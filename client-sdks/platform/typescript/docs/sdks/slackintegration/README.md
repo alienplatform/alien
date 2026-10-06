@@ -62,6 +62,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useSlackIntegrationInstallUrlMutation
+} from "@alienplatform/platform-api/react-query/slackIntegrationInstallUrl.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -134,6 +151,33 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useSlackIntegrationStatus,
+  useSlackIntegrationStatusSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchSlackIntegrationStatus,
+
+  // Utility to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateAllSlackIntegrationStatus,
+} from "@alienplatform/platform-api/react-query/slackIntegrationStatus.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -203,6 +247,33 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useSlackIntegrationListChannels,
+  useSlackIntegrationListChannelsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchSlackIntegrationListChannels,
+
+  // Utility to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateAllSlackIntegrationListChannels,
+} from "@alienplatform/platform-api/react-query/slackIntegrationListChannels.js";
 ```
 
 ### Parameters
@@ -277,6 +348,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useSlackIntegrationSetNotificationChannelMutation
+} from "@alienplatform/platform-api/react-query/slackIntegrationSetNotificationChannel.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -340,13 +428,30 @@ async function run() {
   const res = await slackIntegrationUninstall(alien);
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("slackIntegrationUninstall failed:", res.error);
   }
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useSlackIntegrationUninstallMutation
+} from "@alienplatform/platform-api/react-query/slackIntegrationUninstall.js";
 ```
 
 ### Parameters

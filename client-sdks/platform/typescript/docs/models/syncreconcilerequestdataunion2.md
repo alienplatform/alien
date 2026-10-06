@@ -14,7 +14,7 @@ const value: models.DataAwsLambda = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "timed-out",
         severity: "warning",
         source: "<value>",
       },
@@ -38,20 +38,19 @@ const value: models.DataGcpCloudRun = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "error",
+        reason: "forbidden",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopping",
-    partial: false,
-    stale: true,
+    health: "unhealthy",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
-  trafficCount: 12255,
+  trafficCount: 9050,
   urls: [
     "<value 1>",
-    "<value 2>",
   ],
   backend: "gcpCloudRun",
 };
@@ -66,15 +65,15 @@ const value: models.DataAzureContainerApps1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "stopped",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azureContainerApps",
 };
@@ -118,17 +117,17 @@ const value: models.DataLocal2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "info",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: false,
+    health: "degraded",
+    lifecycle: "updating",
+    partial: true,
     stale: false,
   },
-  triggerCount: 852008,
+  triggerCount: 963366,
   backend: "local",
 };
 ```

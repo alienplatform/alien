@@ -10,12 +10,17 @@ import {
 } from "./stackinputvaluerequest.js";
 
 export type UpdateDeploymentInputsRequest = {
+  /**
+   * Save only if this is still the latest accepted deployment operation. Follow the returned operation ID before continuing setup.
+   */
+  expectedBaseOperationId?: string | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
   clearInputIds?: Array<string> | undefined;
 };
 
 /** @internal */
 export type UpdateDeploymentInputsRequest$Outbound = {
+  expectedBaseOperationId?: string | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
   clearInputIds?: Array<string> | undefined;
 };
@@ -25,6 +30,7 @@ export const UpdateDeploymentInputsRequest$outboundSchema: z.ZodType<
   UpdateDeploymentInputsRequest$Outbound,
   UpdateDeploymentInputsRequest
 > = z.object({
+  expectedBaseOperationId: z.string().optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
   clearInputIds: z.array(z.string()).optional(),

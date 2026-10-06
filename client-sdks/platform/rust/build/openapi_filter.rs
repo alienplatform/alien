@@ -34,6 +34,7 @@ const OPEN_STRING_ENUM_SCHEMAS: &[(&str, &str)] = &[
 /// Keep this list explicit: adding a Platform API call should require a review
 /// of the compiler input it brings into the always-enabled CLI graph.
 pub const REQUIRED_OPERATION_IDS: &[&str] = &[
+    "cancelDeploymentVolumeRestore",
     "configureProjectBuckets",
     "configureProjectDeployments",
     "configureProjectKeys",
@@ -46,6 +47,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createDeploymentGroup",
     "createDeploymentGroupToken",
     "createDeploymentToken",
+    "createDeploymentVolumeRestore",
     "createProject",
     "createRelease",
     "createReleaseChannel",
@@ -81,6 +83,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listDeployments",
     "listEvents",
     "listDeploymentMachines",
+    "listDeploymentVolumeRestores",
     "listManagerEvents",
     "listManagers",
     "listMemberships",
@@ -171,8 +174,10 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
+    preserve_secret_presence(&mut filtered)?;
+    normalize_binding_unions(&mut filtered)?;
     open_string_enums(&mut filtered)?;
-    deduplicate_anonymous_object_schemas(
+    deduplicate_anonymous_schemas(
         &mut filtered,
         required_operation_ids == REQUIRED_OPERATION_IDS,
     )?;
@@ -182,7 +187,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
     Ok(Value::Object(filtered))
 }
 
-fn deduplicate_anonymous_object_schemas(
+fn deduplicate_anonymous_schemas(
     document: &mut Map<String, Value>,
     protect_consumer_names: bool,
 ) -> Result<(), String> {
@@ -194,7 +199,7 @@ fn deduplicate_anonymous_object_schemas(
             let schema = document_value.pointer(pointer).ok_or_else(|| {
                 format!("consumer-named anonymous schema is missing at `{pointer}`")
             })?;
-            collect_object_schema_keys(schema, &mut protected_shapes)?;
+            collect_shareable_schema_keys(schema, &mut protected_shapes)?;
         }
     }
     let schemas = document
@@ -267,11 +272,15 @@ fn deduplicate_anonymous_object_schemas(
     Ok(())
 }
 
-fn collect_object_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
-    if value.get("type").and_then(Value::as_str) == Some("object") && value.get("$ref").is_none() {
+fn is_shareable_anonymous_schema(schema: &Value) -> bool {
+    schema.get("$ref").is_none() && schema.get("type").and_then(Value::as_str) == Some("object")
+}
+
+fn collect_shareable_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
+    if is_shareable_anonymous_schema(value) {
         keys.insert(canonical_schema_key(value)?);
     }
-    for_schema_children(value, |child| collect_object_schema_keys(child, keys))?;
+    for_schema_children(value, |child| collect_shareable_schema_keys(child, keys))?;
     Ok(())
 }
 
@@ -309,10 +318,7 @@ fn collect_schema_occurrences(
     occurrences: &mut BTreeMap<String, (usize, Value)>,
     collect_current: bool,
 ) {
-    if collect_current
-        && value.get("type").and_then(Value::as_str) == Some("object")
-        && value.get("$ref").is_none()
-    {
+    if collect_current && is_shareable_anonymous_schema(value) {
         let schema = value.clone();
         let key = serde_json::to_string(&schema).expect("JSON schema serializes");
         occurrences
@@ -369,10 +375,7 @@ fn replace_schema_occurrences(
     replacements: &BTreeMap<String, String>,
     replace_current: bool,
 ) -> Result<(), String> {
-    if replace_current
-        && value.get("type").and_then(Value::as_str) == Some("object")
-        && value.get("$ref").is_none()
-    {
+    if replace_current && is_shareable_anonymous_schema(value) {
         let key = canonical_schema_key(value)?;
         if let Some(name) = replacements.get(&key) {
             *value = serde_json::json!({
@@ -475,10 +478,49 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
+    preserve_secret_presence(&mut root)?;
+    normalize_binding_unions(&mut root)?;
     open_string_enums(&mut root)?;
     canonicalize_nullable_enums(&mut root);
     allow_unknown_properties(&mut root);
     Ok(Value::Object(root))
+}
+
+// A native Vec avoids typify's intrinsic empty-array default for this optional
+// field, yielding Option<Vec<String>> without changing the canonical API schema.
+fn preserve_secret_presence(document: &mut Map<String, Value>) -> Result<(), String> {
+    let Some(config) = document
+        .get_mut("components")
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(|schemas| schemas.get_mut("DeploymentConfig"))
+    else {
+        return Ok(());
+    };
+    let required = config
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|field| field == "storedSecretInputIds"));
+    let Some(field) = config.pointer_mut("/properties/storedSecretInputIds") else {
+        return Ok(());
+    };
+    let valid = !required
+        && field.get("type").and_then(Value::as_str) == Some("array")
+        && field.get("items") == Some(&serde_json::json!({"type": "string"}))
+        && field
+            .get("nullable")
+            .is_none_or(|nullable| nullable == &Value::Bool(false))
+        && field.as_object().is_some_and(|field| {
+            field
+                .keys()
+                .all(|key| matches!(key.as_str(), "type" | "items" | "description" | "nullable"))
+        });
+    if !valid {
+        return Err("DeploymentConfig.storedSecretInputIds must remain an optional unconstrained nonnullable string array".to_string());
+    }
+    field.as_object_mut().unwrap().insert("x-rust-type".to_string(), serde_json::json!({
+        "crate": "std", "version": "*", "path": "std::vec::Vec", "parameters": [{"type": "string"}]
+    }));
+    Ok(())
 }
 
 fn open_string_enums(document: &mut Map<String, Value>) -> Result<(), String> {
@@ -733,4 +775,231 @@ fn parse_component_reference(value: &str) -> Option<(String, String)> {
 
 fn decode_json_pointer_segment(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
+}
+
+// Progenitor represents anyOf as flattened optional fields. A branch containing
+// unrestricted JSON overlaps every other alternative and cannot roundtrip that
+// representation. Remove only demonstrably redundant JSON alternatives; keep
+// sibling constraints and all concrete binding fields unchanged.
+fn normalize_binding_unions(document: &mut Map<String, Value>) -> Result<(), String> {
+    if let Some(paths) = document.get_mut("paths") {
+        normalize_tagged_unions_in_openapi(paths);
+    }
+    if let Some(components) = document
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+    {
+        for (section, value) in components {
+            if section != "schemas" {
+                normalize_tagged_unions_in_openapi(value);
+            }
+        }
+    }
+    let Some(schemas) = document
+        .get_mut("components")
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    for schema in schemas.values_mut() {
+        normalize_nullable_string_enums(schema);
+    }
+    if schemas.get("JsonValue") == Some(&serde_json::json!({})) {
+        for schema in schemas.values_mut() {
+            simplify_unrestricted_json_unions(schema);
+        }
+    }
+    for schema in schemas.values_mut() {
+        normalize_disjoint_tagged_unions(schema);
+    }
+    Ok(())
+}
+
+fn simplify_unrestricted_json_unions(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        let unrestricted = object
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .is_some_and(|branches| {
+                branches.iter().any(|branch| {
+                    branch == &serde_json::json!({"$ref": "#/components/schemas/JsonValue"})
+                        || branch
+                            == &serde_json::json!({
+                                "allOf": [{"$ref": "#/components/schemas/JsonValue"}],
+                                "nullable": true
+                            })
+                })
+            });
+        if unrestricted {
+            object.remove("anyOf");
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        simplify_unrestricted_json_unions(child);
+        Ok::<(), ()>(())
+    })
+    .expect("JSON union simplification is infallible");
+}
+
+// Required finite string tags prove that at most one branch can match. An
+// allOf member is sufficient: every matching value must satisfy that member.
+// References are deliberately left unresolved rather than guessing their tags.
+fn required_string_tags(schema: &Value, field: &str) -> Option<BTreeSet<String>> {
+    if schema.get("nullable") == Some(&Value::Bool(true)) || schema.get("$ref").is_some() {
+        return None;
+    }
+    if schema.get("type").and_then(Value::as_str) == Some("object")
+        && schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| required.contains(&Value::String(field.to_string())))
+    {
+        if let Some(tag) = schema
+            .get("properties")
+            .and_then(|properties| properties.get(field))
+        {
+            if tag.get("type").and_then(Value::as_str) == Some("string")
+                && tag.get("nullable") != Some(&Value::Bool(true))
+                && tag.get("$ref").is_none()
+            {
+                if let Some(values) = tag.get("enum").and_then(Value::as_array) {
+                    let tags: Option<BTreeSet<String>> = values
+                        .iter()
+                        .map(|value| value.as_str().map(str::to_string))
+                        .collect();
+                    if let Some(tags) = tags.filter(|tags| !tags.is_empty()) {
+                        return Some(tags);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+        if let Some(tags) = branches
+            .iter()
+            .find_map(|branch| required_string_tags(branch, field))
+        {
+            return Some(tags);
+        }
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
+            let mut tags = BTreeSet::new();
+            for branch in branches {
+                tags.extend(required_string_tags(branch, field)?);
+            }
+            return (!tags.is_empty()).then_some(tags);
+        }
+    }
+    None
+}
+
+fn candidate_tag_fields(schema: &Value, fields: &mut BTreeSet<String>) {
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        fields.extend(
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string),
+        );
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
+            for branch in branches {
+                candidate_tag_fields(branch, fields);
+            }
+        }
+    }
+}
+
+// OpenAPI containers use `schema` to introduce Schema Objects. Literal payloads
+// and extensions are not schemas, even if they contain the same keywords.
+fn normalize_tagged_unions_in_openapi(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                normalize_tagged_unions_in_openapi(value);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "schema" {
+                    normalize_disjoint_tagged_unions(value);
+                } else if matches!(key.as_str(), "example" | "examples" | "default" | "enum")
+                    || key.starts_with("x-")
+                {
+                    continue;
+                } else {
+                    normalize_tagged_unions_in_openapi(value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_disjoint_tagged_unions(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        if !object.contains_key("oneOf") && !object.contains_key("$ref") {
+            let disjoint = object
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .is_some_and(|branches| {
+                    let Some(first) = branches.first() else {
+                        return false;
+                    };
+                    let mut fields = BTreeSet::new();
+                    candidate_tag_fields(first, &mut fields);
+                    fields.iter().any(|field| {
+                        let mut seen = BTreeSet::new();
+                        branches.iter().all(|branch| {
+                            required_string_tags(branch, field)
+                                .is_some_and(|tags| tags.into_iter().all(|tag| seen.insert(tag)))
+                        })
+                    })
+                });
+            if disjoint {
+                let branches = object.remove("anyOf").expect("union was checked");
+                object.insert("oneOf".to_string(), branches);
+            }
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        normalize_disjoint_tagged_unions(child);
+        Ok::<(), ()>(())
+    })
+    .expect("tagged union normalization is infallible");
+}
+
+// A closed string enum and null are disjoint. Progenitor needs oneOf here
+// to generate a scalar enum instead of a flattened struct that rejects strings.
+fn normalize_nullable_string_enums(schema: &mut Value) {
+    if let Some(object) = schema.as_object_mut() {
+        let disjoint =
+            object
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .is_some_and(|branches| {
+                    branches.len() == 2 && branches.iter().any(|branch| {
+                branch == &serde_json::json!({"type": "string", "nullable": true, "enum": [null]})
+            }) && branches.iter().any(|branch| {
+                branch.get("$ref").is_none()
+                    && branch.get("type").and_then(Value::as_str) == Some("string")
+                    && branch.get("nullable") != Some(&Value::Bool(true))
+                    && branch.get("enum").and_then(Value::as_array).is_some_and(|values| {
+                        !values.is_empty() && values.iter().all(Value::is_string)
+                    })
+            })
+                });
+        if disjoint && !object.contains_key("oneOf") {
+            let branches = object.remove("anyOf").expect("union was checked");
+            object.insert("oneOf".to_string(), branches);
+        }
+    }
+    for_schema_children_mut(schema, |child| {
+        normalize_nullable_string_enums(child);
+        Ok::<(), ()>(())
+    })
+    .expect("nullable enum normalization is infallible");
 }

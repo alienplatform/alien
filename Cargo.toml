@@ -84,7 +84,7 @@ alien-ai-gateway = { path = "crates/alien-ai-gateway", version = "3.3.28" }
 alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "3.3.28" }
 alien-sdk = { path = "crates/alien-sdk", version = "3.3.28", default-features = false }
 alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "3.3.28", default-features = false }
-dockdash = { git = "https://github.com/alienplatform/dockdash", rev = "e5338c004ac4be34982f20771b329f79210e768f" }
+dockdash = { git = "https://github.com/alienplatform/dockdash", rev = "fd4f517312a56b329f3bdb08ff32685aeacd73b3" }
 alien-core = { path = "crates/alien-core", version = "3.3.28" }
 alien-infra = { path = "crates/alien-infra", version = "3.3.28" }
 alien-build = { path = "crates/alien-build", version = "3.3.28" }

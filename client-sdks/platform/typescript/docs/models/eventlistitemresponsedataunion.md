@@ -447,6 +447,33 @@ const value: models.EventListItemResponseDataDeploymentEnvironmentUpdated = {
 };
 ```
 
+### `models.EventListItemResponseDataDeploymentVolumeRestoreRequested`
+
+```typescript
+const value: models.EventListItemResponseDataDeploymentVolumeRestoreRequested =
+  {
+    deploymentId: "<id>",
+    ordinal: 139249,
+    requestId: "<id>",
+    resourceId: "<id>",
+    snapshotId: "<id>",
+    type: "DeploymentVolumeRestoreRequested",
+  };
+```
+
+### `models.EventListItemResponseDataDeploymentVolumeRestoreCancelled`
+
+```typescript
+const value: models.EventListItemResponseDataDeploymentVolumeRestoreCancelled =
+  {
+    deploymentId: "<id>",
+    ordinal: 171180,
+    requestId: "<id>",
+    resourceId: "<id>",
+    type: "DeploymentVolumeRestoreCancelled",
+  };
+```
+
 ### `models.EventListItemResponseDataDeploymentDeletionRequested`
 
 ```typescript
@@ -473,4 +500,3 @@ const value: models.DeploymentCredentialRotationEvent = {
   },
 };
 ```
-

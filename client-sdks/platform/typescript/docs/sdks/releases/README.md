@@ -67,6 +67,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesList,
+  useReleasesListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesList,
+  invalidateAllReleasesList,
+} from "@alienplatform/platform-api/react-query/releasesList.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listReleases" method="get" path="/v1/releases" example="projectName" -->
@@ -117,6 +145,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesList,
+  useReleasesListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesList,
+  invalidateAllReleasesList,
+} from "@alienplatform/platform-api/react-query/releasesList.js";
 ```
 
 ### Parameters
@@ -220,6 +276,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useReleasesCreateMutation
+} from "@alienplatform/platform-api/react-query/releasesCreate.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -296,6 +369,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesListBranches,
+  useReleasesListBranchesSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesListBranches,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesListBranches,
+  invalidateAllReleasesListBranches,
+} from "@alienplatform/platform-api/react-query/releasesListBranches.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listReleaseBranches" method="get" path="/v1/releases/branches" example="projectName" -->
@@ -346,6 +447,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesListBranches,
+  useReleasesListBranchesSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesListBranches,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesListBranches,
+  invalidateAllReleasesListBranches,
+} from "@alienplatform/platform-api/react-query/releasesListBranches.js";
 ```
 
 ### Parameters
@@ -423,6 +552,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesListAuthors,
+  useReleasesListAuthorsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesListAuthors,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesListAuthors,
+  invalidateAllReleasesListAuthors,
+} from "@alienplatform/platform-api/react-query/releasesListAuthors.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="listReleaseAuthors" method="get" path="/v1/releases/authors" example="projectName" -->
@@ -473,6 +630,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesListAuthors,
+  useReleasesListAuthorsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesListAuthors,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesListAuthors,
+  invalidateAllReleasesListAuthors,
+} from "@alienplatform/platform-api/react-query/releasesListAuthors.js";
 ```
 
 ### Parameters
@@ -551,6 +736,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesGet,
+  useReleasesGetSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesGet,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesGet,
+  invalidateAllReleasesGet,
+} from "@alienplatform/platform-api/react-query/releasesGet.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -626,6 +839,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleasesListDeployments,
+  useReleasesListDeploymentsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleasesListDeployments,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleasesListDeployments,
+  invalidateAllReleasesListDeployments,
+} from "@alienplatform/platform-api/react-query/releasesListDeployments.js";
 ```
 
 ### Parameters
@@ -712,6 +953,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useReleasesPromoteMutation
+} from "@alienplatform/platform-api/react-query/releasesPromote.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="promoteRelease" method="post" path="/v1/release-channels/{name}/promote" example="projectName" -->
@@ -772,6 +1030,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useReleasesPromoteMutation
+} from "@alienplatform/platform-api/react-query/releasesPromote.js";
 ```
 
 ### Parameters

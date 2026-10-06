@@ -71,19 +71,21 @@ impl StackMutation for SecretsVaultMutation {
         });
 
         // Vault-native deployer secrets live in this vault: the deployer
-        // writes them there, and workloads read them from it. A secret with a
-        // stored value is delivered from that value and needs no vault, so a
-        // deployment installed before slots were vault-native is not asked to
-        // add this setup-owned vault on its next update.
-        let stored = alien_core::stored_input_values(
+        // writes them there, and workloads read them from it.
+        let deployer_secrets_need_vault = alien_core::deployer_secret_slots(
             &stack.inputs,
             &config.input_values,
-            &config.environment_variables,
-        );
-        let deployer_secrets_need_vault =
-            alien_core::deployer_secret_slots(&stack.inputs, &stored, stack_state.platform)
-                .iter()
-                .any(|slot| !slot.has_stored_value);
+            config.stored_secret_input_ids.as_deref(),
+            &config.environment_variables.variables,
+            stack_state.platform,
+        )
+        .iter()
+        .any(|slot| {
+            !config
+                .input_values
+                .get(&slot.input.id)
+                .is_some_and(|value| !value.is_null())
+        });
 
         explicitly_configured
             || worker_needs_vault
@@ -100,6 +102,18 @@ impl StackMutation for SecretsVaultMutation {
         info!("Adding deployment secrets vault and scoped runtime access");
 
         let secrets_vault_id = SECRETS_VAULT_ID;
+
+        // Validate workload identities before deriving a vault or changing grants.
+        // Kubernetes on a cloud base uses its own projection path, but an
+        // identityless daemon still cannot consume deployer-vault slots.
+        let deployer_keys = if [Platform::Aws, Platform::Gcp, Platform::Azure]
+            .into_iter()
+            .any(|platform| runs_on_platform_or_base(stack_state, config, platform))
+        {
+            deployer_secret_keys_by_profile(&stack, config, stack_state.platform)?
+        } else {
+            BTreeMap::new()
+        };
 
         let infrastructure_only = azure_setup_needs_vault(&stack, stack_state, config)
             && !config.external_bindings.has(SECRETS_VAULT_ID)
@@ -155,8 +169,7 @@ impl StackMutation for SecretsVaultMutation {
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
-            let slots = deployer_secret_keys_by_profile(&stack, config, stack_state.platform)?;
-            add_deployer_secret_read_permissions(&mut stack, secrets_vault_id, slots)?;
+            add_deployer_secret_read_permissions(&mut stack, secrets_vault_id, deployer_keys)?;
         }
         add_vault_dependency_to_compute_clusters(
             &mut stack,
@@ -301,12 +314,13 @@ fn deployer_secret_keys_by_profile(
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
     // The same slots delivery reads: a secret the developer may also provide
     // and has a stored developer value is not a slot.
-    let stored = alien_core::stored_input_values(
+    let slots = alien_core::deployer_secret_slots(
         &stack.inputs,
         &config.input_values,
-        &config.environment_variables,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        platform,
     );
-    let slots = alien_core::deployer_secret_slots(&stack.inputs, &stored, platform);
     if slots.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -315,14 +329,22 @@ fn deployer_secret_keys_by_profile(
     let mut by_profile: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for (resource_id, entry) in &stack.resources {
         let profile = if let Some(container) = entry.config.downcast_ref::<Container>() {
-            &container.permissions
+            Some(&container.permissions)
         } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-            &daemon.permissions
+            daemon.permissions.as_ref()
         } else {
             continue;
         };
+        // Concrete pre-vault values retain their delivery until removed.
+        // Presence IDs alone never stand in for such a value.
         let keys: BTreeSet<String> = slots
             .iter()
+            .filter(|slot| {
+                !config
+                    .input_values
+                    .get(&slot.input.id)
+                    .is_some_and(|value| !value.is_null())
+            })
             .filter(|slot| {
                 slot.input
                     .env
@@ -331,6 +353,20 @@ fn deployer_secret_keys_by_profile(
             })
             .map(|slot| slot.vault_key.clone())
             .collect();
+        let Some(profile) = profile else {
+            if !keys.is_empty() {
+                return Err(AlienError::new(ErrorData::ResourceValidationFailed {
+                    resource_id: resource_id.clone(),
+                    message: "A cloud daemon receiving deployer-vault secrets requires an explicit workload permission profile. Set permissions to a declared profile, or remove its deployer-secret mappings.".to_string(),
+                }));
+            }
+            continue;
+        };
+        // Cloud-base Kubernetes keeps its existing secret projection and grant
+        // behavior; only the missing workload identity is rejected here.
+        if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+            continue;
+        }
         match by_profile.get(profile) {
             None => {
                 by_profile.insert(profile.clone(), (resource_id.clone(), keys));
@@ -351,27 +387,10 @@ fn deployer_secret_keys_by_profile(
         }
     }
 
-    // A slot that still has a value stored from before deployer secrets were
-    // vault-native is delivered from that value, so its workload needs no read
-    // grant yet. Granting it anyway would change the setup-owned profile of
-    // every deployment installed before vault-native slots, and the next
-    // update would be refused until setup reran. Once the stored value is
-    // gone, the slot is granted like any other, and that update asks for setup.
-    let stored: BTreeSet<&str> = slots
-        .iter()
-        .filter(|slot| slot.has_stored_value)
-        .map(|slot| slot.vault_key.as_str())
-        .collect();
     Ok(by_profile
         .into_iter()
-        .map(|(profile, (_, keys))| {
-            let keys: BTreeSet<String> = keys
-                .into_iter()
-                .filter(|key| !stored.contains(key.as_str()))
-                .collect();
-            (profile, keys)
-        })
-        .filter(|(_, keys)| !keys.is_empty())
+        .filter(|(_, (_, keys))| !keys.is_empty())
+        .map(|(profile, (_, keys))| (profile, keys))
         .collect())
 }
 
@@ -1073,9 +1092,8 @@ mod tests {
         stack.inputs = vec![input.clone()];
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &config));
 
-        // A secret either side may provide, whose developer value reaches the
-        // deployment through its variable, has no slot and needs no vault: an
-        // installed deployment must not be asked to add one on update.
+        // Explicit metadata is authoritative; only legacy omission may use
+        // complete Secret delivery for a dual-provider input.
         input.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
         input.env = vec![StackInputEnvironmentMapping {
             name: "DATABASE_PASSWORD".to_string(),
@@ -1091,7 +1109,235 @@ mod tests {
             var_type: alien_core::EnvironmentVariableType::Secret,
             target_resources: None,
         }];
+        assert!(delivered.stored_secret_input_ids.is_none());
         assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
+        delivered.stored_secret_input_ids = Some(Vec::new());
+        assert!(SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
+        delivered.stored_secret_input_ids = Some(vec![stack.inputs[0].id.clone()]);
+        assert!(!SecretsVaultMutation.should_run(&stack, &stack_state, &delivered));
+    }
+
+    #[test]
+    fn stored_dual_secret_presence_avoids_an_unneeded_vault() {
+        let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        stack.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        let state = StackState::new(Platform::Gcp);
+        let mut config = deployer_secret_config();
+        assert!(config.input_values.is_empty());
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+        config.stored_secret_input_ids = Some(vec![stack.inputs[0].id.clone()]);
+        assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
+        assert!(
+            deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
+                .unwrap()
+                .is_empty()
+        );
+        stack.inputs[0].provided_by = vec![StackInputProvider::Deployer];
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+        assert!(
+            !deployer_secret_keys_by_profile(&stack, &config, Platform::Gcp)
+                .unwrap()
+                .is_empty()
+        );
+        stack.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        config.stored_secret_input_ids = Some(Vec::new());
+        assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+    }
+
+    fn secret_daemon_stack() -> Stack {
+        let mut stack = deployer_secret_stack(&[], &["daemon"]);
+        let daemon = Daemon::new("daemon".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .build();
+        stack.resources.insert(
+            "daemon".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(daemon),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    #[tokio::test]
+    async fn identityless_cloud_daemon_refuses_actual_vault_slots() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+        ] {
+            let stack = secret_daemon_stack();
+            let mut config = deployer_secret_config();
+            if platform == Platform::Kubernetes {
+                config.base_platform = Some(Platform::Gcp);
+            }
+            // Presence cannot turn a pure deployer secret into a developer answer.
+            config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+            config.input_values.insert(
+                "unrelated".to_string(),
+                serde_json::json!("generic-canary-value"),
+            );
+            let state = StackState::new(platform);
+            assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+            let error = SecretsVaultMutation
+                .mutate(stack, &state, &config)
+                .await
+                .expect_err("a vault slot requires workload identity");
+            assert_eq!(error.code, "RESOURCE_VALIDATION_FAILED");
+            let diagnostic = format!("{error} {error:?}");
+            assert!(diagnostic.contains("explicit workload permission profile"));
+            assert!(!diagnostic.contains("generic-canary-value"));
+            assert!(!diagnostic.contains("apiKey"));
+        }
+        let mut dual = secret_daemon_stack();
+        dual.inputs[0]
+            .provided_by
+            .push(StackInputProvider::Developer);
+        let mut config = deployer_secret_config();
+        config
+            .input_values
+            .insert("apiKey".to_string(), serde_json::Value::Null);
+        config.stored_secret_input_ids = Some(vec!["unrelated".to_string()]);
+        config
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "API_KEY".to_string(),
+                value: "generic-mapped-value".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: None,
+            });
+        assert!(
+            SecretsVaultMutation
+                .mutate(dual.clone(), &StackState::new(Platform::Gcp), &config)
+                .await
+                .is_err(),
+            "mapped environment names must not bypass workload identity validation"
+        );
+        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+        let prepared = SecretsVaultMutation
+            .mutate(dual, &StackState::new(Platform::Gcp), &config)
+            .await
+            .unwrap();
+        assert!(prepared.permissions.profiles.is_empty());
+        assert_eq!(config.input_values["apiKey"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn identityless_daemon_without_actual_vault_slots_remains_valid() {
+        for case in [
+            "none",
+            "developer",
+            "stored-dual",
+            "concrete-dual",
+            "other-platform",
+            "other-target",
+        ] {
+            let mut stack = secret_daemon_stack();
+            let mut config = deployer_secret_config();
+            match case {
+                "none" => stack.inputs.clear(),
+                "developer" => stack.inputs[0].provided_by = vec![StackInputProvider::Developer],
+                "stored-dual" | "concrete-dual" => {
+                    stack.inputs[0]
+                        .provided_by
+                        .push(StackInputProvider::Developer);
+                    if case == "stored-dual" {
+                        config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+                    } else {
+                        config.input_values.insert(
+                            "apiKey".to_string(),
+                            serde_json::json!("generic-developer-value"),
+                        );
+                    }
+                }
+                "other-platform" => stack.inputs[0].platforms = Some(vec![Platform::Aws]),
+                "other-target" => {
+                    stack.inputs[0].env[0].target_resources = Some(vec!["other".to_string()])
+                }
+                _ => unreachable!(),
+            }
+            let result = SecretsVaultMutation
+                .mutate(stack, &StackState::new(Platform::Gcp), &config)
+                .await
+                .unwrap();
+            assert!(result.permissions.profiles.is_empty(), "{case}");
+            assert!(result.resources["daemon"]
+                .config
+                .downcast_ref::<Daemon>()
+                .unwrap()
+                .permissions
+                .is_none());
+        }
+        // Non-cloud boundaries retain their existing delivery/refusal handling.
+        for platform in [Platform::Machines, Platform::Local, Platform::Kubernetes] {
+            let result = SecretsVaultMutation
+                .mutate(
+                    secret_daemon_stack(),
+                    &StackState::new(platform),
+                    &deployer_secret_config(),
+                )
+                .await
+                .unwrap();
+            assert!(result.permissions.profiles.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_daemon_profile_receives_only_its_vault_keys() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut stack = secret_daemon_stack();
+            stack
+                .resources
+                .get_mut("daemon")
+                .unwrap()
+                .config
+                .downcast_mut::<Daemon>()
+                .unwrap()
+                .permissions = Some("execution".to_string());
+            stack
+                .permissions
+                .profiles
+                .insert("execution".to_string(), PermissionProfile::new());
+            let mut other = stack.inputs[0].clone();
+            other.id = "otherCredential".to_string();
+            other.env[0].target_resources = Some(vec!["other".to_string()]);
+            stack.inputs.push(other);
+            let result = SecretsVaultMutation
+                .mutate(stack, &StackState::new(platform), &deployer_secret_config())
+                .await
+                .unwrap();
+            let expected = deployer_secrets_read_permission_set(&BTreeSet::from([
+                alien_core::deployer_secret_vault_key("apiKey"),
+            ]))
+            .unwrap();
+            assert_eq!(
+                deployer_secrets_read_set(&result, "execution").unwrap(),
+                expected
+            );
+            assert_eq!(
+                result.permissions.profiles["execution"].0[SECRETS_VAULT_ID].len(),
+                1
+            );
+        }
     }
 
     #[tokio::test]

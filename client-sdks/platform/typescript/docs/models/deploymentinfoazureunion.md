@@ -11,9 +11,9 @@ const value: models.DeploymentInfoAzure = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

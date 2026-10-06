@@ -77,7 +77,7 @@ export type Counts = {
   ready?: number | null | undefined;
 };
 
-export type CountsUnion = Counts | any;
+export type CountsUnion = Counts | string;
 
 export const ObservedInventoryBatchHealth = {
   Unknown: "unknown",
@@ -143,13 +143,11 @@ export type ObservedInventoryBatchRaw = {
   truncated: boolean;
 };
 
-export type ResourceTypeHint = string | any;
-
 export type ObservedInventoryBatchResource = {
   alienResourceId?: string | null | undefined;
   attributes?: { [k: string]: any | null } | undefined;
   collectionIssues?: Array<ObservedInventoryBatchCollectionIssue> | undefined;
-  counts?: Counts | any | null | undefined;
+  counts?: Counts | string | null | undefined;
   deploymentId?: string | null | undefined;
   displayName: string;
   health: ObservedInventoryBatchHealth;
@@ -183,7 +181,7 @@ export type ObservedInventoryBatchResource = {
    */
   rawIdentity: string;
   region?: string | null | undefined;
-  resourceTypeHint?: string | any | null | undefined;
+  resourceTypeHint?: any | null | undefined;
   scope?: string | null | undefined;
   /**
    * Release/version identity observed from the provider resource, when available.
@@ -295,13 +293,13 @@ export function countsToJSON(counts: Counts): string {
 }
 
 /** @internal */
-export type CountsUnion$Outbound = Counts$Outbound | any;
+export type CountsUnion$Outbound = Counts$Outbound | string;
 
 /** @internal */
 export const CountsUnion$outboundSchema: z.ZodType<
   CountsUnion$Outbound,
   CountsUnion
-> = z.union([z.lazy(() => Counts$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Counts$outboundSchema), z.string()]);
 
 export function countsUnionToJSON(countsUnion: CountsUnion): string {
   return JSON.stringify(CountsUnion$outboundSchema.parse(countsUnion));
@@ -370,30 +368,13 @@ export function observedInventoryBatchRawToJSON(
 }
 
 /** @internal */
-export type ResourceTypeHint$Outbound = string | any;
-
-/** @internal */
-export const ResourceTypeHint$outboundSchema: z.ZodType<
-  ResourceTypeHint$Outbound,
-  ResourceTypeHint
-> = z.union([z.string(), z.any()]);
-
-export function resourceTypeHintToJSON(
-  resourceTypeHint: ResourceTypeHint,
-): string {
-  return JSON.stringify(
-    ResourceTypeHint$outboundSchema.parse(resourceTypeHint),
-  );
-}
-
-/** @internal */
 export type ObservedInventoryBatchResource$Outbound = {
   alienResourceId?: string | null | undefined;
   attributes?: { [k: string]: any | null } | undefined;
   collectionIssues?:
     | Array<ObservedInventoryBatchCollectionIssue$Outbound>
     | undefined;
-  counts?: Counts$Outbound | any | null | undefined;
+  counts?: Counts$Outbound | string | null | undefined;
   deploymentId?: string | null | undefined;
   displayName: string;
   health: string;
@@ -408,7 +389,7 @@ export type ObservedInventoryBatchResource$Outbound = {
   raw?: Array<ObservedInventoryBatchRaw$Outbound> | undefined;
   rawIdentity: string;
   region?: string | null | undefined;
-  resourceTypeHint?: string | any | null | undefined;
+  resourceTypeHint?: any | null | undefined;
   scope?: string | null | undefined;
   version?: string | null | undefined;
 };
@@ -423,7 +404,7 @@ export const ObservedInventoryBatchResource$outboundSchema: z.ZodType<
   collectionIssues: z.array(
     z.lazy(() => ObservedInventoryBatchCollectionIssue$outboundSchema),
   ).optional(),
-  counts: z.nullable(z.union([z.lazy(() => Counts$outboundSchema), z.any()]))
+  counts: z.nullable(z.union([z.lazy(() => Counts$outboundSchema), z.string()]))
     .optional(),
   deploymentId: z.nullable(z.string()).optional(),
   displayName: z.string(),
@@ -440,7 +421,7 @@ export const ObservedInventoryBatchResource$outboundSchema: z.ZodType<
     .optional(),
   rawIdentity: z.string(),
   region: z.nullable(z.string()).optional(),
-  resourceTypeHint: z.nullable(z.union([z.string(), z.any()])).optional(),
+  resourceTypeHint: z.nullable(z.any()).optional(),
   scope: z.nullable(z.string()).optional(),
   version: z.nullable(z.string()).optional(),
 });

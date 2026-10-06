@@ -22,16 +22,20 @@ import {
 /**
  * Provider-specific repository information, resolved server-side from remoteUrl
  */
-export type GitProvider = GitHubProvider | GitLabProvider | any;
+export type GitProvider = GitHubProvider | GitLabProvider | string;
 
 /** @internal */
 export const GitProvider$inboundSchema: z.ZodType<GitProvider, unknown> = z
-  .union([GitHubProvider$inboundSchema, GitLabProvider$inboundSchema, z.any()]);
+  .union([
+    GitHubProvider$inboundSchema,
+    GitLabProvider$inboundSchema,
+    z.string(),
+  ]);
 /** @internal */
 export type GitProvider$Outbound =
   | GitHubProvider$Outbound
   | GitLabProvider$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const GitProvider$outboundSchema: z.ZodType<
@@ -40,7 +44,7 @@ export const GitProvider$outboundSchema: z.ZodType<
 > = z.union([
   GitHubProvider$outboundSchema,
   GitLabProvider$outboundSchema,
-  z.any(),
+  z.string(),
 ]);
 
 export function gitProviderToJSON(gitProvider: GitProvider): string {

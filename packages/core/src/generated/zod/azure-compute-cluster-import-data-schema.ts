@@ -12,6 +12,9 @@ export const AzureComputeClusterImportDataSchema = z.object({
     "clusterId": z.string().describe("Cluster identifier used by the controller."),
 "clusterIdentityPrincipalId": z.string().describe("AKS cluster identity principal id (system-assigned identity)."),
 "identityId": z.string().describe("Resource ID of the user-assigned identity attached to cluster VMs."),
+"isolatedIdentityClientId": z.string().describe("Optional isolated node identity client ID.").nullish(),
+"isolatedIdentityId": z.string().describe("Optional isolated node identity resource ID.").nullish(),
+"isolatedIdentityPrincipalId": z.string().describe("Optional isolated node identity principal ID.").nullish(),
 "kubeletIdentityClientId": z.string().describe("kubelet UAMI client id used by node pools.")
     }).describe("Azure ComputeCluster ImportData — AKS node pool identity / network.")
 

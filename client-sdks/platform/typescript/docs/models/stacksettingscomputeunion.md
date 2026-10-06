@@ -9,9 +9,9 @@
 const value: models.StackSettingsCompute = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

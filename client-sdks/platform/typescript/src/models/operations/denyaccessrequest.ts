@@ -86,6 +86,41 @@ export type DenyAccessRequestMaxRisk = ClosedEnum<
 >;
 
 /**
+ * How and when the customer gate was passed. Null until approved.
+ */
+export type DenyAccessRequestApprovedBy = {
+  /**
+   * `kubectl` for the in-cluster path, else the direct caller's method such as `slack`.
+   */
+  method: string | null;
+  /**
+   * The approving user. Null for the kubectl path: the approver is only in the customer's cluster audit log.
+   */
+  actorId: string | null;
+  at: string;
+};
+
+export type DenyAccessRequestDeniedBy = {
+  actorId: string | null;
+  at: string;
+};
+
+export const DenyAccessRequestActorKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+export type DenyAccessRequestActorKind = ClosedEnum<
+  typeof DenyAccessRequestActorKind
+>;
+
+export type DenyAccessRequestRevokedBy = {
+  actorKind: DenyAccessRequestActorKind;
+  actorId: string;
+  at: string;
+  reason: string | null;
+};
+
+/**
  * The rejected access request.
  */
 export type DenyAccessRequestResponse = {
@@ -96,6 +131,10 @@ export type DenyAccessRequestResponse = {
   deploymentId: string;
   deployment?: DenyAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
+  /**
+   * The investigation whose remediation plan proposed this request, if a plan did.
+   */
+  agentSessionId: string | null;
   title: string;
   reason: string | null;
   commands: Array<DenyAccessRequestCommand>;
@@ -107,6 +146,18 @@ export type DenyAccessRequestResponse = {
   debugGrant: models.AccessRequestDebugGrant | null;
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
+  createdAt: string;
+  /**
+   * Who passed the engineer gate; the requester for a plan-less request.
+   */
+  queuedBy: string | null;
+  queuedAt: string | null;
+  /**
+   * How and when the customer gate was passed. Null until approved.
+   */
+  approvedBy: DenyAccessRequestApprovedBy | null;
+  deniedBy: DenyAccessRequestDeniedBy | null;
+  revokedBy: DenyAccessRequestRevokedBy | null;
 };
 
 /** @internal */
@@ -223,6 +274,71 @@ export const DenyAccessRequestMaxRisk$inboundSchema: z.ZodEnum<
 > = z.enum(DenyAccessRequestMaxRisk);
 
 /** @internal */
+export const DenyAccessRequestApprovedBy$inboundSchema: z.ZodType<
+  DenyAccessRequestApprovedBy,
+  unknown
+> = z.object({
+  method: z.nullable(z.string()),
+  actorId: z.nullable(z.string()),
+  at: z.string(),
+});
+
+export function denyAccessRequestApprovedByFromJSON(
+  jsonString: string,
+): SafeParseResult<DenyAccessRequestApprovedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DenyAccessRequestApprovedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DenyAccessRequestApprovedBy' from JSON`,
+  );
+}
+
+/** @internal */
+export const DenyAccessRequestDeniedBy$inboundSchema: z.ZodType<
+  DenyAccessRequestDeniedBy,
+  unknown
+> = z.object({
+  actorId: z.nullable(z.string()),
+  at: z.string(),
+});
+
+export function denyAccessRequestDeniedByFromJSON(
+  jsonString: string,
+): SafeParseResult<DenyAccessRequestDeniedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DenyAccessRequestDeniedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DenyAccessRequestDeniedBy' from JSON`,
+  );
+}
+
+/** @internal */
+export const DenyAccessRequestActorKind$inboundSchema: z.ZodEnum<
+  typeof DenyAccessRequestActorKind
+> = z.enum(DenyAccessRequestActorKind);
+
+/** @internal */
+export const DenyAccessRequestRevokedBy$inboundSchema: z.ZodType<
+  DenyAccessRequestRevokedBy,
+  unknown
+> = z.object({
+  actorKind: DenyAccessRequestActorKind$inboundSchema,
+  actorId: z.string(),
+  at: z.string(),
+  reason: z.nullable(z.string()),
+});
+
+export function denyAccessRequestRevokedByFromJSON(
+  jsonString: string,
+): SafeParseResult<DenyAccessRequestRevokedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DenyAccessRequestRevokedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DenyAccessRequestRevokedBy' from JSON`,
+  );
+}
+
+/** @internal */
 export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   DenyAccessRequestResponse,
   unknown
@@ -235,6 +351,7 @@ export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   deployment: z.lazy(() => DenyAccessRequestDeployment$inboundSchema)
     .optional(),
   remediationPlanId: z.nullable(z.string()),
+  agentSessionId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => DenyAccessRequestCommand$inboundSchema)),
@@ -243,6 +360,14 @@ export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   debugGrant: z.nullable(models.AccessRequestDebugGrant$inboundSchema),
   status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
+  createdAt: z.string(),
+  queuedBy: z.nullable(z.string()),
+  queuedAt: z.nullable(z.string()),
+  approvedBy: z.nullable(
+    z.lazy(() => DenyAccessRequestApprovedBy$inboundSchema),
+  ),
+  deniedBy: z.nullable(z.lazy(() => DenyAccessRequestDeniedBy$inboundSchema)),
+  revokedBy: z.nullable(z.lazy(() => DenyAccessRequestRevokedBy$inboundSchema)),
 });
 
 export function denyAccessRequestResponseFromJSON(

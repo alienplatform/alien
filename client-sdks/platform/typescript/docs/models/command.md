@@ -25,6 +25,11 @@ let value: Command = {
   dispatchedAt: new Date("2024-12-27T01:09:12.395Z"),
   completedAt: new Date("2025-03-08T10:27:35.115Z"),
   error: {},
+  accessRequestId: "<id>",
+  verification: {
+    state: "failed",
+    reason: null,
+  },
 };
 ```
 
@@ -48,5 +53,7 @@ let value: Command = {
 | `dispatchedAt`                                                                                | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | When the command was dispatched to the deployment                                             |                                                                                               |
 | `completedAt`                                                                                 | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | When the command completed                                                                    |                                                                                               |
 | `error`                                                                                       | Record<string, *any*>                                                                         | :heavy_check_mark:                                                                            | Error details if command failed                                                               |                                                                                               |
+| `accessRequestId`                                                                             | *string*                                                                                      | :heavy_check_mark:                                                                            | The approved access request that authorized this operation command, if one did                |                                                                                               |
+| `verification`                                                                                | [models.CommandVerification](../models/commandverification.md)                                | :heavy_check_mark:                                                                            | Verification outcome of an operation command; null for commands that are not operations       |                                                                                               |
 | `result`                                                                                      | *any*                                                                                         | :heavy_minus_sign:                                                                            | Decoded command result when available                                                         |                                                                                               |
 | `resultAvailability`                                                                          | [models.CommandResultAvailability](../models/commandresultavailability.md)                    | :heavy_minus_sign:                                                                            | Whether a successful operation result is included or withheld pending explicit confirmation   |                                                                                               |

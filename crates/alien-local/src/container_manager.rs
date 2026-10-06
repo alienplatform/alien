@@ -25,7 +25,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -374,6 +374,8 @@ pub struct LocalContainerManager {
     state_dir: PathBuf,
     /// Tracked containers (container_id → metadata)
     containers: Arc<RwLock<HashMap<String, ContainerMetadata>>>,
+    /// Serialize imports that share content or mutate the same registry reference.
+    image_load_locks: tokio::sync::Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl LocalContainerManager {
@@ -466,6 +468,7 @@ impl LocalContainerManager {
             docker,
             state_dir,
             containers: Arc::new(RwLock::new(containers)),
+            image_load_locks: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -620,6 +623,58 @@ impl LocalContainerManager {
         tarball_path: &Path,
         container_id: &str,
     ) -> Result<String> {
+        // Docker's containerd image store identifies the image by the manifest
+        // digest listed in the archive's index.json; the classic store by the
+        // config digest. Both are immutable, unlike the archive's tag, which a
+        // previous load of the same tag may still point at.
+        let archive_path = tarball_path.to_path_buf();
+        let (candidates, mut lock_keys) =
+            tokio::task::spawn_blocking(move || -> std::io::Result<([String; 2], Vec<String>)> {
+                let (manifest_digest, references) = oci_archive_identity(&archive_path)?;
+                let config_digest = dockdash::Image::from_tarball(&archive_path)
+                    .map_err(std::io::Error::other)?
+                    .config_digest()
+                    .to_string();
+                let mut lock_keys = references;
+                lock_keys.push(format!("content:{config_digest}"));
+                Ok(([manifest_digest, config_digest], lock_keys))
+            })
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "resolve_loaded_image".to_string(),
+                reason: "Image archive reader task failed".to_string(),
+            })?
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "resolve_loaded_image".to_string(),
+                reason: format!(
+                    "Failed to read the image digests of '{}'",
+                    tarball_path.display()
+                ),
+            })?;
+
+        // Resolve keys before locking; independent archives can be read and imported
+        // concurrently. Ordering prevents deadlock for archives with multiple tags.
+        lock_keys.sort();
+        lock_keys.dedup();
+        let locks = {
+            let mut locks = self.image_load_locks.lock().await;
+            retain_image_load_locks(&mut locks, lock_keys)
+        };
+        let mut load_guards = Vec::with_capacity(locks.len());
+        for lock in locks {
+            load_guards.push(lock.lock_owned().await);
+        }
+
+        if let Some(image_id) = self
+            .inspect_archive_image(&candidates, container_id)
+            .await?
+        {
+            return Ok(image_id);
+        }
         info!(
             tarball = %tarball_path.display(),
             container_id = %container_id,
@@ -648,39 +703,30 @@ impl LocalContainerManager {
             }));
         }
 
-        // Docker's containerd image store identifies the image by the manifest
-        // digest listed in the archive's index.json; the classic store by the
-        // config digest. Both are immutable, unlike the archive's tag, which a
-        // previous load of the same tag may still point at.
-        let archive_path = tarball_path.to_path_buf();
-        let candidates = tokio::task::spawn_blocking(move || -> std::io::Result<[String; 2]> {
-            let manifest_digest = oci_archive_manifest_digest(&archive_path)?;
-            let config_digest = dockdash::Image::from_tarball(&archive_path)
-                .map_err(std::io::Error::other)?
-                .config_digest()
-                .to_string();
-            Ok([manifest_digest, config_digest])
-        })
-        .await
-        .into_alien_error()
-        .context(ErrorData::DockerContainerError {
+        if let Some(image_id) = self
+            .inspect_archive_image(&candidates, container_id)
+            .await?
+        {
+            return Ok(image_id);
+        }
+        Err(AlienError::new(ErrorData::DockerContainerError {
             container: container_id.to_string(),
-            operation: "resolve_loaded_image".to_string(),
-            reason: "Image archive reader task failed".to_string(),
-        })?
-        .into_alien_error()
-        .context(ErrorData::DockerContainerError {
-            container: container_id.to_string(),
-            operation: "resolve_loaded_image".to_string(),
+            operation: "inspect_loaded_image".to_string(),
             reason: format!(
-                "Failed to read the image digests of '{}'",
-                tarball_path.display()
+                "Docker did not load image {} (manifest) or {} (config)",
+                candidates[0], candidates[1]
             ),
-        })?;
+        }))
+    }
 
-        for image_id in &candidates {
+    async fn inspect_archive_image(
+        &self,
+        candidates: &[String; 2],
+        container_id: &str,
+    ) -> Result<Option<String>> {
+        for image_id in candidates {
             match self.docker.inspect_image(image_id).await {
-                Ok(_) => return Ok(image_id.clone()),
+                Ok(_) => return Ok(Some(image_id.clone())),
                 Err(bollard::errors::Error::DockerResponseServerError {
                     status_code: 404, ..
                 }) => continue,
@@ -695,14 +741,7 @@ impl LocalContainerManager {
                 }
             }
         }
-        Err(AlienError::new(ErrorData::DockerContainerError {
-            container: container_id.to_string(),
-            operation: "inspect_loaded_image".to_string(),
-            reason: format!(
-                "Docker did not load image {} (manifest) or {} (config)",
-                candidates[0], candidates[1]
-            ),
-        }))
+        Ok(None)
     }
 
     /// Make a registry image available to the daemon and return a reference
@@ -904,10 +943,28 @@ impl LocalContainerManager {
             }
         };
 
-        // Resolve image (load from OCI tarball if local path)
-        let image = self
+        // Freeze registry references as well as archive images before creation.
+        let image_reference = self
             .resolve_image(&config.image, container_id, config.proxy_token.as_deref())
             .await?;
+        let image = self
+            .docker
+            .inspect_image(&image_reference)
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "inspect_image".to_string(),
+                reason: format!("Failed to resolve image identity for '{image_reference}'"),
+            })?
+            .id
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "inspect_image".to_string(),
+                    reason: format!("Docker returned no image ID for '{image_reference}'"),
+                })
+            })?;
 
         // Build DNS aliases
         let mut network_aliases = vec![container_id.to_string(), format!("{}.svc", container_id)];
@@ -1073,6 +1130,14 @@ impl LocalContainerManager {
         // Build container config
         let container_config = Config {
             image: Some(image.clone()),
+            labels: Some(HashMap::from([
+                ("alien.dev/resource".to_string(), container_id.to_string()),
+                (
+                    "alien.dev/image-reference".to_string(),
+                    config.image.clone(),
+                ),
+                ("alien.dev/image-id".to_string(), image.clone()),
+            ])),
             entrypoint: process_override.entrypoint,
             cmd: process_override.cmd,
             user,
@@ -1691,11 +1756,31 @@ struct OciIndex {
 #[serde(rename_all = "camelCase")]
 struct OciDescriptor {
     digest: String,
+    #[serde(default)]
+    annotations: HashMap<String, String>,
+}
+
+/// Retain only imports with active owners or waiters, reusing their locks atomically.
+fn retain_image_load_locks(
+    locks: &mut HashMap<String, Weak<tokio::sync::Mutex<()>>>,
+    keys: Vec<String>,
+) -> Vec<Arc<tokio::sync::Mutex<()>>> {
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    keys.into_iter()
+        .map(|key| {
+            if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+                return lock;
+            }
+            let lock = Arc::new(tokio::sync::Mutex::new(()));
+            locks.insert(key, Arc::downgrade(&lock));
+            lock
+        })
+        .collect()
 }
 
 /// Digest of the first image an OCI archive's `index.json` lists: the same
 /// image whose config digest `dockdash::Image::from_tarball` reads.
-fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
+fn oci_archive_identity(tarball_path: &Path) -> std::io::Result<(String, Vec<String>)> {
     let mut archive = tar::Archive::new(std::fs::File::open(tarball_path)?);
     // Seeking skips over layer blobs instead of reading them.
     for entry in archive.entries_with_seek()? {
@@ -1705,12 +1790,23 @@ fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
             continue;
         }
         let index: OciIndex = serde_json::from_reader(entry).map_err(std::io::Error::other)?;
-        return index
+        let digest = index
             .manifests
-            .into_iter()
-            .next()
-            .map(|manifest| manifest.digest)
-            .ok_or_else(|| std::io::Error::other("index.json lists no images"));
+            .first()
+            .ok_or_else(|| std::io::Error::other("index.json lists no images"))?
+            .digest
+            .clone();
+        let references = index
+            .manifests
+            .iter()
+            .filter_map(|manifest| {
+                manifest
+                    .annotations
+                    .get("org.opencontainers.image.ref.name")
+                    .map(|reference| format!("reference:{reference}"))
+            })
+            .collect();
+        return Ok((digest, references));
     }
     Err(std::io::Error::other("archive has no index.json"))
 }
@@ -1718,6 +1814,41 @@ fn oci_archive_manifest_digest(tarball_path: &Path) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn image_import_locks_preserve_waiters_and_prune_finished_imports() {
+        let mut locks = HashMap::new();
+        let mut first = retain_image_load_locks(&mut locks, vec!["shared".to_string()]);
+        let guard = first.pop().unwrap().lock_owned().await;
+        let mut second = retain_image_load_locks(&mut locks, vec!["shared".to_string()]);
+        let waiter = second.pop().unwrap().lock_owned();
+        tokio::pin!(waiter);
+        tokio::select! {
+            biased;
+            _ = &mut waiter => panic!("a waiting import must not bypass the active owner"),
+            _ = tokio::task::yield_now() => {}
+        }
+        for index in 0..100 {
+            let unrelated =
+                retain_image_load_locks(&mut locks, vec![format!("independent-{index}")]);
+            assert_eq!(locks.len(), 2, "finished image keys must not accumulate");
+            assert!(locks["shared"].upgrade().unwrap().try_lock().is_err());
+            drop(unrelated);
+        }
+        drop(guard);
+        let waiting_guard = waiter.await;
+        let shared = retain_image_load_locks(&mut locks, vec!["shared".to_string()]);
+        assert_eq!(locks.len(), 1);
+        assert!(
+            shared[0].try_lock().is_err(),
+            "the waiter still owns the same lock"
+        );
+        drop((waiting_guard, shared));
+        let final_import = retain_image_load_locks(&mut locks, vec!["last".to_string()]);
+        assert_eq!(locks.len(), 1);
+        assert!(!locks.contains_key("shared"));
+        assert!(final_import[0].try_lock().is_ok());
+    }
 
     fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
         BindMount {

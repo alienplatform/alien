@@ -20,9 +20,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::{
-    import::EmitContext, ErrorData, PermissionSet, PermissionSetReference, Result, ServiceAccount,
-};
+use alien_core::{import::EmitContext, ErrorData, PermissionSet, Result, ServiceAccount};
 use alien_error::AlienError;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
@@ -79,39 +77,34 @@ impl TfEmitter for GcpServiceAccountEmitter {
             )?;
         }
 
-        if let Some(profile_name) = service_account.id.strip_suffix("-sa") {
-            if let Some(profile) = ctx.stack.permission_profiles().get(profile_name) {
-                for (resource_id, permission_set_refs) in &profile.0 {
-                    if resource_id == "*" {
-                        continue;
-                    }
-                    let context = permission_context(label, ctx.stack.id())
-                        .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
-                    // These grants name the target resource's namespace, so they
-                    // follow that resource's gate — not this account's. The
-                    // generator later coalesces project-wide grants shared by
-                    // multiple resources into one Terraform owner.
-                    let enabled_when = ctx
-                        .stack
-                        .resources
-                        .get(resource_id)
-                        .and_then(|entry| entry.enabled_when.as_deref());
-                    for permission_set_ref in permission_set_refs {
-                        if let Some(permission_set) = resolve_permission_set(permission_set_ref) {
-                            let appended_from = fragment.resource_blocks.len();
-                            emit_project_bindings(
-                                &mut fragment,
-                                label,
-                                &member,
-                                &permission_set,
-                                &context,
-                                BindingTarget::Resource,
-                                resource_id,
-                            )?;
-                            gate_bindings(&mut fragment, appended_from, enabled_when);
-                        }
-                    }
-                }
+        let legacy_profile = service_account
+            .id
+            .strip_suffix("-sa")
+            .and_then(|name| ctx.stack.permission_profiles().get(name));
+        let concrete = service_account.concrete_permission_sets(legacy_profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })?;
+        for (resource_id, sets) in concrete.iter() {
+            let context = permission_context(label, ctx.stack.id())
+                .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
+            // Concrete grants follow their target resource's gate.
+            let enabled_when = ctx
+                .stack
+                .resources
+                .get(resource_id)
+                .and_then(|entry| entry.enabled_when.as_deref());
+            for set in sets {
+                let appended_from = fragment.resource_blocks.len();
+                emit_project_bindings(
+                    &mut fragment,
+                    label,
+                    &member,
+                    set,
+                    &context,
+                    BindingTarget::Resource,
+                    resource_id,
+                )?;
+                gate_bindings(&mut fragment, appended_from, enabled_when);
             }
         }
 
@@ -177,7 +170,8 @@ fn emit_project_bindings(
                 ),
             })
         })?;
-    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let mut bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    bindings.extend(grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount));
     let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
     for (idx, binding) in bindings.into_iter().enumerate() {
@@ -195,10 +189,6 @@ fn emit_project_bindings(
     }
 
     Ok(())
-}
-
-fn resolve_permission_set(permission_set_ref: &PermissionSetReference) -> Option<PermissionSet> {
-    permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }
 
 fn unique_iam_member_label(

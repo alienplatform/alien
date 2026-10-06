@@ -11,23 +11,484 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  OverrideReleaseInfoAzure,
-  OverrideReleaseInfoAzure$inboundSchema,
+  ReleaseInfoTypeStringList,
+  ReleaseInfoTypeStringList$inboundSchema,
   TargetDeploymentConfig,
   TargetDeploymentConfig$inboundSchema,
-  TargetDeploymentInput,
-  TargetDeploymentInput$inboundSchema,
-  TargetDeploymentManagementEnum,
-  TargetDeploymentManagementEnum$inboundSchema,
-  TargetDeploymentOverrideAw,
-  TargetDeploymentOverrideAw$inboundSchema,
-  TargetDeploymentOverrideConditionResource,
-  TargetDeploymentOverrideConditionResource$inboundSchema,
-} from "./targetdeploymentoverrideconditionresource.js";
+} from "./releaseinfotypestringlist.js";
+
+export type TargetDeploymentDefaultStringList = {
+  type: ReleaseInfoTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const ReleaseInfoTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type ReleaseInfoTypeBoolean = ClosedEnum<typeof ReleaseInfoTypeBoolean>;
+
+export type TargetDeploymentDefaultBoolean = {
+  type: ReleaseInfoTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const ReleaseInfoTypeNumber = {
+  Number: "number",
+} as const;
+export type ReleaseInfoTypeNumber = ClosedEnum<typeof ReleaseInfoTypeNumber>;
+
+export type TargetDeploymentDefaultNumber = {
+  type: ReleaseInfoTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const ReleaseInfoTypeString = {
+  String: "string",
+} as const;
+export type ReleaseInfoTypeString = ClosedEnum<typeof ReleaseInfoTypeString>;
+
+export type TargetDeploymentDefaultString = {
+  type: ReleaseInfoTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type TargetDeploymentDefaultUnion =
+  | TargetDeploymentDefaultString
+  | TargetDeploymentDefaultNumber
+  | TargetDeploymentDefaultBoolean
+  | TargetDeploymentDefaultStringList
+  | string;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const TypeReleaseInfoEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type TypeReleaseInfoEnvEnum = ClosedEnum<typeof TypeReleaseInfoEnvEnum>;
+
+export type ReleaseInfoTypeUnion = TypeReleaseInfoEnvEnum | string;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type TargetDeploymentEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: TypeReleaseInfoEnvEnum | string | null | undefined;
+};
+
+/**
+ * Asks Alien to generate a secret input's value.
+ *
+ * @remarks
+ *
+ * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+ * connection strings, command lines and environment variables. It is generated
+ * once, when the deployment's input values are first resolved, and then kept
+ * with the deployment's other input values.
+ */
+export type TargetDeploymentGenerate = {
+  /**
+   * Number of characters to generate.
+   */
+  length: number;
+};
+
+export type TargetDeploymentGenerateUnion = TargetDeploymentGenerate | string;
+
+/**
+ * Primitive stack input kind.
+ */
+export const TargetDeploymentKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type TargetDeploymentKind = ClosedEnum<typeof TargetDeploymentKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const ReleaseInfoPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type ReleaseInfoPlatform = ClosedEnum<typeof ReleaseInfoPlatform>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const TargetDeploymentProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type TargetDeploymentProvidedBy = ClosedEnum<
+  typeof TargetDeploymentProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type TargetDeploymentValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type TargetDeploymentValidationUnion =
+  | TargetDeploymentValidation
+  | string;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type TargetDeploymentInput = {
+  default?:
+    | TargetDeploymentDefaultString
+    | TargetDeploymentDefaultNumber
+    | TargetDeploymentDefaultBoolean
+    | TargetDeploymentDefaultStringList
+    | string
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<TargetDeploymentEnv> | undefined;
+  generate?: TargetDeploymentGenerate | string | null | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: TargetDeploymentKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<ReleaseInfoPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<TargetDeploymentProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: TargetDeploymentValidation | string | null | undefined;
+};
+
+export const TargetDeploymentManagementEnum = {
+  Auto: "auto",
+} as const;
+export type TargetDeploymentManagementEnum = ClosedEnum<
+  typeof TargetDeploymentManagementEnum
+>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetDeploymentOverrideAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetDeploymentOverrideAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetDeploymentOverrideAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: TargetDeploymentOverrideAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: TargetDeploymentOverrideAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const TargetDeploymentOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type TargetDeploymentOverrideEffect = ClosedEnum<
+  typeof TargetDeploymentOverrideEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetDeploymentOverrideAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type TargetDeploymentOverrideAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetDeploymentOverrideAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: TargetDeploymentOverrideEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetDeploymentOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetDeploymentOverrideAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetDeploymentOverrideAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetDeploymentOverrideAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: TargetDeploymentOverrideAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: TargetDeploymentOverrideAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetDeploymentOverrideAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type OverrideReleaseInfoAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetDeploymentOverrideAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetDeploymentOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetDeploymentOverrideConditionResource = {
+  expression: string;
+  title: string;
+};
 
 export type TargetDeploymentOverrideResourceConditionUnion =
   | TargetDeploymentOverrideConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -35,7 +496,7 @@ export type TargetDeploymentOverrideResourceConditionUnion =
 export type TargetDeploymentOverrideGcpResource = {
   condition?:
     | TargetDeploymentOverrideConditionResource
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -54,13 +515,13 @@ export type TargetDeploymentOverrideCondition = {
 
 export type TargetDeploymentOverrideConditionUnion =
   | TargetDeploymentOverrideCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentOverrideGcpStack = {
-  condition?: TargetDeploymentOverrideCondition | any | null | undefined;
+  condition?: TargetDeploymentOverrideCondition | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -396,13 +857,17 @@ export type TargetDeploymentExtendConditionResource = {
 
 export type TargetDeploymentExtendResourceConditionUnion =
   | TargetDeploymentExtendConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentExtendGcpResource = {
-  condition?: TargetDeploymentExtendConditionResource | any | null | undefined;
+  condition?:
+    | TargetDeploymentExtendConditionResource
+    | string
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -419,13 +884,13 @@ export type TargetDeploymentExtendCondition = {
 
 export type TargetDeploymentExtendConditionUnion =
   | TargetDeploymentExtendCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentExtendGcpStack = {
-  condition?: TargetDeploymentExtendCondition | any | null | undefined;
+  condition?: TargetDeploymentExtendCondition | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -769,13 +1234,17 @@ export type TargetDeploymentProfileConditionResource = {
 
 export type TargetDeploymentProfileResourceConditionUnion =
   | TargetDeploymentProfileConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentProfileGcpResource = {
-  condition?: TargetDeploymentProfileConditionResource | any | null | undefined;
+  condition?:
+    | TargetDeploymentProfileConditionResource
+    | string
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -792,13 +1261,13 @@ export type TargetDeploymentProfileCondition = {
 
 export type TargetDeploymentProfileConditionUnion =
   | TargetDeploymentProfileCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type TargetDeploymentProfileGcpStack = {
-  condition?: TargetDeploymentProfileCondition | any | null | undefined;
+  condition?: TargetDeploymentProfileCondition | string | null | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1127,10 +1596,549 @@ export type TargetDeployment = {
 };
 
 /** @internal */
+export const TargetDeploymentDefaultStringList$inboundSchema: z.ZodType<
+  TargetDeploymentDefaultStringList,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function targetDeploymentDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentDefaultStringList, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentDefaultStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeBoolean
+> = z.enum(ReleaseInfoTypeBoolean);
+
+/** @internal */
+export const TargetDeploymentDefaultBoolean$inboundSchema: z.ZodType<
+  TargetDeploymentDefaultBoolean,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function targetDeploymentDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentDefaultBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeNumber$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeNumber
+> = z.enum(ReleaseInfoTypeNumber);
+
+/** @internal */
+export const TargetDeploymentDefaultNumber$inboundSchema: z.ZodType<
+  TargetDeploymentDefaultNumber,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function targetDeploymentDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoTypeString$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeString
+> = z.enum(ReleaseInfoTypeString);
+
+/** @internal */
+export const TargetDeploymentDefaultString$inboundSchema: z.ZodType<
+  TargetDeploymentDefaultString,
+  unknown
+> = z.object({
+  type: ReleaseInfoTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function targetDeploymentDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentDefaultUnion$inboundSchema: z.ZodType<
+  TargetDeploymentDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentDefaultString$inboundSchema),
+  z.lazy(() => TargetDeploymentDefaultNumber$inboundSchema),
+  z.lazy(() => TargetDeploymentDefaultBoolean$inboundSchema),
+  z.lazy(() => TargetDeploymentDefaultStringList$inboundSchema),
+  z.string(),
+]);
+
+export function targetDeploymentDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeReleaseInfoEnvEnum$inboundSchema: z.ZodEnum<
+  typeof TypeReleaseInfoEnvEnum
+> = z.enum(TypeReleaseInfoEnvEnum);
+
+/** @internal */
+export const ReleaseInfoTypeUnion$inboundSchema: z.ZodType<
+  ReleaseInfoTypeUnion,
+  unknown
+> = z.union([TypeReleaseInfoEnvEnum$inboundSchema, z.string()]);
+
+export function releaseInfoTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentEnv$inboundSchema: z.ZodType<
+  TargetDeploymentEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(z.union([TypeReleaseInfoEnvEnum$inboundSchema, z.string()]))
+    .optional(),
+});
+
+export function targetDeploymentEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentGenerate$inboundSchema: z.ZodType<
+  TargetDeploymentGenerate,
+  unknown
+> = z.object({
+  length: z.int(),
+});
+
+export function targetDeploymentGenerateFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentGenerate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentGenerate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentGenerate' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentGenerateUnion$inboundSchema: z.ZodType<
+  TargetDeploymentGenerateUnion,
+  unknown
+> = z.union([z.lazy(() => TargetDeploymentGenerate$inboundSchema), z.string()]);
+
+export function targetDeploymentGenerateUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentGenerateUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentGenerateUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentGenerateUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentKind$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentKind
+> = z.enum(TargetDeploymentKind);
+
+/** @internal */
+export const ReleaseInfoPlatform$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoPlatform
+> = z.enum(ReleaseInfoPlatform);
+
+/** @internal */
+export const TargetDeploymentProvidedBy$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentProvidedBy
+> = z.enum(TargetDeploymentProvidedBy);
+
+/** @internal */
+export const TargetDeploymentValidation$inboundSchema: z.ZodType<
+  TargetDeploymentValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetDeploymentValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentValidationUnion$inboundSchema: z.ZodType<
+  TargetDeploymentValidationUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentValidation$inboundSchema),
+  z.string(),
+]);
+
+export function targetDeploymentValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentInput$inboundSchema: z.ZodType<
+  TargetDeploymentInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => TargetDeploymentDefaultString$inboundSchema),
+      z.lazy(() => TargetDeploymentDefaultNumber$inboundSchema),
+      z.lazy(() => TargetDeploymentDefaultBoolean$inboundSchema),
+      z.lazy(() => TargetDeploymentDefaultStringList$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => TargetDeploymentEnv$inboundSchema)).optional(),
+  generate: z.nullable(
+    z.union([z.lazy(() => TargetDeploymentGenerate$inboundSchema), z.string()]),
+  ).optional(),
+  id: z.string(),
+  kind: TargetDeploymentKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(z.array(ReleaseInfoPlatform$inboundSchema)).optional(),
+  providedBy: z.array(TargetDeploymentProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => TargetDeploymentValidation$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function targetDeploymentInputFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentManagementEnum$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentManagementEnum
+> = z.enum(TargetDeploymentManagementEnum);
+
+/** @internal */
+export const TargetDeploymentOverrideAwResource$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetDeploymentOverrideAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAwStack$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetDeploymentOverrideAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentOverrideAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAwBinding$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetDeploymentOverrideAwResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetDeploymentOverrideAwStack$inboundSchema).optional(),
+});
+
+export function targetDeploymentOverrideAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentOverrideAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideEffect$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentOverrideEffect
+> = z.enum(TargetDeploymentOverrideEffect);
+
+/** @internal */
+export const TargetDeploymentOverrideAwGrant$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetDeploymentOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentOverrideAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAw$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetDeploymentOverrideAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetDeploymentOverrideEffect$inboundSchema.optional(),
+  grant: z.lazy(() => TargetDeploymentOverrideAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetDeploymentOverrideAwFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentOverrideAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAzureResource$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetDeploymentOverrideAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAzureStack$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetDeploymentOverrideAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAzureBinding$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetDeploymentOverrideAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetDeploymentOverrideAzureStack$inboundSchema)
+    .optional(),
+});
+
+export function targetDeploymentOverrideAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideAzureGrant$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetDeploymentOverrideAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOverrideAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOverrideAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAzure$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetDeploymentOverrideAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetDeploymentOverrideAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function overrideReleaseInfoAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOverrideConditionResource$inboundSchema: z.ZodType<
+  TargetDeploymentOverrideConditionResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetDeploymentOverrideConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetDeploymentOverrideConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentOverrideConditionResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetDeploymentOverrideConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentOverrideResourceConditionUnion$inboundSchema:
   z.ZodType<TargetDeploymentOverrideResourceConditionUnion, unknown> = z.union([
-    TargetDeploymentOverrideConditionResource$inboundSchema,
-    z.any(),
+    z.lazy(() => TargetDeploymentOverrideConditionResource$inboundSchema),
+    z.string(),
   ]);
 
 export function targetDeploymentOverrideResourceConditionUnionFromJSON(
@@ -1155,7 +2163,10 @@ export const TargetDeploymentOverrideGcpResource$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   condition: z.nullable(
-    z.union([TargetDeploymentOverrideConditionResource$inboundSchema, z.any()]),
+    z.union([
+      z.lazy(() => TargetDeploymentOverrideConditionResource$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   scope: z.string(),
 });
@@ -1196,7 +2207,7 @@ export const TargetDeploymentOverrideConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetDeploymentOverrideCondition$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetDeploymentOverrideConditionUnionFromJSON(
@@ -1218,7 +2229,7 @@ export const TargetDeploymentOverrideGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentOverrideCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -1304,8 +2315,12 @@ export const TargetDeploymentOverridePlatforms$inboundSchema: z.ZodType<
   TargetDeploymentOverridePlatforms,
   unknown
 > = z.object({
-  aws: z.nullable(z.array(TargetDeploymentOverrideAw$inboundSchema)).optional(),
-  azure: z.nullable(z.array(OverrideReleaseInfoAzure$inboundSchema)).optional(),
+  aws: z.nullable(
+    z.array(z.lazy(() => TargetDeploymentOverrideAw$inboundSchema)),
+  ).optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => OverrideReleaseInfoAzure$inboundSchema)),
+  ).optional(),
   gcp: z.nullable(z.array(z.lazy(() => OverrideReleaseInfoGcp$inboundSchema)))
     .optional(),
 });
@@ -1622,7 +2637,7 @@ export function targetDeploymentExtendConditionResourceFromJSON(
 export const TargetDeploymentExtendResourceConditionUnion$inboundSchema:
   z.ZodType<TargetDeploymentExtendResourceConditionUnion, unknown> = z.union([
     z.lazy(() => TargetDeploymentExtendConditionResource$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function targetDeploymentExtendResourceConditionUnionFromJSON(
@@ -1649,7 +2664,7 @@ export const TargetDeploymentExtendGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentExtendConditionResource$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -1690,7 +2705,7 @@ export const TargetDeploymentExtendConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetDeploymentExtendCondition$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetDeploymentExtendConditionUnionFromJSON(
@@ -1712,7 +2727,7 @@ export const TargetDeploymentExtendGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentExtendCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -2135,7 +3150,7 @@ export function targetDeploymentProfileConditionResourceFromJSON(
 export const TargetDeploymentProfileResourceConditionUnion$inboundSchema:
   z.ZodType<TargetDeploymentProfileResourceConditionUnion, unknown> = z.union([
     z.lazy(() => TargetDeploymentProfileConditionResource$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function targetDeploymentProfileResourceConditionUnionFromJSON(
@@ -2162,7 +3177,7 @@ export const TargetDeploymentProfileGcpResource$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentProfileConditionResource$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -2204,7 +3219,7 @@ export const TargetDeploymentProfileConditionUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => TargetDeploymentProfileCondition$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function targetDeploymentProfileConditionUnionFromJSON(
@@ -2226,7 +3241,7 @@ export const TargetDeploymentProfileGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentProfileCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -2482,7 +3497,7 @@ export const TargetDeploymentStack$inboundSchema: z.ZodType<
   dynamicContainerImageResources: z.array(z.string()).optional(),
   dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
-  inputs: z.array(TargetDeploymentInput$inboundSchema).optional(),
+  inputs: z.array(z.lazy(() => TargetDeploymentInput$inboundSchema)).optional(),
   permissions: z.lazy(() => TargetDeploymentPermissions$inboundSchema)
     .optional(),
   resources: z.record(

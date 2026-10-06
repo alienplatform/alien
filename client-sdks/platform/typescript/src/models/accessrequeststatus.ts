@@ -11,6 +11,7 @@ export const AccessRequestStatus = {
   CustomerApproved: "customer-approved",
   Expired: "expired",
   Rejected: "rejected",
+  Revoked: "revoked",
 } as const;
 export type AccessRequestStatus = ClosedEnum<typeof AccessRequestStatus>;
 

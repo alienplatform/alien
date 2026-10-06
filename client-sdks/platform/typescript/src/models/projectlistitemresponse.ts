@@ -421,14 +421,21 @@ export type ProjectListItemResponseRegistry = {
 };
 
 export type ProjectListItemResponseAzure = {
-  catalogImage: string;
+  registryImage?: string | undefined;
   idleSuspendSeconds: number;
+};
+
+export type ProjectListItemResponseGcp = {
+  image?: string | undefined;
+  maxLifetimeSeconds: number;
 };
 
 export type ProjectListItemResponseRemoteSandbox = {
   enabled: true;
+  customImage?: string | undefined;
   baseImage?: string | undefined;
   azure?: ProjectListItemResponseAzure | undefined;
+  gcp?: ProjectListItemResponseGcp | undefined;
   maxLifetimeSeconds?: number | undefined;
 };
 
@@ -1022,7 +1029,7 @@ export const ProjectListItemResponseAzure$inboundSchema: z.ZodType<
   ProjectListItemResponseAzure,
   unknown
 > = z.object({
-  catalogImage: z.string(),
+  registryImage: z.string().optional(),
   idleSuspendSeconds: z.int(),
 });
 
@@ -1037,13 +1044,34 @@ export function projectListItemResponseAzureFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseGcp$inboundSchema: z.ZodType<
+  ProjectListItemResponseGcp,
+  unknown
+> = z.object({
+  image: z.string().optional(),
+  maxLifetimeSeconds: z.int(),
+});
+
+export function projectListItemResponseGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseGcp' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponseRemoteSandbox$inboundSchema: z.ZodType<
   ProjectListItemResponseRemoteSandbox,
   unknown
 > = z.object({
   enabled: z.literal(true),
+  customImage: z.string().optional(),
   baseImage: z.string().optional(),
   azure: z.lazy(() => ProjectListItemResponseAzure$inboundSchema).optional(),
+  gcp: z.lazy(() => ProjectListItemResponseGcp$inboundSchema).optional(),
   maxLifetimeSeconds: z.int().optional(),
 });
 

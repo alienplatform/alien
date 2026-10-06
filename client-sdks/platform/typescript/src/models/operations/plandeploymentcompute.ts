@@ -54,12 +54,12 @@ export type PlanDeploymentComputeFailureDomains2 = {
 
 export type PlanDeploymentComputeFailureDomainsUnion2 =
   | PlanDeploymentComputeFailureDomains2
-  | any;
+  | string;
 
 export type PlanDeploymentComputePoolsAutoscale = {
   failureDomains?:
     | PlanDeploymentComputeFailureDomains2
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -96,12 +96,12 @@ export type PlanDeploymentComputeFailureDomains1 = {
 
 export type PlanDeploymentComputeFailureDomainsUnion1 =
   | PlanDeploymentComputeFailureDomains1
-  | any;
+  | string;
 
 export type PlanDeploymentComputePoolsFixed = {
   failureDomains?:
     | PlanDeploymentComputeFailureDomains1
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -144,7 +144,7 @@ export type PlanDeploymentComputeCompute = {
 
 export type PlanDeploymentComputeComputeUnion =
   | PlanDeploymentComputeCompute
-  | any;
+  | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -164,20 +164,22 @@ export type PlanDeploymentComputeAws = {
   certificateArn: string;
 };
 
-export type PlanDeploymentComputeAwsUnion = PlanDeploymentComputeAws | any;
+export type PlanDeploymentComputeAwsUnion = PlanDeploymentComputeAws | string;
 
 export type PlanDeploymentComputeAzure = {
   keyVaultCertificateId: string;
   keyVaultResourceId?: string | null | undefined;
 };
 
-export type PlanDeploymentComputeAzureUnion = PlanDeploymentComputeAzure | any;
+export type PlanDeploymentComputeAzureUnion =
+  | PlanDeploymentComputeAzure
+  | string;
 
 export type PlanDeploymentComputeGcp = {
   certificateName: string;
 };
 
-export type PlanDeploymentComputeGcpUnion = PlanDeploymentComputeGcp | any;
+export type PlanDeploymentComputeGcpUnion = PlanDeploymentComputeGcp | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -202,16 +204,20 @@ export type PlanDeploymentComputeDomainsKubernetes = {
 
 export type PlanDeploymentComputeDomainsKubernetesUnion =
   | PlanDeploymentComputeDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type PlanDeploymentComputeDomainsCertificate = {
-  aws?: PlanDeploymentComputeAws | any | null | undefined;
-  azure?: PlanDeploymentComputeAzure | any | null | undefined;
-  gcp?: PlanDeploymentComputeGcp | any | null | undefined;
-  kubernetes?: PlanDeploymentComputeDomainsKubernetes | any | null | undefined;
+  aws?: PlanDeploymentComputeAws | string | null | undefined;
+  azure?: PlanDeploymentComputeAzure | string | null | undefined;
+  gcp?: PlanDeploymentComputeGcp | string | null | undefined;
+  kubernetes?:
+    | PlanDeploymentComputeDomainsKubernetes
+    | string
+    | null
+    | undefined;
 };
 
 /**
@@ -257,7 +263,7 @@ export type PlanDeploymentComputePublicEndpointTargetMachineAddresses = {
 export type PlanDeploymentComputePublicEndpointTargetUnion =
   | PlanDeploymentComputePublicEndpointTargetLoadBalancer
   | PlanDeploymentComputePublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -278,24 +284,28 @@ export type PlanDeploymentComputeDomains = {
   publicEndpointTarget?:
     | PlanDeploymentComputePublicEndpointTargetLoadBalancer
     | PlanDeploymentComputePublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type PlanDeploymentComputeDomainsUnion =
   | PlanDeploymentComputeDomains
-  | any;
+  | string;
 
 /**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
+ * Reachability of the deployment's public endpoints, fixed at setup.
  */
-export type PlanDeploymentComputeExternalBindings = {};
+export const PlanDeploymentComputeEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type PlanDeploymentComputeEndpointAccess = ClosedEnum<
+  typeof PlanDeploymentComputeEndpointAccess
+>;
 
 /**
  * How heartbeat health checks are handled.
@@ -324,7 +334,9 @@ export type PlanDeploymentComputeCloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type PlanDeploymentComputeCloudUnion = PlanDeploymentComputeCloud | any;
+export type PlanDeploymentComputeCloudUnion =
+  | PlanDeploymentComputeCloud
+  | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -345,7 +357,7 @@ export type PlanDeploymentComputeOwnership = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type PlanDeploymentComputeCluster = {
-  cloud?: PlanDeploymentComputeCloud | any | null | undefined;
+  cloud?: PlanDeploymentComputeCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -358,7 +370,7 @@ export type PlanDeploymentComputeCluster = {
 
 export type PlanDeploymentComputeClusterUnion =
   | PlanDeploymentComputeCluster
-  | any;
+  | string;
 
 export type PlanDeploymentComputeCertificateNone2 = {
   mode: "none";
@@ -498,7 +510,7 @@ export type PlanDeploymentComputeProviderUnion4 =
   | PlanDeploymentComputeProviderAwsAlb4
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4
   | PlanDeploymentComputeProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -528,7 +540,7 @@ export type PlanDeploymentComputeRouteGateway2 = {
     | PlanDeploymentComputeProviderAwsAlb4
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4
     | PlanDeploymentComputeProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -608,7 +620,7 @@ export type PlanDeploymentComputeProviderUnion3 =
   | PlanDeploymentComputeProviderAwsAlb3
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3
   | PlanDeploymentComputeProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -634,7 +646,7 @@ export type PlanDeploymentComputeRouteIngress2 = {
     | PlanDeploymentComputeProviderAwsAlb3
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3
     | PlanDeploymentComputeProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -808,7 +820,7 @@ export type PlanDeploymentComputeProviderUnion2 =
   | PlanDeploymentComputeProviderAwsAlb2
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2
   | PlanDeploymentComputeProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -838,7 +850,7 @@ export type PlanDeploymentComputeRouteGateway1 = {
     | PlanDeploymentComputeProviderAwsAlb2
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2
     | PlanDeploymentComputeProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -918,7 +930,7 @@ export type PlanDeploymentComputeProviderUnion1 =
   | PlanDeploymentComputeProviderAwsAlb1
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1
   | PlanDeploymentComputeProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -944,7 +956,7 @@ export type PlanDeploymentComputeRouteIngress1 = {
     | PlanDeploymentComputeProviderAwsAlb1
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1
     | PlanDeploymentComputeProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -991,7 +1003,7 @@ export type PlanDeploymentComputeExposureUnion =
   | PlanDeploymentComputeExposureCustom
   | PlanDeploymentComputeExposureGenerated
   | PlanDeploymentComputeExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -1004,19 +1016,19 @@ export type PlanDeploymentComputeExposureUnion =
  * cluster.
  */
 export type PlanDeploymentComputeKubernetes = {
-  cluster?: PlanDeploymentComputeCluster | any | null | undefined;
+  cluster?: PlanDeploymentComputeCluster | string | null | undefined;
   exposure?:
     | PlanDeploymentComputeExposureCustom
     | PlanDeploymentComputeExposureGenerated
     | PlanDeploymentComputeExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
 export type PlanDeploymentComputeKubernetesUnion =
   | PlanDeploymentComputeKubernetes
-  | any;
+  | string;
 
 export const PlanDeploymentComputeTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1144,7 +1156,7 @@ export type PlanDeploymentComputeNetworkUnion =
   | PlanDeploymentComputeNetworkByoVnetAzure
   | PlanDeploymentComputeNetworkUseDefault
   | PlanDeploymentComputeNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1188,33 +1200,32 @@ export type PlanDeploymentComputeUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type PlanDeploymentComputeStackSettings = {
-  compute?: PlanDeploymentComputeCompute | any | null | undefined;
+  compute?: PlanDeploymentComputeCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: PlanDeploymentComputeDeploymentModel | undefined;
-  domains?: PlanDeploymentComputeDomains | any | null | undefined;
+  domains?: PlanDeploymentComputeDomains | string | null | undefined;
   /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
+   * Reachability of the deployment's public endpoints, fixed at setup.
    */
-  externalBindings?: PlanDeploymentComputeExternalBindings | null | undefined;
+  endpointAccess?: PlanDeploymentComputeEndpointAccess | undefined;
+  externalBindings?:
+    | { [k: string]: models.ExternalBindingUnion }
+    | null
+    | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: PlanDeploymentComputeHeartbeats | undefined;
-  kubernetes?: PlanDeploymentComputeKubernetes | any | null | undefined;
+  kubernetes?: PlanDeploymentComputeKubernetes | string | null | undefined;
   network?:
     | PlanDeploymentComputeNetworkByoVpcAws
     | PlanDeploymentComputeNetworkByoVpcGcp
     | PlanDeploymentComputeNetworkByoVnetAzure
     | PlanDeploymentComputeNetworkUseDefault
     | PlanDeploymentComputeNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1297,7 +1308,7 @@ export function planDeploymentComputeFailureDomains2ToJSON(
 /** @internal */
 export type PlanDeploymentComputeFailureDomainsUnion2$Outbound =
   | PlanDeploymentComputeFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeFailureDomainsUnion2$outboundSchema:
@@ -1306,7 +1317,7 @@ export const PlanDeploymentComputeFailureDomainsUnion2$outboundSchema:
     PlanDeploymentComputeFailureDomainsUnion2
   > = z.union([
     z.lazy(() => PlanDeploymentComputeFailureDomains2$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function planDeploymentComputeFailureDomainsUnion2ToJSON(
@@ -1324,7 +1335,7 @@ export function planDeploymentComputeFailureDomainsUnion2ToJSON(
 export type PlanDeploymentComputePoolsAutoscale$Outbound = {
   failure_domains?:
     | PlanDeploymentComputeFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1341,7 +1352,7 @@ export const PlanDeploymentComputePoolsAutoscale$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeFailureDomains2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1392,7 +1403,7 @@ export function planDeploymentComputeFailureDomains1ToJSON(
 /** @internal */
 export type PlanDeploymentComputeFailureDomainsUnion1$Outbound =
   | PlanDeploymentComputeFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeFailureDomainsUnion1$outboundSchema:
@@ -1401,7 +1412,7 @@ export const PlanDeploymentComputeFailureDomainsUnion1$outboundSchema:
     PlanDeploymentComputeFailureDomainsUnion1
   > = z.union([
     z.lazy(() => PlanDeploymentComputeFailureDomains1$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function planDeploymentComputeFailureDomainsUnion1ToJSON(
@@ -1419,7 +1430,7 @@ export function planDeploymentComputeFailureDomainsUnion1ToJSON(
 export type PlanDeploymentComputePoolsFixed$Outbound = {
   failure_domains?:
     | PlanDeploymentComputeFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1435,7 +1446,7 @@ export const PlanDeploymentComputePoolsFixed$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeFailureDomains1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1517,7 +1528,7 @@ export function planDeploymentComputeComputeToJSON(
 /** @internal */
 export type PlanDeploymentComputeComputeUnion$Outbound =
   | PlanDeploymentComputeCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeComputeUnion$outboundSchema: z.ZodType<
@@ -1525,7 +1536,7 @@ export const PlanDeploymentComputeComputeUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeComputeUnion
 > = z.union([
   z.lazy(() => PlanDeploymentComputeCompute$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeComputeUnionToJSON(
@@ -1567,13 +1578,16 @@ export function planDeploymentComputeAwsToJSON(
 /** @internal */
 export type PlanDeploymentComputeAwsUnion$Outbound =
   | PlanDeploymentComputeAws$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeAwsUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeAwsUnion$Outbound,
   PlanDeploymentComputeAwsUnion
-> = z.union([z.lazy(() => PlanDeploymentComputeAws$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => PlanDeploymentComputeAws$outboundSchema),
+  z.string(),
+]);
 
 export function planDeploymentComputeAwsUnionToJSON(
   planDeploymentComputeAwsUnion: PlanDeploymentComputeAwsUnion,
@@ -1611,13 +1625,16 @@ export function planDeploymentComputeAzureToJSON(
 /** @internal */
 export type PlanDeploymentComputeAzureUnion$Outbound =
   | PlanDeploymentComputeAzure$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeAzureUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeAzureUnion$Outbound,
   PlanDeploymentComputeAzureUnion
-> = z.union([z.lazy(() => PlanDeploymentComputeAzure$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => PlanDeploymentComputeAzure$outboundSchema),
+  z.string(),
+]);
 
 export function planDeploymentComputeAzureUnionToJSON(
   planDeploymentComputeAzureUnion: PlanDeploymentComputeAzureUnion,
@@ -1653,13 +1670,16 @@ export function planDeploymentComputeGcpToJSON(
 /** @internal */
 export type PlanDeploymentComputeGcpUnion$Outbound =
   | PlanDeploymentComputeGcp$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeGcpUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeGcpUnion$Outbound,
   PlanDeploymentComputeGcpUnion
-> = z.union([z.lazy(() => PlanDeploymentComputeGcp$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => PlanDeploymentComputeGcp$outboundSchema),
+  z.string(),
+]);
 
 export function planDeploymentComputeGcpUnionToJSON(
   planDeploymentComputeGcpUnion: PlanDeploymentComputeGcpUnion,
@@ -1723,7 +1743,7 @@ export function planDeploymentComputeDomainsKubernetesToJSON(
 /** @internal */
 export type PlanDeploymentComputeDomainsKubernetesUnion$Outbound =
   | PlanDeploymentComputeDomainsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeDomainsKubernetesUnion$outboundSchema:
@@ -1732,7 +1752,7 @@ export const PlanDeploymentComputeDomainsKubernetesUnion$outboundSchema:
     PlanDeploymentComputeDomainsKubernetesUnion
   > = z.union([
     z.lazy(() => PlanDeploymentComputeDomainsKubernetes$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function planDeploymentComputeDomainsKubernetesUnionToJSON(
@@ -1748,12 +1768,12 @@ export function planDeploymentComputeDomainsKubernetesUnionToJSON(
 
 /** @internal */
 export type PlanDeploymentComputeDomainsCertificate$Outbound = {
-  aws?: PlanDeploymentComputeAws$Outbound | any | null | undefined;
-  azure?: PlanDeploymentComputeAzure$Outbound | any | null | undefined;
-  gcp?: PlanDeploymentComputeGcp$Outbound | any | null | undefined;
+  aws?: PlanDeploymentComputeAws$Outbound | string | null | undefined;
+  azure?: PlanDeploymentComputeAzure$Outbound | string | null | undefined;
+  gcp?: PlanDeploymentComputeGcp$Outbound | string | null | undefined;
   kubernetes?:
     | PlanDeploymentComputeDomainsKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1764,18 +1784,27 @@ export const PlanDeploymentComputeDomainsCertificate$outboundSchema: z.ZodType<
   PlanDeploymentComputeDomainsCertificate
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => PlanDeploymentComputeAws$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PlanDeploymentComputeAws$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => PlanDeploymentComputeAzure$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PlanDeploymentComputeAzure$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => PlanDeploymentComputeGcp$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PlanDeploymentComputeGcp$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeDomainsKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1885,7 +1914,7 @@ export function planDeploymentComputePublicEndpointTargetMachineAddressesToJSON(
 export type PlanDeploymentComputePublicEndpointTargetUnion$Outbound =
   | PlanDeploymentComputePublicEndpointTargetLoadBalancer$Outbound
   | PlanDeploymentComputePublicEndpointTargetMachineAddresses$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputePublicEndpointTargetUnion$outboundSchema:
@@ -1899,7 +1928,7 @@ export const PlanDeploymentComputePublicEndpointTargetUnion$outboundSchema:
     z.lazy(() =>
       PlanDeploymentComputePublicEndpointTargetMachineAddresses$outboundSchema
     ),
-    z.any(),
+    z.string(),
   ]);
 
 export function planDeploymentComputePublicEndpointTargetUnionToJSON(
@@ -1922,7 +1951,7 @@ export type PlanDeploymentComputeDomains$Outbound = {
   publicEndpointTarget?:
     | PlanDeploymentComputePublicEndpointTargetLoadBalancer$Outbound
     | PlanDeploymentComputePublicEndpointTargetMachineAddresses$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1946,7 +1975,7 @@ export const PlanDeploymentComputeDomains$outboundSchema: z.ZodType<
       z.lazy(() =>
         PlanDeploymentComputePublicEndpointTargetMachineAddresses$outboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1964,7 +1993,7 @@ export function planDeploymentComputeDomainsToJSON(
 /** @internal */
 export type PlanDeploymentComputeDomainsUnion$Outbound =
   | PlanDeploymentComputeDomains$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeDomainsUnion$outboundSchema: z.ZodType<
@@ -1972,7 +2001,7 @@ export const PlanDeploymentComputeDomainsUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeDomainsUnion
 > = z.union([
   z.lazy(() => PlanDeploymentComputeDomains$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeDomainsUnionToJSON(
@@ -1986,23 +2015,9 @@ export function planDeploymentComputeDomainsUnionToJSON(
 }
 
 /** @internal */
-export type PlanDeploymentComputeExternalBindings$Outbound = {};
-
-/** @internal */
-export const PlanDeploymentComputeExternalBindings$outboundSchema: z.ZodType<
-  PlanDeploymentComputeExternalBindings$Outbound,
-  PlanDeploymentComputeExternalBindings
-> = z.object({});
-
-export function planDeploymentComputeExternalBindingsToJSON(
-  planDeploymentComputeExternalBindings: PlanDeploymentComputeExternalBindings,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeExternalBindings$outboundSchema.parse(
-      planDeploymentComputeExternalBindings,
-    ),
-  );
-}
+export const PlanDeploymentComputeEndpointAccess$outboundSchema: z.ZodEnum<
+  typeof PlanDeploymentComputeEndpointAccess
+> = z.enum(PlanDeploymentComputeEndpointAccess);
 
 /** @internal */
 export const PlanDeploymentComputeHeartbeats$outboundSchema: z.ZodEnum<
@@ -2045,13 +2060,16 @@ export function planDeploymentComputeCloudToJSON(
 /** @internal */
 export type PlanDeploymentComputeCloudUnion$Outbound =
   | PlanDeploymentComputeCloud$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeCloudUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeCloudUnion$Outbound,
   PlanDeploymentComputeCloudUnion
-> = z.union([z.lazy(() => PlanDeploymentComputeCloud$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => PlanDeploymentComputeCloud$outboundSchema),
+  z.string(),
+]);
 
 export function planDeploymentComputeCloudUnionToJSON(
   planDeploymentComputeCloudUnion: PlanDeploymentComputeCloudUnion,
@@ -2070,7 +2088,7 @@ export const PlanDeploymentComputeOwnership$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PlanDeploymentComputeCluster$Outbound = {
-  cloud?: PlanDeploymentComputeCloud$Outbound | any | null | undefined;
+  cloud?: PlanDeploymentComputeCloud$Outbound | string | null | undefined;
   namespace?: string | null | undefined;
   ownership: string;
 };
@@ -2081,7 +2099,10 @@ export const PlanDeploymentComputeCluster$outboundSchema: z.ZodType<
   PlanDeploymentComputeCluster
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => PlanDeploymentComputeCloud$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => PlanDeploymentComputeCloud$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: PlanDeploymentComputeOwnership$outboundSchema,
@@ -2100,7 +2121,7 @@ export function planDeploymentComputeClusterToJSON(
 /** @internal */
 export type PlanDeploymentComputeClusterUnion$Outbound =
   | PlanDeploymentComputeCluster$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeClusterUnion$outboundSchema: z.ZodType<
@@ -2108,7 +2129,7 @@ export const PlanDeploymentComputeClusterUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeClusterUnion
 > = z.union([
   z.lazy(() => PlanDeploymentComputeCluster$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeClusterUnionToJSON(
@@ -2411,7 +2432,7 @@ export type PlanDeploymentComputeProviderUnion4$Outbound =
   | PlanDeploymentComputeProviderAwsAlb4$Outbound
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$Outbound
   | PlanDeploymentComputeProviderGkeGateway4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeProviderUnion4$outboundSchema: z.ZodType<
@@ -2423,7 +2444,7 @@ export const PlanDeploymentComputeProviderUnion4$outboundSchema: z.ZodType<
     PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$outboundSchema
   ),
   z.lazy(() => PlanDeploymentComputeProviderGkeGateway4$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeProviderUnion4ToJSON(
@@ -2447,7 +2468,7 @@ export type PlanDeploymentComputeRouteGateway2$Outbound = {
     | PlanDeploymentComputeProviderAwsAlb4$Outbound
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$Outbound
     | PlanDeploymentComputeProviderGkeGateway4$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -2470,7 +2491,7 @@ export const PlanDeploymentComputeRouteGateway2$outboundSchema: z.ZodType<
         PlanDeploymentComputeProviderAzureApplicationGatewayForContainers4$outboundSchema
       ),
       z.lazy(() => PlanDeploymentComputeProviderGkeGateway4$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -2601,7 +2622,7 @@ export type PlanDeploymentComputeProviderUnion3$Outbound =
   | PlanDeploymentComputeProviderAwsAlb3$Outbound
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$Outbound
   | PlanDeploymentComputeProviderGkeGateway3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeProviderUnion3$outboundSchema: z.ZodType<
@@ -2613,7 +2634,7 @@ export const PlanDeploymentComputeProviderUnion3$outboundSchema: z.ZodType<
     PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$outboundSchema
   ),
   z.lazy(() => PlanDeploymentComputeProviderGkeGateway3$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeProviderUnion3ToJSON(
@@ -2636,7 +2657,7 @@ export type PlanDeploymentComputeRouteIngress2$Outbound = {
     | PlanDeploymentComputeProviderAwsAlb3$Outbound
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$Outbound
     | PlanDeploymentComputeProviderGkeGateway3$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -2658,7 +2679,7 @@ export const PlanDeploymentComputeRouteIngress2$outboundSchema: z.ZodType<
         PlanDeploymentComputeProviderAzureApplicationGatewayForContainers3$outboundSchema
       ),
       z.lazy(() => PlanDeploymentComputeProviderGkeGateway3$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3037,7 +3058,7 @@ export type PlanDeploymentComputeProviderUnion2$Outbound =
   | PlanDeploymentComputeProviderAwsAlb2$Outbound
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$Outbound
   | PlanDeploymentComputeProviderGkeGateway2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeProviderUnion2$outboundSchema: z.ZodType<
@@ -3049,7 +3070,7 @@ export const PlanDeploymentComputeProviderUnion2$outboundSchema: z.ZodType<
     PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$outboundSchema
   ),
   z.lazy(() => PlanDeploymentComputeProviderGkeGateway2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeProviderUnion2ToJSON(
@@ -3073,7 +3094,7 @@ export type PlanDeploymentComputeRouteGateway1$Outbound = {
     | PlanDeploymentComputeProviderAwsAlb2$Outbound
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$Outbound
     | PlanDeploymentComputeProviderGkeGateway2$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -3096,7 +3117,7 @@ export const PlanDeploymentComputeRouteGateway1$outboundSchema: z.ZodType<
         PlanDeploymentComputeProviderAzureApplicationGatewayForContainers2$outboundSchema
       ),
       z.lazy(() => PlanDeploymentComputeProviderGkeGateway2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3227,7 +3248,7 @@ export type PlanDeploymentComputeProviderUnion1$Outbound =
   | PlanDeploymentComputeProviderAwsAlb1$Outbound
   | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$Outbound
   | PlanDeploymentComputeProviderGkeGateway1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeProviderUnion1$outboundSchema: z.ZodType<
@@ -3239,7 +3260,7 @@ export const PlanDeploymentComputeProviderUnion1$outboundSchema: z.ZodType<
     PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$outboundSchema
   ),
   z.lazy(() => PlanDeploymentComputeProviderGkeGateway1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeProviderUnion1ToJSON(
@@ -3262,7 +3283,7 @@ export type PlanDeploymentComputeRouteIngress1$Outbound = {
     | PlanDeploymentComputeProviderAwsAlb1$Outbound
     | PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$Outbound
     | PlanDeploymentComputeProviderGkeGateway1$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -3284,7 +3305,7 @@ export const PlanDeploymentComputeRouteIngress1$outboundSchema: z.ZodType<
         PlanDeploymentComputeProviderAzureApplicationGatewayForContainers1$outboundSchema
       ),
       z.lazy(() => PlanDeploymentComputeProviderGkeGateway1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3405,7 +3426,7 @@ export type PlanDeploymentComputeExposureUnion$Outbound =
   | PlanDeploymentComputeExposureCustom$Outbound
   | PlanDeploymentComputeExposureGenerated$Outbound
   | PlanDeploymentComputeExposureDisabled$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeExposureUnion$outboundSchema: z.ZodType<
@@ -3415,7 +3436,7 @@ export const PlanDeploymentComputeExposureUnion$outboundSchema: z.ZodType<
   z.lazy(() => PlanDeploymentComputeExposureCustom$outboundSchema),
   z.lazy(() => PlanDeploymentComputeExposureGenerated$outboundSchema),
   z.lazy(() => PlanDeploymentComputeExposureDisabled$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeExposureUnionToJSON(
@@ -3430,12 +3451,12 @@ export function planDeploymentComputeExposureUnionToJSON(
 
 /** @internal */
 export type PlanDeploymentComputeKubernetes$Outbound = {
-  cluster?: PlanDeploymentComputeCluster$Outbound | any | null | undefined;
+  cluster?: PlanDeploymentComputeCluster$Outbound | string | null | undefined;
   exposure?:
     | PlanDeploymentComputeExposureCustom$Outbound
     | PlanDeploymentComputeExposureGenerated$Outbound
     | PlanDeploymentComputeExposureDisabled$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -3448,7 +3469,7 @@ export const PlanDeploymentComputeKubernetes$outboundSchema: z.ZodType<
   cluster: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeCluster$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   exposure: z.nullable(
@@ -3456,7 +3477,7 @@ export const PlanDeploymentComputeKubernetes$outboundSchema: z.ZodType<
       z.lazy(() => PlanDeploymentComputeExposureCustom$outboundSchema),
       z.lazy(() => PlanDeploymentComputeExposureGenerated$outboundSchema),
       z.lazy(() => PlanDeploymentComputeExposureDisabled$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3474,7 +3495,7 @@ export function planDeploymentComputeKubernetesToJSON(
 /** @internal */
 export type PlanDeploymentComputeKubernetesUnion$Outbound =
   | PlanDeploymentComputeKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeKubernetesUnion$outboundSchema: z.ZodType<
@@ -3482,7 +3503,7 @@ export const PlanDeploymentComputeKubernetesUnion$outboundSchema: z.ZodType<
   PlanDeploymentComputeKubernetesUnion
 > = z.union([
   z.lazy(() => PlanDeploymentComputeKubernetes$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeKubernetesUnionToJSON(
@@ -3696,7 +3717,7 @@ export type PlanDeploymentComputeNetworkUnion$Outbound =
   | PlanDeploymentComputeNetworkByoVnetAzure$Outbound
   | PlanDeploymentComputeNetworkUseDefault$Outbound
   | PlanDeploymentComputeNetworkCreate$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const PlanDeploymentComputeNetworkUnion$outboundSchema: z.ZodType<
@@ -3708,7 +3729,7 @@ export const PlanDeploymentComputeNetworkUnion$outboundSchema: z.ZodType<
   z.lazy(() => PlanDeploymentComputeNetworkByoVnetAzure$outboundSchema),
   z.lazy(() => PlanDeploymentComputeNetworkUseDefault$outboundSchema),
   z.lazy(() => PlanDeploymentComputeNetworkCreate$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function planDeploymentComputeNetworkUnionToJSON(
@@ -3733,17 +3754,18 @@ export const PlanDeploymentComputeUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PlanDeploymentComputeStackSettings$Outbound = {
-  compute?: PlanDeploymentComputeCompute$Outbound | any | null | undefined;
+  compute?: PlanDeploymentComputeCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
-  domains?: PlanDeploymentComputeDomains$Outbound | any | null | undefined;
+  domains?: PlanDeploymentComputeDomains$Outbound | string | null | undefined;
+  endpointAccess?: string | undefined;
   externalBindings?:
-    | PlanDeploymentComputeExternalBindings$Outbound
+    | { [k: string]: models.ExternalBindingUnion$Outbound }
     | null
     | undefined;
   heartbeats?: string | undefined;
   kubernetes?:
     | PlanDeploymentComputeKubernetes$Outbound
-    | any
+    | string
     | null
     | undefined;
   network?:
@@ -3752,7 +3774,7 @@ export type PlanDeploymentComputeStackSettings$Outbound = {
     | PlanDeploymentComputeNetworkByoVnetAzure$Outbound
     | PlanDeploymentComputeNetworkUseDefault$Outbound
     | PlanDeploymentComputeNetworkCreate$Outbound
-    | any
+    | string
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
@@ -3768,7 +3790,7 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
   compute: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeCompute$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   deploymentModel: PlanDeploymentComputeDeploymentModel$outboundSchema
@@ -3776,17 +3798,18 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
   domains: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeDomains$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
+  endpointAccess: PlanDeploymentComputeEndpointAccess$outboundSchema.optional(),
   externalBindings: z.nullable(
-    z.lazy(() => PlanDeploymentComputeExternalBindings$outboundSchema),
+    z.record(z.string(), models.ExternalBindingUnion$outboundSchema),
   ).optional(),
   heartbeats: PlanDeploymentComputeHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   network: z.nullable(
@@ -3796,7 +3819,7 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => PlanDeploymentComputeNetworkByoVnetAzure$outboundSchema),
       z.lazy(() => PlanDeploymentComputeNetworkUseDefault$outboundSchema),
       z.lazy(() => PlanDeploymentComputeNetworkCreate$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(

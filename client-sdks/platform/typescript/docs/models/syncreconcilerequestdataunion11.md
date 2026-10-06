@@ -19,15 +19,15 @@ const value: models.DataAwsVpc = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "timed-out",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "scaling",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "awsVpc",
 };

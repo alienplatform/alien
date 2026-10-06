@@ -21,9 +21,9 @@ const value: models.DeploymentDetailResponsePreparedStack = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

@@ -146,6 +146,7 @@ mod tests {
                 hash: "empty".to_string(),
                 created_at: "1970-01-01T00:00:00Z".to_string(),
             },
+            stored_secret_input_ids: None,
             input_values: Default::default(),
             allow_frozen_changes: false,
             compute_backend: None,
@@ -160,6 +161,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 

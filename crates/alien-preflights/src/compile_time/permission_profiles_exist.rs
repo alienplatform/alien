@@ -4,7 +4,7 @@ use alien_core::{Platform, Stack};
 
 /// Ensures that all permission profiles referenced by resources actually exist in the stack's permissions config.
 ///
-/// This check validates that Workers, Containers, and Builds reference existing permission profiles.
+/// This check validates that Workers, Containers, Daemons, and Builds reference existing permission profiles.
 /// Running this BEFORE mutations ensures we catch typos and missing profiles early,
 /// rather than having them silently created by mutations.
 pub struct PermissionProfilesExistCheck;
@@ -18,6 +18,13 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
         // Run if stack has any resources that might reference permission profiles
         stack.resources().any(|(_, resource_entry)| {
+            if resource_entry
+                .config
+                .downcast_ref::<alien_core::Daemon>()
+                .is_some()
+            {
+                return true;
+            }
             resource_entry
                 .config
                 .downcast_ref::<alien_core::Worker>()
@@ -85,6 +92,16 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
                 }
             }
 
+            if let Some(daemon) = resource_entry.config.downcast_ref::<alien_core::Daemon>() {
+                if let Some(profile_name) = daemon.get_permissions() {
+                    if !defined_profiles.contains_key(profile_name) {
+                        errors.push(format!(
+                            "Daemon '{resource_id}' references permission profile '{profile_name}' which does not exist."
+                        ));
+                    }
+                }
+            }
+
             // Check Builds
             if let Some(build) = resource_entry.config.downcast_ref::<alien_core::Build>() {
                 let profile_name = &build.permissions;
@@ -123,6 +140,28 @@ mod tests {
         PermissionProfile, PermissionsConfig, ResourceEntry, ResourceLifecycle, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
+
+    #[tokio::test]
+    async fn daemon_profile_is_optional_but_explicit_names_must_exist() {
+        for profile in [None, Some("reader")] {
+            let daemon = alien_core::Daemon::new("observer".to_string())
+                .code(alien_core::DaemonCode::Image {
+                    image: "observer:latest".to_string(),
+                })
+                .maybe_permissions(profile.map(str::to_owned))
+                .build();
+            let stack = Stack::new("example".to_string())
+                .add(daemon, ResourceLifecycle::Live)
+                .build();
+            assert!(PermissionProfilesExistCheck.should_run(&stack, Platform::Gcp));
+            let result = PermissionProfilesExistCheck
+                .check(&stack, Platform::Gcp)
+                .await
+                .unwrap();
+            assert_eq!(result.success, profile.is_none());
+            assert_eq!(result.errors.len(), usize::from(profile.is_some()));
+        }
+    }
 
     #[tokio::test]
     async fn test_permission_profile_exists_success() {

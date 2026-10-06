@@ -2402,3 +2402,30 @@ async fn initialize_refuses_a_deployer_value_for_a_generated_secret() {
         .unwrap();
     assert!(existing.is_none(), "nothing is created");
 }
+
+#[tokio::test]
+async fn initialize_cannot_supply_trusted_stored_secret_presence() {
+    let fixture = make_fixture(None).await;
+    let (status, response) = post_initialize(
+        &fixture,
+        serde_json::json!({
+            "name": "demo-presence", "platform": "aws", "initialDesiredRelease": "none",
+            "storedSecretInputIds": ["apiKey"],
+            "deploymentConfig": { "storedSecretInputIds": ["apiKey"] }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {response:#}");
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            response["deploymentId"].as_str().expect("deployment id"),
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert!(deployment.deployment_config.is_none());
+    assert!(deployment.input_values.is_empty());
+    assert!(deployment.desired_release_id.is_none());
+}

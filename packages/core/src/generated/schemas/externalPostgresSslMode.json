@@ -1,0 +1,1 @@
+{"type":"string","description":"TLS policy for an operator-provided / BYO Postgres database.\n\nUnlike libpq's ambiguous `prefer` mode, both choices map exactly to the\nconnection settings exposed by every supported SDK.","enum":["verify-full","disable"],"x-readme-ref-name":"ExternalPostgresSslMode"}

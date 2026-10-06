@@ -85,6 +85,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
     }
 
     Some(HorizonMachineImage {
+        runtime_isolation_generation: 0,
         channel: "byo".to_string(),
         machine_image_version: "byo-local".to_string(),
         horizond_version: "byo".to_string(),
@@ -725,6 +726,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
+                stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
@@ -749,6 +751,7 @@ impl DeploymentLoop {
                 manager_url: Some(self.config.base_url()),
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
+                volume_restores: Vec::new(),
             }
         };
 

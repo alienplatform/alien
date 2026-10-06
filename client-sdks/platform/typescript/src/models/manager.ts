@@ -111,7 +111,7 @@ export type Manager = {
    */
   setupStatus?: ManagerSetupStatus | null | undefined;
   /**
-   * Manager URL (self-reported via heartbeat). DeepStore endpoints are exposed through this URL (e.g., {url}/v1/logs)
+   * Manager URL (self-reported via heartbeat). Log ingestion endpoints are exposed through this URL (e.g., {url}/v1/logs)
    */
   url?: string | null | undefined;
   /**

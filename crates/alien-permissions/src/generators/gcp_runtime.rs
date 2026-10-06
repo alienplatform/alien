@@ -52,6 +52,8 @@ pub enum GcpBindingTargetScope {
     Project,
     /// Bind the role on the current resource IAM policy.
     CurrentResource,
+    /// Bind on the executing service account's own IAM policy.
+    ServiceAccount,
 }
 
 /// Resource family for current-resource IAM bindings that need provider-specific routing.
@@ -78,6 +80,9 @@ pub struct GcpIamBinding {
     pub members: Vec<String>,
     /// IAM policy scope where this role should be bound.
     pub target: GcpBindingTargetScope,
+    /// Explicit full IAM target for an executing-service-account binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_resource_name: Option<String>,
     /// Resource family for current-resource IAM policy routing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_kind: Option<GcpBindingResourceKind>,
@@ -336,6 +341,32 @@ impl GcpRuntimePermissionsGenerator {
             };
 
             let target = binding_target_scope(binding_spec);
+            let target_resource_name = if target == GcpBindingTargetScope::ServiceAccount {
+                for variable in ["projectName", "serviceAccountName"] {
+                    let value = context
+                        .get_variable(variable)
+                        .filter(|value| !value.trim().is_empty());
+                    if value.is_none()
+                        || value.is_some_and(|value| {
+                            value.contains(&format!("${{{variable}}}"))
+                                || matches!(value, "SERVICE_ACCOUNT" | "PROJECT_NAME")
+                        })
+                    {
+                        return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                            platform: "gcp".to_string(),
+                            message: format!(
+                                "Executing service-account binding requires a resolved {variable}"
+                            ),
+                        }));
+                    }
+                }
+                Some(VariableInterpolator::interpolate_variables(
+                    &binding_spec.scope,
+                    context,
+                )?)
+            } else {
+                None
+            };
             let resource_kind = binding_resource_kind(binding_spec);
             let condition = self.binding_condition(binding_spec, context)?;
 
@@ -345,6 +376,7 @@ impl GcpRuntimePermissionsGenerator {
                         role: predefined_role.clone(),
                         members: vec![service_account.clone()],
                         target,
+                        target_resource_name: target_resource_name.clone(),
                         resource_kind,
                         condition: condition.clone(),
                     });
@@ -374,6 +406,7 @@ impl GcpRuntimePermissionsGenerator {
                 role: custom_role.name.clone(),
                 members: vec![service_account.clone()],
                 target,
+                target_resource_name,
                 resource_kind,
                 condition,
             });
@@ -747,6 +780,9 @@ fn stable_role_hash(value: &str) -> String {
 
 fn binding_target_scope(binding_spec: &GcpBindingSpec) -> GcpBindingTargetScope {
     let scope = binding_spec.scope.trim();
+    if scope == "projects/${projectName}/serviceAccounts/${serviceAccountName}@${projectName}.iam.gserviceaccount.com" {
+        return GcpBindingTargetScope::ServiceAccount;
+    }
     match scope.strip_prefix("projects/") {
         Some(project_scope) if !project_scope.contains('/') => GcpBindingTargetScope::Project,
         _ => GcpBindingTargetScope::CurrentResource,

@@ -286,6 +286,28 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("sets or turns off persistent volume backups", () => {
+    const base = () =>
+      new alien.Container("db")
+        .code({ type: "image", image: "postgres:16-alpine" })
+        .cpu(0.5)
+        .memory("512Mi")
+        .port(5432)
+        .permissions("database")
+
+    const hourly = base()
+      .persistentStorage("20Gi", { backups: { intervalHours: 1, retentionDays: 3 } })
+      .build()
+    expect(hourly.config.persistentStorage?.backups).toEqual({
+      enabled: true,
+      intervalHours: 1,
+      retentionDays: 3,
+    })
+
+    const off = base().persistentStorage("20Gi", { backups: false }).build()
+    expect(off.config.persistentStorage?.backups?.enabled).toBe(false)
+  })
+
   it("builds container and daemon stop grace periods", () => {
     const container = new alien.Container("api")
       .code({ type: "image", image: "nginx:latest" })

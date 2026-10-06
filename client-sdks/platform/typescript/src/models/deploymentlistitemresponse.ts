@@ -44,6 +44,7 @@ export const DeploymentListItemResponseStatus = {
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
   WaitingForMachines: "waiting-for-machines",
+  WaitingForSecrets: "waiting-for-secrets",
   ProvisioningFailed: "provisioning-failed",
   Running: "running",
   RefreshFailed: "refresh-failed",
@@ -217,7 +218,7 @@ export type DeploymentListItemResponseEnvironmentInfoUnion =
   | DeploymentListItemResponseEnvironmentInfoLocal
   | DeploymentListItemResponseEnvironmentInfoAws
   | DeploymentListItemResponseEnvironmentInfoTest
-  | any;
+  | string;
 
 /**
  * Setup source that imported this deployment
@@ -375,7 +376,7 @@ export type DeploymentListItemResponse = {
     | DeploymentListItemResponseEnvironmentInfoLocal
     | DeploymentListItemResponseEnvironmentInfoAws
     | DeploymentListItemResponseEnvironmentInfoTest
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -627,7 +628,7 @@ export const DeploymentListItemResponseEnvironmentInfoUnion$inboundSchema:
     z.lazy(() => DeploymentListItemResponseEnvironmentInfoLocal$inboundSchema),
     z.lazy(() => DeploymentListItemResponseEnvironmentInfoAws$inboundSchema),
     z.lazy(() => DeploymentListItemResponseEnvironmentInfoTest$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function deploymentListItemResponseEnvironmentInfoUnionFromJSON(
@@ -707,7 +708,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
         DeploymentListItemResponseEnvironmentInfoAws$inboundSchema
       ),
       z.lazy(() => DeploymentListItemResponseEnvironmentInfoTest$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   currentReleaseId: z.nullable(z.string()).optional(),

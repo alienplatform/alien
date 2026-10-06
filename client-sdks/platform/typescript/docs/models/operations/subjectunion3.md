@@ -11,9 +11,9 @@ const value: operations.Subject3 = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

@@ -10,9 +10,9 @@ const value:
   models.PersistImportedDeploymentRequestPendingPreparedStackValidation = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

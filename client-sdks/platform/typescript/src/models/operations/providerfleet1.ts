@@ -21,7 +21,7 @@ export type Memory11 = {
   value: number;
 };
 
-export type MemoryUnion11 = Memory11 | any;
+export type MemoryUnion11 = Memory11 | string;
 
 export type NodeCounts = {
   current?: number | null | undefined;
@@ -44,7 +44,7 @@ export type CpuAllocatable = {
   value: number;
 };
 
-export type AllocatableCpuUnion = CpuAllocatable | any;
+export type AllocatableCpuUnion = CpuAllocatable | string;
 
 export const MemoryAllocatableUnit = {
   Count: "count",
@@ -61,11 +61,11 @@ export type MemoryAllocatable = {
   value: number;
 };
 
-export type AllocatableMemoryUnion = MemoryAllocatable | any;
+export type AllocatableMemoryUnion = MemoryAllocatable | string;
 
 export type Allocatable = {
-  cpu?: CpuAllocatable | any | null | undefined;
-  memory?: MemoryAllocatable | any | null | undefined;
+  cpu?: CpuAllocatable | string | null | undefined;
+  memory?: MemoryAllocatable | string | null | undefined;
   pods?: number | null | undefined;
 };
 
@@ -84,7 +84,7 @@ export type CpuCapacity = {
   value: number;
 };
 
-export type CapacityCpuUnion = CpuCapacity | any;
+export type CapacityCpuUnion = CpuCapacity | string;
 
 export const MemoryCapacityUnit = {
   Count: "count",
@@ -101,11 +101,11 @@ export type MemoryCapacity = {
   value: number;
 };
 
-export type CapacityMemoryUnion = MemoryCapacity | any;
+export type CapacityMemoryUnion = MemoryCapacity | string;
 
 export type Capacity = {
-  cpu?: CpuCapacity | any | null | undefined;
-  memory?: MemoryCapacity | any | null | undefined;
+  cpu?: CpuCapacity | string | null | undefined;
+  memory?: MemoryCapacity | string | null | undefined;
   pods?: number | null | undefined;
 };
 
@@ -131,7 +131,7 @@ export type UsageCpu = {
   value: number;
 };
 
-export type UsageCpuUnion = UsageCpu | any;
+export type UsageCpuUnion = UsageCpu | string;
 
 export const UsageMemoryUnit = {
   Count: "count",
@@ -148,14 +148,14 @@ export type UsageMemory = {
   value: number;
 };
 
-export type UsageMemoryUnion = UsageMemory | any;
+export type UsageMemoryUnion = UsageMemory | string;
 
 export type Usage = {
-  cpu?: UsageCpu | any | null | undefined;
-  memory?: UsageMemory | any | null | undefined;
+  cpu?: UsageCpu | string | null | undefined;
+  memory?: UsageMemory | string | null | undefined;
 };
 
-export type UsageUnion = Usage | any;
+export type UsageUnion = Usage | string;
 
 export type NodeStatus = {
   allocatable: Allocatable;
@@ -168,7 +168,7 @@ export type NodeStatus = {
   ready: boolean;
   roles: Array<string>;
   uid?: string | null | undefined;
-  usage?: Usage | any | null | undefined;
+  usage?: Usage | string | null | undefined;
 };
 
 export type PodCounts = {
@@ -238,7 +238,7 @@ export type GetResourceDeploymentDetailDataStatus24 = {
 export type GetResourceDeploymentDetailData1 = {
   cpu?: CpuUnion11 | null | undefined;
   events: Array<Event12>;
-  memory?: Memory11 | any | null | undefined;
+  memory?: Memory11 | string | null | undefined;
   name: string;
   namespace?: string | null | undefined;
   nodeCounts: NodeCounts;
@@ -351,7 +351,7 @@ export type CapacityBlocker4 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion4 = CapacityBlocker4 | any;
+export type CapacityBlockerUnion4 = CapacityBlocker4 | string;
 
 export type DrainProgressBlocker4 = {
   reason: string;
@@ -380,7 +380,7 @@ export type DrainProgress4 = {
   status: DrainProgressStatus4;
 };
 
-export type DrainProgressUnion4 = DrainProgress4 | any;
+export type DrainProgressUnion4 = DrainProgress4 | string;
 
 export const UtilizationUnit4 = {
   Count: "count",
@@ -397,27 +397,27 @@ export type Utilization4 = {
   value: number;
 };
 
-export type UtilizationUnion4 = Utilization4 | any;
+export type UtilizationUnion4 = Utilization4 | string;
 
 export type Recommendation4 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization4 | any | null | undefined;
+  utilization?: Utilization4 | string | null | undefined;
 };
 
-export type RecommendationUnion4 = Recommendation4 | any;
+export type RecommendationUnion4 = Recommendation4 | string;
 
 export type CapacityGroup4 = {
-  capacityBlocker?: CapacityBlocker4 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker4 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress4 | any | null | undefined;
+  drainProgress?: DrainProgress4 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation4 | any | null | undefined;
+  recommendation?: Recommendation4 | string | null | undefined;
 };
 
 export const CpuUnit10 = {
@@ -435,7 +435,7 @@ export type Cpu10 = {
   value: number;
 };
 
-export type CpuUnion10 = Cpu10 | any;
+export type CpuUnion10 = Cpu10 | string;
 
 export type DrainBlocker = {
   reason: string;
@@ -479,7 +479,7 @@ export type Memory10 = {
   value: number;
 };
 
-export type MemoryUnion10 = Memory10 | any;
+export type MemoryUnion10 = Memory10 | string;
 
 export type Nodes4 = {
   current?: number | null | undefined;
@@ -548,9 +548,9 @@ export type GetResourceDeploymentDetailDataStatus22 = {
 export type DataMachines2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup4>;
-  cpu?: Cpu10 | any | null | undefined;
+  cpu?: Cpu10 | string | null | undefined;
   machines: Array<Machine>;
-  memory?: Memory10 | any | null | undefined;
+  memory?: Memory10 | string | null | undefined;
   name: string;
   nodes: Nodes4;
   status: GetResourceDeploymentDetailDataStatus22;
@@ -573,7 +573,7 @@ export type CapacityBlocker3 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
+export type CapacityBlockerUnion3 = CapacityBlocker3 | string;
 
 export type DrainProgressBlocker3 = {
   reason: string;
@@ -602,7 +602,7 @@ export type DrainProgress3 = {
   status: DrainProgressStatus3;
 };
 
-export type DrainProgressUnion3 = DrainProgress3 | any;
+export type DrainProgressUnion3 = DrainProgress3 | string;
 
 export const UtilizationUnit3 = {
   Count: "count",
@@ -619,27 +619,27 @@ export type Utilization3 = {
   value: number;
 };
 
-export type UtilizationUnion3 = Utilization3 | any;
+export type UtilizationUnion3 = Utilization3 | string;
 
 export type Recommendation3 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization3 | any | null | undefined;
+  utilization?: Utilization3 | string | null | undefined;
 };
 
-export type RecommendationUnion3 = Recommendation3 | any;
+export type RecommendationUnion3 = Recommendation3 | string;
 
 export type CapacityGroup3 = {
-  capacityBlocker?: CapacityBlocker3 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker3 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress3 | any | null | undefined;
+  drainProgress?: DrainProgress3 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation3 | any | null | undefined;
+  recommendation?: Recommendation3 | string | null | undefined;
 };
 
 export const CpuUnit9 = {
@@ -657,7 +657,7 @@ export type Cpu9 = {
   value: number;
 };
 
-export type CpuUnion9 = Cpu9 | any;
+export type CpuUnion9 = Cpu9 | string;
 
 export const MemoryUnit9 = {
   Count: "count",
@@ -674,7 +674,7 @@ export type Memory9 = {
   value: number;
 };
 
-export type MemoryUnion9 = Memory9 | any;
+export type MemoryUnion9 = Memory9 | string;
 
 export type Nodes3 = {
   current?: number | null | undefined;
@@ -751,8 +751,8 @@ export type GetResourceDeploymentDetailDataStatus21 = {
 export type DataAzure2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup3>;
-  cpu?: Cpu9 | any | null | undefined;
-  memory?: Memory9 | any | null | undefined;
+  cpu?: Cpu9 | string | null | undefined;
+  memory?: Memory9 | string | null | undefined;
   name: string;
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
@@ -777,7 +777,7 @@ export type CapacityBlocker2 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
+export type CapacityBlockerUnion2 = CapacityBlocker2 | string;
 
 export type DrainProgressBlocker2 = {
   reason: string;
@@ -806,7 +806,7 @@ export type DrainProgress2 = {
   status: DrainProgressStatus2;
 };
 
-export type DrainProgressUnion2 = DrainProgress2 | any;
+export type DrainProgressUnion2 = DrainProgress2 | string;
 
 export const UtilizationUnit2 = {
   Count: "count",
@@ -823,27 +823,27 @@ export type Utilization2 = {
   value: number;
 };
 
-export type UtilizationUnion2 = Utilization2 | any;
+export type UtilizationUnion2 = Utilization2 | string;
 
 export type Recommendation2 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization2 | any | null | undefined;
+  utilization?: Utilization2 | string | null | undefined;
 };
 
-export type RecommendationUnion2 = Recommendation2 | any;
+export type RecommendationUnion2 = Recommendation2 | string;
 
 export type CapacityGroup2 = {
-  capacityBlocker?: CapacityBlocker2 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker2 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress2 | any | null | undefined;
+  drainProgress?: DrainProgress2 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation2 | any | null | undefined;
+  recommendation?: Recommendation2 | string | null | undefined;
 };
 
 export const CpuUnit8 = {
@@ -861,7 +861,7 @@ export type Cpu8 = {
   value: number;
 };
 
-export type CpuUnion8 = Cpu8 | any;
+export type CpuUnion8 = Cpu8 | string;
 
 export const MemoryUnit8 = {
   Count: "count",
@@ -878,7 +878,7 @@ export type Memory8 = {
   value: number;
 };
 
-export type MemoryUnion8 = Memory8 | any;
+export type MemoryUnion8 = Memory8 | string;
 
 export type Nodes2 = {
   current?: number | null | undefined;
@@ -955,8 +955,8 @@ export type GetResourceDeploymentDetailDataStatus20 = {
 export type DataGcp2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup2>;
-  cpu?: Cpu8 | any | null | undefined;
-  memory?: Memory8 | any | null | undefined;
+  cpu?: Cpu8 | string | null | undefined;
+  memory?: Memory8 | string | null | undefined;
   name: string;
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
@@ -981,7 +981,7 @@ export type CapacityBlocker1 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
+export type CapacityBlockerUnion1 = CapacityBlocker1 | string;
 
 export type DrainProgressBlocker1 = {
   reason: string;
@@ -1010,7 +1010,7 @@ export type DrainProgress1 = {
   status: DrainProgressStatus1;
 };
 
-export type DrainProgressUnion1 = DrainProgress1 | any;
+export type DrainProgressUnion1 = DrainProgress1 | string;
 
 export const UtilizationUnit1 = {
   Count: "count",
@@ -1027,27 +1027,27 @@ export type Utilization1 = {
   value: number;
 };
 
-export type UtilizationUnion1 = Utilization1 | any;
+export type UtilizationUnion1 = Utilization1 | string;
 
 export type Recommendation1 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization1 | any | null | undefined;
+  utilization?: Utilization1 | string | null | undefined;
 };
 
-export type RecommendationUnion1 = Recommendation1 | any;
+export type RecommendationUnion1 = Recommendation1 | string;
 
 export type CapacityGroup1 = {
-  capacityBlocker?: CapacityBlocker1 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker1 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress1 | any | null | undefined;
+  drainProgress?: DrainProgress1 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation1 | any | null | undefined;
+  recommendation?: Recommendation1 | string | null | undefined;
 };
 
 export const CpuUnit7 = {
@@ -1065,7 +1065,7 @@ export type Cpu7 = {
   value: number;
 };
 
-export type CpuUnion7 = Cpu7 | any;
+export type CpuUnion7 = Cpu7 | string;
 
 export const MemoryUnit7 = {
   Count: "count",
@@ -1082,7 +1082,7 @@ export type Memory7 = {
   value: number;
 };
 
-export type MemoryUnion7 = Memory7 | any;
+export type MemoryUnion7 = Memory7 | string;
 
 export type Nodes1 = {
   current?: number | null | undefined;
@@ -1116,7 +1116,7 @@ export function memory11FromJSON(
 
 /** @internal */
 export const MemoryUnion11$inboundSchema: z.ZodType<MemoryUnion11, unknown> = z
-  .union([z.lazy(() => Memory11$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory11$inboundSchema), z.string()]);
 
 export function memoryUnion11FromJSON(
   jsonString: string,
@@ -1172,7 +1172,7 @@ export function cpuAllocatableFromJSON(
 export const AllocatableCpuUnion$inboundSchema: z.ZodType<
   AllocatableCpuUnion,
   unknown
-> = z.union([z.lazy(() => CpuAllocatable$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuAllocatable$inboundSchema), z.string()]);
 
 export function allocatableCpuUnionFromJSON(
   jsonString: string,
@@ -1212,7 +1212,7 @@ export function memoryAllocatableFromJSON(
 export const AllocatableMemoryUnion$inboundSchema: z.ZodType<
   AllocatableMemoryUnion,
   unknown
-> = z.union([z.lazy(() => MemoryAllocatable$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryAllocatable$inboundSchema), z.string()]);
 
 export function allocatableMemoryUnionFromJSON(
   jsonString: string,
@@ -1228,10 +1228,10 @@ export function allocatableMemoryUnionFromJSON(
 export const Allocatable$inboundSchema: z.ZodType<Allocatable, unknown> = z
   .object({
     cpu: z.nullable(
-      z.union([z.lazy(() => CpuAllocatable$inboundSchema), z.any()]),
+      z.union([z.lazy(() => CpuAllocatable$inboundSchema), z.string()]),
     ).optional(),
     memory: z.nullable(
-      z.union([z.lazy(() => MemoryAllocatable$inboundSchema), z.any()]),
+      z.union([z.lazy(() => MemoryAllocatable$inboundSchema), z.string()]),
     ).optional(),
     pods: z.nullable(z.int()).optional(),
   });
@@ -1271,7 +1271,7 @@ export function cpuCapacityFromJSON(
 export const CapacityCpuUnion$inboundSchema: z.ZodType<
   CapacityCpuUnion,
   unknown
-> = z.union([z.lazy(() => CpuCapacity$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuCapacity$inboundSchema), z.string()]);
 
 export function capacityCpuUnionFromJSON(
   jsonString: string,
@@ -1309,7 +1309,7 @@ export function memoryCapacityFromJSON(
 export const CapacityMemoryUnion$inboundSchema: z.ZodType<
   CapacityMemoryUnion,
   unknown
-> = z.union([z.lazy(() => MemoryCapacity$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryCapacity$inboundSchema), z.string()]);
 
 export function capacityMemoryUnionFromJSON(
   jsonString: string,
@@ -1323,10 +1323,11 @@ export function capacityMemoryUnionFromJSON(
 
 /** @internal */
 export const Capacity$inboundSchema: z.ZodType<Capacity, unknown> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuCapacity$inboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => CpuCapacity$inboundSchema), z.string()]),
+  ).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryCapacity$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryCapacity$inboundSchema), z.string()]),
   ).optional(),
   pods: z.nullable(z.int()).optional(),
 });
@@ -1384,7 +1385,7 @@ export function usageCpuFromJSON(
 
 /** @internal */
 export const UsageCpuUnion$inboundSchema: z.ZodType<UsageCpuUnion, unknown> = z
-  .union([z.lazy(() => UsageCpu$inboundSchema), z.any()]);
+  .union([z.lazy(() => UsageCpu$inboundSchema), z.string()]);
 
 export function usageCpuUnionFromJSON(
   jsonString: string,
@@ -1421,7 +1422,7 @@ export function usageMemoryFromJSON(
 export const UsageMemoryUnion$inboundSchema: z.ZodType<
   UsageMemoryUnion,
   unknown
-> = z.union([z.lazy(() => UsageMemory$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => UsageMemory$inboundSchema), z.string()]);
 
 export function usageMemoryUnionFromJSON(
   jsonString: string,
@@ -1435,10 +1436,10 @@ export function usageMemoryUnionFromJSON(
 
 /** @internal */
 export const Usage$inboundSchema: z.ZodType<Usage, unknown> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => UsageCpu$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => UsageCpu$inboundSchema), z.string()]))
     .optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => UsageMemory$inboundSchema), z.any()]),
+    z.union([z.lazy(() => UsageMemory$inboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -1454,7 +1455,7 @@ export function usageFromJSON(
 
 /** @internal */
 export const UsageUnion$inboundSchema: z.ZodType<UsageUnion, unknown> = z.union(
-  [z.lazy(() => Usage$inboundSchema), z.any()],
+  [z.lazy(() => Usage$inboundSchema), z.string()],
 );
 
 export function usageUnionFromJSON(
@@ -1481,7 +1482,7 @@ export const NodeStatus$inboundSchema: z.ZodType<NodeStatus, unknown> = z
     ready: z.boolean(),
     roles: z.array(z.string()),
     uid: z.nullable(z.string()).optional(),
-    usage: z.nullable(z.union([z.lazy(() => Usage$inboundSchema), z.any()]))
+    usage: z.nullable(z.union([z.lazy(() => Usage$inboundSchema), z.string()]))
       .optional(),
   });
 
@@ -1589,8 +1590,9 @@ export const GetResourceDeploymentDetailData1$inboundSchema: z.ZodType<
 > = z.object({
   cpu: z.nullable(CpuUnion11$inboundSchema).optional(),
   events: z.array(Event12$inboundSchema),
-  memory: z.nullable(z.union([z.lazy(() => Memory11$inboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([z.lazy(() => Memory11$inboundSchema), z.string()]),
+  ).optional(),
   name: z.string(),
   namespace: z.nullable(z.string()).optional(),
   nodeCounts: z.lazy(() => NodeCounts$inboundSchema),
@@ -1777,7 +1779,7 @@ export function capacityBlocker4FromJSON(
 export const CapacityBlockerUnion4$inboundSchema: z.ZodType<
   CapacityBlockerUnion4,
   unknown
-> = z.union([z.lazy(() => CapacityBlocker4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker4$inboundSchema), z.string()]);
 
 export function capacityBlockerUnion4FromJSON(
   jsonString: string,
@@ -1845,7 +1847,7 @@ export function drainProgress4FromJSON(
 export const DrainProgressUnion4$inboundSchema: z.ZodType<
   DrainProgressUnion4,
   unknown
-> = z.union([z.lazy(() => DrainProgress4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress4$inboundSchema), z.string()]);
 
 export function drainProgressUnion4FromJSON(
   jsonString: string,
@@ -1883,7 +1885,7 @@ export function utilization4FromJSON(
 export const UtilizationUnion4$inboundSchema: z.ZodType<
   UtilizationUnion4,
   unknown
-> = z.union([z.lazy(() => Utilization4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization4$inboundSchema), z.string()]);
 
 export function utilizationUnion4FromJSON(
   jsonString: string,
@@ -1904,7 +1906,7 @@ export const Recommendation4$inboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization4$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization4$inboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -1922,7 +1924,7 @@ export function recommendation4FromJSON(
 export const RecommendationUnion4$inboundSchema: z.ZodType<
   RecommendationUnion4,
   unknown
-> = z.union([z.lazy(() => Recommendation4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation4$inboundSchema), z.string()]);
 
 export function recommendationUnion4FromJSON(
   jsonString: string,
@@ -1938,19 +1940,19 @@ export function recommendationUnion4FromJSON(
 export const CapacityGroup4$inboundSchema: z.ZodType<CapacityGroup4, unknown> =
   z.object({
     capacityBlocker: z.nullable(
-      z.union([z.lazy(() => CapacityBlocker4$inboundSchema), z.any()]),
+      z.union([z.lazy(() => CapacityBlocker4$inboundSchema), z.string()]),
     ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     drainProgress: z.nullable(
-      z.union([z.lazy(() => DrainProgress4$inboundSchema), z.any()]),
+      z.union([z.lazy(() => DrainProgress4$inboundSchema), z.string()]),
     ).optional(),
     groupId: z.string(),
     instanceType: z.nullable(z.string()).optional(),
     maxMachines: z.nullable(z.int()).optional(),
     minMachines: z.nullable(z.int()).optional(),
     recommendation: z.nullable(
-      z.union([z.lazy(() => Recommendation4$inboundSchema), z.any()]),
+      z.union([z.lazy(() => Recommendation4$inboundSchema), z.string()]),
     ).optional(),
   });
 
@@ -1987,7 +1989,7 @@ export function cpu10FromJSON(
 
 /** @internal */
 export const CpuUnion10$inboundSchema: z.ZodType<CpuUnion10, unknown> = z.union(
-  [z.lazy(() => Cpu10$inboundSchema), z.any()],
+  [z.lazy(() => Cpu10$inboundSchema), z.string()],
 );
 
 export function cpuUnion10FromJSON(
@@ -2072,7 +2074,7 @@ export function memory10FromJSON(
 
 /** @internal */
 export const MemoryUnion10$inboundSchema: z.ZodType<MemoryUnion10, unknown> = z
-  .union([z.lazy(() => Memory10$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory10$inboundSchema), z.string()]);
 
 export function memoryUnion10FromJSON(
   jsonString: string,
@@ -2176,11 +2178,12 @@ export const DataMachines2$inboundSchema: z.ZodType<DataMachines2, unknown> = z
   .object({
     backendClusterId: z.nullable(z.string()).optional(),
     capacityGroups: z.array(z.lazy(() => CapacityGroup4$inboundSchema)),
-    cpu: z.nullable(z.union([z.lazy(() => Cpu10$inboundSchema), z.any()]))
+    cpu: z.nullable(z.union([z.lazy(() => Cpu10$inboundSchema), z.string()]))
       .optional(),
     machines: z.array(z.lazy(() => Machine$inboundSchema)),
-    memory: z.nullable(z.union([z.lazy(() => Memory10$inboundSchema), z.any()]))
-      .optional(),
+    memory: z.nullable(
+      z.union([z.lazy(() => Memory10$inboundSchema), z.string()]),
+    ).optional(),
     name: z.string(),
     nodes: z.lazy(() => Nodes4$inboundSchema),
     status: z.lazy(() => GetResourceDeploymentDetailDataStatus22$inboundSchema),
@@ -2228,7 +2231,7 @@ export function capacityBlocker3FromJSON(
 export const CapacityBlockerUnion3$inboundSchema: z.ZodType<
   CapacityBlockerUnion3,
   unknown
-> = z.union([z.lazy(() => CapacityBlocker3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker3$inboundSchema), z.string()]);
 
 export function capacityBlockerUnion3FromJSON(
   jsonString: string,
@@ -2296,7 +2299,7 @@ export function drainProgress3FromJSON(
 export const DrainProgressUnion3$inboundSchema: z.ZodType<
   DrainProgressUnion3,
   unknown
-> = z.union([z.lazy(() => DrainProgress3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress3$inboundSchema), z.string()]);
 
 export function drainProgressUnion3FromJSON(
   jsonString: string,
@@ -2334,7 +2337,7 @@ export function utilization3FromJSON(
 export const UtilizationUnion3$inboundSchema: z.ZodType<
   UtilizationUnion3,
   unknown
-> = z.union([z.lazy(() => Utilization3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization3$inboundSchema), z.string()]);
 
 export function utilizationUnion3FromJSON(
   jsonString: string,
@@ -2355,7 +2358,7 @@ export const Recommendation3$inboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization3$inboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -2373,7 +2376,7 @@ export function recommendation3FromJSON(
 export const RecommendationUnion3$inboundSchema: z.ZodType<
   RecommendationUnion3,
   unknown
-> = z.union([z.lazy(() => Recommendation3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation3$inboundSchema), z.string()]);
 
 export function recommendationUnion3FromJSON(
   jsonString: string,
@@ -2389,19 +2392,19 @@ export function recommendationUnion3FromJSON(
 export const CapacityGroup3$inboundSchema: z.ZodType<CapacityGroup3, unknown> =
   z.object({
     capacityBlocker: z.nullable(
-      z.union([z.lazy(() => CapacityBlocker3$inboundSchema), z.any()]),
+      z.union([z.lazy(() => CapacityBlocker3$inboundSchema), z.string()]),
     ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     drainProgress: z.nullable(
-      z.union([z.lazy(() => DrainProgress3$inboundSchema), z.any()]),
+      z.union([z.lazy(() => DrainProgress3$inboundSchema), z.string()]),
     ).optional(),
     groupId: z.string(),
     instanceType: z.nullable(z.string()).optional(),
     maxMachines: z.nullable(z.int()).optional(),
     minMachines: z.nullable(z.int()).optional(),
     recommendation: z.nullable(
-      z.union([z.lazy(() => Recommendation3$inboundSchema), z.any()]),
+      z.union([z.lazy(() => Recommendation3$inboundSchema), z.string()]),
     ).optional(),
   });
 
@@ -2439,7 +2442,7 @@ export function cpu9FromJSON(
 /** @internal */
 export const CpuUnion9$inboundSchema: z.ZodType<CpuUnion9, unknown> = z.union([
   z.lazy(() => Cpu9$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion9FromJSON(
@@ -2475,7 +2478,7 @@ export function memory9FromJSON(
 
 /** @internal */
 export const MemoryUnion9$inboundSchema: z.ZodType<MemoryUnion9, unknown> = z
-  .union([z.lazy(() => Memory9$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory9$inboundSchema), z.string()]);
 
 export function memoryUnion9FromJSON(
   jsonString: string,
@@ -2599,10 +2602,11 @@ export const DataAzure2$inboundSchema: z.ZodType<DataAzure2, unknown> = z
   .object({
     backendClusterId: z.nullable(z.string()).optional(),
     capacityGroups: z.array(z.lazy(() => CapacityGroup3$inboundSchema)),
-    cpu: z.nullable(z.union([z.lazy(() => Cpu9$inboundSchema), z.any()]))
+    cpu: z.nullable(z.union([z.lazy(() => Cpu9$inboundSchema), z.string()]))
       .optional(),
-    memory: z.nullable(z.union([z.lazy(() => Memory9$inboundSchema), z.any()]))
-      .optional(),
+    memory: z.nullable(
+      z.union([z.lazy(() => Memory9$inboundSchema), z.string()]),
+    ).optional(),
     name: z.string(),
     nodes: z.lazy(() => Nodes3$inboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet3$inboundSchema)),
@@ -2652,7 +2656,7 @@ export function capacityBlocker2FromJSON(
 export const CapacityBlockerUnion2$inboundSchema: z.ZodType<
   CapacityBlockerUnion2,
   unknown
-> = z.union([z.lazy(() => CapacityBlocker2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker2$inboundSchema), z.string()]);
 
 export function capacityBlockerUnion2FromJSON(
   jsonString: string,
@@ -2720,7 +2724,7 @@ export function drainProgress2FromJSON(
 export const DrainProgressUnion2$inboundSchema: z.ZodType<
   DrainProgressUnion2,
   unknown
-> = z.union([z.lazy(() => DrainProgress2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress2$inboundSchema), z.string()]);
 
 export function drainProgressUnion2FromJSON(
   jsonString: string,
@@ -2758,7 +2762,7 @@ export function utilization2FromJSON(
 export const UtilizationUnion2$inboundSchema: z.ZodType<
   UtilizationUnion2,
   unknown
-> = z.union([z.lazy(() => Utilization2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization2$inboundSchema), z.string()]);
 
 export function utilizationUnion2FromJSON(
   jsonString: string,
@@ -2779,7 +2783,7 @@ export const Recommendation2$inboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization2$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization2$inboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -2797,7 +2801,7 @@ export function recommendation2FromJSON(
 export const RecommendationUnion2$inboundSchema: z.ZodType<
   RecommendationUnion2,
   unknown
-> = z.union([z.lazy(() => Recommendation2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation2$inboundSchema), z.string()]);
 
 export function recommendationUnion2FromJSON(
   jsonString: string,
@@ -2813,19 +2817,19 @@ export function recommendationUnion2FromJSON(
 export const CapacityGroup2$inboundSchema: z.ZodType<CapacityGroup2, unknown> =
   z.object({
     capacityBlocker: z.nullable(
-      z.union([z.lazy(() => CapacityBlocker2$inboundSchema), z.any()]),
+      z.union([z.lazy(() => CapacityBlocker2$inboundSchema), z.string()]),
     ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     drainProgress: z.nullable(
-      z.union([z.lazy(() => DrainProgress2$inboundSchema), z.any()]),
+      z.union([z.lazy(() => DrainProgress2$inboundSchema), z.string()]),
     ).optional(),
     groupId: z.string(),
     instanceType: z.nullable(z.string()).optional(),
     maxMachines: z.nullable(z.int()).optional(),
     minMachines: z.nullable(z.int()).optional(),
     recommendation: z.nullable(
-      z.union([z.lazy(() => Recommendation2$inboundSchema), z.any()]),
+      z.union([z.lazy(() => Recommendation2$inboundSchema), z.string()]),
     ).optional(),
   });
 
@@ -2863,7 +2867,7 @@ export function cpu8FromJSON(
 /** @internal */
 export const CpuUnion8$inboundSchema: z.ZodType<CpuUnion8, unknown> = z.union([
   z.lazy(() => Cpu8$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion8FromJSON(
@@ -2899,7 +2903,7 @@ export function memory8FromJSON(
 
 /** @internal */
 export const MemoryUnion8$inboundSchema: z.ZodType<MemoryUnion8, unknown> = z
-  .union([z.lazy(() => Memory8$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory8$inboundSchema), z.string()]);
 
 export function memoryUnion8FromJSON(
   jsonString: string,
@@ -3022,9 +3026,9 @@ export function getResourceDeploymentDetailDataStatus20FromJSON(
 export const DataGcp2$inboundSchema: z.ZodType<DataGcp2, unknown> = z.object({
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(z.lazy(() => CapacityGroup2$inboundSchema)),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu8$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => Cpu8$inboundSchema), z.string()]))
     .optional(),
-  memory: z.nullable(z.union([z.lazy(() => Memory8$inboundSchema), z.any()]))
+  memory: z.nullable(z.union([z.lazy(() => Memory8$inboundSchema), z.string()]))
     .optional(),
   name: z.string(),
   nodes: z.lazy(() => Nodes2$inboundSchema),
@@ -3075,7 +3079,7 @@ export function capacityBlocker1FromJSON(
 export const CapacityBlockerUnion1$inboundSchema: z.ZodType<
   CapacityBlockerUnion1,
   unknown
-> = z.union([z.lazy(() => CapacityBlocker1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker1$inboundSchema), z.string()]);
 
 export function capacityBlockerUnion1FromJSON(
   jsonString: string,
@@ -3143,7 +3147,7 @@ export function drainProgress1FromJSON(
 export const DrainProgressUnion1$inboundSchema: z.ZodType<
   DrainProgressUnion1,
   unknown
-> = z.union([z.lazy(() => DrainProgress1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress1$inboundSchema), z.string()]);
 
 export function drainProgressUnion1FromJSON(
   jsonString: string,
@@ -3181,7 +3185,7 @@ export function utilization1FromJSON(
 export const UtilizationUnion1$inboundSchema: z.ZodType<
   UtilizationUnion1,
   unknown
-> = z.union([z.lazy(() => Utilization1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization1$inboundSchema), z.string()]);
 
 export function utilizationUnion1FromJSON(
   jsonString: string,
@@ -3202,7 +3206,7 @@ export const Recommendation1$inboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization1$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization1$inboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -3220,7 +3224,7 @@ export function recommendation1FromJSON(
 export const RecommendationUnion1$inboundSchema: z.ZodType<
   RecommendationUnion1,
   unknown
-> = z.union([z.lazy(() => Recommendation1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation1$inboundSchema), z.string()]);
 
 export function recommendationUnion1FromJSON(
   jsonString: string,
@@ -3236,19 +3240,19 @@ export function recommendationUnion1FromJSON(
 export const CapacityGroup1$inboundSchema: z.ZodType<CapacityGroup1, unknown> =
   z.object({
     capacityBlocker: z.nullable(
-      z.union([z.lazy(() => CapacityBlocker1$inboundSchema), z.any()]),
+      z.union([z.lazy(() => CapacityBlocker1$inboundSchema), z.string()]),
     ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     drainProgress: z.nullable(
-      z.union([z.lazy(() => DrainProgress1$inboundSchema), z.any()]),
+      z.union([z.lazy(() => DrainProgress1$inboundSchema), z.string()]),
     ).optional(),
     groupId: z.string(),
     instanceType: z.nullable(z.string()).optional(),
     maxMachines: z.nullable(z.int()).optional(),
     minMachines: z.nullable(z.int()).optional(),
     recommendation: z.nullable(
-      z.union([z.lazy(() => Recommendation1$inboundSchema), z.any()]),
+      z.union([z.lazy(() => Recommendation1$inboundSchema), z.string()]),
     ).optional(),
   });
 
@@ -3286,7 +3290,7 @@ export function cpu7FromJSON(
 /** @internal */
 export const CpuUnion7$inboundSchema: z.ZodType<CpuUnion7, unknown> = z.union([
   z.lazy(() => Cpu7$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion7FromJSON(
@@ -3322,7 +3326,7 @@ export function memory7FromJSON(
 
 /** @internal */
 export const MemoryUnion7$inboundSchema: z.ZodType<MemoryUnion7, unknown> = z
-  .union([z.lazy(() => Memory7$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory7$inboundSchema), z.string()]);
 
 export function memoryUnion7FromJSON(
   jsonString: string,

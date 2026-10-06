@@ -9,9 +9,9 @@
 const value: models.DeploymentPreparedStackValidation = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

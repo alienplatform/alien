@@ -7,7 +7,7 @@ import { ManagerDeployment } from "@alienplatform/platform-api/models";
 
 let value: ManagerDeployment = {
   platform: "<value>",
-  status: "update-failed",
+  status: "updating",
   deploymentId: "<id>",
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

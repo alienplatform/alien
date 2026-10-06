@@ -214,9 +214,9 @@ pub fn service_account_member_for_var(variable: &str) -> Expression {
 }
 
 /// Build a `PermissionContext` shared by every generator call. `label`
-/// is the SA's terraform label and is used as `service_account_name`
-/// so generators that mention `${variable.service_account_name}`
-/// resolve correctly. Concrete project / region values are surfaced
+/// identifies the declared service-account resource; its account ID expression
+/// supplies the executing identity without deriving it from a label.
+/// Concrete project / region values are surfaced
 /// as `var.gcp_project` / `var.gcp_region` so the rendered HCL stays
 /// parameterised — the runtime generator interpolates them at apply
 /// time, exactly the same way the controller does.
@@ -228,7 +228,7 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
         .with_project_name("${var.gcp_project}".to_string())
         .with_project_number("${data.google_project.current.number}".to_string())
         .with_region("${var.gcp_region}".to_string())
-        .with_service_account_name(label.to_string())
+        .with_service_account_name(format!("${{google_service_account.{label}.account_id}}"))
 }
 
 /// Declare that the IAM bindings appended to `fragment` from `appended_from`
@@ -295,7 +295,8 @@ pub fn emit_custom_role_and_bindings_for_target(
                 permission_set.id
             ),
         })?;
-    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let mut bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    bindings.extend(grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount));
     let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
     for (idx, binding) in bindings.into_iter().enumerate() {
@@ -308,7 +309,8 @@ pub fn emit_custom_role_and_bindings_for_target(
     Ok(())
 }
 
-pub(crate) fn emit_custom_roles_for_bindings(
+/// Emit the custom role definitions selected by these bindings.
+pub fn emit_custom_roles_for_bindings(
     fragment: &mut TfFragment,
     grant_plan: &alien_permissions::generators::GcpGrantPlan,
     bindings: &[GcpIamBinding],
@@ -376,7 +378,8 @@ pub(crate) fn binding_label_role_segment(role: &str) -> String {
     role.rsplit('/').next().unwrap_or(role).replace('-', "_")
 }
 
-pub(crate) fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole]) -> Result<String> {
+/// Return the canonical Terraform label for a predefined or generated role.
+pub fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole]) -> Result<String> {
     if role.starts_with("roles/") {
         return Ok(binding_label_role_segment(role));
     }
@@ -385,7 +388,8 @@ pub(crate) fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole])
     Ok(custom_role_label(custom_role))
 }
 
-pub(crate) fn role_expression_for_binding(
+/// Resolve a binding role to its predefined name or generated Terraform reference.
+pub fn role_expression_for_binding(
     role: &str,
     custom_roles: &[GcpCustomRole],
 ) -> Result<Expression> {
@@ -444,6 +448,19 @@ pub(crate) fn push_iam_member(
         GcpBindingTargetScope::Project => {
             body.insert(0, attr("project", expr::raw("var.gcp_project")));
             "google_project_iam_member"
+        }
+        GcpBindingTargetScope::ServiceAccount => {
+            let target = binding.target_resource_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: "Service-account IAM binding is missing its explicit target"
+                        .to_string(),
+                })
+            })?;
+            body.insert(
+                0,
+                attr("service_account_id", expr::template(target.clone())),
+            );
+            "google_service_account_iam_member"
         }
         GcpBindingTargetScope::CurrentResource => {
             return Err(AlienError::new(ErrorData::GenericError {

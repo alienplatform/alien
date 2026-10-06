@@ -11,9 +11,9 @@ const value: models.SyncListResponseEgress = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 
