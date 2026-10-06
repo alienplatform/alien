@@ -188,7 +188,7 @@ pub async fn handle_initial_setup(
 
     // Compute status only for Frozen resources. A stack with no Frozen
     // resources can hand off immediately to Provisioning.
-    let stack_status = compute_lifecycle_status(
+    let mut stack_status = compute_lifecycle_status(
         &target_stack,
         &step_result.next_state,
         ResourceLifecycle::Frozen,
@@ -196,6 +196,51 @@ pub async fn handle_initial_setup(
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to compute initial setup status".to_string(),
     })?;
+
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup {
+        // Removed resources are not part of the target lifecycle status. The planner
+        // also excludes deletions already underway, so retain their completion gate.
+        let mut removed_frozen =
+            step_result
+                .next_state
+                .resources
+                .iter()
+                .filter(|(id, resource)| {
+                    resource.lifecycle == Some(ResourceLifecycle::Frozen)
+                        && !target_stack.resources.contains_key(*id)
+                });
+        if removed_frozen
+            .clone()
+            .any(|(_, resource)| resource.status == ResourceStatus::DeleteFailed)
+        {
+            stack_status = StackStatus::Failure;
+        } else if stack_status == StackStatus::Running {
+            // A dependency can become ready during this step, making a deferred
+            // update actionable only now. Healthy old resources are not convergence.
+            let plan = match executor.plan(&step_result.next_state).context(
+                ErrorData::StackExecutionFailed {
+                    message: "Failed to plan remaining initial setup work".to_string(),
+                },
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    return Ok(failed_keeping_record(
+                        current_cloned,
+                        step_result.next_state,
+                        runtime_metadata,
+                        error,
+                    ));
+                }
+            };
+            if !plan.creates.is_empty()
+                || !plan.updates.is_empty()
+                || !plan.deletes.is_empty()
+                || removed_frozen.any(|(_, resource)| resource.status == ResourceStatus::Deleting)
+            {
+                stack_status = StackStatus::InProgress;
+            }
+        }
+    }
 
     let result = if stack_status == StackStatus::Running && scaffolding == ScaffoldingProgress::Done
     {
@@ -1928,6 +1973,183 @@ mod tests {
                 image_arn: Some(IMAGE_ARN.to_string()),
             },
             "setup records the image it built, so its teardown deletes it"
+        );
+    }
+
+    async fn deployed_test_stack(stack: &Stack) -> StackState {
+        let cfg = config();
+        let executor = StackExecutor::builder(stack, ClientConfig::Test)
+            .deployment_config(&cfg)
+            .build()
+            .expect("test executor");
+        executor
+            .run_until_synced(StackState::new(Platform::Test))
+            .await
+            .into_result()
+            .expect("deploy test resources")
+    }
+
+    fn resumed_test_setup(stack_state: StackState, target: Stack) -> DeploymentState {
+        DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(target),
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_waits_for_a_running_resource_update_after_its_new_dependency_is_ready() {
+        for change_config in [false, true] {
+            let original = Storage::new("existing".to_string()).build();
+            let installed = Stack::new("test".to_string())
+                .add(original.clone(), ResourceLifecycle::Frozen)
+                .build();
+            let stack_state = deployed_test_stack(&installed).await;
+            let dependency = Storage::new("dependency".to_string()).build();
+            let desired = Storage::new("existing".to_string())
+                .versioning(change_config)
+                .build();
+            let target = Stack::new("test".to_string())
+                .add_with_dependencies(
+                    desired.clone(),
+                    ResourceLifecycle::Frozen,
+                    vec![alien_core::ResourceRef::from(&dependency)],
+                )
+                .add(dependency, ResourceLifecycle::Frozen)
+                .add(
+                    Storage::new("runtime".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let expected_dependencies = target.resources["existing"].combined_dependencies();
+            let mut state = resumed_test_setup(stack_state, target);
+            let mut observed_deferred_update = false;
+            for _ in 0..10 {
+                state = handle_initial_setup(
+                    state,
+                    config(),
+                    ClientConfig::Test,
+                    Arc::new(DefaultPlatformServiceProvider::default()),
+                )
+                .await
+                .expect("setup step")
+                .state;
+                let stack_state = state.stack_state.as_ref().expect("stack state");
+                assert!(!stack_state.resources.contains_key("runtime"));
+                let existing = &stack_state.resources["existing"];
+                let dependency_ready = stack_state
+                    .resources
+                    .get("dependency")
+                    .is_some_and(|entry| entry.status == ResourceStatus::Running);
+                if dependency_ready && existing.dependencies != expected_dependencies {
+                    observed_deferred_update = true;
+                    assert_eq!(
+                        state.status,
+                        DeploymentStatus::InitialSetup,
+                        "healthy old configuration is not completed setup"
+                    );
+                }
+                if state.status == DeploymentStatus::Provisioning {
+                    assert_eq!(existing.status, ResourceStatus::Running);
+                    assert_eq!(existing.config, alien_core::Resource::new(desired.clone()));
+                    assert_eq!(existing.dependencies, expected_dependencies);
+                    break;
+                }
+            }
+            assert!(
+                observed_deferred_update,
+                "test must exercise the delayed update"
+            );
+            assert_eq!(state.status, DeploymentStatus::Provisioning);
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_waits_for_removed_frozen_resource_deletion() {
+        let installed = Stack::new("test".to_string())
+            .add(
+                Storage::new("removed".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let stack_state = deployed_test_stack(&installed).await;
+        let mut state = resumed_test_setup(stack_state, Stack::new("test".to_string()).build());
+        state = handle_initial_setup(
+            state,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("begin deletion")
+        .state;
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["removed"].status,
+            ResourceStatus::Deleting
+        );
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        for _ in 0..5 {
+            state = handle_initial_setup(
+                state,
+                config(),
+                ClientConfig::Test,
+                Arc::new(DefaultPlatformServiceProvider::default()),
+            )
+            .await
+            .expect("continue deletion")
+            .state;
+            if state.status == DeploymentStatus::Provisioning {
+                break;
+            }
+        }
+        assert_eq!(state.status, DeploymentStatus::Provisioning);
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["removed"].status,
+            ResourceStatus::Deleted
+        );
+    }
+
+    #[tokio::test]
+    async fn setup_reports_failed_removed_frozen_deletion() {
+        let installed = Stack::new("test".to_string())
+            .add(
+                Storage::new("removed".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&installed).await;
+        let resource = stack_state.resources.get_mut("removed").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_delete_start().unwrap();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.set_internal_controller(Some(controller)).unwrap();
+        assert_eq!(resource.status, ResourceStatus::DeleteFailed);
+
+        let state = handle_initial_setup(
+            resumed_test_setup(stack_state, Stack::new("test".to_string()).build()),
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("record failed deletion")
+        .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetupFailed);
+        assert_eq!(
+            state.stack_state.unwrap().resources["removed"].status,
+            ResourceStatus::DeleteFailed
         );
     }
 
