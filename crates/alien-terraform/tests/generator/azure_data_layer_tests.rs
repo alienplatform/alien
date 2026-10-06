@@ -851,9 +851,9 @@ fn attribute(block: &hcl::Block, name: &str) -> String {
         })
 }
 
-/// `(label, name)` of every rendered role assignment: its Terraform address and the Azure name
-/// seed it is applied under.
-fn assignment_addresses(rendered: &str) -> Vec<(String, String)> {
+/// `(label, name, description)` of every rendered role assignment: its Terraform address, the
+/// Azure name seed it is applied under, and the text an approver reads.
+fn assignment_addresses(rendered: &str) -> Vec<(String, String, String)> {
     let body: hcl::Body = hcl::from_str(rendered).expect("the module parses");
     body.blocks()
         .filter(|block| {
@@ -865,14 +865,18 @@ fn assignment_addresses(rendered: &str) -> Vec<(String, String)> {
             (
                 block.labels()[1].as_str().to_string(),
                 attribute(block, "name"),
+                attribute(block, "description"),
             )
         })
         .collect()
 }
 
-/// The error the module refuses to render with, for a workload profile on one sandbox `agents`.
-fn refusal(profile: PermissionProfile) -> alien_error::AlienError<alien_core::ErrorData> {
-    let stack = workload_sandbox_stack(profile, &["agents"]);
+/// The error the module refuses to render with, for a workload profile on these sandboxes.
+fn refusal(
+    profile: PermissionProfile,
+    sandbox_ids: &[&str],
+) -> alien_error::AlienError<alien_core::ErrorData> {
+    let stack = workload_sandbox_stack(profile, sandbox_ids);
     super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default())
         .expect_err("the module is refused")
 }
@@ -953,6 +957,26 @@ fn a_keyed_management_grant_uses_the_setup_owned_role_on_that_sandbox_group() {
     assert!(
         role.starts_with("azurerm_role_definition.setup_execution_sandbox_management_"),
         "the group grant uses the setup-owned role for this profile: {role}"
+    );
+    // Addressed by the role's key, not its display name, so renaming the role keeps the address.
+    let addresses = assignment_addresses(&rendered)
+        .into_iter()
+        .filter(|(label, _, _)| label.starts_with("agents_execution_"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        addresses
+            .iter()
+            .map(|(label, _, _)| label.as_str())
+            .collect::<Vec<_>>(),
+        ["agents_execution_microsoft_app_sandbox_groups_sandboxes_write_permissions"],
+        "{rendered}"
+    );
+    assert!(
+        addresses[0].1.ends_with(
+            ":agents:execution:microsoft_app_sandbox_groups_sandboxes_write_permissions\")"
+        ),
+        "{}",
+        addresses[0].1
     );
     assert_terraform_valid(&module, "azure sandbox keyed management grant");
 }
@@ -1076,11 +1100,14 @@ fn execute_and_remote_execute_share_one_data_plane_assignment() {
 /// retryable: the stack has to change.
 #[test]
 fn a_set_of_another_resource_type_keyed_on_a_sandbox_is_refused() {
-    let error = refusal(PermissionProfile::new().resource("agents", ["storage/data-read"]));
+    let error = refusal(
+        PermissionProfile::new().resource("agents", ["storage/data-read"]),
+        &["agents"],
+    );
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     let message = error.to_string();
     assert!(
-        message.contains("grant 'storage/data-read' on sandbox 'agents'")
+        message.contains("grant storage/data-read on sandbox agents")
             && message.contains("only sandbox/* permission sets can be granted on a sandbox"),
         "{message}"
     );
@@ -1102,11 +1129,12 @@ fn an_inline_set_reusing_a_built_in_id_keyed_on_a_sandbox_is_refused() {
     };
     let error = refusal(
         PermissionProfile::new().resource("agents", [PermissionSetReference::from_inline(inline)]),
+        &["agents"],
     );
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     let message = error.to_string();
     assert!(
-        message.contains("grant 'sandbox/management' on sandbox 'agents'")
+        message.contains("grant sandbox/management on sandbox agents")
             && message.contains("only built-in permission sets referenced by name"),
         "{message}"
     );
@@ -1117,17 +1145,95 @@ fn an_inline_set_reusing_a_built_in_id_keyed_on_a_sandbox_is_refused() {
 /// grant here.
 #[test]
 fn a_keyed_provision_grant_on_a_sandbox_is_refused_and_a_stack_wide_one_is_skipped() {
-    let error = refusal(PermissionProfile::new().resource("agents", ["sandbox/provision"]));
+    let error = refusal(
+        PermissionProfile::new().resource("agents", ["sandbox/provision"]),
+        &["agents"],
+    );
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     let message = error.to_string();
     assert!(
-        message.contains("grant 'sandbox/provision' on sandbox 'agents'")
-            && message.contains("cannot hold provisioning rights on a sandbox group"),
+        message.contains("grant sandbox/provision on sandbox agents")
+            && message.contains("Azure delivers provisioning at the resource group only"),
         "{message}"
     );
 
     let stack = workload_sandbox_stack(
         PermissionProfile::new().global(["sandbox/provision"]),
+        &["agents"],
+    );
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = rendered_tf(&module);
+    let execution_assignments: Vec<_> = role_assignments(&rendered)
+        .into_iter()
+        .filter(|(_, _, principal)| {
+            principal == "azurerm_user_assigned_identity.execution_sa.principal_id"
+        })
+        .collect();
+    let on_the_group = execution_assignments
+        .iter()
+        .filter(|(scope, _, _)| scope == "azapi_resource.agents.id")
+        .count();
+    assert_eq!(on_the_group, 0, "{rendered}");
+    let at_the_resource_group = execution_assignments
+        .iter()
+        .filter(|(scope, _, _)| scope.contains("resourceGroups/${var.azure_resource_group_name}\""))
+        .count();
+    assert_eq!(
+        at_the_resource_group, 1,
+        "a stack-wide provision grant lands at the resource group once:\n{rendered}"
+    );
+}
+
+/// The setup renders one role definition per profile and set id and takes inline sets too, so an
+/// inline set reusing a built-in id anywhere in the profile could be the one a keyed grant on
+/// another sandbox binds, carrying the inline set's actions. Inline sets need their own ids.
+#[test]
+fn an_inline_set_reusing_a_built_in_id_anywhere_in_the_profile_is_refused() {
+    let inline = alien_permissions::get_permission_set("sandbox/management")
+        .cloned()
+        .expect("the built-in set is registered");
+    let error = refusal(
+        PermissionProfile::new()
+            .global([PermissionSetReference::from_inline(inline)])
+            .resource("other", ["sandbox/management"]),
+        &["agents", "other"],
+    );
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/management on sandbox other")
+            && message.contains("reuses this built-in id"),
+        "{message}"
+    );
+}
+
+/// An inline `sandbox/*` set under `"*"` that binds at the sandbox group only is delivered by no
+/// setup emitter, so it is refused; one that binds at the stack is the service-account emitter's
+/// and renders at the resource group with nothing on the group.
+#[test]
+fn an_inline_stack_wide_set_bound_only_at_the_group_is_refused() {
+    let mut group_only = alien_permissions::get_permission_set("sandbox/execute")
+        .cloned()
+        .expect("the built-in set is registered");
+    group_only.id = "sandbox/exec-copy".to_string();
+    let error = refusal(
+        PermissionProfile::new().global([PermissionSetReference::from_inline(group_only)]),
+        &["agents"],
+    );
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    let message = error.to_string();
+    assert!(
+        message.contains("grant sandbox/exec-copy on sandbox agents")
+            && message.contains("delivered by no setup emitter"),
+        "{message}"
+    );
+
+    let mut stack_bound = alien_permissions::get_permission_set("sandbox/management")
+        .cloned()
+        .expect("the built-in set is registered");
+    stack_bound.id = "sandbox/management-copy".to_string();
+    let stack = workload_sandbox_stack(
+        PermissionProfile::new().global([PermissionSetReference::from_inline(stack_bound)]),
         &["agents"],
     );
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
@@ -1143,9 +1249,10 @@ fn a_keyed_provision_grant_on_a_sandbox_is_refused_and_a_stack_wide_one_is_skipp
 }
 
 /// Each assignment is addressed by sandbox, profile and role, so the order a profile lists its
-/// sets in, and which of two sets resolving to one role comes first, change neither the Terraform
-/// address nor the Azure name: a changed address would destroy and recreate an assignment Azure
-/// still holds, which it refuses.
+/// sets in, and which of two sets resolving to one role comes first, change nothing in the
+/// rendered block: neither the Terraform address and Azure name (a changed address would destroy
+/// and recreate an assignment Azure still holds, which it refuses) nor the description (a changed
+/// attribute is a plan diff on a stack nobody changed).
 #[test]
 fn a_workload_assignment_keeps_its_address_when_the_profile_is_reordered() {
     let addresses = |sets: [&str; 2]| {
@@ -1163,7 +1270,7 @@ fn a_workload_assignment_keeps_its_address_when_the_profile_is_reordered() {
     let reversed = addresses(["sandbox/remote-execute", "sandbox/execute"]);
     assert_eq!(forward, reversed);
     assert_eq!(forward.len(), 1, "{forward:?}");
-    let (label, name) = &forward[0];
+    let (label, name, _) = &forward[0];
     assert_eq!(
         label,
         &format!(

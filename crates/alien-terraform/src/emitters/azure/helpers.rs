@@ -785,7 +785,7 @@ fn custom_role_segment(key: &str) -> String {
         .unwrap_or_else(|| "custom".to_string())
 }
 
-fn azure_resource_role_key_segment(key: &str) -> String {
+pub fn azure_resource_role_key_segment(key: &str) -> String {
     key.rsplit(':')
         .next()
         .map(|segment| {
