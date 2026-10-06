@@ -306,13 +306,13 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::permissions::PermissionsConfig;
+    use alien_core::permissions::{PermissionProfile, PermissionsConfig};
     use alien_core::{
         CapacityGroup, ComputeCluster, Resource, ResourceEntry, ResourceLifecycle, Stack, Storage,
     };
     use indexmap::IndexMap;
 
-    fn account_stack(profile: alien_core::permissions::PermissionProfile, captured: bool) -> Stack {
+    fn account_stack(profile: PermissionProfile, captured: bool) -> Stack {
         let mut account =
             ServiceAccount::from_permission_profile("reader-sa".to_string(), &profile, |id| {
                 alien_permissions::get_permission_set(id).cloned()
@@ -329,7 +329,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_resource_grants_can_be_captured_without_setup() {
-        let profile = alien_core::permissions::PermissionProfile::new()
+        let profile = PermissionProfile::new()
             .resource("objects", ["storage/data-read", "storage/data-write"])
             .resource("database", ["postgres/data-access"]);
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
@@ -346,7 +346,6 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_grant_capture_rejects_permission_changes_and_missing_profiles() {
-        use alien_core::permissions::PermissionProfile;
         let profile = PermissionProfile::new().resource("objects", ["storage/data-read"]);
         let old = account_stack(profile.clone(), false);
         let target = account_stack(profile.clone(), true);
