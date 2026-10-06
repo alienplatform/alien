@@ -811,7 +811,6 @@ pub async fn create_initial_deployment(
     // deployment in another group cannot safely be distinguished from an intentional one.
     let outside = client
         .list_deployments()
-        .name(deployment_name)
         .send()
         .await
         .into_sdk_error()
@@ -1305,8 +1304,9 @@ mod tests {
         CreateDeploymentGroupParams, CreateDeploymentParams,
     };
     use axum::{
-        extract::{Path as AxumPath, State},
+        extract::{Path as AxumPath, Query, State},
         http::StatusCode,
+        response::{IntoResponse, Response},
         routing::{get, post},
         Json, Router,
     };
@@ -1464,7 +1464,13 @@ mod tests {
             })
         }
         type Created = Arc<Mutex<Vec<serde_json::Value>>>;
-        async fn list(State(created): State<Created>) -> Json<serde_json::Value> {
+        async fn list(
+            State(created): State<Created>,
+            Query(query): Query<HashMap<String, String>>,
+        ) -> Response {
+            if query.contains_key("name") && !query.contains_key("deploymentGroupId") {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
             let mut items: Vec<_> = created
                 .lock()
                 .unwrap()
@@ -1477,7 +1483,7 @@ mod tests {
             if !items.is_empty() {
                 items.insert(0, unrelated);
             }
-            Json(serde_json::json!({ "items": items }))
+            Json(serde_json::json!({ "items": items })).into_response()
         }
         async fn create(
             State(created): State<Created>,
