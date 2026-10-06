@@ -472,7 +472,6 @@ dependencies = [
  "httpmock",
  "indexmap 2.14.1",
  "insta",
- "keyring",
  "oauth2",
  "object_store",
  "oci-client",
@@ -5984,16 +5983,6 @@ checksum = "ffd9697dc4a9a62e2da93389f34400b77a28f0287711263cabb203b3ccb9c0e4"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
-]
-
-[[package]]
-name = "keyring"
-version = "3.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
-dependencies = [
- "log",
- "zeroize",
 ]
 
 [[package]]

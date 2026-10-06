@@ -1,13 +1,15 @@
 //! Destroy command — tears down a deployment's cloud resources via the manager.
 //!
 //! Flow:
-//! 1. Resolve tracked deployment
+//! 1. Resolve the deployment (from `--token`, or from the tracked deployments)
 //! 2. Discover manager (resolve_manager)
 //! 3. Request deletion via manager
 //! 4. Run deletion step loop (acquire → step → reconcile → release)
 
 use crate::commands::deploy::deployment_manager_http_client;
-use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment};
+use crate::deployment_tracking::{
+    validate_deployment_api_key, DeploymentTracker, TrackedDeployment,
+};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
@@ -33,11 +35,14 @@ use uuid::Uuid;
     # Destroy a tracked deployment
     alien destroy --name production --platform aws
 
+    # Destroy with the deployment's own token (no local tracking needed)
+    alien destroy --token ax_deployment_xyz... --name production --platform aws
+
     # Force-destroy (skip resource teardown)
     alien destroy --name production --platform aws --force"
 )]
 pub struct DestroyArgs {
-    /// Deployment API key for authentication (optional if already tracked)
+    /// Deployment token; identifies the deployment without a tracked entry
     #[arg(long)]
     pub token: Option<String>,
 
@@ -73,20 +78,9 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         })
     })?;
 
-    // Step 1: Resolve tracked deployment
-    let tracker = DeploymentTracker::new()?;
-    let tracked_deployment = tracker
-        .get_deployment(&args.name)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "name".to_string(),
-                message: format!(
-                    "Deployment '{}' is not tracked. Deploy it first with 'alien deploy'",
-                    args.name
-                ),
-            })
-        })?
-        .clone();
+    // Step 1: Resolve the deployment
+    let tracked_deployment =
+        resolve_deployment(&args.name, args.token.as_deref(), &ctx.base_url()).await?;
 
     steps.complete(
         0,
@@ -106,6 +100,39 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     steps.complete(1, Some(format!("Manager: {}", manager_ctx.manager_url)));
 
     destroy_tracked_deployment(&args, platform, &tracked_deployment, manager_ctx, steps).await
+}
+
+/// Identify the deployment to destroy.
+///
+/// A `--token` names its deployment on its own, the same way `alien deploy --token`
+/// does, so the tracked deployments are only consulted without one.
+async fn resolve_deployment(
+    name: &str,
+    token: Option<&str>,
+    base_url: &str,
+) -> Result<TrackedDeployment> {
+    if let Some(token) = token {
+        let info = validate_deployment_api_key(token, base_url).await?;
+        return Ok(TrackedDeployment {
+            name: name.to_string(),
+            deployment_id: info.deployment_id,
+            api_key: token.to_string(),
+            workspace_id: info.workspace_id,
+            project_id: info.project_id,
+        });
+    }
+
+    DeploymentTracker::new()?
+        .get_deployment(name)
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: format!(
+                    "Deployment '{name}' is not tracked on this machine. Pass its deployment token with --token, or deploy it first with 'alien deploy'"
+                ),
+            })
+        })
 }
 
 /// Delete a tracked deployment through its resolved manager.
@@ -494,10 +521,37 @@ mod tests {
         Json(serde_json::json!({ "deployments": [] })).into_response()
     }
 
+    /// The platform's answer for a deployment token: who it authenticates as.
+    async fn whoami(headers: HeaderMap) -> Response {
+        let expected = format!("Bearer {DEPLOYMENT_TOKEN}");
+        if headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            != Some(expected.as_str())
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Json(serde_json::json!({
+            "kind": "serviceAccount",
+            "id": "sa_test",
+            "workspaceId": "ws_test",
+            "role": "deployment.manager",
+            "scope": {
+                "type": "deployment",
+                "deploymentId": "dep_test",
+                "projectId": "proj_test",
+            },
+        }))
+        .into_response()
+    }
+
+    /// `alien destroy --token` on a machine that never tracked the deployment: the
+    /// token alone identifies it, and teardown runs with that token.
     #[tokio::test]
-    async fn teardown_required_destroy_acquires_with_the_deployment_token() {
+    async fn destroy_with_only_a_deployment_token_tears_the_deployment_down() {
         let state = Shared::default();
         let app = Router::new()
+            .route("/v1/whoami", get(whoami))
             .route("/v1/deployments/{id}", get(get_deployment))
             .route("/v1/sync/acquire", post(acquire))
             .with_state(state.clone());
@@ -526,15 +580,16 @@ mod tests {
             repository_uri: None,
             workspace: Some("ws-name".to_string()),
         };
-        let tracked = TrackedDeployment {
-            name: "test".to_string(),
-            deployment_id: "dep_test".to_string(),
-            api_key: DEPLOYMENT_TOKEN.to_string(),
-            workspace_id: "ws_test".to_string(),
-            project_id: "proj_test".to_string(),
-        };
+        let resolved = resolve_deployment("test", Some(DEPLOYMENT_TOKEN), &manager_url)
+            .await
+            .expect("the token alone should identify the deployment");
+        assert_eq!(resolved.deployment_id, "dep_test");
+        assert_eq!(resolved.project_id, "proj_test");
+        assert_eq!(resolved.workspace_id, "ws_test");
+        assert_eq!(resolved.api_key, DEPLOYMENT_TOKEN);
+
         let args = DestroyArgs {
-            token: None,
+            token: Some(DEPLOYMENT_TOKEN.to_string()),
             name: "test".to_string(),
             platform: Some("test".to_string()),
             force: false,
@@ -543,7 +598,7 @@ mod tests {
         destroy_tracked_deployment(
             &args,
             Platform::Test,
-            &tracked,
+            &resolved,
             manager_ctx,
             FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
         )

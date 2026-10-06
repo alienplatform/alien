@@ -1,7 +1,13 @@
 //! Deployment tracking and storage functionality for the Alien CLI
 //!
-//! This module handles securely storing deployment information (name, ID, API key)
-//! and managing deployment registration with the platform.
+//! This module stores deployment information (name, ID, API key) and manages
+//! deployment registration with the platform.
+//!
+//! Tracked deployments live in `<config dir>/alien/tracked-deployments.json`, an
+//! owner-only file next to the login session in `credentials.json`, for the same
+//! reasons: it behaves the same on every OS and in headless environments, and it
+//! survives CLI upgrades (macOS ties keychain items to the creating binary's
+//! signature). The deployment keys it holds are narrower than that session.
 
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -10,7 +16,6 @@ use alien_platform_api::{
     types::{Subject, SubjectScope},
     Client as SdkClient,
 };
-#[cfg(debug_assertions)]
 use dirs::config_dir;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
@@ -18,18 +23,15 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
-#[cfg(debug_assertions)]
-use debug_keyring::{Entry, KeyringError};
-#[cfg(not(debug_assertions))]
-use keyring::{Entry, Error as KeyringError};
-
-const SERVICE: &str = "alien-cli";
-const DEPLOYMENTS_KEY: &str = "tracked_deployments";
+const TRACKED_DEPLOYMENTS_FILE: &str = "tracked-deployments.json";
 
 /// Information about a tracked deployment
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrackedDeployment {
     /// User-provided name for the deployment
     pub name: String,
@@ -46,28 +48,31 @@ pub struct TrackedDeployment {
 /// All tracked deployments, keyed by their user-provided name
 type TrackedDeployments = HashMap<String, TrackedDeployment>;
 
-/// Persistence backend for the tracked-deployment registry.
-trait TrackedDeploymentStore: Send + Sync {
-    fn load(&self) -> Result<TrackedDeployments>;
-    fn save(&self, deployments: &TrackedDeployments) -> Result<()>;
-}
-
 /// Deployment tracking manager
 pub struct DeploymentTracker {
     /// All tracked deployments by name
     deployments: TrackedDeployments,
-    store: Box<dyn TrackedDeploymentStore>,
+    /// File the registry is read from and written back to
+    path: PathBuf,
 }
 
 impl DeploymentTracker {
-    /// Create a new deployment tracker and load existing deployments
+    /// Load the tracked deployments from the user's config directory.
     pub fn new() -> Result<Self> {
-        Self::with_store(Box::new(KeyringStore))
+        // Refuse to fall back to the working directory: deployment keys written
+        // into a project tree can end up committed.
+        let config_dir = config_dir().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "No user config directory found to store tracked deployments".to_string(),
+            })
+        })?;
+        Self::at(config_dir.join("alien").join(TRACKED_DEPLOYMENTS_FILE))
     }
 
-    fn with_store(store: Box<dyn TrackedDeploymentStore>) -> Result<Self> {
-        let deployments = store.load()?;
-        Ok(Self { deployments, store })
+    /// Load the tracked deployments stored at `path`.
+    pub fn at(path: PathBuf) -> Result<Self> {
+        let deployments = load_registry(&path)?;
+        Ok(Self { deployments, path })
     }
 
     /// Add a new deployment after validating it with the platform
@@ -97,7 +102,7 @@ impl DeploymentTracker {
         };
 
         self.deployments.insert(name, tracked.clone());
-        self.store.save(&self.deployments)?;
+        save_registry(&self.path, &self.deployments)?;
 
         Ok(tracked)
     }
@@ -141,7 +146,7 @@ impl DeploymentTracker {
     pub fn remove_deployment(&mut self, name: &str) -> Result<Option<TrackedDeployment>> {
         let removed = self.deployments.remove(name);
         if removed.is_some() {
-            self.store.save(&self.deployments)?;
+            save_registry(&self.path, &self.deployments)?;
         }
         Ok(removed)
     }
@@ -327,7 +332,7 @@ async fn fetch_deployment_group(
 }
 
 /// Validate a deployment API key by calling the whoami endpoint
-async fn validate_deployment_api_key(
+pub async fn validate_deployment_api_key(
     api_key: &str,
     base_url: &str,
 ) -> Result<ValidatedDeploymentInfo> {
@@ -352,228 +357,61 @@ async fn validate_deployment_api_key(
     }
 }
 
-/// The real registry: one keyring entry holding every tracked deployment.
-struct KeyringStore;
-
-impl KeyringStore {
-    fn entry() -> Result<Entry> {
-        Entry::new(SERVICE, DEPLOYMENTS_KEY)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to create keyring entry for deployments".to_string(),
-            })
-    }
-}
-
-impl TrackedDeploymentStore for KeyringStore {
-    fn load(&self) -> Result<TrackedDeployments> {
-        match Self::entry()?.get_password() {
-            Ok(data) => {
-                serde_json::from_str(&data)
-                    .into_alien_error()
-                    .context(ErrorData::JsonError {
-                        operation: "deserialize".to_string(),
-                        reason: "Failed to parse tracked deployments data".to_string(),
-                    })
-            }
-            Err(KeyringError::NoEntry) => Ok(TrackedDeployments::new()),
-            // Reading an empty registry from a store that is merely unreadable would
-            // make the next save wipe every deployment key it holds.
-            Err(err) => Err(err)
+/// Read the registry at `path`; a missing file means nothing is tracked yet.
+///
+/// An unreadable or unparseable file is an error rather than an empty registry,
+/// because the next save would replace every deployment key it holds.
+fn load_registry(path: &Path) -> Result<TrackedDeployments> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(TrackedDeployments::new())
+        }
+        Err(err) => {
+            return Err(err
                 .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to read tracked deployments from the keyring".to_string(),
-                }),
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read tracked deployments".to_string(),
+                }))
         }
-    }
-
-    fn save(&self, deployments: &TrackedDeployments) -> Result<()> {
-        let data = serde_json::to_string(deployments)
-            .into_alien_error()
-            .context(ErrorData::JsonError {
-                operation: "serialize".to_string(),
-                reason: "Failed to serialize tracked deployments data".to_string(),
-            })?;
-
-        Self::entry()?
-            .set_password(&data)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to store tracked deployments in keyring".to_string(),
-            })?;
-
-        Ok(())
-    }
+    };
+    serde_json::from_str(&content)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse".to_string(),
+            reason: format!(
+                "Tracked deployments at {} are not valid JSON; fix or remove the file",
+                path.display()
+            ),
+        })
 }
 
-/// Simple file-based keyring for debug builds to avoid macOS keychain prompts
-#[cfg(debug_assertions)]
-mod debug_keyring {
-    use std::collections::HashMap;
-    use std::fs;
-    use std::path::PathBuf;
-
-    #[derive(Debug)]
-    pub enum KeyringError {
-        /// Nothing has been stored under this service and user yet.
-        NoEntry,
-        /// The backing file could not be read, parsed, or written.
-        Unusable(String),
-    }
-
-    impl std::fmt::Display for KeyringError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::NoEntry => write!(f, "No entry found"),
-                Self::Unusable(message) => write!(f, "{}", message),
-            }
-        }
-    }
-
-    impl std::error::Error for KeyringError {}
-
-    pub struct Entry {
-        service: String,
-        user: String,
-        path: PathBuf,
-    }
-
-    impl Entry {
-        pub fn new(service: &str, user: &str) -> std::result::Result<Self, KeyringError> {
-            Ok(Self::at(service, user, default_keyring_path()))
-        }
-
-        fn at(service: &str, user: &str, path: PathBuf) -> Self {
-            Self {
-                service: service.to_string(),
-                user: user.to_string(),
-                path,
-            }
-        }
-
-        pub fn set_password(&self, password: &str) -> std::result::Result<(), KeyringError> {
-            let mut store = self.load_store()?;
-            store.insert(self.key(), password.to_string());
-            self.save_store(&store)
-        }
-
-        pub fn get_password(&self) -> std::result::Result<String, KeyringError> {
-            self.load_store()?
-                .get(&self.key())
-                .cloned()
-                .ok_or(KeyringError::NoEntry)
-        }
-
-        fn key(&self) -> String {
-            format!("{}:{}", self.service, self.user)
-        }
-
-        fn load_store(&self) -> std::result::Result<HashMap<String, String>, KeyringError> {
-            if !self.path.exists() {
-                return Ok(HashMap::new());
-            }
-            let content = fs::read_to_string(&self.path).map_err(|e| {
-                KeyringError::Unusable(format!(
-                    "Failed to read keyring file {}: {}",
-                    self.path.display(),
-                    e
-                ))
+/// Write the registry to `path` with owner-only permissions.
+fn save_registry(path: &Path, deployments: &TrackedDeployments) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "create directory".to_string(),
+                file_path: dir.display().to_string(),
+                reason: "Failed to create config directory".to_string(),
             })?;
-            // Treating an unparseable file as empty would let the next write
-            // replace every credential it holds.
-            serde_json::from_str(&content).map_err(|e| {
-                KeyringError::Unusable(format!(
-                    "Failed to parse keyring file {}: {}",
-                    self.path.display(),
-                    e
-                ))
-            })
-        }
-
-        fn save_store(
-            &self,
-            store: &HashMap<String, String>,
-        ) -> std::result::Result<(), KeyringError> {
-            if let Some(dir) = self.path.parent() {
-                fs::create_dir_all(dir).map_err(|e| {
-                    KeyringError::Unusable(format!("Failed to create config dir: {}", e))
-                })?;
-            }
-            let content = serde_json::to_string_pretty(store).map_err(|e| {
-                KeyringError::Unusable(format!("Failed to serialize keyring: {}", e))
-            })?;
-            alien_core::file_utils::write_secret_file(&self.path, content.as_bytes()).map_err(
-                |e| {
-                    KeyringError::Unusable(format!(
-                        "Failed to write keyring file {}: {}",
-                        self.path.display(),
-                        e
-                    ))
-                },
-            )?;
-            Ok(())
-        }
     }
-
-    fn default_keyring_path() -> PathBuf {
-        super::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("alien")
-            .join("cli-keyring.json")
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn unparseable_file_is_an_error_rather_than_an_empty_store() {
-            let dir = tempfile::tempdir().expect("temp dir");
-            let path = dir.path().join("cli-keyring.json");
-            let entry = Entry::at("alien-cli", "tracked_deployments", path.clone());
-
-            entry.set_password("stored").expect("write entry");
-            assert_eq!(
-                entry.get_password().expect("read entry"),
-                "stored",
-                "round trip should return what was stored"
-            );
-
-            fs::write(&path, "{ not json").expect("corrupt the file");
-            let error = entry
-                .get_password()
-                .expect_err("a corrupt store must not read as empty");
-            assert!(
-                matches!(error, KeyringError::Unusable(_)),
-                "expected an unusable store, got {error:?}"
-            );
-
-            entry
-                .set_password("replacement")
-                .expect_err("a corrupt store must not be overwritten");
-            assert_eq!(
-                fs::read_to_string(&path).expect("file still readable"),
-                "{ not json",
-                "the corrupt file must be left untouched"
-            );
-        }
-
-        #[test]
-        fn missing_entry_is_distinct_from_a_broken_store() {
-            let dir = tempfile::tempdir().expect("temp dir");
-            let entry = Entry::at(
-                "alien-cli",
-                "tracked_deployments",
-                dir.path().join("cli-keyring.json"),
-            );
-
-            let error = entry.get_password().expect_err("nothing stored yet");
-            assert!(
-                matches!(error, KeyringError::NoEntry),
-                "expected NoEntry, got {error:?}"
-            );
-        }
-    }
+    let json = serde_json::to_string_pretty(deployments)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialize".to_string(),
+            reason: "Failed to serialize tracked deployments".to_string(),
+        })?;
+    alien_core::file_utils::write_secret_file(path, json.as_bytes())
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: path.display().to_string(),
+            reason: "Failed to write tracked deployments".to_string(),
+        })
 }
 
 #[cfg(test)]
@@ -582,7 +420,9 @@ mod tests {
     use axum::{
         extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router,
     };
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -594,62 +434,28 @@ mod tests {
     const WORKSPACE_ID: &str = "ws_000000000000000000000001";
     const API_KEY: &str = "ax_dep_stored";
 
-    /// Registry backed by a temp file, so no test touches the developer's real keyring.
-    struct FileStore {
-        path: PathBuf,
-    }
-
-    impl TrackedDeploymentStore for FileStore {
-        fn load(&self) -> Result<TrackedDeployments> {
-            if !self.path.exists() {
-                return Ok(TrackedDeployments::new());
-            }
-            let data = std::fs::read_to_string(&self.path)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to read the test registry".to_string(),
-                })?;
-            serde_json::from_str(&data)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to parse the test registry".to_string(),
-                })
-        }
-
-        fn save(&self, deployments: &TrackedDeployments) -> Result<()> {
-            let data = serde_json::to_string(deployments)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to serialize the test registry".to_string(),
-                })?;
-            std::fs::write(&self.path, data).into_alien_error().context(
-                ErrorData::ConfigurationError {
-                    message: "Failed to write the test registry".to_string(),
-                },
-            )
-        }
-    }
-
     fn tracker_at(path: &Path) -> DeploymentTracker {
-        DeploymentTracker::with_store(Box::new(FileStore {
-            path: path.to_path_buf(),
-        }))
-        .expect("registry should load")
+        DeploymentTracker::at(path.to_path_buf()).expect("registry should load")
+    }
+
+    fn validated(deployment_id: &str) -> ValidatedDeploymentInfo {
+        ValidatedDeploymentInfo {
+            deployment_id: deployment_id.to_string(),
+            workspace_id: WORKSPACE_ID.to_string(),
+            project_id: PROJECT_ID.to_string(),
+        }
     }
 
     fn registry_with_entry() -> (TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("registry.json");
+        // A nested path, so the first save has to create the config directory.
+        let path = dir.path().join("alien").join(TRACKED_DEPLOYMENTS_FILE);
 
         let tracked = tracker_at(&path)
             .track(
                 NAME.to_string(),
                 API_KEY.to_string(),
-                ValidatedDeploymentInfo {
-                    deployment_id: DEPLOYMENT_ID.to_string(),
-                    workspace_id: WORKSPACE_ID.to_string(),
-                    project_id: PROJECT_ID.to_string(),
-                },
+                validated(DEPLOYMENT_ID),
             )
             .expect("entry should persist");
         assert_eq!(tracked.deployment_id, DEPLOYMENT_ID);
@@ -833,7 +639,7 @@ mod tests {
     #[tokio::test]
     async fn untracked_name_resolves_without_calling_the_platform() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("registry.json");
+        let path = dir.path().join(TRACKED_DEPLOYMENTS_FILE);
         let (base_url, calls) = fake_platform(Whoami::Rejected).await;
 
         let resolved = tracker_at(&path)
@@ -853,11 +659,7 @@ mod tests {
             .track(
                 NAME.to_string(),
                 "ax_dep_rotated".to_string(),
-                ValidatedDeploymentInfo {
-                    deployment_id: REPLACEMENT_DEPLOYMENT_ID.to_string(),
-                    workspace_id: WORKSPACE_ID.to_string(),
-                    project_id: PROJECT_ID.to_string(),
-                },
+                validated(REPLACEMENT_DEPLOYMENT_ID),
             )
             .expect("re-tracking should persist");
 
@@ -881,5 +683,90 @@ mod tests {
         assert_eq!(removed.deployment_id, DEPLOYMENT_ID);
 
         assert!(tracker_at(&path).get_deployment(NAME).is_none());
+    }
+
+    /// Set only in the child process spawned by
+    /// `tracked_deployment_survives_into_a_new_process`, naming the registry to write.
+    const CHILD_REGISTRY_ENV: &str = "ALIEN_CLI_TEST_TRACKER_CHILD_REGISTRY";
+
+    /// `deploy` and `destroy` run as separate processes, so an entry must outlive the
+    /// process that wrote it. A store that only lives in process memory passes every
+    /// same-process round trip and fails this one.
+    #[test]
+    fn tracked_deployment_survives_into_a_new_process() {
+        if let Ok(path) = std::env::var(CHILD_REGISTRY_ENV) {
+            tracker_at(Path::new(&path))
+                .track(
+                    NAME.to_string(),
+                    API_KEY.to_string(),
+                    validated(DEPLOYMENT_ID),
+                )
+                .expect("child should persist the entry");
+            return;
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("alien").join(TRACKED_DEPLOYMENTS_FILE);
+
+        let output = Command::new(std::env::current_exe().expect("test binary path"))
+            .args([
+                "deployment_tracking::tests::tracked_deployment_survives_into_a_new_process",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(CHILD_REGISTRY_ENV, &path)
+            .output()
+            .expect("spawn child test process");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "child process failed: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "the child must have run exactly this test, got: {stdout}"
+        );
+
+        let reloaded = tracker_at(&path);
+        let entry = reloaded
+            .get_deployment(NAME)
+            .expect("the entry written by the child process must be visible here");
+        assert_eq!(entry.deployment_id, DEPLOYMENT_ID);
+        assert_eq!(entry.api_key, API_KEY);
+        assert_eq!(entry.workspace_id, WORKSPACE_ID);
+        assert_eq!(entry.project_id, PROJECT_ID);
+        assert_eq!(reloaded.list_deployments().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_file_is_readable_only_by_its_owner() {
+        let (_dir, path) = registry_with_entry();
+        let mode = fs::metadata(&path)
+            .expect("registry file exists")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "deployment keys must not be group/world readable"
+        );
+    }
+
+    #[test]
+    fn corrupt_registry_is_an_error_and_is_left_untouched() {
+        let (_dir, path) = registry_with_entry();
+        fs::write(&path, "{ not json").expect("corrupt the registry");
+
+        let error = DeploymentTracker::at(path.clone())
+            .err()
+            .expect("a corrupt registry must not load as empty");
+        assert_eq!(error.code, "JSON_ERROR");
+        assert_eq!(
+            fs::read_to_string(&path).expect("registry still readable"),
+            "{ not json",
+            "nothing may overwrite a registry that failed to load"
+        );
     }
 }

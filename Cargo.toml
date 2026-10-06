@@ -158,7 +158,6 @@ hyper-util = "0.1"
 indexmap = "2.2.6"
 insta = "1"
 zstd = "0.13"
-keyring = "3.6"
 lambda-extension = "0.12"
 lambda_http = { version = "0.17", default-features = false, features = ["apigw_http", "tracing"] }
 lambda_runtime = "0.14"
