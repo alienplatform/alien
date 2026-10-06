@@ -374,6 +374,8 @@ pub struct LocalContainerManager {
     state_dir: PathBuf,
     /// Tracked containers (container_id → metadata)
     containers: Arc<RwLock<HashMap<String, ContainerMetadata>>>,
+    /// Serialize content lookup and load so shared images are imported only once.
+    image_load_lock: tokio::sync::Mutex<()>,
 }
 
 impl LocalContainerManager {
@@ -466,6 +468,7 @@ impl LocalContainerManager {
             docker,
             state_dir,
             containers: Arc::new(RwLock::new(containers)),
+            image_load_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -620,34 +623,7 @@ impl LocalContainerManager {
         tarball_path: &Path,
         container_id: &str,
     ) -> Result<String> {
-        info!(
-            tarball = %tarball_path.display(),
-            container_id = %container_id,
-            "Loading OCI image from local tarball"
-        );
-
-        // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
-        // docker import is for filesystem tarballs, docker load is for OCI image tarballs
-        let output = tokio::process::Command::new("docker")
-            .args(&["load", "-i", &tarball_path.to_string_lossy()])
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "docker_load".to_string(),
-                reason: "Failed to execute docker load command".to_string(),
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AlienError::new(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "docker_load".to_string(),
-                reason: format!("docker load failed: {}", stderr),
-            }));
-        }
-
+        let _load_guard = self.image_load_lock.lock().await;
         // Docker's containerd image store identifies the image by the manifest
         // digest listed in the archive's index.json; the classic store by the
         // config digest. Both are immutable, unlike the archive's tag, which a
@@ -678,9 +654,64 @@ impl LocalContainerManager {
             ),
         })?;
 
-        for image_id in &candidates {
+        if let Some(image_id) = self
+            .inspect_archive_image(&candidates, container_id)
+            .await?
+        {
+            return Ok(image_id);
+        }
+        info!(
+            tarball = %tarball_path.display(),
+            container_id = %container_id,
+            "Loading OCI image from local tarball"
+        );
+
+        // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
+        // docker import is for filesystem tarballs, docker load is for OCI image tarballs
+        let output = tokio::process::Command::new("docker")
+            .args(&["load", "-i", &tarball_path.to_string_lossy()])
+            .output()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "docker_load".to_string(),
+                reason: "Failed to execute docker load command".to_string(),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AlienError::new(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "docker_load".to_string(),
+                reason: format!("docker load failed: {}", stderr),
+            }));
+        }
+
+        if let Some(image_id) = self
+            .inspect_archive_image(&candidates, container_id)
+            .await?
+        {
+            return Ok(image_id);
+        }
+        Err(AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "inspect_loaded_image".to_string(),
+            reason: format!(
+                "Docker did not load image {} (manifest) or {} (config)",
+                candidates[0], candidates[1]
+            ),
+        }))
+    }
+
+    async fn inspect_archive_image(
+        &self,
+        candidates: &[String; 2],
+        container_id: &str,
+    ) -> Result<Option<String>> {
+        for image_id in candidates {
             match self.docker.inspect_image(image_id).await {
-                Ok(_) => return Ok(image_id.clone()),
+                Ok(_) => return Ok(Some(image_id.clone())),
                 Err(bollard::errors::Error::DockerResponseServerError {
                     status_code: 404, ..
                 }) => continue,
@@ -695,14 +726,7 @@ impl LocalContainerManager {
                 }
             }
         }
-        Err(AlienError::new(ErrorData::DockerContainerError {
-            container: container_id.to_string(),
-            operation: "inspect_loaded_image".to_string(),
-            reason: format!(
-                "Docker did not load image {} (manifest) or {} (config)",
-                candidates[0], candidates[1]
-            ),
-        }))
+        Ok(None)
     }
 
     /// Make a registry image available to the daemon and return a reference
@@ -1073,6 +1097,14 @@ impl LocalContainerManager {
         // Build container config
         let container_config = Config {
             image: Some(image.clone()),
+            labels: Some(HashMap::from([
+                ("alien.dev/resource".to_string(), container_id.to_string()),
+                (
+                    "alien.dev/image-reference".to_string(),
+                    config.image.clone(),
+                ),
+                ("alien.dev/image-id".to_string(), image.clone()),
+            ])),
             entrypoint: process_override.entrypoint,
             cmd: process_override.cmd,
             user,
