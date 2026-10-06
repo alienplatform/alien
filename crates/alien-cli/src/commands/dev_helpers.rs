@@ -1655,7 +1655,6 @@ mod tests {
         refresh_local_deployment_environment(directory.path(), "local-dev/api", &[])
             .await
             .unwrap();
-        drop(store);
         refresh_local_deployment_environment(directory.path(), "api", &[])
             .await
             .unwrap();
