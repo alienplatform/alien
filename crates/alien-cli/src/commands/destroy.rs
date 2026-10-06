@@ -764,7 +764,7 @@ mod tests {
             .route(
                 "/v1/resolve",
                 get(move || async move {
-                    Json(serde_json::json!({ "manager_url": manager_url, "project_id": PROJECT }))
+                    Json(serde_json::json!({ "managerUrl": manager_url, "projectId": PROJECT }))
                 }),
             )
             .route("/v1/deployments/{id}", get(deployment))
