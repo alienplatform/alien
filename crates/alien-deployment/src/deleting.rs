@@ -399,7 +399,6 @@ mod tests {
         has_remaining_setup_resources,
     };
 
-    #[cfg(feature = "local")]
     struct LocalStorageFixture {
         directory: tempfile::TempDir,
         state: StackState,
@@ -409,7 +408,6 @@ mod tests {
         prepared: Stack,
     }
 
-    #[cfg(feature = "local")]
     async fn local_storage_fixture() -> LocalStorageFixture {
         let directory = tempfile::tempdir().expect("temporary state directory");
         let bindings =
@@ -477,7 +475,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "local")]
     async fn local_manager_destroy_removes_frozen_storage_with_its_own_services() {
         let fixture = local_storage_fixture().await;
         let neighbor = fixture.directory.path().join("neighbor.txt");
@@ -534,7 +531,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "local")]
     async fn missing_local_storage_services_fail_without_forgetting_stored_data() {
         let mut fixture = local_storage_fixture().await;
         fixture
