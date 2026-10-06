@@ -966,6 +966,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn force_target_rejects_deployment_outside_selected_project() {
+        let state = Shared::default();
+        let app = Router::new()
+            .route("/v1/deployments/{id}", get(get_deployment))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ctx = ExecutionMode::Standalone {
+            server_url,
+            api_key: "operator".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "dep_test".to_string(),
+            platform: Some("test".to_string()),
+            force: true,
+        };
+        let error = resolve_destroy_target(&args, &ctx, "test", None)
+            .await
+            .err()
+            .expect("cross-project force target must be rejected before mutation");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("project"));
+        let state = state.lock().unwrap();
+        assert!(!state.deleted);
+        assert!(state.delete_authorizations.is_empty());
+        assert!(state.acquire_authorizations.is_empty());
+    }
+
+    #[tokio::test]
     async fn teardown_required_destroy_acquires_with_the_deployment_token() {
         let state = Shared::default();
         let app = Router::new()
