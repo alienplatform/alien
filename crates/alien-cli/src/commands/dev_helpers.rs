@@ -244,35 +244,94 @@ async fn refresh_local_deployment_environment(
             .context(ErrorData::ServerStartFailed {
                 reason: "Failed to resolve the local development group".to_string(),
             })?;
-    let Some(group) = groups.iter().find(|group| group.name == "local-dev") else {
-        return Ok(());
+    let canonical = groups.iter().find(|group| group.name == "local-dev");
+    let explicit = name.starts_with("dep_") || name.contains('/');
+    let (source_group, deployment_name) = match name.split_once('/') {
+        Some((group, name)) if !group.is_empty() && !name.is_empty() && !name.contains('/') => {
+            (Some(group), name)
+        }
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "deployment-name".to_string(),
+                message: "Use a deployment ID or <group>/<name> for an explicit local migration"
+                    .to_string(),
+            }))
+        }
+        None => (None, name),
     };
-    let filter = DeploymentFilter {
-        deployment_group_id: Some(group.id.clone()),
-        name: Some(name.to_string()),
-        platforms: Some(vec![alien_core::Platform::Local]),
-        ..Default::default()
-    };
-    let deployments =
-        store
-            .list_deployments(&subject, &filter)
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to resolve local session deployment".to_string(),
-            })?;
+    let deployments = store
+        .list_deployments(
+            &subject,
+            &DeploymentFilter {
+                name: if name.starts_with("dep_") {
+                    None
+                } else {
+                    Some(deployment_name.to_string())
+                },
+                platforms: Some(vec![alien_core::Platform::Local]),
+                ..Default::default()
+            },
+        )
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to resolve local session deployment".to_string(),
+        })?;
     let matches: Vec<_> = deployments
         .iter()
         .filter(|deployment| {
-            deployment.name == name && deployment.platform == alien_core::Platform::Local
+            if name.starts_with("dep_") {
+                deployment.id == name
+            } else if let Some(source_group) = source_group {
+                deployment.name == deployment_name
+                    && groups.iter().any(|group| {
+                        group.name == source_group && group.id == deployment.deployment_group_id
+                    })
+            } else {
+                deployment.name == name
+                    && canonical.is_some_and(|group| group.id == deployment.deployment_group_id)
+            }
         })
         .collect();
-    if matches.len() > 1 {
+    if matches.len() > 1 || (explicit && matches.is_empty()) {
         return Err(AlienError::new(ErrorData::ValidationError {
-            field: "name".to_string(),
-            message: format!("Multiple local deployments are named '{name}'"),
+            field: "deployment-name".to_string(),
+            message: format!(
+                "Expected one local deployment for '{name}'; found {}",
+                matches.len()
+            ),
+        }));
+    }
+    if !explicit && matches.is_empty() && !deployments.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: format!("A local deployment named '{name}' exists outside local-dev. Preserve its identity by selecting it explicitly: alien dev --deployment-name {}", deployments[0].id),
         }));
     }
     if let Some(deployment) = matches.first() {
+        if explicit {
+            let group_id =
+                match canonical {
+                    Some(group) => group.id.clone(),
+                    None => store
+                        .create_deployment_group(
+                            &subject,
+                            alien_manager::traits::deployment_store::CreateDeploymentGroupParams {
+                                name: "local-dev".to_string(),
+                                max_deployments: 100,
+                                setup: Default::default(),
+                            },
+                        )
+                        .await
+                        .context(ErrorData::ServerStartFailed {
+                            reason: "Failed to create the local development group".to_string(),
+                        })?
+                        .id,
+                };
+            store.reassign_local_deployment_group(&deployment.id, &group_id).await
+                .context(ErrorData::ServerStartFailed {
+                    reason: "Failed to migrate the selected local deployment; check for a conflicting name in local-dev".to_string(),
+                })?;
+        }
         let variables = crate::cli_env_vars_to_core(variables).unwrap_or_default();
         store
             .replace_environment_variables(&deployment.id, &variables)
@@ -748,6 +807,31 @@ pub async fn create_initial_deployment(
         return Ok(existing.id.clone());
     }
 
+    // Old clients omitted the group ID. Without an explicit identity, a same-name
+    // deployment in another group cannot safely be distinguished from an intentional one.
+    let outside = client
+        .list_deployments()
+        .name(deployment_name)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to check for an existing local deployment".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    if outside.next_cursor.is_some()
+        || outside.items.iter().any(|deployment| {
+            deployment.name == deployment_name
+                && deployment.platform == alien_manager_api::types::Platform::Local
+        })
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: "A same-name local deployment may exist outside local-dev. Stop the manager and select its ID with alien dev --deployment-name dep_... to preserve its state".to_string(),
+        }));
+    }
+
     // Create deployment
     info!("Creating initial deployment '{}'...", deployment_name);
 
@@ -850,21 +934,40 @@ async fn find_named_local_deployment(
     client: &AlienManagerClient,
     deployment_name: &str,
 ) -> Result<Option<alien_manager_api::types::DeploymentResponse>> {
-    let list_response = client
+    let group_id = local_dev_group_id(client).await?;
+    let response = client
         .list_deployments()
+        .deployment_group_id(&group_id)
+        .name(deployment_name)
         .send()
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "Failed to list deployments".to_string(),
+            message: "Failed to list local development deployments".to_string(),
             url: None,
-        })?;
-
-    let inner = list_response.into_inner();
-    Ok(inner
-        .items
-        .into_iter()
-        .find(|deployment| deployment.name == deployment_name))
+        })?
+        .into_inner();
+    if response.next_cursor.is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: "The manager returned an incomplete local deployment list".to_string(),
+        }));
+    }
+    let mut matches = response.items.into_iter().filter(|deployment| {
+        deployment.name == deployment_name
+            && deployment.deployment_group_id == group_id
+            && deployment.platform == alien_manager_api::types::Platform::Local
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!(
+                "Multiple local development deployments are named '{deployment_name}'"
+            ),
+        }));
+    }
+    Ok(first)
 }
 
 async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> Result<()> {
@@ -1258,7 +1361,24 @@ mod tests {
         } else {
             serde_json::json!([])
         };
+        let mut items = items.as_array().unwrap().clone();
+        items.insert(
+            0,
+            serde_json::json!({
+                "id":"dep_other", "name":"api", "platform":"local", "status":"running",
+                "deploymentGroupId":"dg_other", "deploymentProtocolVersion":1,
+                "projectId":"default", "workspaceId":"default", "retryRequested":false,
+                "createdAt":"2026-01-01T00:00:00Z"
+            }),
+        );
         Json(serde_json::json!({ "items": items }))
+    }
+
+    async fn destroy_manager_groups() -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "items": [{
+            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+            "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
+        }] }))
     }
 
     async fn destroy_manager_delete(
@@ -1283,6 +1403,7 @@ mod tests {
     async fn force_destroy_local_deployment_deletes_by_name_and_waits() {
         let manager: SharedDestroyManager = Arc::default();
         let app = Router::new()
+            .route("/v1/deployment-groups", get(destroy_manager_groups))
             .route("/v1/deployments", get(destroy_manager_list))
             .route("/v1/deployments/{id}/delete", post(destroy_manager_delete))
             .with_state(manager.clone());
@@ -1306,6 +1427,12 @@ mod tests {
             // until a second poll saw it gone.
             assert_eq!(manager.lists_after_delete, 2);
         }
+
+        assert!(
+            destroy_local_deployment(port, "api", true).await.is_err(),
+            "the remaining same-name deployment outside local-dev must never be deleted"
+        );
+        assert_eq!(manager.lock().unwrap().deleted.len(), 1);
 
         let error = destroy_local_deployment(port, "missing", false)
             .await
@@ -1347,7 +1474,9 @@ mod tests {
             let mut unrelated = deployment("api");
             unrelated["id"] = serde_json::json!("dep_other");
             unrelated["deploymentGroupId"] = serde_json::json!("dg_other");
-            items.insert(0, unrelated);
+            if !items.is_empty() {
+                items.insert(0, unrelated);
+            }
             Json(serde_json::json!({ "items": items }))
         }
         async fn create(
@@ -1403,6 +1532,133 @@ mod tests {
             .expect("the full dev session also reuses durable state");
         assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_local_migration_requires_identity_and_preserves_state() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("dev-server.db");
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let subject = Subject::system();
+        let legacy = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "legacy".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let parameters = CreateDeploymentParams {
+            name: "api".to_string(),
+            deployment_group_id: legacy.id,
+            platform: alien_core::Platform::Local,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            stack_settings: Default::default(),
+            stack_state: Some(StackState::with_resource_prefix(
+                alien_core::Platform::Local,
+                "retained".to_string(),
+            )),
+            environment_variables: None,
+            public_subdomain: None,
+            input_values: Default::default(),
+            setup_item: None,
+            deployment_token: None,
+        };
+        let before = store
+            .create_deployment(&subject, parameters.clone())
+            .await
+            .unwrap();
+        drop(store);
+        assert!(
+            refresh_local_deployment_environment(directory.path(), "api", &[])
+                .await
+                .is_err(),
+            "a same-name deployment in another group must not be adopted implicitly"
+        );
+        let variables = vec![CliEnvVar {
+            name: "APP_KEY".to_string(),
+            value: "updated".to_string(),
+            is_secret: false,
+            target_resources: None,
+        }];
+        refresh_local_deployment_environment(directory.path(), &before.id, &variables)
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let after = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let groups = store.list_deployment_groups(&subject).await.unwrap();
+        let canonical = groups
+            .iter()
+            .find(|group| group.name == "local-dev")
+            .unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.deployment_group_id, canonical.id);
+        assert_eq!(
+            serde_json::to_value(&after.stack_state).unwrap(),
+            serde_json::to_value(&before.stack_state).unwrap()
+        );
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(
+            after.user_environment_variables.unwrap()[0].value,
+            "updated"
+        );
+        assert_eq!(
+            store
+                .list_deployments(&subject, &DeploymentFilter::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let conflicting = store.create_deployment(&subject, parameters).await.unwrap();
+        drop(store);
+        assert!(
+            refresh_local_deployment_environment(directory.path(), &conflicting.id, &variables)
+                .await
+                .is_err(),
+            "migration must not overwrite a same-name deployment in local-dev"
+        );
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let untouched = store
+            .get_deployment(&subject, &conflicting.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            untouched.deployment_group_id,
+            conflicting.deployment_group_id
+        );
+        assert_eq!(
+            untouched.user_environment_variables,
+            conflicting.user_environment_variables
+        );
+        assert_eq!(
+            serde_json::to_value(&untouched.stack_state).unwrap(),
+            serde_json::to_value(&conflicting.stack_state).unwrap()
+        );
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "local-dev/api", &[])
+            .await
+            .unwrap();
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .unwrap();
     }
 
     #[test]
