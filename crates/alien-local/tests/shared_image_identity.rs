@@ -5,6 +5,23 @@ use futures::FutureExt;
 use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 use uuid::Uuid;
 
+fn config(image: String) -> ContainerConfig {
+    ContainerConfig {
+        image,
+        command: Some(vec!["sleep".to_string(), "300".to_string()]),
+        ports: vec![],
+        public_endpoint: None,
+        health_check_port: None,
+        env_vars: HashMap::new(),
+        stateful: false,
+        ordinal: None,
+        volume_mount: None,
+        volume_size: None,
+        bind_mounts: vec![],
+        proxy_token: None,
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires Docker and registry access"]
 async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
@@ -62,20 +79,6 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
         );
     }
     let manager = Arc::new(LocalContainerManager::new(directory.path().to_path_buf()).unwrap());
-    let config = |image: String| ContainerConfig {
-        image,
-        command: Some(vec!["sleep".to_string(), "300".to_string()]),
-        ports: vec![],
-        public_endpoint: None,
-        health_check_port: None,
-        env_vars: HashMap::new(),
-        stateful: false,
-        ordinal: None,
-        volume_mount: None,
-        volume_size: None,
-        bind_mounts: vec![],
-        proxy_token: None,
-    };
     let unique = std::process::id();
     let first_name = format!("identity-first-{unique}");
     let second_name = format!("identity-second-{unique}");
@@ -137,6 +140,37 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
         ));
     }
     if let Err(panic) = inspect {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker and registry access"]
+async fn registry_container_uses_and_labels_its_immutable_image_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let manager = LocalContainerManager::new(directory.path().to_path_buf()).unwrap();
+    let name = format!("registry-identity-{}", Uuid::new_v4());
+    let docker = Docker::connect_with_local_defaults().unwrap();
+    let result = manager
+        .start_container(&name, config("alpine:3.22".to_string()))
+        .await;
+    let inspection = AssertUnwindSafe(async {
+        let container = result.unwrap();
+        let container = docker
+            .inspect_container(&container.docker_container_id, None)
+            .await
+            .unwrap();
+        let id = container.image.unwrap();
+        assert!(id.starts_with("sha256:"));
+        let config = container.config.unwrap();
+        assert_eq!(config.image.as_deref(), Some(id.as_str()));
+        assert_eq!(config.labels.unwrap()["alien.dev/image-id"], id);
+        assert!(docker.inspect_image(&id).await.is_ok());
+    })
+    .catch_unwind()
+    .await;
+    manager.delete_container(&name).await.unwrap();
+    if let Err(panic) = inspection {
         std::panic::resume_unwind(panic);
     }
 }
