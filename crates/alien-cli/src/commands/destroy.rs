@@ -494,7 +494,7 @@ mod tests {
         Json(serde_json::json!({
             "id": "dep_test",
             "name": "test",
-            "platform": "test",
+            "platform": "local",
             "status": "teardown-required",
             "deploymentGroupId": "dg_test",
             "deploymentProtocolVersion": 1,
@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn teardown_required_destroy_acquires_with_the_deployment_token() {
+    async fn remote_local_teardown_acquires_with_the_deployment_token() {
         let state = Shared::default();
         let app = Router::new()
             .route("/v1/deployments/{id}", get(get_deployment))
@@ -565,13 +565,13 @@ mod tests {
         let args = DestroyArgs {
             token: None,
             name: "test".to_string(),
-            platform: Some("test".to_string()),
+            platform: Some("local".to_string()),
             force: false,
         };
 
         destroy_tracked_deployment(
             &args,
-            Platform::Test,
+            Platform::Local,
             &tracked,
             manager_ctx,
             FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
