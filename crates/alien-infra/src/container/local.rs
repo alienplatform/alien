@@ -913,13 +913,13 @@ mod tests {
             .command(vec!["sleep".to_string(), "300".to_string()])
             .build();
         let mut executor = SingleControllerExecutor::builder()
-            .resource(config)
+            .resource(config.clone())
             .controller(LocalContainerController::default())
             .platform(Platform::Local)
             .client_config(alien_core::ClientConfig::Local {
                 state_directory: directory.path().to_string_lossy().into_owned(),
             })
-            .service_provider(services)
+            .service_provider(services.clone())
             .build()
             .await
             .unwrap();
@@ -958,10 +958,29 @@ mod tests {
                     .expect("a present stopped container must fail its health check");
                 assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
                 assert!(error.message.contains("Container health check failed"));
-                assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
+                assert_eq!(executor.status(), ResourceStatus::Running);
             }
             assert!(!manager.is_running(&id).await);
             assert!(manager.container_exists(&id).await.unwrap());
+
+            // The production executor moves to failure after its retry policy is exhausted.
+            let mut failed_controller = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .clone();
+            failed_controller.transition_to_failure();
+            executor = SingleControllerExecutor::builder()
+                .resource(config.clone())
+                .controller(failed_controller)
+                .platform(Platform::Local)
+                .client_config(alien_core::ClientConfig::Local {
+                    state_directory: directory.path().to_string_lossy().into_owned(),
+                })
+                .service_provider(services.clone())
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
 
             // Once absent, even an already failed health checkpoint can recover.
             manager.delete_container(&id).await.unwrap();
