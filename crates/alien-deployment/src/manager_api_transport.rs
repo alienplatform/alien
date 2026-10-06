@@ -623,13 +623,14 @@ pub async fn finalize_step_loop(
     result: crate::Result<crate::runner::RunnerResult>,
 ) -> Result<crate::runner::RunnerResult, AlienError> {
     let checkpointed_terminal = result.as_ref().is_ok_and(|result| {
-        matches!(
-            result.loop_result.stop_reason,
-            LoopStopReason::Synced
-                | LoopStopReason::Failed
-                | LoopStopReason::Deleted
-                | LoopStopReason::Handoff
-        )
+        result.loop_result.final_status.is_failed()
+            || matches!(
+                result.loop_result.stop_reason,
+                LoopStopReason::Synced
+                    | LoopStopReason::Failed
+                    | LoopStopReason::Deleted
+                    | LoopStopReason::Handoff
+            )
     });
     let finalized = if checkpointed_terminal {
         release_deployment(client, deployment_id, session, execution_claim).await
@@ -1258,6 +1259,80 @@ mod tests {
             reconcile.assert_hits_async(1).await;
             release.assert_hits_async(1).await;
         }
+    }
+
+    #[tokio::test]
+    async fn checkpointed_teardown_budget_failure_releases_without_another_terminal_write() {
+        let server = MockServer::start_async().await;
+        let mut state = running_state();
+        state.platform = Platform::Test;
+        state.status = alien_core::DeploymentStatus::TeardownRequired;
+        state.stack_state = Some(alien_core::StackState::new(Platform::Test));
+        state.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+        let prepared = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":state}));
+            })
+            .await;
+        let mut failed = state.clone();
+        failed.status = alien_core::DeploymentStatus::TeardownFailed;
+        failed.error = Some(
+            AlienError::new(crate::ErrorData::StackExecutionFailed {
+                message: "Setup-owned resource teardown did not complete within 0 steps"
+                    .to_string(),
+            })
+            .into_generic(),
+        );
+        let terminal = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-failed"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":failed}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let result = crate::setup_teardown::run_setup_teardown_after_handoff(
+            &mut state,
+            &mut deployment_config(),
+            &alien_core::ClientConfig::Test,
+            "deployment-1",
+            &crate::runner::RunnerPolicy {
+                max_steps: 0,
+                operation: crate::loop_contract::LoopOperation::Delete,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+            },
+            &ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+            None,
+        )
+        .await
+        .map(|result| result.expect("teardown must run"));
+        assert_eq!(
+            result
+                .as_ref()
+                .expect("failure should be durably checkpointed")
+                .loop_result
+                .stop_reason,
+            LoopStopReason::BudgetExceeded
+        );
+        let error = finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+            .await
+            .expect_err("teardown exhaustion must remain a semantic failure");
+        assert!(error.message.contains("did not complete within 0 steps"));
+        prepared.assert_hits_async(2).await;
+        terminal.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
     }
 
     #[tokio::test]
