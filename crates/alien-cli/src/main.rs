@@ -6,8 +6,24 @@ use alien_cli::{
 };
 use clap::Parser;
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
+fn main() -> std::process::ExitCode {
+    // Embedded reconciliation polls deeply nested controller and registry futures.
+    // Debug builds need the same stack headroom as the worker runtime.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(8 * 1024 * 1024)
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Failed to start async runtime: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> std::process::ExitCode {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cli = Cli::parse();
