@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use alien_error::{Context, IntoAlienError};
-use bollard::{network::InspectNetworkOptions, Docker};
+use bollard::network::InspectNetworkOptions;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
@@ -11,27 +11,33 @@ use crate::{ErrorData, Result};
 
 /// Returns a Docker bridge gateway that belongs to the private range used by
 /// Local services and is bindable by this host.
-pub(crate) async fn bindable_docker_bridge_gateway() -> Option<Ipv4Addr> {
-    let docker = Docker::connect_with_local_defaults().ok()?;
-    let network = docker
-        .inspect_network("bridge", None::<InspectNetworkOptions<String>>)
-        .await
-        .ok()?;
-    let gateway = network
-        .ipam?
-        .config?
-        .into_iter()
-        .filter_map(|config| config.gateway)
-        .find_map(|gateway| docker_bridge_gateway(&gateway))?;
-    std::net::TcpListener::bind((gateway, 0)).ok()?;
-    Some(gateway)
+pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>> {
+    let docker = crate::connect_docker()?;
+    // Bridge discovery is optional on hosts without a local bridge (for
+    // example Docker Desktop). Endpoint selection errors above are mandatory.
+    let gateway = async {
+        let network = docker
+            .inspect_network("bridge", None::<InspectNetworkOptions<String>>)
+            .await
+            .ok()?;
+        let gateway = network
+            .ipam?
+            .config?
+            .into_iter()
+            .filter_map(|config| config.gateway)
+            .find_map(|gateway| docker_bridge_gateway(&gateway))?;
+        std::net::TcpListener::bind((gateway, 0)).ok()?;
+        Some(gateway)
+    }
+    .await;
+    Ok(gateway)
 }
 
 /// Makes a loopback service reachable at the same port on Docker's private
 /// host gateway. Hosts where that gateway cannot be bound, such as Docker
 /// Desktop, retain their native `host.docker.internal` behavior.
 pub async fn start_docker_bridge_proxy(target: SocketAddr) -> Result<Option<SocketAddr>> {
-    let Some(gateway) = bindable_docker_bridge_gateway().await else {
+    let Some(gateway) = bindable_docker_bridge_gateway().await? else {
         return Ok(None);
     };
     let listen_addr = SocketAddr::new(IpAddr::V4(gateway), target.port());

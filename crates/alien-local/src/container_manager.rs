@@ -453,11 +453,7 @@ impl LocalContainerManager {
     /// # Arguments
     /// * `state_dir` - Base directory for container metadata
     pub fn new(state_dir: PathBuf) -> Result<Self> {
-        let docker = Docker::connect_with_local_defaults()
-            .into_alien_error()
-            .context(ErrorData::DockerConnectionFailed {
-                reason: "Failed to connect to Docker daemon. Is Docker running?".to_string(),
-            })?;
+        let docker = crate::connect_docker()?;
 
         let containers = Self::load_metadata_from_disk(&state_dir)?
             .into_iter()
