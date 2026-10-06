@@ -4053,7 +4053,7 @@ checksum = "780955b8b195a21ab8e4ac6b60dd1dbdcec1dc6c51c0617964b08c81785e12c9"
 [[package]]
 name = "dockdash"
 version = "0.2.0"
-source = "git+https://github.com/alienplatform/dockdash?rev=e5338c004ac4be34982f20771b329f79210e768f#e5338c004ac4be34982f20771b329f79210e768f"
+source = "git+https://github.com/alienplatform/dockdash?rev=fd4f517312a56b329f3bdb08ff32685aeacd73b3#fd4f517312a56b329f3bdb08ff32685aeacd73b3"
 dependencies = [
  "async-trait",
  "cacache",
