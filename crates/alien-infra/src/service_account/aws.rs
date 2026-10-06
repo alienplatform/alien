@@ -295,7 +295,8 @@ impl AwsServiceAccountController {
         // Frozen compatibility has already verified the installed explicit grants.
         // Capturing their metadata changes no AWS role policy, and runtime does
         // not need IAM write access to record it.
-        if previous.resource_permission_sets.is_empty()
+        if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::ImportedHandoff
+            && previous.resource_permission_sets.is_empty()
             && !config.resource_permission_sets.is_empty()
             && previous.id == config.id
             && previous.stack_permission_sets == config.stack_permission_sets
@@ -1134,34 +1135,57 @@ mod tests {
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn capturing_legacy_grants_completes_without_iam_access() {
+    async fn legacy_grant_capture_avoids_iam_only_for_imported_handoffs() {
         let profile = PermissionProfile::new().resource("objects", ["storage/data-read"]);
         let captured =
             ServiceAccount::from_permission_profile("reader-sa".to_string(), &profile, |id| {
                 alien_permissions::get_permission_set(id).cloned()
             })
             .unwrap();
-        let mut legacy = captured.clone();
-        legacy.resource_permission_sets.clear();
-        let controller = AwsServiceAccountController {
-            state: AwsServiceAccountState::Ready,
-            role_arn: Some("arn:aws:iam::123456789012:role/reader-sa".to_string()),
-            role_name: Some("reader-sa".to_string()),
-            stack_permissions_applied: true,
-            ..Default::default()
-        };
-        // No cloud clients are provided: any IAM call fails the test.
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(legacy)
-            .controller(controller)
-            .platform(Platform::Aws)
-            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-        executor.update(captured).unwrap();
-        executor.step().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
+        for authority in [
+            alien_core::InitialSetupAuthority::ImportedHandoff,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        ] {
+            let direct_setup = authority == alien_core::InitialSetupAuthority::DirectSetup;
+            let mut legacy = captured.clone();
+            legacy.resource_permission_sets.clear();
+            let controller = AwsServiceAccountController {
+                state: AwsServiceAccountState::Ready,
+                role_arn: Some("arn:aws:iam::123456789012:role/reader-sa".to_string()),
+                role_name: Some("reader-sa".to_string()),
+                stack_permissions_applied: true,
+                ..Default::default()
+            };
+            let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_delete_role_policy()
+                .times(usize::from(direct_setup))
+                .returning(|_, _| Ok(()));
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .times(usize::from(direct_setup))
+                .returning(move |_| Ok(iam.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(legacy)
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(authority)
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.update(captured.clone()).unwrap();
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor.status(),
+                if direct_setup {
+                    ResourceStatus::Provisioning
+                } else {
+                    ResourceStatus::Running
+                }
+            );
+        }
     }
 }
