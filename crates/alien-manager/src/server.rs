@@ -172,9 +172,10 @@ impl AlienManager {
         info!(%addr, "alien-manager listening");
 
         // Keep HTTP available while native runtimes drain their accepted work.
-        let mut server = tokio::spawn(serve(listener, self.router, INBOUND_IDLE_TIMEOUT));
+        let mut server = JoinSet::new();
+        server.spawn(serve(listener, self.router, INBOUND_IDLE_TIMEOUT));
         let server_result = tokio::select! {
-            result = &mut server => Some(result),
+            result = server.join_next() => Some(result.expect("HTTP task is owned until completion")),
             _ = shutdown => None,
         };
         let _ = shutdown_tx.send(true);
@@ -198,8 +199,7 @@ impl AlienManager {
                     message: "Server error".to_string(),
                 })?;
         } else {
-            server.abort();
-            let _ = server.await;
+            server.shutdown().await;
         }
         if let Some(error) = task_error {
             return Err(error)
@@ -358,6 +358,47 @@ mod tests {
             0,
             "existing keep-alive connection must close"
         );
+    }
+
+    #[tokio::test]
+    async fn aborting_manager_closes_listener_and_existing_connections() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = ManagerConfig {
+            db_path: Some(directory.path().join("manager.db")),
+            state_dir: Some(directory.path().to_path_buf()),
+            response_signing_key: b"test-response-signing-key".to_vec(),
+            ..Default::default()
+        };
+        let server = AlienManager::builder(config)
+            .with_standalone_defaults(&ManagerTomlConfig::default())
+            .await
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let task = tokio::spawn(server.start_with_listener_and_shutdown(listener, pending()));
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(REQUEST).await.unwrap();
+        assert!(read_response(&mut stream).await.starts_with("HTTP/1.1 200"));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+                .await
+                .expect("aborting the manager must close its connections")
+                .unwrap(),
+            0,
+        );
+        assert!(
+            TcpStream::connect(addr).await.is_err(),
+            "listener must close"
+        );
+        TcpListener::bind(addr)
+            .await
+            .expect("manager port must be released");
     }
 
     #[tokio::test]
