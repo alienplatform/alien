@@ -1665,8 +1665,10 @@ async fn deploy_task_with_environment(
     // An installed deployment with nothing pending has nothing to deploy, and
     // one whose update waits for setup needs setup authority this run must
     // bring: say so now instead of waiting for a lock nobody grants.
+    let has_installed_release = deployment.current_release_id.is_some();
     let initial_setup =
-        existing_deployment_plan(&status, None, false) == ExistingDeploymentPlan::InitialSetup;
+        existing_deployment_plan(&status, None, ctx.is_platform(), has_installed_release)
+            == ExistingDeploymentPlan::InitialSetup;
     let (deployment_group_id, active_update) = if ctx.is_platform() && !initial_setup {
         let (group, active_update) = platform_deployment_progress(
             &base_url,
@@ -1678,7 +1680,12 @@ async fn deploy_task_with_environment(
     } else {
         (None, None)
     };
-    let plan = existing_deployment_plan(&status, active_update, ctx.is_platform());
+    let plan = existing_deployment_plan(
+        &status,
+        active_update,
+        ctx.is_platform(),
+        has_installed_release,
+    );
     if plan == ExistingDeploymentPlan::WaitForManager {
         return Err(AlienError::new(ErrorData::DeploymentFailed {
             message: format!(
@@ -2591,7 +2598,21 @@ fn existing_deployment_plan(
     status: &DeploymentStatus,
     active_update: Option<ActiveUpdate>,
     platform_mode: bool,
+    has_installed_release: bool,
 ) -> ExistingDeploymentPlan {
+    // Setup can fail after a release is installed. Status alone cannot grant
+    // the deployment token authority to resume setup on that installation.
+    if platform_mode && has_installed_release {
+        match status {
+            DeploymentStatus::InitialSetup => {
+                return ExistingDeploymentPlan::SetupUpdate { retry: false };
+            }
+            DeploymentStatus::InitialSetupFailed => {
+                return ExistingDeploymentPlan::SetupUpdate { retry: true };
+            }
+            _ => {}
+        }
+    }
     if matches!(
         status,
         DeploymentStatus::Pending
@@ -2868,7 +2889,7 @@ mod tests {
         ] {
             for platform_mode in [true, false] {
                 assert_eq!(
-                    existing_deployment_plan(&status, None, platform_mode),
+                    existing_deployment_plan(&status, None, platform_mode, false),
                     InitialSetup,
                     "{status:?} is still in initial setup"
                 );
@@ -2929,10 +2950,43 @@ mod tests {
         ];
         for (status, active_update, platform_mode, expected) in cases {
             assert_eq!(
-                existing_deployment_plan(&status, active_update, platform_mode),
+                existing_deployment_plan(&status, active_update, platform_mode, true),
                 expected,
                 "{status:?} with {active_update:?} (platform: {platform_mode})"
             );
+        }
+    }
+
+    #[test]
+    fn installed_setup_resume_uses_setup_authority_and_retries_failed_operations() {
+        for active in [
+            None,
+            Some(ActiveUpdate::WaitingForSetup),
+            Some(ActiveUpdate::Pending),
+        ] {
+            for (status, expected) in [
+                (
+                    DeploymentStatus::InitialSetup,
+                    ExistingDeploymentPlan::SetupUpdate { retry: false },
+                ),
+                (
+                    DeploymentStatus::InitialSetupFailed,
+                    ExistingDeploymentPlan::SetupUpdate { retry: true },
+                ),
+            ] {
+                assert_eq!(
+                    existing_deployment_plan(&status, active, true, true),
+                    expected
+                );
+                assert_eq!(
+                    existing_deployment_plan(&status, active, true, false),
+                    ExistingDeploymentPlan::InitialSetup
+                );
+                assert_eq!(
+                    existing_deployment_plan(&status, active, false, true),
+                    ExistingDeploymentPlan::InitialSetup
+                );
+            }
         }
     }
 
