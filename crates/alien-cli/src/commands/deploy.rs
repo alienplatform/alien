@@ -2265,6 +2265,8 @@ fn describe_waiting_status(status: &DeploymentStatus) -> &'static str {
 /// must not need manager credentials, a platform session, or network access merely to
 /// parse and validate a local file.
 pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
+    let mut args = args.clone();
+    args.resolve_token_file()?;
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -2272,7 +2274,7 @@ pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
         }));
     }
 
-    resolve_deploy_args(args)?;
+    resolve_deploy_args(&args)?;
     println!("Deployment config is valid.");
     Ok(())
 }
