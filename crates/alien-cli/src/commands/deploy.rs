@@ -64,13 +64,20 @@ use uuid::Uuid;
     # Deploy an existing deployment (uses stored API key)
     alien deploy --name production --platform aws
 
+    # Read a deployment token from a protected file
+    alien deploy --token-file deployment-token.txt --name prod --platform aws
+
     # Deploy without heartbeat capability
     alien deploy --token ax_deployment_xyz... --name prod --platform aws --no-heartbeat"
 )]
 pub struct DeployArgs {
     /// Deployment API key for authentication (optional if deployment is already tracked)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "token_file")]
     pub token: Option<String>,
+
+    /// Read the deployment API key from a file instead of exposing it in command arguments.
+    #[arg(long)]
+    pub token_file: Option<PathBuf>,
 
     /// Deployment name for identification in tracking
     #[arg(long)]
@@ -78,7 +85,7 @@ pub struct DeployArgs {
 
     /// Existing deployment group ID, name, or external ID for a new deployment.
     /// The group is inferred when --token contains a deployment-group key.
-    #[arg(long, conflicts_with = "token")]
+    #[arg(long, conflicts_with_all = ["token", "token_file"])]
     pub deployment_group: Option<String>,
 
     /// Target platform for the deployment (aws, gcp, azure, machines)
@@ -144,6 +151,28 @@ pub struct DeployArgs {
 
     #[command(flatten)]
     pub network: NetworkArgs,
+}
+
+impl DeployArgs {
+    fn resolve_token_file(&mut self) -> Result<()> {
+        let Some(path) = self.token_file.as_deref() else {
+            return Ok(());
+        };
+        let raw = std::fs::read_to_string(path).into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: format!("Failed to read token file {}", path.display()),
+            },
+        )?;
+        let token = raw.trim();
+        if token.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "token-file".to_string(),
+                message: format!("Token file {} is empty", path.display()),
+            }));
+        }
+        self.token = Some(token.to_owned());
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1214,10 +1243,12 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 }
 
 async fn deploy_task_with_environment(
-    args: DeployArgs,
+    mut args: DeployArgs,
     ctx: ExecutionMode,
     environment: &HashMap<String, String>,
 ) -> Result<()> {
+    args.resolve_token_file()?;
+
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1634,8 +1665,10 @@ async fn deploy_task_with_environment(
     // An installed deployment with nothing pending has nothing to deploy, and
     // one whose update waits for setup needs setup authority this run must
     // bring: say so now instead of waiting for a lock nobody grants.
+    let has_installed_release = deployment.current_release_id.is_some();
     let initial_setup =
-        existing_deployment_plan(&status, None, false) == ExistingDeploymentPlan::InitialSetup;
+        existing_deployment_plan(&status, None, ctx.is_platform(), has_installed_release)
+            == ExistingDeploymentPlan::InitialSetup;
     let (deployment_group_id, active_update) = if ctx.is_platform() && !initial_setup {
         let (group, active_update) = platform_deployment_progress(
             &base_url,
@@ -1647,7 +1680,12 @@ async fn deploy_task_with_environment(
     } else {
         (None, None)
     };
-    let plan = existing_deployment_plan(&status, active_update, ctx.is_platform());
+    let plan = existing_deployment_plan(
+        &status,
+        active_update,
+        ctx.is_platform(),
+        has_installed_release,
+    );
     if plan == ExistingDeploymentPlan::WaitForManager {
         return Err(AlienError::new(ErrorData::DeploymentFailed {
             message: format!(
@@ -2234,6 +2272,8 @@ fn describe_waiting_status(status: &DeploymentStatus) -> &'static str {
 /// must not need manager credentials, a platform session, or network access merely to
 /// parse and validate a local file.
 pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
+    let mut args = args.clone();
+    args.resolve_token_file()?;
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -2241,7 +2281,7 @@ pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
         }));
     }
 
-    resolve_deploy_args(args)?;
+    resolve_deploy_args(&args)?;
     println!("Deployment config is valid.");
     Ok(())
 }
@@ -2558,7 +2598,21 @@ fn existing_deployment_plan(
     status: &DeploymentStatus,
     active_update: Option<ActiveUpdate>,
     platform_mode: bool,
+    has_installed_release: bool,
 ) -> ExistingDeploymentPlan {
+    // Setup can fail after a release is installed. Status alone cannot grant
+    // the deployment token authority to resume setup on that installation.
+    if platform_mode && has_installed_release {
+        match status {
+            DeploymentStatus::InitialSetup => {
+                return ExistingDeploymentPlan::SetupUpdate { retry: false };
+            }
+            DeploymentStatus::InitialSetupFailed => {
+                return ExistingDeploymentPlan::SetupUpdate { retry: true };
+            }
+            _ => {}
+        }
+    }
     if matches!(
         status,
         DeploymentStatus::Pending
@@ -2754,6 +2808,76 @@ mod tests {
     use tokio::time::{timeout, Duration};
 
     #[test]
+    fn token_file_uses_the_existing_token_path_and_trims_whitespace() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("token");
+        std::fs::write(&path, "  ax_test\n").expect("write token fixture");
+        let mut args =
+            DeployArgs::try_parse_from(["deploy", "--token-file", path.to_str().expect("path")])
+                .expect("file argument");
+        args.resolve_token_file().expect("read token");
+        assert_eq!(args.token.as_deref(), Some("ax_test"));
+
+        let mut inline = DeployArgs::try_parse_from(["deploy", "--token", "ax_inline"])
+            .expect("inline argument");
+        inline
+            .resolve_token_file()
+            .expect("inline token remains supported");
+        assert_eq!(inline.token.as_deref(), Some("ax_inline"));
+    }
+
+    #[test]
+    fn token_file_rejects_conflicting_authentication_selectors() {
+        for selector in ["--token", "--deployment-group"] {
+            let error = DeployArgs::try_parse_from([
+                "deploy",
+                "--token-file",
+                "token.txt",
+                selector,
+                "value",
+            ])
+            .expect_err("conflicting selector");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+    }
+
+    #[tokio::test]
+    async fn token_file_errors_fail_before_deployment_resolution() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("token");
+        for contents in [None, Some(" \n\t")] {
+            if let Some(contents) = contents {
+                std::fs::write(&path, contents).expect("write empty fixture");
+            }
+            let args = DeployArgs::try_parse_from([
+                "deploy",
+                "--token-file",
+                path.to_str().expect("path"),
+            ])
+            .expect("file argument");
+            let error = deploy_task_with_environment(
+                args,
+                ExecutionMode::Standalone {
+                    server_url: "http://127.0.0.1:1".to_string(),
+                    api_key: "unused".to_string(),
+                },
+                &HashMap::new(),
+            )
+            .await
+            .expect_err("file must fail before deployment resolution");
+            assert_eq!(
+                error.code,
+                if contents.is_some() {
+                    "VALIDATION_ERROR"
+                } else {
+                    "CONFIGURATION_ERROR"
+                }
+            );
+            assert!(error.message.contains("token file") || error.message.contains("Token file"));
+        }
+    }
+
+    #[test]
     fn existing_deployment_plan_routes_each_state_to_the_lock_that_can_take_it() {
         use ExistingDeploymentPlan::*;
 
@@ -2765,7 +2889,7 @@ mod tests {
         ] {
             for platform_mode in [true, false] {
                 assert_eq!(
-                    existing_deployment_plan(&status, None, platform_mode),
+                    existing_deployment_plan(&status, None, platform_mode, false),
                     InitialSetup,
                     "{status:?} is still in initial setup"
                 );
@@ -2826,10 +2950,43 @@ mod tests {
         ];
         for (status, active_update, platform_mode, expected) in cases {
             assert_eq!(
-                existing_deployment_plan(&status, active_update, platform_mode),
+                existing_deployment_plan(&status, active_update, platform_mode, true),
                 expected,
                 "{status:?} with {active_update:?} (platform: {platform_mode})"
             );
+        }
+    }
+
+    #[test]
+    fn installed_setup_resume_uses_setup_authority_and_retries_failed_operations() {
+        for active in [
+            None,
+            Some(ActiveUpdate::WaitingForSetup),
+            Some(ActiveUpdate::Pending),
+        ] {
+            for (status, expected) in [
+                (
+                    DeploymentStatus::InitialSetup,
+                    ExistingDeploymentPlan::SetupUpdate { retry: false },
+                ),
+                (
+                    DeploymentStatus::InitialSetupFailed,
+                    ExistingDeploymentPlan::SetupUpdate { retry: true },
+                ),
+            ] {
+                assert_eq!(
+                    existing_deployment_plan(&status, active, true, true),
+                    expected
+                );
+                assert_eq!(
+                    existing_deployment_plan(&status, active, true, false),
+                    ExistingDeploymentPlan::InitialSetup
+                );
+                assert_eq!(
+                    existing_deployment_plan(&status, active, false, true),
+                    ExistingDeploymentPlan::InitialSetup
+                );
+            }
         }
     }
 
