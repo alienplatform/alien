@@ -253,13 +253,14 @@ fn to_manager_api_observed_inventory_batches(
 }
 
 // ---------------------------------------------------------------------------
-// Shared helpers for the acquire / final-reconcile / release pattern.
+// Shared helpers for deployment acquisition and finalization.
 //
 // Every external caller (alien-deploy-cli, alien-cli, alien-terraform) follows
 // the same protocol:
 //   1. acquire_deployment()   — lock the deployment with a retry loop
 //   2. run_step_loop()        — step until terminal (uses ManagerApiTransport)
-//   3. final_reconcile()      — persist terminal state and always attempt unlock
+//   3. finalize_step_loop()   — release checkpointed terminal state, otherwise
+//                              persist final state and always attempt unlock
 // ---------------------------------------------------------------------------
 
 /// Maximum number of acquire attempts (60 × 2s = 2 minutes).

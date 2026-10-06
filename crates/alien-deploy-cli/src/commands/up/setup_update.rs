@@ -1085,7 +1085,8 @@ storageSecret = "canary-secret"
             when.method(POST).path("/v1/sync/reconcile").json_body_partial(json!({
                 "deploymentId":"dep_demo", "executionClaim":{"operationId":"op_saved","attemptId":"attempt_demo"},
                 "state":{"status":"provisioning", "currentRelease":{"releaseId":"rel_installed"},
-                    "targetRelease":{"releaseId":"rel_target"}, "stackState":{"resources":{"archive":{"status":"running"}}}}
+                    "targetRelease":{"releaseId":"rel_target"}, "stackState":{"resources":{"archive":{"status":"running"}}},
+                    "runtimeMetadata":{"directSetupRevision":"revision_applied"}}
             }).to_string());
             then.status(200).json_body(json!({"success":true,"current":null}));
         }).await;
@@ -1107,9 +1108,11 @@ storageSecret = "canary-secret"
         if change_endpoint_access {
             args.network.endpoint_access = Some(alien_core::EndpointAccess::Private);
         }
+        let embedded: DeployCliConfig =
+            serde_json::from_value(json!({"setupRevision":"revision_applied"})).unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            super::super::up_command(args, None),
+            super::super::up_command(args, Some(&embedded)),
         )
         .await
         .expect("setup handoff should finish promptly");
@@ -1134,7 +1137,7 @@ storageSecret = "canary-secret"
                 .await;
         }
         reconcile
-            .assert_hits_async(if change_endpoint_access { 0 } else { 2 })
+            .assert_hits_async(if change_endpoint_access { 0 } else { 1 })
             .await;
         init.assert_hits_async(0).await;
     }
