@@ -155,16 +155,16 @@ async fn resolve_destroy_target(
                 message: "Failed to resolve the deployment token's target".to_string(),
             })?
             .into_inner();
-        let reference_matches = if args.name.contains('/') {
-            let requested =
-                crate::deployment_resolver::resolve(&manager.client, &args.name, ctx.is_dev())
-                    .await
-                    .context(ErrorData::ValidationError {
-                        field: "name".to_string(),
-                        message: "The supplied reference does not match the token's deployment"
-                            .to_string(),
-                    })?;
-            requested.id.as_str() == deployment_id
+        let reference_matches = if let Some((group, name)) = args.name.split_once('/') {
+            let parent = deployment.deployment_group.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "name".to_string(),
+                    message: format!(
+                        "This manager does not expose the token target's group name. Use --name {deployment_id} with this token"
+                    ),
+                })
+            })?;
+            group == parent.name.as_str() && name == deployment.name.as_str()
         } else {
             args.name == deployment_id || args.name == deployment.name.as_str()
         };
@@ -764,8 +764,8 @@ mod tests {
         })
     }
 
-    async fn list_token_deployment() -> Json<serde_json::Value> {
-        Json(serde_json::json!({ "items": [deployment_record()] }))
+    async fn list_token_deployment() -> StatusCode {
+        StatusCode::FORBIDDEN
     }
 
     /// Mirrors the platform: sync acquire only accepts deployment-scoped tokens.
