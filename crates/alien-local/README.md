@@ -19,25 +19,28 @@ Used by `alien dev` for local development, and deployable to any machine via `al
 Local container and sandbox API clients read `DOCKER_CONFIG` (or the home
 `.docker` directory) and select an endpoint in this order:
 
-1. A nonempty `DOCKER_CONTEXT`.
-2. A nonempty `DOCKER_HOST`.
+1. A nonempty `DOCKER_HOST`.
+2. A nonempty `DOCKER_CONTEXT`.
 3. `currentContext` in `config.json`.
 4. Docker's platform default socket or named pipe.
 
 The `default` context is synthetic and honors `DOCKER_HOST`. Named contexts use
-Docker's context metadata and ignore environment TLS options. Missing or invalid
+Docker CLI's `context inspect` output and ignore environment TLS options. Missing or invalid
 selected context metadata fails with a structured error; another daemon is never
-tried. This follows the documented context-first precedence; Docker CLI versions
-that prefer `DOCKER_HOST` when both variables are set differ in that case.
+tried. This matches Docker CLI's source and installed behavior, including host-first
+precedence when both environment variables are set.
 
 Unix sockets, Windows named pipes, and plaintext TCP endpoints are supported.
-SSH, TLS environment settings, and contexts with TLS material or verification
-settings return actionable unsupported-transport errors. TLS is never silently
+SSH, TLS environment settings, and TCP contexts with TLS material or verification
+settings return actionable unsupported-transport errors. Socket contexts ignore
+TLS verification settings, as Docker CLI does. TLS is never silently
 removed. Image loading through Docker CLI is pinned to the endpoint captured by
 the container API client, including after the active context changes.
 
 Docker bridge discovery remains optional for native services on hosts without a
-bindable bridge. Configuration and unsupported-transport errors still propagate.
+bindable bridge. Configuration and unsupported-transport errors still propagate. Native services
+using the default socket do not require Docker CLI; named contexts require the
+CLI to inspect their metadata without duplicating its context-store format.
 
 To validate selection against a real engine, create a dedicated empty daemon with
 its own Unix socket, data directory, execution directory, and PID file. Use an

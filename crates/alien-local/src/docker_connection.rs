@@ -1,17 +1,11 @@
 //! Docker endpoint selection from the documented context and host settings.
 
-use std::{
-    collections::HashMap,
-    env, fs,
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, env, fs, io::ErrorKind, path::PathBuf, process::Command};
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::{Docker, API_DEFAULT_VERSION};
+use reqwest::Url;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use url::Url;
 
 use crate::{ErrorData, Result};
 
@@ -78,13 +72,20 @@ impl DockerEnvironment {
         };
         let config_dir = match value("DOCKER_CONFIG")? {
             Some(path) => PathBuf::from(path),
-            None => dirs::home_dir()
-                .ok_or_else(|| {
-                    AlienError::new(config_error(
-                        "Set DOCKER_CONFIG: home directory is unavailable".into(),
-                    ))
-                })?
-                .join(".docker"),
+            None => {
+                // Docker CLI uses os.UserHomeDir: HOME on Unix, USERPROFILE on Windows.
+                let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+                PathBuf::from(
+                    env::var_os(key)
+                        .filter(|home| !home.is_empty())
+                        .ok_or_else(|| {
+                            AlienError::new(config_error(
+                                "Set DOCKER_CONFIG: home directory is unavailable".into(),
+                            ))
+                        })?,
+                )
+                .join(".docker")
+            }
         };
         Ok(Self {
             config_dir,
@@ -95,15 +96,13 @@ impl DockerEnvironment {
     }
 
     fn selected_context(&self) -> Result<String> {
-        // DOCKER_CONTEXT overrides DOCKER_HOST; a host override in turn bypasses
-        // the persisted currentContext. Explicit "default" still honors HOST.
-        // Some CLI versions prefer HOST when both variables are set; pin our
-        // CLI subprocess endpoint rather than re-resolving that ambiguity.
-        if let Some(context) = &self.context {
-            return Ok(context.clone());
-        }
+        // Match Docker CLI resolveContextName: HOST selects the synthetic
+        // default context before CONTEXT or the persisted currentContext.
         if self.host.is_some() {
             return Ok("default".into());
+        }
+        if let Some(context) = &self.context {
+            return Ok(context.clone());
         }
         let path = self.config_dir.join("config.json");
         match fs::read(&path) {
@@ -127,23 +126,43 @@ impl DockerEnvironment {
 
     fn endpoint_for_context(&self, context: &str) -> Result<String> {
         if context.is_empty() || context == "default" {
-            if self.tls {
-                return Err(AlienError::new(unsupported("TLS", "Select a Unix/npipe or plaintext TCP endpoint, or use the Docker CLI for TLS operations")));
+            let host = self.host.clone().unwrap_or_else(default_host);
+            if self.tls && !is_socket(&host) {
+                return Err(AlienError::new(unsupported(
+                    "TLS",
+                    "Use the Docker CLI for TLS operations, or select a local socket endpoint",
+                )));
             }
-            return Ok(self.host.clone().unwrap_or_else(default_host));
+            return Ok(host);
         }
-        let id = format!("{:x}", Sha256::digest(context.as_bytes()));
-        let path = self
-            .config_dir
-            .join("contexts/meta")
-            .join(&id)
-            .join("meta.json");
-        let metadata: ContextMetadata = read_json(&path)?;
+        // Let the CLI own its context-store format and TLS material discovery.
+        // Native services using the default endpoint need no Docker executable.
+        let output = Command::new("docker")
+            .env("DOCKER_CONFIG", &self.config_dir)
+            .env_remove("DOCKER_HOST")
+            .env_remove("DOCKER_CONTEXT")
+            .env_remove("DOCKER_TLS")
+            .env_remove("DOCKER_TLS_VERIFY")
+            .env_remove("DOCKER_CERT_PATH")
+            .args(["context", "inspect", context, "--format", "{{json .}}"])
+            .output()
+            .into_alien_error()
+            .context(config_error("Cannot inspect selected Docker context; install Docker CLI and select an existing context".into()))?;
+        if !output.status.success() {
+            // Do not expose CLI stderr: context metadata can contain credentials.
+            return Err(std::io::Error::other(format!("docker context inspect exited with {}", output.status)))
+                .into_alien_error()
+                .context(config_error(format!("Cannot inspect Docker context '{context}'; select an existing context with 'docker context use'")));
+        }
+        let metadata: ContextMetadata = serde_json::from_slice(&output.stdout)
+            .into_alien_error()
+            .context(config_error(
+            "Docker CLI returned invalid context metadata".into(),
+        ))?;
         if metadata.name != context {
-            return Err(AlienError::new(config_error(format!(
-                "Context metadata at {} does not match selected context '{context}'",
-                path.display()
-            ))));
+            return Err(AlienError::new(config_error(
+                "Docker CLI returned a different context than requested".into(),
+            )));
         }
         let endpoint = metadata.endpoints.get("docker").ok_or_else(|| {
             AlienError::new(config_error(format!(
@@ -155,27 +174,14 @@ impl DockerEnvironment {
                 "Context '{context}' has an empty Docker endpoint"
             ))));
         }
-        let tls_path = self.config_dir.join("contexts/tls").join(id).join("docker");
-        let has_tls = match fs::read_dir(&tls_path) {
-            Ok(mut files) => files
-                .next()
-                .transpose()
-                .into_alien_error()
-                .context(config_error(format!(
-                    "Cannot inspect TLS material at {}",
-                    tls_path.display()
-                )))?
-                .is_some(),
-            Err(error) if error.kind() == ErrorKind::NotFound => false,
-            Err(error) => {
-                return Err(error).into_alien_error().context(config_error(format!(
-                    "Cannot inspect TLS material at {}",
-                    tls_path.display()
-                )))
-            }
-        };
-        if has_tls || endpoint.skip_tls_verify {
-            return Err(AlienError::new(unsupported("TLS context", "Use the Docker CLI for this context; context TLS verification settings and certificates cannot be honored by this client")));
+        // Docker CLI bypasses TLS configuration for Unix sockets/named pipes.
+        // For TCP, SkipTLSVerify requests TLS even without certificate files.
+        let has_tls = metadata
+            .tls_material
+            .get("docker")
+            .is_some_and(|files| !files.is_empty());
+        if !is_socket(&endpoint.host) && (has_tls || endpoint.skip_tls_verify) {
+            return Err(AlienError::new(unsupported("TLS context", "Use the Docker CLI for this context; its TLS settings and certificates cannot be honored by this client")));
         }
         Ok(endpoint.host.clone())
     }
@@ -184,6 +190,10 @@ impl DockerEnvironment {
     fn connect(&self) -> Result<Docker> {
         connect_endpoint(&self.endpoint()?)
     }
+}
+
+fn is_socket(host: &str) -> bool {
+    host.starts_with("unix://") || host.starts_with("npipe://")
 }
 
 fn default_host() -> String {
@@ -254,16 +264,6 @@ fn unsupported(transport: &str, message: &str) -> ErrorData {
     }
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let bytes = fs::read(path).into_alien_error().context(config_error(format!("Cannot read selected Docker context at {}; select an existing context with 'docker context use'", path.display())))?;
-    serde_json::from_slice(&bytes)
-        .into_alien_error()
-        .context(config_error(format!(
-            "Invalid Docker context metadata at {}",
-            path.display()
-        )))
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CliConfig {
@@ -279,6 +279,8 @@ struct ContextMetadata {
     name: String,
     #[serde(rename = "Endpoints")]
     endpoints: HashMap<String, ContextEndpoint>,
+    #[serde(default, rename = "TLSMaterial")]
+    tls_material: HashMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -307,8 +309,20 @@ mod tests {
         (directory, environment)
     }
 
+    // Fixture directory names from Docker's public SHA256 context-store format.
+    fn context_id(name: &str) -> &'static str {
+        match name {
+            "stored" => "87b04e58961f9a99d853d4046a0b5b793e7c3e4bbd21f5aca8fb17c20cdb1d8b",
+            "explicit" => "3b283e93debf035e990dfce1f21468476dc57c69313c5574f43ad1a185840277",
+            "missing" => "ffa63583dfa6706b87d284b86b0d693a161e4840aad2c5cf6b5d27c3b9621f7d",
+            "secure" => "6a934b45144e3758911efa29ed68fb2d420fa7bd568739cdcda9251fa9609b1e",
+            "fixture" => "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+            _ => panic!("unknown fixture context"),
+        }
+    }
+
     fn write_context(environment: &DockerEnvironment, name: &str, host: &str) {
-        let id = format!("{:x}", Sha256::digest(name.as_bytes()));
+        let id = context_id(name);
         let directory = environment.config_dir.join("contexts/meta").join(id);
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("meta.json"), serde_json::to_vec(&serde_json::json!({"Name": name, "Endpoints": {"docker": {"Host": host, "SkipTLSVerify": false}}})).unwrap()).unwrap();
@@ -328,8 +342,11 @@ mod tests {
         environment.host = Some("tcp://localhost:1234".into());
         assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
         environment.context = Some("explicit".into());
+        assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
+        environment.host = None;
         environment.tls = true; // Named contexts ignore environment TLS options.
         assert_eq!(environment.endpoint().unwrap(), "unix:///explicit.sock");
+        environment.host = Some("tcp://localhost:1234".into());
         environment.context = Some("default".into());
         assert!(matches!(
             environment.endpoint().unwrap_err().error,
@@ -355,7 +372,7 @@ mod tests {
         ));
         assert!(std::error::Error::source(&error).is_some());
         environment.context = Some("missing".into());
-        environment.host = Some("unix:///other.sock".into());
+
         let error = environment.endpoint().unwrap_err();
         assert!(matches!(
             error.error,
@@ -367,7 +384,7 @@ mod tests {
             environment.endpoint().unwrap_err().error,
             Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
-        let id = format!("{:x}", Sha256::digest(b"missing"));
+        let id = context_id("missing");
         fs::write(
             environment
                 .config_dir
@@ -384,7 +401,7 @@ mod tests {
         let path = environment
             .config_dir
             .join("contexts/meta")
-            .join(format!("{:x}", Sha256::digest(b"missing")))
+            .join(context_id("missing"))
             .join("meta.json");
         for metadata in [
             "invalid json",
@@ -404,7 +421,7 @@ mod tests {
         let (_directory, mut environment) = fixture();
         environment.context = Some("secure".into());
         write_context(&environment, "secure", "tcp://localhost:2376");
-        let id = format!("{:x}", Sha256::digest(b"secure"));
+        let id = context_id("secure");
         let directory = environment
             .config_dir
             .join("contexts/tls")
@@ -433,6 +450,28 @@ mod tests {
                 Some(ErrorData::DockerConfigurationInvalid { .. })
             ));
         }
+    }
+
+    #[test]
+    fn socket_context_ignores_tls_verification_settings() {
+        let (_directory, mut environment) = fixture();
+        environment.context = Some("secure".into());
+        environment.tls = true;
+        let path = environment
+            .config_dir
+            .join("contexts/meta")
+            .join(context_id("secure"))
+            .join("meta.json");
+        write_context(&environment, "secure", "unix:///fixture.sock");
+        fs::write(&path, r#"{"Name":"secure","Endpoints":{"docker":{"Host":"unix:///fixture.sock","SkipTLSVerify":true}}}"#).unwrap();
+        assert_eq!(environment.endpoint().unwrap(), "unix:///fixture.sock");
+        // For TCP, Docker CLI tlsConfig enables TLS when SkipTLSVerify is true,
+        // including when no certificate files are present. Never downgrade it.
+        fs::write(&path, r#"{"Name":"secure","Endpoints":{"docker":{"Host":"tcp://localhost:2376","SkipTLSVerify":true}}}"#).unwrap();
+        assert_eq!(
+            environment.endpoint().unwrap_err().code,
+            "DOCKER_TRANSPORT_UNSUPPORTED"
+        );
     }
 
     #[cfg(unix)]
@@ -522,10 +561,21 @@ mod tests {
     #[ignore = "requires a dedicated Docker engine and isolated Docker environment"]
     async fn dedicated_engine_proof() {
         let state = TempDir::new().unwrap();
-        crate::LocalContainerManager::new(state.path().join("containers"))
+        let containers = crate::LocalContainerManager::new(state.path().join("containers"))
             .expect("container client selects context");
-        crate::LocalSandboxManager::new(state.path().join("sandboxes"))
+        assert!(containers
+            .runtime_status()
+            .await
+            .expect("container manager API")
+            .docker_version
+            .is_some());
+        let sandboxes = crate::LocalSandboxManager::new(state.path().join("sandboxes"))
             .expect("sandbox client selects context");
+        assert!(sandboxes
+            .list_sessions("fixture")
+            .await
+            .expect("sandbox manager API")
+            .is_empty());
         assert_eq!(
             crate::docker_network::bindable_docker_bridge_gateway()
                 .await
