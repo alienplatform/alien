@@ -881,12 +881,13 @@ fn emit_local_container_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
+
+    use crate::core::controller_test::SingleControllerExecutor;
 
     #[tokio::test]
     #[ignore = "requires Docker and registry access"]
     async fn removed_unchanged_container_recovers_from_ready_and_refresh_failed() {
-        use crate::core::controller_test::SingleControllerExecutor;
         let directory = tempfile::tempdir().unwrap();
         let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
         let manager = bindings.container_manager().unwrap();
@@ -895,6 +896,7 @@ mod tests {
         ));
         let id = format!("recovery-{}", std::process::id());
         let config = Container::new(id.clone())
+            .cpu(0.25)
             .code(ContainerCode::Image {
                 image: "alpine:3.22".to_string(),
             })
