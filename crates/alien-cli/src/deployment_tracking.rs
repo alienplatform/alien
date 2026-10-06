@@ -148,6 +148,12 @@ impl DeploymentTracker {
 
     /// Remove a tracked deployment
     pub fn remove_deployment(&mut self, name: &str) -> Result<Option<TrackedDeployment>> {
+        // Removing an entry that isn't on disk changes nothing, so it must not take the
+        // lock or write the registry (which may not exist yet, or not be writable).
+        if !load_registry(&self.path)?.contains_key(name) {
+            self.deployments.remove(name);
+            return Ok(None);
+        }
         self.update(|deployments| deployments.remove(name))
     }
 
@@ -737,6 +743,22 @@ mod tests {
         assert_eq!(entry.api_key, "ax_dep_rotated");
         assert_eq!(entry.deployment_id, REPLACEMENT_DEPLOYMENT_ID);
         assert_eq!(reloaded.list_deployments().len(), 1);
+    }
+
+    #[test]
+    fn removing_an_untracked_name_writes_nothing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("alien").join(TRACKED_DEPLOYMENTS_FILE);
+
+        let removed = tracker_at(&path)
+            .remove_deployment(NAME)
+            .expect("removing an untracked name should succeed");
+
+        assert!(removed.is_none());
+        assert!(
+            !dir.path().join("alien").exists(),
+            "nothing to remove must not create the registry, its lock, or its directory"
+        );
     }
 
     #[test]
