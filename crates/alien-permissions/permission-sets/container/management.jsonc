@@ -142,9 +142,7 @@
       // changes, snapshots and restores use container/provision).
       {
         "grant": {
-          "permissions": [
-            "compute.snapshots.list"
-          ]
+          "permissions": ["compute.snapshots.list"]
         },
         "binding": {
           "stack": {

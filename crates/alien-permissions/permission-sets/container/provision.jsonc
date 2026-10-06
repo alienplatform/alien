@@ -169,15 +169,11 @@
       // both the source volume and the new snapshot.
       {
         "grant": {
-          "actions": [
-            "ec2:CreateSnapshot"
-          ]
+          "actions": ["ec2:CreateSnapshot"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -186,9 +182,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -201,15 +195,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateSnapshot"
-          ]
+          "actions": ["ec2:CreateSnapshot"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -218,9 +208,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -233,15 +221,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -251,9 +235,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -268,15 +250,11 @@
       // Scheduled snapshots copy the volume's tags, so they carry the same boundary tags.
       {
         "grant": {
-          "actions": [
-            "ec2:DeleteSnapshot"
-          ]
+          "actions": ["ec2:DeleteSnapshot"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -285,9 +263,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -301,15 +277,11 @@
       // Restore: a new volume made from one of this stack's snapshots.
       {
         "grant": {
-          "actions": [
-            "ec2:CreateVolume"
-          ]
+          "actions": ["ec2:CreateVolume"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -318,9 +290,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}::snapshot/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -334,15 +304,11 @@
       // Restore: the restored volume's marker tag is removed once it replaces the old one.
       {
         "grant": {
-          "actions": [
-            "ec2:DeleteTags"
-          ]
+          "actions": ["ec2:DeleteTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -354,9 +320,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -401,15 +365,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "dlm:TagResource"
-          ]
+          "actions": ["dlm:TagResource"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"
-            ],
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -418,9 +378,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"
-            ],
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -441,9 +399,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"
-            ],
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -452,9 +408,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"
-            ],
+            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -472,10 +426,7 @@
       // AccessDenied, and cleanup must see NoSuchEntity to treat it as already gone.
       {
         "grant": {
-          "actions": [
-            "iam:CreateRole",
-            "iam:TagRole"
-          ]
+          "actions": ["iam:CreateRole", "iam:TagRole"]
         },
         "binding": {
           "stack": {
@@ -501,11 +452,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "iam:GetRole",
-            "iam:DetachRolePolicy",
-            "iam:DeleteRole"
-          ]
+          "actions": ["iam:GetRole", "iam:DetachRolePolicy", "iam:DeleteRole"]
         },
         "binding": {
           "stack": {
@@ -518,9 +465,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "iam:AttachRolePolicy"
-          ]
+          "actions": ["iam:AttachRolePolicy"]
         },
         "binding": {
           "stack": {
@@ -543,9 +488,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "iam:PassRole"
-          ]
+          "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
