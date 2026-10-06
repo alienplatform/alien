@@ -896,7 +896,14 @@ mod tests {
         ));
         let id = format!("recovery-{}", std::process::id());
         let config = Container::new(id.clone())
-            .cpu(0.25)
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "64Mi".to_string(),
+                desired: "64Mi".to_string(),
+            })
             .code(ContainerCode::Image {
                 image: "alpine:3.22".to_string(),
             })
