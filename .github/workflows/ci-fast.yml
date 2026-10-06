@@ -57,8 +57,30 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       worker_integration: ${{ steps.filter.outputs.worker_integration }}
       platform_sdk: ${{ steps.filter.outputs.platform_sdk }}
+      rust_mode: ${{ steps.rust_selection.outputs.mode }}
+      rust_packages: ${{ steps.rust_selection.outputs.packages }}
+      rust_features: ${{ steps.rust_selection.outputs.features }}
+      rust_core: ${{ steps.rust_selection.outputs.core }}
+      rust_agent: ${{ steps.rust_selection.outputs.agent }}
     steps:
       - uses: actions/checkout@v7
+
+      # Pull requests build and test only the packages their changes can affect: the changed
+      # packages and everything that depends on them. Any change outside the packages (other
+      # than docs) runs the whole workspace, as do pushes, merge groups and manual runs.
+      - name: Select Rust packages to test
+        id: rust_selection
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # The repo pins a nightly; stable cargo reads the metadata without installing it.
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD >> "$GITHUB_OUTPUT"
 
       - uses: dorny/paths-filter@v4
         id: filter
@@ -89,29 +111,16 @@ jobs:
               - 'client-sdks/platform/rust/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-            # What the Worker integration tests exercise: the local worker manager, the build
-            # toolchain, the bindings addon a TypeScript worker loads, and the example app.
+            # JavaScript inputs of the Worker integration job; Rust changes trigger it through `rust`.
             worker_integration:
-              - 'Cargo.toml'
-              - 'Cargo.lock'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'turbo.json'
+              - 'packages/**'
               - 'examples/package.json'
               - 'examples/pnpm-lock.yaml'
               - 'examples/pnpm-workspace.yaml'
-              - 'rust-toolchain.toml'
-              - 'mise*.toml'
-              - 'crates/alien-local/**'
-              - 'crates/alien-build/**'
-              - 'crates/alien-core/**'
-              - 'crates/alien-bindings/**'
-              - 'crates/alien-bindings-node/**'
-              - 'crates/alien-worker-runtime/**'
-              - 'crates/alien-worker-protocol/**'
-              - 'crates/alien-ai-gateway/**'
-              - 'packages/**'
               - 'examples/basic-worker-ts/**'
               - '.github/workflows/ci-fast.yml'
             typescript:
@@ -152,9 +161,10 @@ jobs:
   rust:
     name: Rust crates
     needs: [pr-conventions, changes]
+    # Skipped when a pull request changed only documentation inside the Rust paths.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.rust == 'true'
+      (needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode != 'none')
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     env:
@@ -167,6 +177,12 @@ jobs:
       NEXTEST_TEST_THREADS: "8"
       # Debug info makes linking ~120 test binaries much slower and nothing in CI reads it.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      # The packages and features to build and test (see `Select Rust packages to test`).
+      RUST_SELECTION: >-
+        ${{ needs.changes.outputs.rust_mode == 'affected'
+        && format('{0}{1}', needs.changes.outputs.rust_packages,
+             needs.changes.outputs.rust_features != '' && format(' --features {0}', needs.changes.outputs.rust_features) || '')
+        || '--workspace --features alien-manager/openapi,alien-bindings/platform-sdk' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -265,6 +281,9 @@ jobs:
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
           AXIOM_DATASET: dev
         run: |
+          # On pull requests this builds only the affected packages ($RUST_SELECTION); the
+          # `Rust check` job then compiles every package so none can rot.
+          #
           # Never use `--exclude` here. It drops a package from *compilation*, not just
           # from the test run, so the package rots silently until something else builds
           # it. Skip tests with `--filter-expr` instead: the package still compiles, so
@@ -315,14 +334,15 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
 
-            # Real TypeScript workers through alien build: the Worker integration job runs them.
+            # Real TypeScript workers through alien build, and the worker runtime driving a real
+            # alien-test-app process: the Worker integration job runs them.
             'and not binary_id(alien-local::worker_integration)'
+            'and not binary_id(alien-worker-runtime::container_app)'
           )
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
-          cargo nextest run --workspace \
-            --features alien-manager/openapi,alien-bindings/platform-sdk \
-            --filter-expr "${FILTER_CLAUSES[*]}"
+          read -r -a SELECTION <<< "$RUST_SELECTION"
+          cargo nextest run "${SELECTION[@]}" --filter-expr "${FILTER_CLAUSES[*]}"
 
       - name: Platform SDK full-api tests
         # The workspace builds the filtered client; tests that need operations outside it
@@ -331,6 +351,7 @@ jobs:
         run: cargo test --locked -p alien-platform-api --features full-api
 
       - name: Sandbox agent privileged tests
+        if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_agent == 'true'
         # The agent runs as root and drops to a different uid before every spawn.
         # The sandbox's file and working-directory handling turns on those two
         # identities differing, which nothing running under a single uid can
@@ -338,20 +359,25 @@ jobs:
         # and only the test binary re-run under sudo: a root `cargo` would leave
         # root-owned artifacts behind for the cache upload.
         run: |
-          binary=$(cargo test --workspace --features alien-manager/openapi,alien-bindings/platform-sdk --no-run --message-format=json \
+          read -r -a SELECTION <<< "$RUST_SELECTION"
+          binary=$(cargo test "${SELECTION[@]}" --no-run --message-format=json \
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
           sudo "$binary" --ignored
 
       - name: Sandbox agent image contract
+        if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_core == 'true'
         # The committed GCP Dockerfiles are generated from the contract, and this
         # compares the two. Named here so a Dockerfile-only change still fails
         # visibly rather than inside the workspace run.
         run: |
-          cargo nextest run --workspace --features alien-manager/openapi,alien-bindings/platform-sdk \
+          read -r -a SELECTION <<< "$RUST_SELECTION"
+          cargo nextest run "${SELECTION[@]}" \
             --filter-expr 'package(alien-core) and kind(lib) and test(sandbox_image)'
 
       - name: Sandbox agent smoke test harness
+        # Its inputs are scripts and Dockerfiles, which always select the full run.
+        if: needs.changes.outputs.rust_mode != 'affected'
         # Drives the release smoke test against a stub docker, once per failure
         # mode, asserting each exits nonzero AND annotates. Needs no daemon.
         run: |
@@ -478,13 +504,20 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm test:ts
 
-      - name: Build bindings dev addon
-        working-directory: crates/alien-bindings-node
-        run: ../../packages/package-layout/node_modules/.bin/napi build --platform
-
-      - name: Build all CLIs and package gateway
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
-        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-ai-gateway
+      # One cargo invocation, so the addon and the CLIs share their dependency builds.
+      # `napi build --platform` would only add a generated index.js/index.d.ts, which this
+      # crate does not use (see its .gitignore): packages/bindings loads the .node file.
+      - name: Build bindings dev addon, CLIs and gateway
+        env:
+          BUILD_CLIS: ${{ steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          packages=(-p alien-bindings-node)
+          if [[ "$BUILD_CLIS" == "true" ]]; then
+            packages+=(-p alien-cli -p alien-deploy-cli -p alien-operator -p alien-ai-gateway)
+          fi
+          cargo build "${packages[@]}"
+          cp target/debug/libalien_bindings_node.so \
+            crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
 
       - name: Build package-layout dependencies
         run: pnpm --filter @alienplatform/sdk... build
@@ -528,10 +561,76 @@ jobs:
         # the gate focused on generated behavior and schema content.
         run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk packages/permissions/generated
 
+  rust-check:
+    name: Rust check
+    needs: [pr-conventions, changes]
+    # When a pull request tests only its affected packages, this keeps every package compiling.
+    if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode == 'affected'
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_BUILD_JOBS: "6"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install development tools
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm bun
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
+
+      - name: Cache pnpm dependencies
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/pnpm-lock.yaml
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript dependencies for Rust tests
+        run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
+
+      - name: Check every package and target
+        run: cargo check --workspace --all-targets --features alien-manager/openapi,alien-bindings/platform-sdk --locked
+
   worker-integration:
     name: Worker integration
     needs: [pr-conventions, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.worker_integration == 'true'
+    # The tested packages, alien-test-app, the addon and the gateway depend on most workspace
+    # crates, so any Rust change runs this job; worker_integration adds the JS inputs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.worker_integration == 'true'
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
@@ -594,15 +693,21 @@ jobs:
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       # alien build stages the bindings addon and AI gateway it finds here. Without them it
-      # builds both in release mode inside the first test, which takes minutes.
-      - name: Build the bindings addon and AI gateway
+      # builds both in release mode inside the first test, which takes minutes. The
+      # container_app tests run alien-test-app; without ALIEN_TEST_APP_BIN each test process
+      # would build it again.
+      - name: Build the bindings addon, AI gateway and test app
         run: |
-          cargo build --locked -p alien-bindings-node --lib -p alien-ai-gateway --bin alien-ai-gateway
+          cargo build --locked -p alien-bindings-node --lib -p alien-ai-gateway --bin alien-ai-gateway \
+            -p alien-test-app --bin alien-test-app
           cp target/debug/libalien_bindings_node.so \
             crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+          echo "ALIEN_TEST_APP_BIN=$PWD/target/debug/alien-test-app" >> "$GITHUB_ENV"
 
       - name: Worker integration tests
-        run: cargo nextest run --locked -p alien-local --test worker_integration
+        run: |
+          cargo nextest run --locked -p alien-local -p alien-worker-runtime \
+            --test worker_integration --test container_app
 
   all-tests-passed:
     name: All tests passed
@@ -612,7 +717,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, typescript, worker-integration]
+    needs: [pr-conventions, changes, rust, rust-check, typescript, worker-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

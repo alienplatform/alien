@@ -1693,6 +1693,10 @@ impl KubernetesContainerController {
                     None => format!("{workload_name}.svc.cluster.local"),
                 },
                 replicas: Vec::new(), // Replica details tracked separately
+                // Kubernetes leaves volume snapshots to the cluster's own tooling. With no
+                // volumes reported, there is nothing to restore.
+                volumes: Vec::new(),
+                volume_backups: None,
                 public_endpoints: self
                     .public_endpoint
                     .effective_public_url()

@@ -9,6 +9,7 @@ use alien_aws_clients::{
     cloudformation::{CloudFormationApi, CloudFormationClient},
     cloudwatch_logs::{CloudWatchLogsApi, CloudWatchLogsClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
+    dlm::{DlmApi, DlmClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
@@ -36,6 +37,7 @@ use alien_azure_clients::{
     compute::{AzureVmssClient, VirtualMachineScaleSetsApi},
     container_apps::{AzureContainerAppsClient, ContainerAppsApi},
     containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
+    data_protection::{AzureDataProtectionClient, DataProtectionApi},
     disks::{AzureManagedDisksClient, ManagedDisksApi},
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
@@ -58,6 +60,7 @@ use alien_azure_clients::{
         AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
         ServiceBusManagementApi,
     },
+    snapshots::{AzureSnapshotsClient, SnapshotsApi},
     storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi},
     tables::{AzureTableManagementClient, TableManagementApi},
     AzureClientConfig, AzureTokenCache,
@@ -167,6 +170,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
     async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
+    async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>>;
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
@@ -267,6 +271,14 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>>;
+    fn get_azure_snapshots_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn SnapshotsApi>>;
+    fn get_azure_data_protection_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn DataProtectionApi>>;
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
@@ -595,6 +607,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(KmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_dlm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn DlmApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(DlmClient::new(
             reqwest::Client::new(),
             credentials,
         )))
@@ -1154,6 +1179,26 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn FlexibleServerApi>> {
         Ok(Arc::new(AzureFlexibleServerClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_snapshots_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn SnapshotsApi>> {
+        Ok(Arc::new(AzureSnapshotsClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_data_protection_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn DataProtectionApi>> {
+        Ok(Arc::new(AzureDataProtectionClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

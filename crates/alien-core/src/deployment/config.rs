@@ -135,6 +135,34 @@ pub struct DeploymentConfig {
     /// - GAR: `{region}-docker.pkg.dev/{project_id}/{repository_name}`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_image_host: Option<String>,
+    /// Operator requests to replace a replica's persistent volume with a new
+    /// volume made from a snapshot. A container controller performs each
+    /// request once, identified by its `request_id`, and reports it in
+    /// `ContainerOutputs.volumes`. Only a volume that a controller reports in
+    /// `ContainerOutputs.volumes` can be the target of a request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub volume_restores: Vec<VolumeRestoreRequest>,
+}
+
+/// Replace one replica's persistent volume with a new volume made from a snapshot.
+///
+/// The controller stops the replica, snapshots the volume it is about to
+/// replace (so the restore can be undone), creates the new volume in the same
+/// zone, starts the replica on it, and deletes the replaced volume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeRestoreRequest {
+    /// Unique ID of this request. A controller performs each request once.
+    pub request_id: String,
+    /// ID of the container resource that owns the volume
+    pub resource_id: String,
+    /// Replica ordinal whose volume is replaced
+    pub ordinal: u32,
+    /// Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
+    /// Engine snapshot name, or an Azure snapshot resource ID
+    pub snapshot_id: String,
 }
 
 /// Resource-attribute key marking OTLP telemetry as Alien system-component
