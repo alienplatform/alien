@@ -22,7 +22,7 @@ import {
   SyncReconcileRequestEvent12$outboundSchema,
 } from "./cpuallocatable.js";
 
-export type AllocatableCpuUnion = CpuAllocatable | any;
+export type AllocatableCpuUnion = CpuAllocatable | string;
 
 export const MemoryAllocatableUnit = {
   Count: "count",
@@ -39,11 +39,11 @@ export type MemoryAllocatable = {
   value: number;
 };
 
-export type AllocatableMemoryUnion = MemoryAllocatable | any;
+export type AllocatableMemoryUnion = MemoryAllocatable | string;
 
 export type Allocatable = {
-  cpu?: CpuAllocatable | any | null | undefined;
-  memory?: MemoryAllocatable | any | null | undefined;
+  cpu?: CpuAllocatable | string | null | undefined;
+  memory?: MemoryAllocatable | string | null | undefined;
   pods?: number | null | undefined;
 };
 
@@ -62,7 +62,7 @@ export type CpuCapacity = {
   value: number;
 };
 
-export type CapacityCpuUnion = CpuCapacity | any;
+export type CapacityCpuUnion = CpuCapacity | string;
 
 export const MemoryCapacityUnit = {
   Count: "count",
@@ -79,11 +79,11 @@ export type MemoryCapacity = {
   value: number;
 };
 
-export type CapacityMemoryUnion = MemoryCapacity | any;
+export type CapacityMemoryUnion = MemoryCapacity | string;
 
 export type Capacity = {
-  cpu?: CpuCapacity | any | null | undefined;
-  memory?: MemoryCapacity | any | null | undefined;
+  cpu?: CpuCapacity | string | null | undefined;
+  memory?: MemoryCapacity | string | null | undefined;
   pods?: number | null | undefined;
 };
 
@@ -109,7 +109,7 @@ export type UsageCpu = {
   value: number;
 };
 
-export type UsageCpuUnion = UsageCpu | any;
+export type UsageCpuUnion = UsageCpu | string;
 
 export const UsageMemoryUnit = {
   Count: "count",
@@ -126,14 +126,14 @@ export type UsageMemory = {
   value: number;
 };
 
-export type UsageMemoryUnion = UsageMemory | any;
+export type UsageMemoryUnion = UsageMemory | string;
 
 export type SyncReconcileRequestUsage = {
-  cpu?: UsageCpu | any | null | undefined;
-  memory?: UsageMemory | any | null | undefined;
+  cpu?: UsageCpu | string | null | undefined;
+  memory?: UsageMemory | string | null | undefined;
 };
 
-export type Usage = SyncReconcileRequestUsage | any;
+export type Usage = SyncReconcileRequestUsage | string;
 
 export type NodeStatus = {
   allocatable: Allocatable;
@@ -146,7 +146,7 @@ export type NodeStatus = {
   ready: boolean;
   roles: Array<string>;
   uid?: string | null | undefined;
-  usage?: SyncReconcileRequestUsage | any | null | undefined;
+  usage?: SyncReconcileRequestUsage | string | null | undefined;
 };
 
 export type PodCounts = {
@@ -206,7 +206,7 @@ export type SyncReconcileRequestLifecycle24 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle24
 >;
 
-export type SyncReconcileRequestStatus24 = {
+export type ResourceHeartbeatStatus24 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue24>;
   health: SyncReconcileRequestHealth24;
   lifecycle: SyncReconcileRequestLifecycle24;
@@ -225,7 +225,7 @@ export type SyncReconcileRequestData1 = {
   nodeStatuses?: Array<NodeStatus> | undefined;
   podCounts: PodCounts;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus24;
+  status: ResourceHeartbeatStatus24;
   version?: string | null | undefined;
 };
 
@@ -291,7 +291,7 @@ export type SyncReconcileRequestLifecycle23 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle23
 >;
 
-export type SyncReconcileRequestStatus23 = {
+export type ResourceHeartbeatStatus23 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue23>;
   health: SyncReconcileRequestHealth23;
   lifecycle: SyncReconcileRequestLifecycle23;
@@ -312,7 +312,7 @@ export type DataLocal5 = {
   networkName?: string | null | undefined;
   nodes: Nodes5;
   runningContainers?: number | null | undefined;
-  status: SyncReconcileRequestStatus23;
+  status: ResourceHeartbeatStatus23;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -333,7 +333,7 @@ export type CapacityBlocker4 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion4 = CapacityBlocker4 | any;
+export type CapacityBlockerUnion4 = CapacityBlocker4 | string;
 
 export type DrainProgressBlocker4 = {
   reason: string;
@@ -362,7 +362,7 @@ export type DrainProgress4 = {
   status: DrainProgressStatus4;
 };
 
-export type DrainProgressUnion4 = DrainProgress4 | any;
+export type DrainProgressUnion4 = DrainProgress4 | string;
 
 export const UtilizationUnit4 = {
   Count: "count",
@@ -379,27 +379,27 @@ export type Utilization4 = {
   value: number;
 };
 
-export type UtilizationUnion4 = Utilization4 | any;
+export type UtilizationUnion4 = Utilization4 | string;
 
 export type Recommendation4 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization4 | any | null | undefined;
+  utilization?: Utilization4 | string | null | undefined;
 };
 
-export type RecommendationUnion4 = Recommendation4 | any;
+export type RecommendationUnion4 = Recommendation4 | string;
 
 export type CapacityGroup4 = {
-  capacityBlocker?: CapacityBlocker4 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker4 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress4 | any | null | undefined;
+  drainProgress?: DrainProgress4 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation4 | any | null | undefined;
+  recommendation?: Recommendation4 | string | null | undefined;
 };
 
 export const CpuUnit10 = {
@@ -417,7 +417,7 @@ export type SyncReconcileRequestCpu10 = {
   value: number;
 };
 
-export type CpuUnion10 = SyncReconcileRequestCpu10 | any;
+export type CpuUnion10 = SyncReconcileRequestCpu10 | string;
 
 export type SyncReconcileRequestDrainBlocker = {
   reason: string;
@@ -461,7 +461,7 @@ export type SyncReconcileRequestMemory10 = {
   value: number;
 };
 
-export type MemoryUnion10 = SyncReconcileRequestMemory10 | any;
+export type MemoryUnion10 = SyncReconcileRequestMemory10 | string;
 
 export type Nodes4 = {
   current?: number | null | undefined;
@@ -520,7 +520,7 @@ export type SyncReconcileRequestLifecycle22 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle22
 >;
 
-export type SyncReconcileRequestStatus22 = {
+export type ResourceHeartbeatStatus22 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue22>;
   health: SyncReconcileRequestHealth22;
   lifecycle: SyncReconcileRequestLifecycle22;
@@ -532,12 +532,12 @@ export type SyncReconcileRequestStatus22 = {
 export type DataMachines2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup4>;
-  cpu?: SyncReconcileRequestCpu10 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu10 | string | null | undefined;
   machines: Array<SyncReconcileRequestMachine>;
-  memory?: SyncReconcileRequestMemory10 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory10 | string | null | undefined;
   name: string;
   nodes: Nodes4;
-  status: SyncReconcileRequestStatus22;
+  status: ResourceHeartbeatStatus22;
   backend: "machines";
 };
 
@@ -557,7 +557,7 @@ export type CapacityBlocker3 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
+export type CapacityBlockerUnion3 = CapacityBlocker3 | string;
 
 export type DrainProgressBlocker3 = {
   reason: string;
@@ -586,7 +586,7 @@ export type DrainProgress3 = {
   status: DrainProgressStatus3;
 };
 
-export type DrainProgressUnion3 = DrainProgress3 | any;
+export type DrainProgressUnion3 = DrainProgress3 | string;
 
 export const UtilizationUnit3 = {
   Count: "count",
@@ -603,27 +603,27 @@ export type Utilization3 = {
   value: number;
 };
 
-export type UtilizationUnion3 = Utilization3 | any;
+export type UtilizationUnion3 = Utilization3 | string;
 
 export type Recommendation3 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization3 | any | null | undefined;
+  utilization?: Utilization3 | string | null | undefined;
 };
 
-export type RecommendationUnion3 = Recommendation3 | any;
+export type RecommendationUnion3 = Recommendation3 | string;
 
 export type CapacityGroup3 = {
-  capacityBlocker?: CapacityBlocker3 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker3 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress3 | any | null | undefined;
+  drainProgress?: DrainProgress3 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation3 | any | null | undefined;
+  recommendation?: Recommendation3 | string | null | undefined;
 };
 
 export const CpuUnit9 = {
@@ -641,7 +641,7 @@ export type SyncReconcileRequestCpu9 = {
   value: number;
 };
 
-export type CpuUnion9 = SyncReconcileRequestCpu9 | any;
+export type CpuUnion9 = SyncReconcileRequestCpu9 | string;
 
 export const MemoryUnit9 = {
   Count: "count",
@@ -658,7 +658,7 @@ export type SyncReconcileRequestMemory9 = {
   value: number;
 };
 
-export type MemoryUnion9 = SyncReconcileRequestMemory9 | any;
+export type MemoryUnion9 = SyncReconcileRequestMemory9 | string;
 
 export type Nodes3 = {
   current?: number | null | undefined;
@@ -725,7 +725,7 @@ export type SyncReconcileRequestLifecycle21 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle21
 >;
 
-export type SyncReconcileRequestStatus21 = {
+export type ResourceHeartbeatStatus21 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue21>;
   health: SyncReconcileRequestHealth21;
   lifecycle: SyncReconcileRequestLifecycle21;
@@ -737,13 +737,13 @@ export type SyncReconcileRequestStatus21 = {
 export type DataAzure2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup3>;
-  cpu?: SyncReconcileRequestCpu9 | any | null | undefined;
-  memory?: SyncReconcileRequestMemory9 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu9 | string | null | undefined;
+  memory?: SyncReconcileRequestMemory9 | string | null | undefined;
   name: string;
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus21;
+  status: ResourceHeartbeatStatus21;
   backend: "azure";
 };
 
@@ -763,7 +763,7 @@ export type CapacityBlocker2 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
+export type CapacityBlockerUnion2 = CapacityBlocker2 | string;
 
 export type DrainProgressBlocker2 = {
   reason: string;
@@ -792,7 +792,7 @@ export type DrainProgress2 = {
   status: DrainProgressStatus2;
 };
 
-export type DrainProgressUnion2 = DrainProgress2 | any;
+export type DrainProgressUnion2 = DrainProgress2 | string;
 
 export const UtilizationUnit2 = {
   Count: "count",
@@ -809,27 +809,27 @@ export type Utilization2 = {
   value: number;
 };
 
-export type UtilizationUnion2 = Utilization2 | any;
+export type UtilizationUnion2 = Utilization2 | string;
 
 export type Recommendation2 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization2 | any | null | undefined;
+  utilization?: Utilization2 | string | null | undefined;
 };
 
-export type RecommendationUnion2 = Recommendation2 | any;
+export type RecommendationUnion2 = Recommendation2 | string;
 
 export type CapacityGroup2 = {
-  capacityBlocker?: CapacityBlocker2 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker2 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress2 | any | null | undefined;
+  drainProgress?: DrainProgress2 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation2 | any | null | undefined;
+  recommendation?: Recommendation2 | string | null | undefined;
 };
 
 export const CpuUnit8 = {
@@ -847,7 +847,7 @@ export type SyncReconcileRequestCpu8 = {
   value: number;
 };
 
-export type CpuUnion8 = SyncReconcileRequestCpu8 | any;
+export type CpuUnion8 = SyncReconcileRequestCpu8 | string;
 
 export const MemoryUnit8 = {
   Count: "count",
@@ -864,7 +864,7 @@ export type SyncReconcileRequestMemory8 = {
   value: number;
 };
 
-export type MemoryUnion8 = SyncReconcileRequestMemory8 | any;
+export type MemoryUnion8 = SyncReconcileRequestMemory8 | string;
 
 export type Nodes2 = {
   current?: number | null | undefined;
@@ -931,7 +931,7 @@ export type SyncReconcileRequestLifecycle20 = ClosedEnum<
   typeof SyncReconcileRequestLifecycle20
 >;
 
-export type SyncReconcileRequestStatus20 = {
+export type ResourceHeartbeatStatus20 = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue20>;
   health: SyncReconcileRequestHealth20;
   lifecycle: SyncReconcileRequestLifecycle20;
@@ -943,13 +943,13 @@ export type SyncReconcileRequestStatus20 = {
 export type DataGcp2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup2>;
-  cpu?: SyncReconcileRequestCpu8 | any | null | undefined;
-  memory?: SyncReconcileRequestMemory8 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu8 | string | null | undefined;
+  memory?: SyncReconcileRequestMemory8 | string | null | undefined;
   name: string;
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus20;
+  status: ResourceHeartbeatStatus20;
   backend: "gcp";
 };
 
@@ -969,7 +969,7 @@ export type CapacityBlocker1 = {
   providerReference?: string | null | undefined;
 };
 
-export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
+export type CapacityBlockerUnion1 = CapacityBlocker1 | string;
 
 export type DrainProgressBlocker1 = {
   reason: string;
@@ -998,7 +998,7 @@ export type DrainProgress1 = {
   status: DrainProgressStatus1;
 };
 
-export type DrainProgressUnion1 = DrainProgress1 | any;
+export type DrainProgressUnion1 = DrainProgress1 | string;
 
 export const UtilizationUnit1 = {
   Count: "count",
@@ -1015,27 +1015,27 @@ export type Utilization1 = {
   value: number;
 };
 
-export type UtilizationUnion1 = Utilization1 | any;
+export type UtilizationUnion1 = Utilization1 | string;
 
 export type Recommendation1 = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization1 | any | null | undefined;
+  utilization?: Utilization1 | string | null | undefined;
 };
 
-export type RecommendationUnion1 = Recommendation1 | any;
+export type RecommendationUnion1 = Recommendation1 | string;
 
 export type CapacityGroup1 = {
-  capacityBlocker?: CapacityBlocker1 | any | null | undefined;
+  capacityBlocker?: CapacityBlocker1 | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress1 | any | null | undefined;
+  drainProgress?: DrainProgress1 | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation1 | any | null | undefined;
+  recommendation?: Recommendation1 | string | null | undefined;
 };
 
 export const CpuUnit7 = {
@@ -1053,7 +1053,7 @@ export type SyncReconcileRequestCpu7 = {
   value: number;
 };
 
-export type CpuUnion7 = SyncReconcileRequestCpu7 | any;
+export type CpuUnion7 = SyncReconcileRequestCpu7 | string;
 
 export const MemoryUnit7 = {
   Count: "count",
@@ -1070,7 +1070,7 @@ export type SyncReconcileRequestMemory7 = {
   value: number;
 };
 
-export type MemoryUnion7 = SyncReconcileRequestMemory7 | any;
+export type MemoryUnion7 = SyncReconcileRequestMemory7 | string;
 
 export type Nodes1 = {
   current?: number | null | undefined;
@@ -1138,13 +1138,13 @@ export type SyncReconcileRequestLifecycle19 = ClosedEnum<
 >;
 
 /** @internal */
-export type AllocatableCpuUnion$Outbound = CpuAllocatable$Outbound | any;
+export type AllocatableCpuUnion$Outbound = CpuAllocatable$Outbound | string;
 
 /** @internal */
 export const AllocatableCpuUnion$outboundSchema: z.ZodType<
   AllocatableCpuUnion$Outbound,
   AllocatableCpuUnion
-> = z.union([CpuAllocatable$outboundSchema, z.any()]);
+> = z.union([CpuAllocatable$outboundSchema, z.string()]);
 
 export function allocatableCpuUnionToJSON(
   allocatableCpuUnion: AllocatableCpuUnion,
@@ -1183,13 +1183,15 @@ export function memoryAllocatableToJSON(
 }
 
 /** @internal */
-export type AllocatableMemoryUnion$Outbound = MemoryAllocatable$Outbound | any;
+export type AllocatableMemoryUnion$Outbound =
+  | MemoryAllocatable$Outbound
+  | string;
 
 /** @internal */
 export const AllocatableMemoryUnion$outboundSchema: z.ZodType<
   AllocatableMemoryUnion$Outbound,
   AllocatableMemoryUnion
-> = z.union([z.lazy(() => MemoryAllocatable$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryAllocatable$outboundSchema), z.string()]);
 
 export function allocatableMemoryUnionToJSON(
   allocatableMemoryUnion: AllocatableMemoryUnion,
@@ -1201,8 +1203,8 @@ export function allocatableMemoryUnionToJSON(
 
 /** @internal */
 export type Allocatable$Outbound = {
-  cpu?: CpuAllocatable$Outbound | any | null | undefined;
-  memory?: MemoryAllocatable$Outbound | any | null | undefined;
+  cpu?: CpuAllocatable$Outbound | string | null | undefined;
+  memory?: MemoryAllocatable$Outbound | string | null | undefined;
   pods?: number | null | undefined;
 };
 
@@ -1211,9 +1213,10 @@ export const Allocatable$outboundSchema: z.ZodType<
   Allocatable$Outbound,
   Allocatable
 > = z.object({
-  cpu: z.nullable(z.union([CpuAllocatable$outboundSchema, z.any()])).optional(),
+  cpu: z.nullable(z.union([CpuAllocatable$outboundSchema, z.string()]))
+    .optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryAllocatable$outboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryAllocatable$outboundSchema), z.string()]),
   ).optional(),
   pods: z.nullable(z.int()).optional(),
 });
@@ -1246,13 +1249,13 @@ export function cpuCapacityToJSON(cpuCapacity: CpuCapacity): string {
 }
 
 /** @internal */
-export type CapacityCpuUnion$Outbound = CpuCapacity$Outbound | any;
+export type CapacityCpuUnion$Outbound = CpuCapacity$Outbound | string;
 
 /** @internal */
 export const CapacityCpuUnion$outboundSchema: z.ZodType<
   CapacityCpuUnion$Outbound,
   CapacityCpuUnion
-> = z.union([z.lazy(() => CpuCapacity$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuCapacity$outboundSchema), z.string()]);
 
 export function capacityCpuUnionToJSON(
   capacityCpuUnion: CapacityCpuUnion,
@@ -1287,13 +1290,13 @@ export function memoryCapacityToJSON(memoryCapacity: MemoryCapacity): string {
 }
 
 /** @internal */
-export type CapacityMemoryUnion$Outbound = MemoryCapacity$Outbound | any;
+export type CapacityMemoryUnion$Outbound = MemoryCapacity$Outbound | string;
 
 /** @internal */
 export const CapacityMemoryUnion$outboundSchema: z.ZodType<
   CapacityMemoryUnion$Outbound,
   CapacityMemoryUnion
-> = z.union([z.lazy(() => MemoryCapacity$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryCapacity$outboundSchema), z.string()]);
 
 export function capacityMemoryUnionToJSON(
   capacityMemoryUnion: CapacityMemoryUnion,
@@ -1305,8 +1308,8 @@ export function capacityMemoryUnionToJSON(
 
 /** @internal */
 export type Capacity$Outbound = {
-  cpu?: CpuCapacity$Outbound | any | null | undefined;
-  memory?: MemoryCapacity$Outbound | any | null | undefined;
+  cpu?: CpuCapacity$Outbound | string | null | undefined;
+  memory?: MemoryCapacity$Outbound | string | null | undefined;
   pods?: number | null | undefined;
 };
 
@@ -1314,10 +1317,10 @@ export type Capacity$Outbound = {
 export const Capacity$outboundSchema: z.ZodType<Capacity$Outbound, Capacity> = z
   .object({
     cpu: z.nullable(
-      z.union([z.lazy(() => CpuCapacity$outboundSchema), z.any()]),
+      z.union([z.lazy(() => CpuCapacity$outboundSchema), z.string()]),
     ).optional(),
     memory: z.nullable(
-      z.union([z.lazy(() => MemoryCapacity$outboundSchema), z.any()]),
+      z.union([z.lazy(() => MemoryCapacity$outboundSchema), z.string()]),
     ).optional(),
     pods: z.nullable(z.int()).optional(),
   });
@@ -1375,13 +1378,13 @@ export function usageCpuToJSON(usageCpu: UsageCpu): string {
 }
 
 /** @internal */
-export type UsageCpuUnion$Outbound = UsageCpu$Outbound | any;
+export type UsageCpuUnion$Outbound = UsageCpu$Outbound | string;
 
 /** @internal */
 export const UsageCpuUnion$outboundSchema: z.ZodType<
   UsageCpuUnion$Outbound,
   UsageCpuUnion
-> = z.union([z.lazy(() => UsageCpu$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => UsageCpu$outboundSchema), z.string()]);
 
 export function usageCpuUnionToJSON(usageCpuUnion: UsageCpuUnion): string {
   return JSON.stringify(UsageCpuUnion$outboundSchema.parse(usageCpuUnion));
@@ -1411,13 +1414,13 @@ export function usageMemoryToJSON(usageMemory: UsageMemory): string {
 }
 
 /** @internal */
-export type UsageMemoryUnion$Outbound = UsageMemory$Outbound | any;
+export type UsageMemoryUnion$Outbound = UsageMemory$Outbound | string;
 
 /** @internal */
 export const UsageMemoryUnion$outboundSchema: z.ZodType<
   UsageMemoryUnion$Outbound,
   UsageMemoryUnion
-> = z.union([z.lazy(() => UsageMemory$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => UsageMemory$outboundSchema), z.string()]);
 
 export function usageMemoryUnionToJSON(
   usageMemoryUnion: UsageMemoryUnion,
@@ -1429,8 +1432,8 @@ export function usageMemoryUnionToJSON(
 
 /** @internal */
 export type SyncReconcileRequestUsage$Outbound = {
-  cpu?: UsageCpu$Outbound | any | null | undefined;
-  memory?: UsageMemory$Outbound | any | null | undefined;
+  cpu?: UsageCpu$Outbound | string | null | undefined;
+  memory?: UsageMemory$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -1438,10 +1441,10 @@ export const SyncReconcileRequestUsage$outboundSchema: z.ZodType<
   SyncReconcileRequestUsage$Outbound,
   SyncReconcileRequestUsage
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => UsageCpu$outboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => UsageCpu$outboundSchema), z.string()]))
     .optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => UsageMemory$outboundSchema), z.any()]),
+    z.union([z.lazy(() => UsageMemory$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -1454,12 +1457,12 @@ export function syncReconcileRequestUsageToJSON(
 }
 
 /** @internal */
-export type Usage$Outbound = SyncReconcileRequestUsage$Outbound | any;
+export type Usage$Outbound = SyncReconcileRequestUsage$Outbound | string;
 
 /** @internal */
 export const Usage$outboundSchema: z.ZodType<Usage$Outbound, Usage> = z.union([
   z.lazy(() => SyncReconcileRequestUsage$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function usageToJSON(usage: Usage): string {
@@ -1478,7 +1481,7 @@ export type NodeStatus$Outbound = {
   ready: boolean;
   roles: Array<string>;
   uid?: string | null | undefined;
-  usage?: SyncReconcileRequestUsage$Outbound | any | null | undefined;
+  usage?: SyncReconcileRequestUsage$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -1498,7 +1501,10 @@ export const NodeStatus$outboundSchema: z.ZodType<
   roles: z.array(z.string()),
   uid: z.nullable(z.string()).optional(),
   usage: z.nullable(
-    z.union([z.lazy(() => SyncReconcileRequestUsage$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileRequestUsage$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
 });
 
@@ -1577,7 +1583,7 @@ export const SyncReconcileRequestLifecycle24$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle24);
 
 /** @internal */
-export type SyncReconcileRequestStatus24$Outbound = {
+export type ResourceHeartbeatStatus24$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue24$Outbound>;
   health: string;
   lifecycle: string;
@@ -1587,9 +1593,9 @@ export type SyncReconcileRequestStatus24$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus24$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus24$Outbound,
-  SyncReconcileRequestStatus24
+export const ResourceHeartbeatStatus24$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus24$Outbound,
+  ResourceHeartbeatStatus24
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue24$outboundSchema),
@@ -1601,13 +1607,11 @@ export const SyncReconcileRequestStatus24$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus24ToJSON(
-  syncReconcileRequestStatus24: SyncReconcileRequestStatus24,
+export function resourceHeartbeatStatus24ToJSON(
+  resourceHeartbeatStatus24: ResourceHeartbeatStatus24,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus24$outboundSchema.parse(
-      syncReconcileRequestStatus24,
-    ),
+    ResourceHeartbeatStatus24$outboundSchema.parse(resourceHeartbeatStatus24),
   );
 }
 
@@ -1622,7 +1626,7 @@ export type SyncReconcileRequestData1$Outbound = {
   nodeStatuses?: Array<NodeStatus$Outbound> | undefined;
   podCounts: PodCounts$Outbound;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus24$Outbound;
+  status: ResourceHeartbeatStatus24$Outbound;
   version?: string | null | undefined;
 };
 
@@ -1640,7 +1644,7 @@ export const SyncReconcileRequestData1$outboundSchema: z.ZodType<
   nodeStatuses: z.array(z.lazy(() => NodeStatus$outboundSchema)).optional(),
   podCounts: z.lazy(() => PodCounts$outboundSchema),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus24$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus24$outboundSchema),
   version: z.nullable(z.string()).optional(),
 });
 
@@ -1744,7 +1748,7 @@ export const SyncReconcileRequestLifecycle23$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle23);
 
 /** @internal */
-export type SyncReconcileRequestStatus23$Outbound = {
+export type ResourceHeartbeatStatus23$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue23$Outbound>;
   health: string;
   lifecycle: string;
@@ -1754,9 +1758,9 @@ export type SyncReconcileRequestStatus23$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus23$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus23$Outbound,
-  SyncReconcileRequestStatus23
+export const ResourceHeartbeatStatus23$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus23$Outbound,
+  ResourceHeartbeatStatus23
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue23$outboundSchema),
@@ -1768,13 +1772,11 @@ export const SyncReconcileRequestStatus23$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus23ToJSON(
-  syncReconcileRequestStatus23: SyncReconcileRequestStatus23,
+export function resourceHeartbeatStatus23ToJSON(
+  resourceHeartbeatStatus23: ResourceHeartbeatStatus23,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus23$outboundSchema.parse(
-      syncReconcileRequestStatus23,
-    ),
+    ResourceHeartbeatStatus23$outboundSchema.parse(resourceHeartbeatStatus23),
   );
 }
 
@@ -1791,7 +1793,7 @@ export type DataLocal5$Outbound = {
   networkName?: string | null | undefined;
   nodes: Nodes5$Outbound;
   runningContainers?: number | null | undefined;
-  status: SyncReconcileRequestStatus23$Outbound;
+  status: ResourceHeartbeatStatus23$Outbound;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -1812,7 +1814,7 @@ export const DataLocal5$outboundSchema: z.ZodType<
   networkName: z.nullable(z.string()).optional(),
   nodes: z.lazy(() => Nodes5$outboundSchema),
   runningContainers: z.nullable(z.int()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus23$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus23$outboundSchema),
   trackedContainers: z.nullable(z.int()).optional(),
   backend: z.literal("local"),
 });
@@ -1856,13 +1858,13 @@ export function capacityBlocker4ToJSON(
 }
 
 /** @internal */
-export type CapacityBlockerUnion4$Outbound = CapacityBlocker4$Outbound | any;
+export type CapacityBlockerUnion4$Outbound = CapacityBlocker4$Outbound | string;
 
 /** @internal */
 export const CapacityBlockerUnion4$outboundSchema: z.ZodType<
   CapacityBlockerUnion4$Outbound,
   CapacityBlockerUnion4
-> = z.union([z.lazy(() => CapacityBlocker4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker4$outboundSchema), z.string()]);
 
 export function capacityBlockerUnion4ToJSON(
   capacityBlockerUnion4: CapacityBlockerUnion4,
@@ -1941,13 +1943,13 @@ export function drainProgress4ToJSON(drainProgress4: DrainProgress4): string {
 }
 
 /** @internal */
-export type DrainProgressUnion4$Outbound = DrainProgress4$Outbound | any;
+export type DrainProgressUnion4$Outbound = DrainProgress4$Outbound | string;
 
 /** @internal */
 export const DrainProgressUnion4$outboundSchema: z.ZodType<
   DrainProgressUnion4$Outbound,
   DrainProgressUnion4
-> = z.union([z.lazy(() => DrainProgress4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress4$outboundSchema), z.string()]);
 
 export function drainProgressUnion4ToJSON(
   drainProgressUnion4: DrainProgressUnion4,
@@ -1982,13 +1984,13 @@ export function utilization4ToJSON(utilization4: Utilization4): string {
 }
 
 /** @internal */
-export type UtilizationUnion4$Outbound = Utilization4$Outbound | any;
+export type UtilizationUnion4$Outbound = Utilization4$Outbound | string;
 
 /** @internal */
 export const UtilizationUnion4$outboundSchema: z.ZodType<
   UtilizationUnion4$Outbound,
   UtilizationUnion4
-> = z.union([z.lazy(() => Utilization4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization4$outboundSchema), z.string()]);
 
 export function utilizationUnion4ToJSON(
   utilizationUnion4: UtilizationUnion4,
@@ -2003,7 +2005,7 @@ export type Recommendation4$Outbound = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization4$Outbound | any | null | undefined;
+  utilization?: Utilization4$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -2015,7 +2017,7 @@ export const Recommendation4$outboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization4$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -2026,13 +2028,13 @@ export function recommendation4ToJSON(
 }
 
 /** @internal */
-export type RecommendationUnion4$Outbound = Recommendation4$Outbound | any;
+export type RecommendationUnion4$Outbound = Recommendation4$Outbound | string;
 
 /** @internal */
 export const RecommendationUnion4$outboundSchema: z.ZodType<
   RecommendationUnion4$Outbound,
   RecommendationUnion4
-> = z.union([z.lazy(() => Recommendation4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation4$outboundSchema), z.string()]);
 
 export function recommendationUnion4ToJSON(
   recommendationUnion4: RecommendationUnion4,
@@ -2044,15 +2046,15 @@ export function recommendationUnion4ToJSON(
 
 /** @internal */
 export type CapacityGroup4$Outbound = {
-  capacityBlocker?: CapacityBlocker4$Outbound | any | null | undefined;
+  capacityBlocker?: CapacityBlocker4$Outbound | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress4$Outbound | any | null | undefined;
+  drainProgress?: DrainProgress4$Outbound | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation4$Outbound | any | null | undefined;
+  recommendation?: Recommendation4$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -2061,19 +2063,19 @@ export const CapacityGroup4$outboundSchema: z.ZodType<
   CapacityGroup4
 > = z.object({
   capacityBlocker: z.nullable(
-    z.union([z.lazy(() => CapacityBlocker4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CapacityBlocker4$outboundSchema), z.string()]),
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   drainProgress: z.nullable(
-    z.union([z.lazy(() => DrainProgress4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DrainProgress4$outboundSchema), z.string()]),
   ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
   minMachines: z.nullable(z.int()).optional(),
   recommendation: z.nullable(
-    z.union([z.lazy(() => Recommendation4$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Recommendation4$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -2110,13 +2112,16 @@ export function syncReconcileRequestCpu10ToJSON(
 }
 
 /** @internal */
-export type CpuUnion10$Outbound = SyncReconcileRequestCpu10$Outbound | any;
+export type CpuUnion10$Outbound = SyncReconcileRequestCpu10$Outbound | string;
 
 /** @internal */
 export const CpuUnion10$outboundSchema: z.ZodType<
   CpuUnion10$Outbound,
   CpuUnion10
-> = z.union([z.lazy(() => SyncReconcileRequestCpu10$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestCpu10$outboundSchema),
+  z.string(),
+]);
 
 export function cpuUnion10ToJSON(cpuUnion10: CpuUnion10): string {
   return JSON.stringify(CpuUnion10$outboundSchema.parse(cpuUnion10));
@@ -2240,7 +2245,7 @@ export function syncReconcileRequestMemory10ToJSON(
 /** @internal */
 export type MemoryUnion10$Outbound =
   | SyncReconcileRequestMemory10$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const MemoryUnion10$outboundSchema: z.ZodType<
@@ -2248,7 +2253,7 @@ export const MemoryUnion10$outboundSchema: z.ZodType<
   MemoryUnion10
 > = z.union([
   z.lazy(() => SyncReconcileRequestMemory10$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function memoryUnion10ToJSON(memoryUnion10: MemoryUnion10): string {
@@ -2324,7 +2329,7 @@ export const SyncReconcileRequestLifecycle22$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle22);
 
 /** @internal */
-export type SyncReconcileRequestStatus22$Outbound = {
+export type ResourceHeartbeatStatus22$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue22$Outbound>;
   health: string;
   lifecycle: string;
@@ -2334,9 +2339,9 @@ export type SyncReconcileRequestStatus22$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus22$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus22$Outbound,
-  SyncReconcileRequestStatus22
+export const ResourceHeartbeatStatus22$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus22$Outbound,
+  ResourceHeartbeatStatus22
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue22$outboundSchema),
@@ -2348,13 +2353,11 @@ export const SyncReconcileRequestStatus22$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus22ToJSON(
-  syncReconcileRequestStatus22: SyncReconcileRequestStatus22,
+export function resourceHeartbeatStatus22ToJSON(
+  resourceHeartbeatStatus22: ResourceHeartbeatStatus22,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus22$outboundSchema.parse(
-      syncReconcileRequestStatus22,
-    ),
+    ResourceHeartbeatStatus22$outboundSchema.parse(resourceHeartbeatStatus22),
   );
 }
 
@@ -2362,12 +2365,12 @@ export function syncReconcileRequestStatus22ToJSON(
 export type DataMachines2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup4$Outbound>;
-  cpu?: SyncReconcileRequestCpu10$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu10$Outbound | string | null | undefined;
   machines: Array<SyncReconcileRequestMachine$Outbound>;
-  memory?: SyncReconcileRequestMemory10$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory10$Outbound | string | null | undefined;
   name: string;
   nodes: Nodes4$Outbound;
-  status: SyncReconcileRequestStatus22$Outbound;
+  status: ResourceHeartbeatStatus22$Outbound;
   backend: "machines";
 };
 
@@ -2379,18 +2382,21 @@ export const DataMachines2$outboundSchema: z.ZodType<
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(z.lazy(() => CapacityGroup4$outboundSchema)),
   cpu: z.nullable(
-    z.union([z.lazy(() => SyncReconcileRequestCpu10$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileRequestCpu10$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   machines: z.array(z.lazy(() => SyncReconcileRequestMachine$outboundSchema)),
   memory: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestMemory10$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   name: z.string(),
   nodes: z.lazy(() => Nodes4$outboundSchema),
-  status: z.lazy(() => SyncReconcileRequestStatus22$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus22$outboundSchema),
   backend: z.literal("machines"),
 });
 
@@ -2433,13 +2439,13 @@ export function capacityBlocker3ToJSON(
 }
 
 /** @internal */
-export type CapacityBlockerUnion3$Outbound = CapacityBlocker3$Outbound | any;
+export type CapacityBlockerUnion3$Outbound = CapacityBlocker3$Outbound | string;
 
 /** @internal */
 export const CapacityBlockerUnion3$outboundSchema: z.ZodType<
   CapacityBlockerUnion3$Outbound,
   CapacityBlockerUnion3
-> = z.union([z.lazy(() => CapacityBlocker3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker3$outboundSchema), z.string()]);
 
 export function capacityBlockerUnion3ToJSON(
   capacityBlockerUnion3: CapacityBlockerUnion3,
@@ -2518,13 +2524,13 @@ export function drainProgress3ToJSON(drainProgress3: DrainProgress3): string {
 }
 
 /** @internal */
-export type DrainProgressUnion3$Outbound = DrainProgress3$Outbound | any;
+export type DrainProgressUnion3$Outbound = DrainProgress3$Outbound | string;
 
 /** @internal */
 export const DrainProgressUnion3$outboundSchema: z.ZodType<
   DrainProgressUnion3$Outbound,
   DrainProgressUnion3
-> = z.union([z.lazy(() => DrainProgress3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress3$outboundSchema), z.string()]);
 
 export function drainProgressUnion3ToJSON(
   drainProgressUnion3: DrainProgressUnion3,
@@ -2559,13 +2565,13 @@ export function utilization3ToJSON(utilization3: Utilization3): string {
 }
 
 /** @internal */
-export type UtilizationUnion3$Outbound = Utilization3$Outbound | any;
+export type UtilizationUnion3$Outbound = Utilization3$Outbound | string;
 
 /** @internal */
 export const UtilizationUnion3$outboundSchema: z.ZodType<
   UtilizationUnion3$Outbound,
   UtilizationUnion3
-> = z.union([z.lazy(() => Utilization3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization3$outboundSchema), z.string()]);
 
 export function utilizationUnion3ToJSON(
   utilizationUnion3: UtilizationUnion3,
@@ -2580,7 +2586,7 @@ export type Recommendation3$Outbound = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization3$Outbound | any | null | undefined;
+  utilization?: Utilization3$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -2592,7 +2598,7 @@ export const Recommendation3$outboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization3$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -2603,13 +2609,13 @@ export function recommendation3ToJSON(
 }
 
 /** @internal */
-export type RecommendationUnion3$Outbound = Recommendation3$Outbound | any;
+export type RecommendationUnion3$Outbound = Recommendation3$Outbound | string;
 
 /** @internal */
 export const RecommendationUnion3$outboundSchema: z.ZodType<
   RecommendationUnion3$Outbound,
   RecommendationUnion3
-> = z.union([z.lazy(() => Recommendation3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation3$outboundSchema), z.string()]);
 
 export function recommendationUnion3ToJSON(
   recommendationUnion3: RecommendationUnion3,
@@ -2621,15 +2627,15 @@ export function recommendationUnion3ToJSON(
 
 /** @internal */
 export type CapacityGroup3$Outbound = {
-  capacityBlocker?: CapacityBlocker3$Outbound | any | null | undefined;
+  capacityBlocker?: CapacityBlocker3$Outbound | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress3$Outbound | any | null | undefined;
+  drainProgress?: DrainProgress3$Outbound | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation3$Outbound | any | null | undefined;
+  recommendation?: Recommendation3$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -2638,19 +2644,19 @@ export const CapacityGroup3$outboundSchema: z.ZodType<
   CapacityGroup3
 > = z.object({
   capacityBlocker: z.nullable(
-    z.union([z.lazy(() => CapacityBlocker3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CapacityBlocker3$outboundSchema), z.string()]),
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   drainProgress: z.nullable(
-    z.union([z.lazy(() => DrainProgress3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DrainProgress3$outboundSchema), z.string()]),
   ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
   minMachines: z.nullable(z.int()).optional(),
   recommendation: z.nullable(
-    z.union([z.lazy(() => Recommendation3$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Recommendation3$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -2687,13 +2693,16 @@ export function syncReconcileRequestCpu9ToJSON(
 }
 
 /** @internal */
-export type CpuUnion9$Outbound = SyncReconcileRequestCpu9$Outbound | any;
+export type CpuUnion9$Outbound = SyncReconcileRequestCpu9$Outbound | string;
 
 /** @internal */
 export const CpuUnion9$outboundSchema: z.ZodType<
   CpuUnion9$Outbound,
   CpuUnion9
-> = z.union([z.lazy(() => SyncReconcileRequestCpu9$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestCpu9$outboundSchema),
+  z.string(),
+]);
 
 export function cpuUnion9ToJSON(cpuUnion9: CpuUnion9): string {
   return JSON.stringify(CpuUnion9$outboundSchema.parse(cpuUnion9));
@@ -2730,7 +2739,9 @@ export function syncReconcileRequestMemory9ToJSON(
 }
 
 /** @internal */
-export type MemoryUnion9$Outbound = SyncReconcileRequestMemory9$Outbound | any;
+export type MemoryUnion9$Outbound =
+  | SyncReconcileRequestMemory9$Outbound
+  | string;
 
 /** @internal */
 export const MemoryUnion9$outboundSchema: z.ZodType<
@@ -2738,7 +2749,7 @@ export const MemoryUnion9$outboundSchema: z.ZodType<
   MemoryUnion9
 > = z.union([
   z.lazy(() => SyncReconcileRequestMemory9$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function memoryUnion9ToJSON(memoryUnion9: MemoryUnion9): string {
@@ -2839,7 +2850,7 @@ export const SyncReconcileRequestLifecycle21$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle21);
 
 /** @internal */
-export type SyncReconcileRequestStatus21$Outbound = {
+export type ResourceHeartbeatStatus21$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue21$Outbound>;
   health: string;
   lifecycle: string;
@@ -2849,9 +2860,9 @@ export type SyncReconcileRequestStatus21$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus21$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus21$Outbound,
-  SyncReconcileRequestStatus21
+export const ResourceHeartbeatStatus21$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus21$Outbound,
+  ResourceHeartbeatStatus21
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue21$outboundSchema),
@@ -2863,13 +2874,11 @@ export const SyncReconcileRequestStatus21$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus21ToJSON(
-  syncReconcileRequestStatus21: SyncReconcileRequestStatus21,
+export function resourceHeartbeatStatus21ToJSON(
+  resourceHeartbeatStatus21: ResourceHeartbeatStatus21,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus21$outboundSchema.parse(
-      syncReconcileRequestStatus21,
-    ),
+    ResourceHeartbeatStatus21$outboundSchema.parse(resourceHeartbeatStatus21),
   );
 }
 
@@ -2877,13 +2886,13 @@ export function syncReconcileRequestStatus21ToJSON(
 export type DataAzure2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup3$Outbound>;
-  cpu?: SyncReconcileRequestCpu9$Outbound | any | null | undefined;
-  memory?: SyncReconcileRequestMemory9$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu9$Outbound | string | null | undefined;
+  memory?: SyncReconcileRequestMemory9$Outbound | string | null | undefined;
   name: string;
   nodes: Nodes3$Outbound;
   providerFleets: Array<ProviderFleet3$Outbound>;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus21$Outbound;
+  status: ResourceHeartbeatStatus21$Outbound;
   backend: "azure";
 };
 
@@ -2895,19 +2904,22 @@ export const DataAzure2$outboundSchema: z.ZodType<
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(z.lazy(() => CapacityGroup3$outboundSchema)),
   cpu: z.nullable(
-    z.union([z.lazy(() => SyncReconcileRequestCpu9$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileRequestCpu9$outboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   memory: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestMemory9$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   name: z.string(),
   nodes: z.lazy(() => Nodes3$outboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet3$outboundSchema)),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => SyncReconcileRequestStatus21$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus21$outboundSchema),
   backend: z.literal("azure"),
 });
 
@@ -2950,13 +2962,13 @@ export function capacityBlocker2ToJSON(
 }
 
 /** @internal */
-export type CapacityBlockerUnion2$Outbound = CapacityBlocker2$Outbound | any;
+export type CapacityBlockerUnion2$Outbound = CapacityBlocker2$Outbound | string;
 
 /** @internal */
 export const CapacityBlockerUnion2$outboundSchema: z.ZodType<
   CapacityBlockerUnion2$Outbound,
   CapacityBlockerUnion2
-> = z.union([z.lazy(() => CapacityBlocker2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker2$outboundSchema), z.string()]);
 
 export function capacityBlockerUnion2ToJSON(
   capacityBlockerUnion2: CapacityBlockerUnion2,
@@ -3035,13 +3047,13 @@ export function drainProgress2ToJSON(drainProgress2: DrainProgress2): string {
 }
 
 /** @internal */
-export type DrainProgressUnion2$Outbound = DrainProgress2$Outbound | any;
+export type DrainProgressUnion2$Outbound = DrainProgress2$Outbound | string;
 
 /** @internal */
 export const DrainProgressUnion2$outboundSchema: z.ZodType<
   DrainProgressUnion2$Outbound,
   DrainProgressUnion2
-> = z.union([z.lazy(() => DrainProgress2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress2$outboundSchema), z.string()]);
 
 export function drainProgressUnion2ToJSON(
   drainProgressUnion2: DrainProgressUnion2,
@@ -3076,13 +3088,13 @@ export function utilization2ToJSON(utilization2: Utilization2): string {
 }
 
 /** @internal */
-export type UtilizationUnion2$Outbound = Utilization2$Outbound | any;
+export type UtilizationUnion2$Outbound = Utilization2$Outbound | string;
 
 /** @internal */
 export const UtilizationUnion2$outboundSchema: z.ZodType<
   UtilizationUnion2$Outbound,
   UtilizationUnion2
-> = z.union([z.lazy(() => Utilization2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization2$outboundSchema), z.string()]);
 
 export function utilizationUnion2ToJSON(
   utilizationUnion2: UtilizationUnion2,
@@ -3097,7 +3109,7 @@ export type Recommendation2$Outbound = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization2$Outbound | any | null | undefined;
+  utilization?: Utilization2$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -3109,7 +3121,7 @@ export const Recommendation2$outboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization2$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization2$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -3120,13 +3132,13 @@ export function recommendation2ToJSON(
 }
 
 /** @internal */
-export type RecommendationUnion2$Outbound = Recommendation2$Outbound | any;
+export type RecommendationUnion2$Outbound = Recommendation2$Outbound | string;
 
 /** @internal */
 export const RecommendationUnion2$outboundSchema: z.ZodType<
   RecommendationUnion2$Outbound,
   RecommendationUnion2
-> = z.union([z.lazy(() => Recommendation2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation2$outboundSchema), z.string()]);
 
 export function recommendationUnion2ToJSON(
   recommendationUnion2: RecommendationUnion2,
@@ -3138,15 +3150,15 @@ export function recommendationUnion2ToJSON(
 
 /** @internal */
 export type CapacityGroup2$Outbound = {
-  capacityBlocker?: CapacityBlocker2$Outbound | any | null | undefined;
+  capacityBlocker?: CapacityBlocker2$Outbound | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress2$Outbound | any | null | undefined;
+  drainProgress?: DrainProgress2$Outbound | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation2$Outbound | any | null | undefined;
+  recommendation?: Recommendation2$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -3155,19 +3167,19 @@ export const CapacityGroup2$outboundSchema: z.ZodType<
   CapacityGroup2
 > = z.object({
   capacityBlocker: z.nullable(
-    z.union([z.lazy(() => CapacityBlocker2$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CapacityBlocker2$outboundSchema), z.string()]),
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   drainProgress: z.nullable(
-    z.union([z.lazy(() => DrainProgress2$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DrainProgress2$outboundSchema), z.string()]),
   ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
   minMachines: z.nullable(z.int()).optional(),
   recommendation: z.nullable(
-    z.union([z.lazy(() => Recommendation2$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Recommendation2$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -3204,13 +3216,16 @@ export function syncReconcileRequestCpu8ToJSON(
 }
 
 /** @internal */
-export type CpuUnion8$Outbound = SyncReconcileRequestCpu8$Outbound | any;
+export type CpuUnion8$Outbound = SyncReconcileRequestCpu8$Outbound | string;
 
 /** @internal */
 export const CpuUnion8$outboundSchema: z.ZodType<
   CpuUnion8$Outbound,
   CpuUnion8
-> = z.union([z.lazy(() => SyncReconcileRequestCpu8$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestCpu8$outboundSchema),
+  z.string(),
+]);
 
 export function cpuUnion8ToJSON(cpuUnion8: CpuUnion8): string {
   return JSON.stringify(CpuUnion8$outboundSchema.parse(cpuUnion8));
@@ -3247,7 +3262,9 @@ export function syncReconcileRequestMemory8ToJSON(
 }
 
 /** @internal */
-export type MemoryUnion8$Outbound = SyncReconcileRequestMemory8$Outbound | any;
+export type MemoryUnion8$Outbound =
+  | SyncReconcileRequestMemory8$Outbound
+  | string;
 
 /** @internal */
 export const MemoryUnion8$outboundSchema: z.ZodType<
@@ -3255,7 +3272,7 @@ export const MemoryUnion8$outboundSchema: z.ZodType<
   MemoryUnion8
 > = z.union([
   z.lazy(() => SyncReconcileRequestMemory8$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function memoryUnion8ToJSON(memoryUnion8: MemoryUnion8): string {
@@ -3356,7 +3373,7 @@ export const SyncReconcileRequestLifecycle20$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestLifecycle20);
 
 /** @internal */
-export type SyncReconcileRequestStatus20$Outbound = {
+export type ResourceHeartbeatStatus20$Outbound = {
   collectionIssues: Array<SyncReconcileRequestCollectionIssue20$Outbound>;
   health: string;
   lifecycle: string;
@@ -3366,9 +3383,9 @@ export type SyncReconcileRequestStatus20$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestStatus20$outboundSchema: z.ZodType<
-  SyncReconcileRequestStatus20$Outbound,
-  SyncReconcileRequestStatus20
+export const ResourceHeartbeatStatus20$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus20$Outbound,
+  ResourceHeartbeatStatus20
 > = z.object({
   collectionIssues: z.array(
     z.lazy(() => SyncReconcileRequestCollectionIssue20$outboundSchema),
@@ -3380,13 +3397,11 @@ export const SyncReconcileRequestStatus20$outboundSchema: z.ZodType<
   stale: z.boolean(),
 });
 
-export function syncReconcileRequestStatus20ToJSON(
-  syncReconcileRequestStatus20: SyncReconcileRequestStatus20,
+export function resourceHeartbeatStatus20ToJSON(
+  resourceHeartbeatStatus20: ResourceHeartbeatStatus20,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestStatus20$outboundSchema.parse(
-      syncReconcileRequestStatus20,
-    ),
+    ResourceHeartbeatStatus20$outboundSchema.parse(resourceHeartbeatStatus20),
   );
 }
 
@@ -3394,13 +3409,13 @@ export function syncReconcileRequestStatus20ToJSON(
 export type DataGcp2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup2$Outbound>;
-  cpu?: SyncReconcileRequestCpu8$Outbound | any | null | undefined;
-  memory?: SyncReconcileRequestMemory8$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu8$Outbound | string | null | undefined;
+  memory?: SyncReconcileRequestMemory8$Outbound | string | null | undefined;
   name: string;
   nodes: Nodes2$Outbound;
   providerFleets: Array<ProviderFleet2$Outbound>;
   region?: string | null | undefined;
-  status: SyncReconcileRequestStatus20$Outbound;
+  status: ResourceHeartbeatStatus20$Outbound;
   backend: "gcp";
 };
 
@@ -3410,19 +3425,22 @@ export const DataGcp2$outboundSchema: z.ZodType<DataGcp2$Outbound, DataGcp2> = z
     backendClusterId: z.nullable(z.string()).optional(),
     capacityGroups: z.array(z.lazy(() => CapacityGroup2$outboundSchema)),
     cpu: z.nullable(
-      z.union([z.lazy(() => SyncReconcileRequestCpu8$outboundSchema), z.any()]),
+      z.union([
+        z.lazy(() => SyncReconcileRequestCpu8$outboundSchema),
+        z.string(),
+      ]),
     ).optional(),
     memory: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileRequestMemory8$outboundSchema),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     name: z.string(),
     nodes: z.lazy(() => Nodes2$outboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet2$outboundSchema)),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => SyncReconcileRequestStatus20$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus20$outboundSchema),
     backend: z.literal("gcp"),
   });
 
@@ -3465,13 +3483,13 @@ export function capacityBlocker1ToJSON(
 }
 
 /** @internal */
-export type CapacityBlockerUnion1$Outbound = CapacityBlocker1$Outbound | any;
+export type CapacityBlockerUnion1$Outbound = CapacityBlocker1$Outbound | string;
 
 /** @internal */
 export const CapacityBlockerUnion1$outboundSchema: z.ZodType<
   CapacityBlockerUnion1$Outbound,
   CapacityBlockerUnion1
-> = z.union([z.lazy(() => CapacityBlocker1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => CapacityBlocker1$outboundSchema), z.string()]);
 
 export function capacityBlockerUnion1ToJSON(
   capacityBlockerUnion1: CapacityBlockerUnion1,
@@ -3550,13 +3568,13 @@ export function drainProgress1ToJSON(drainProgress1: DrainProgress1): string {
 }
 
 /** @internal */
-export type DrainProgressUnion1$Outbound = DrainProgress1$Outbound | any;
+export type DrainProgressUnion1$Outbound = DrainProgress1$Outbound | string;
 
 /** @internal */
 export const DrainProgressUnion1$outboundSchema: z.ZodType<
   DrainProgressUnion1$Outbound,
   DrainProgressUnion1
-> = z.union([z.lazy(() => DrainProgress1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => DrainProgress1$outboundSchema), z.string()]);
 
 export function drainProgressUnion1ToJSON(
   drainProgressUnion1: DrainProgressUnion1,
@@ -3591,13 +3609,13 @@ export function utilization1ToJSON(utilization1: Utilization1): string {
 }
 
 /** @internal */
-export type UtilizationUnion1$Outbound = Utilization1$Outbound | any;
+export type UtilizationUnion1$Outbound = Utilization1$Outbound | string;
 
 /** @internal */
 export const UtilizationUnion1$outboundSchema: z.ZodType<
   UtilizationUnion1$Outbound,
   UtilizationUnion1
-> = z.union([z.lazy(() => Utilization1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Utilization1$outboundSchema), z.string()]);
 
 export function utilizationUnion1ToJSON(
   utilizationUnion1: UtilizationUnion1,
@@ -3612,7 +3630,7 @@ export type Recommendation1$Outbound = {
   desiredMachines: number;
   reason?: string | null | undefined;
   unschedulableReplicas?: number | null | undefined;
-  utilization?: Utilization1$Outbound | any | null | undefined;
+  utilization?: Utilization1$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -3624,7 +3642,7 @@ export const Recommendation1$outboundSchema: z.ZodType<
   reason: z.nullable(z.string()).optional(),
   unschedulableReplicas: z.nullable(z.int()).optional(),
   utilization: z.nullable(
-    z.union([z.lazy(() => Utilization1$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Utilization1$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -3635,13 +3653,13 @@ export function recommendation1ToJSON(
 }
 
 /** @internal */
-export type RecommendationUnion1$Outbound = Recommendation1$Outbound | any;
+export type RecommendationUnion1$Outbound = Recommendation1$Outbound | string;
 
 /** @internal */
 export const RecommendationUnion1$outboundSchema: z.ZodType<
   RecommendationUnion1$Outbound,
   RecommendationUnion1
-> = z.union([z.lazy(() => Recommendation1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => Recommendation1$outboundSchema), z.string()]);
 
 export function recommendationUnion1ToJSON(
   recommendationUnion1: RecommendationUnion1,
@@ -3653,15 +3671,15 @@ export function recommendationUnion1ToJSON(
 
 /** @internal */
 export type CapacityGroup1$Outbound = {
-  capacityBlocker?: CapacityBlocker1$Outbound | any | null | undefined;
+  capacityBlocker?: CapacityBlocker1$Outbound | string | null | undefined;
   currentMachines: number;
   desiredMachines: number;
-  drainProgress?: DrainProgress1$Outbound | any | null | undefined;
+  drainProgress?: DrainProgress1$Outbound | string | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
   minMachines?: number | null | undefined;
-  recommendation?: Recommendation1$Outbound | any | null | undefined;
+  recommendation?: Recommendation1$Outbound | string | null | undefined;
 };
 
 /** @internal */
@@ -3670,19 +3688,19 @@ export const CapacityGroup1$outboundSchema: z.ZodType<
   CapacityGroup1
 > = z.object({
   capacityBlocker: z.nullable(
-    z.union([z.lazy(() => CapacityBlocker1$outboundSchema), z.any()]),
+    z.union([z.lazy(() => CapacityBlocker1$outboundSchema), z.string()]),
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   drainProgress: z.nullable(
-    z.union([z.lazy(() => DrainProgress1$outboundSchema), z.any()]),
+    z.union([z.lazy(() => DrainProgress1$outboundSchema), z.string()]),
   ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
   minMachines: z.nullable(z.int()).optional(),
   recommendation: z.nullable(
-    z.union([z.lazy(() => Recommendation1$outboundSchema), z.any()]),
+    z.union([z.lazy(() => Recommendation1$outboundSchema), z.string()]),
   ).optional(),
 });
 
@@ -3719,13 +3737,16 @@ export function syncReconcileRequestCpu7ToJSON(
 }
 
 /** @internal */
-export type CpuUnion7$Outbound = SyncReconcileRequestCpu7$Outbound | any;
+export type CpuUnion7$Outbound = SyncReconcileRequestCpu7$Outbound | string;
 
 /** @internal */
 export const CpuUnion7$outboundSchema: z.ZodType<
   CpuUnion7$Outbound,
   CpuUnion7
-> = z.union([z.lazy(() => SyncReconcileRequestCpu7$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestCpu7$outboundSchema),
+  z.string(),
+]);
 
 export function cpuUnion7ToJSON(cpuUnion7: CpuUnion7): string {
   return JSON.stringify(CpuUnion7$outboundSchema.parse(cpuUnion7));
@@ -3762,7 +3783,9 @@ export function syncReconcileRequestMemory7ToJSON(
 }
 
 /** @internal */
-export type MemoryUnion7$Outbound = SyncReconcileRequestMemory7$Outbound | any;
+export type MemoryUnion7$Outbound =
+  | SyncReconcileRequestMemory7$Outbound
+  | string;
 
 /** @internal */
 export const MemoryUnion7$outboundSchema: z.ZodType<
@@ -3770,7 +3793,7 @@ export const MemoryUnion7$outboundSchema: z.ZodType<
   MemoryUnion7
 > = z.union([
   z.lazy(() => SyncReconcileRequestMemory7$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function memoryUnion7ToJSON(memoryUnion7: MemoryUnion7): string {

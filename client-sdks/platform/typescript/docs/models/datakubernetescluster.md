@@ -20,13 +20,13 @@ let value: DataKubernetesCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
+          reason: "timed-out",
           severity: "warning",
           source: "<value>",
         },
       ],
       health: "unknown",
-      lifecycle: "stopped",
+      lifecycle: "stopping",
       partial: true,
       stale: false,
     },

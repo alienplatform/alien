@@ -9,9 +9,9 @@
 const value: models.DeploymentKubernetes = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

@@ -977,6 +977,14 @@ impl ResourcePermissionsHelper {
         // Get the service account for this profile
         let service_account_email = Self::get_gcp_service_account_email(ctx, profile_name)?;
 
+        let permission_context = permission_context.clone().with_service_account_name(
+            service_account_email
+                .split('@')
+                .next()
+                .unwrap_or(&service_account_email)
+                .to_string(),
+        );
+
         // Process each permission set for this resource
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
@@ -989,7 +997,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for permission set '{}'",
@@ -1154,6 +1166,13 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
+        let permission_context = permission_context.clone().with_service_account_name(
+            management_sa_email
+                .split('@')
+                .next()
+                .unwrap_or(&management_sa_email)
+                .to_string(),
+        );
 
         for permission_set_ref in &combined_refs {
             let permission_set = permission_set_ref
@@ -1169,7 +1188,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for management permission set '{}'",
@@ -1749,6 +1772,13 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
+        let permission_context = permission_context.clone().with_service_account_name(
+            management_sa_email
+                .split('@')
+                .next()
+                .unwrap_or(&management_sa_email)
+                .to_string(),
+        );
 
         for permission_set_ref in management_refs {
             let permission_set = permission_set_ref
@@ -1764,7 +1794,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for management permission set '{}'",
@@ -1928,7 +1962,8 @@ mod tests {
             .with_project_name("test-project")
             .with_region("us-central1")
             .with_stack_prefix("test")
-            .with_resource_name("test-bucket");
+            .with_resource_name("test-bucket")
+            .with_service_account_name("reader");
 
         let grant_plan = generator
             .generate_grant_plan(permission_set, BindingTarget::Resource, &permission_context)
@@ -1936,19 +1971,20 @@ mod tests {
 
         let resource_bindings =
             grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-        let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+        let account_bindings =
+            grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
 
         let resource_custom_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
-        let project_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+        let account_custom_roles = grant_plan.custom_roles_for_bindings(&account_bindings);
 
         assert_eq!(resource_custom_roles.len(), 1);
         assert!(resource_custom_roles[0]
             .included_permissions
             .iter()
             .any(|permission| permission == "storage.objects.get"));
-        assert_eq!(project_custom_roles.len(), 1);
+        assert_eq!(account_custom_roles.len(), 1);
         assert_eq!(
-            project_custom_roles[0].included_permissions,
+            account_custom_roles[0].included_permissions,
             vec!["iam.serviceAccounts.signBlob"]
         );
     }
@@ -2023,6 +2059,103 @@ mod tests {
         );
 
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn narrowed_signing_plan_removes_old_project_member_and_preserves_other_members() {
+        let current = alien_permissions::get_permission_set("storage/data-read").unwrap();
+        let mut old = current.clone();
+        for entry in old.platforms.gcp.as_mut().unwrap() {
+            if entry.grant.permissions.as_ref().is_some_and(|permissions| {
+                permissions
+                    .iter()
+                    .any(|permission| permission == "iam.serviceAccounts.signBlob")
+            }) {
+                entry.binding.resource.as_mut().unwrap().scope =
+                    "projects/${projectName}".to_string();
+            }
+        }
+        let context = PermissionContext::new()
+            .with_project_name("test-project")
+            .with_stack_prefix("test")
+            .with_resource_name("test-objects")
+            .with_service_account_name("reader");
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let before = generator
+            .generate_grant_plan(&old, BindingTarget::Resource, &context)
+            .unwrap();
+        let after = generator
+            .generate_grant_plan(current, BindingTarget::Resource, &context)
+            .unwrap();
+        let project = before.bindings_for_target(GcpBindingTargetScope::Project);
+        assert_eq!(project.len(), 1);
+        assert!(after
+            .bindings_for_target(GcpBindingTargetScope::Project)
+            .is_empty());
+        assert_eq!(
+            before.bindings_for_target(GcpBindingTargetScope::CurrentResource),
+            after.bindings_for_target(GcpBindingTargetScope::CurrentResource)
+        );
+        let own = after.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
+        assert_eq!(own.len(), 1);
+        assert_eq!(
+            own[0].target_resource_name.as_deref(),
+            Some(
+                "projects/test-project/serviceAccounts/reader@test-project.iam.gserviceaccount.com"
+            )
+        );
+        let roles = after.custom_roles_for_bindings(&own);
+        assert_eq!(roles.len(), 1);
+        assert_eq!(
+            roles[0].included_permissions,
+            vec!["iam.serviceAccounts.signBlob"]
+        );
+        let member = "serviceAccount:reader@test-project.iam.gserviceaccount.com";
+        let other = "serviceAccount:writer@test-project.iam.gserviceaccount.com";
+        let mut bindings = project
+            .into_iter()
+            .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
+            .collect::<Vec<_>>();
+        bindings[0].members = vec![member.to_string(), other.to_string()];
+        let old_role = bindings[0].role.clone();
+        let owned_prefix = ResourcePermissionsHelper::gcp_stack_custom_role_name_prefix(&context);
+        assert!(old_role.starts_with(&owned_prefix));
+        let unrelated = Binding {
+            role: "projects/test-project/roles/unrelated_signer".to_string(),
+            members: vec![member.to_string()],
+            condition: None,
+        };
+        bindings.push(unrelated.clone());
+        assert!(
+            ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut bindings,
+                vec![],
+                member,
+                &[owned_prefix.clone()],
+                &[],
+            )
+        );
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].role, old_role);
+        assert_eq!(bindings[0].members, vec![other]);
+        assert_eq!(
+            serde_json::to_value(&bindings[1]).unwrap(),
+            serde_json::to_value(&unrelated).unwrap()
+        );
+        let converged = bindings.clone();
+        assert!(
+            !ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut bindings,
+                vec![],
+                member,
+                &[owned_prefix],
+                &[],
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(&bindings).unwrap(),
+            serde_json::to_value(&converged).unwrap()
+        );
     }
 
     #[test]

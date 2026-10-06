@@ -2,12 +2,14 @@
 //!
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
+use alien_bindings::Vault as _;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry,
-    ResourceLifecycle, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackSettings, StackState,
-    Storage, Worker, WorkerCode,
+    ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
+    DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+    Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata,
+    SetupUpdateAuthorization, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
+use alien_infra::{register_registry_extension, LocalComputeClusterController};
 use chrono::Utc;
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
@@ -250,6 +252,7 @@ fn expected_secrets_sync_hash(secret_value: &str) -> String {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
@@ -387,16 +390,204 @@ async fn stale_waiting_for_machines_returns_to_provisioning() {
         &[DeploymentStatus::Provisioning],
     )
     .await;
+    assert!(state.current_release.is_none());
+    assert!(state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    let target = state.target_release.clone();
     let stale_state = DeploymentState {
         status: DeploymentStatus::WaitingForMachines,
         ..state
     };
 
-    let result = alien_deployment::step(stale_state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(stale_state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("provisioning step should succeed");
 
     assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+    let completed = run_to_completion(result.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(completed.current_release, target);
+    assert!(completed.target_release.is_none());
+    assert_eq!(
+        completed.stack_state.as_ref().unwrap().resources["test-function"].status,
+        alien_core::ResourceStatus::Running
+    );
+}
+
+#[tokio::test]
+async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
+    let config = create_test_config("target-env", false);
+    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut state = run_until_status(
+        create_initial_state(old_stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    assert!(state.current_release.is_none());
+    let frozen = state.stack_state.as_ref().unwrap().resources["archive"].clone();
+    let baseline = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .clone();
+    state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .direct_setup_revision = Some("setup-revision".into());
+
+    let mut target = create_test_stack_with_storage("test-stack", "archive", "new-worker");
+    target.resources.get_mut("new-worker").unwrap().config = alien_core::Resource::new(
+        Worker::new("new-worker".into())
+            .code(WorkerCode::Image {
+                image: "demo:target".into(),
+            })
+            .permissions("default".into())
+            .build(),
+    );
+    let target_release = ReleaseInfo {
+        release_id: Some("rel_target".into()),
+        version: Some("2.0.0".into()),
+        description: None,
+        stack: target,
+    };
+    start_update(&mut state, target_release.clone());
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
+    let pending = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .clone();
+    assert!(pending
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    assert_eq!(
+        state.runtime_metadata.as_ref().unwrap().prepared_stack,
+        baseline
+    );
+
+    // The setup-owned cluster is already Running; only its persisted inventory changes.
+    // Test controllers reconcile the workloads, and no cluster controller action is needed.
+    register_registry_extension(Box::new(|registry| {
+        registry
+            .register::<ComputeCluster>(ComputeCluster::RESOURCE_TYPE)
+            .with_controller::<LocalComputeClusterController>(Platform::Test);
+    }));
+    let cluster = ResourceEntry {
+        config: alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
+        lifecycle: ResourceLifecycle::Frozen,
+        dependencies: Vec::new(),
+        remote_access: false,
+        enabled_when: None,
+    };
+    let metadata = state.runtime_metadata.as_mut().unwrap();
+    metadata
+        .prepared_stack
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), cluster.clone());
+    metadata
+        .pending_prepared_stack
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), cluster);
+    let pending = metadata.pending_prepared_stack.clone();
+    state.platform = Platform::Machines;
+    let mut inventory = alien_core::StackResourceState::new_pending(
+        ComputeCluster::RESOURCE_TYPE.to_string(),
+        alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    inventory.status = alien_core::ResourceStatus::Running;
+    let outputs = ComputeClusterOutputs {
+        cluster_id: "demo-cluster".into(),
+        horizon_ready: true,
+        capacity_group_statuses: vec![],
+        total_machines: 0,
+    };
+    inventory.outputs = Some(alien_core::ResourceOutputs::new(outputs.clone()));
+    state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), inventory);
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("updating should wait for inventory");
+    state = result.state;
+    assert_eq!(state.status, DeploymentStatus::WaitingForMachines);
+    assert_eq!(result.suggested_delay_ms, Some(30_000));
+    assert!(state.current_release.is_none());
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .pending_prepared_stack,
+        pending
+    );
+
+    // Round-trip the checkpoint just as a later loop invocation reloads persisted state.
+    state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut("machines")
+        .unwrap()
+        .outputs = Some(alien_core::ResourceOutputs::new(ComputeClusterOutputs {
+        total_machines: 1,
+        ..outputs
+    }));
+    state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(state.current_release, Some(target_release));
+    assert!(state.target_release.is_none());
+    let metadata = state.runtime_metadata.as_ref().unwrap();
+    assert_eq!(metadata.prepared_stack, pending);
+    assert!(metadata.pending_prepared_stack.is_none());
+    assert_eq!(
+        metadata.direct_setup_revision.as_deref(),
+        Some("setup-revision")
+    );
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert_eq!(
+        serde_json::to_value(&resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert!(!resources.contains_key("old-worker"));
+    assert_eq!(
+        resources["new-worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    let worker = resources["new-worker"]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap();
+    assert_eq!(
+        worker.code,
+        WorkerCode::Image {
+            image: "demo:target".into()
+        }
+    );
+    assert_eq!(
+        worker.environment.get("PLAIN_VAR").map(String::as_str),
+        Some("plain_value")
+    );
 }
 
 /// B) Secrets sync behavior tests
@@ -1177,15 +1368,29 @@ async fn stale_waiting_for_machines_returns_to_updating() {
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
     };
-    start_update(&mut state, release_v2);
+    start_update(&mut state, release_v2.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
     state.status = DeploymentStatus::WaitingForMachines;
 
-    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("updating step should succeed");
 
     assert_eq!(result.state.status, DeploymentStatus::Updating);
+    let completed = run_to_completion(result.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(completed.current_release, Some(release_v2));
+    assert!(completed.target_release.is_none());
+    assert!(completed
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    assert_eq!(
+        completed.stack_state.as_ref().unwrap().resources["test-function-v2"].status,
+        alien_core::ResourceStatus::Running
+    );
 }
 
 #[tokio::test]
@@ -2381,6 +2586,100 @@ fn deployer_reports(state: &DeploymentState) -> Vec<alien_core::DeployerSecretRe
 }
 
 #[tokio::test]
+async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("target-env", false);
+    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut state = run_until_status(
+        create_initial_state(old_stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    assert!(state.current_release.is_none());
+    let frozen = state.stack_state.as_ref().unwrap().resources["archive"].clone();
+    let baseline = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .clone();
+    let mut target = create_test_stack_with_storage("test-stack", "archive", "new-worker");
+    target.inputs = vec![database_password_input()];
+    let target_release = ReleaseInfo {
+        release_id: Some("rel_target".into()),
+        version: Some("2.0.0".into()),
+        description: None,
+        stack: target,
+    };
+    start_update(&mut state, target_release.clone());
+    let blocked = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+    assert_eq!(blocked.status, DeploymentStatus::WaitingForSecrets);
+    assert!(blocked.current_release.is_none());
+    assert_eq!(
+        blocked.runtime_metadata.as_ref().unwrap().prepared_stack,
+        baseline
+    );
+    assert!(blocked
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    assert_eq!(
+        deployer_reports(&blocked)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "demo-secret")
+        .await
+        .unwrap();
+    let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
+    let running = run_to_completion(checkpoint, config).await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(running.current_release, Some(target_release));
+    assert!(running.target_release.is_none());
+    let metadata = running.runtime_metadata.as_ref().unwrap();
+    assert!(metadata.pending_prepared_stack.is_none());
+    assert!(metadata
+        .prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    let resources = &running.stack_state.as_ref().unwrap().resources;
+    assert!(!resources.contains_key("old-worker"));
+    assert_eq!(
+        resources["new-worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        serde_json::to_value(&resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    assert!(!serde_json::to_string(&running)
+        .unwrap()
+        .contains("demo-secret"));
+}
+
+#[tokio::test]
 async fn test_missing_deployer_secret_blocks_workloads_until_written() {
     use alien_bindings::Vault as _;
 
@@ -2460,6 +2759,35 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
             .contains("customer-only-value"),
         "the deployment state never carries the deployer's secret"
     );
+}
+
+#[tokio::test]
+async fn test_stored_dual_secret_presence_starts_without_vault_slots() {
+    let mut stack = create_test_stack("demo-stack", "demo-worker");
+    let mut input = database_password_input();
+    input
+        .provided_by
+        .push(alien_core::StackInputProvider::Developer);
+    stack.inputs = vec![input];
+    let mut config = create_test_config("hash_v1", false);
+    config.stored_secret_input_ids = Some(vec!["databasePassword".to_string()]);
+    assert!(config.input_values.is_empty());
+    let running = run_until_status(
+        create_initial_state(stack),
+        config,
+        &[
+            DeploymentStatus::Running,
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::ProvisioningFailed,
+        ],
+    )
+    .await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(deployer_reports(&running).is_empty());
+    let environment = worker_environment(&running, "demo-worker");
+    assert!(!environment.contains_key("DATABASE_PASSWORD"));
+    assert!(!environment.contains_key(alien_core::ENV_ALIEN_DEPLOYER_SECRETS));
+    assert!(!environment.contains_key(alien_core::ENV_ALIEN_SECRETS));
 }
 
 #[tokio::test]

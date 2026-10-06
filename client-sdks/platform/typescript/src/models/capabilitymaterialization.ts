@@ -33,6 +33,7 @@ export const CapabilityMaterializationType = {
   Cloudformation: "cloudformation",
   Terraform: "terraform",
   SandboxBundle: "sandbox-bundle",
+  GcpSandboxImage: "gcp-sandbox-image",
 } as const;
 export type CapabilityMaterializationType = ClosedEnum<
   typeof CapabilityMaterializationType

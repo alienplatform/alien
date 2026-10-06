@@ -19,6 +19,7 @@ export const PreparedDeploymentStackPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
+  Machines: "machines",
 } as const;
 export type PreparedDeploymentStackPlatform = ClosedEnum<
   typeof PreparedDeploymentStackPlatform
@@ -89,7 +90,7 @@ export type PreparedDeploymentStackDefaultUnion =
   | PreparedDeploymentStackDefaultNumber
   | PreparedDeploymentStackDefaultBoolean
   | PreparedDeploymentStackDefaultStringList
-  | any;
+  | string;
 
 /**
  * Environment variable handling for a stack input mapping.
@@ -107,7 +108,7 @@ export type PreparedDeploymentStackTypeEnvEnum = ClosedEnum<
 
 export type PreparedDeploymentStackTypeUnion =
   | PreparedDeploymentStackTypeEnvEnum
-  | any;
+  | string;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
@@ -121,8 +122,29 @@ export type PreparedDeploymentStackEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?: PreparedDeploymentStackTypeEnvEnum | any | null | undefined;
+  type?: PreparedDeploymentStackTypeEnvEnum | string | null | undefined;
 };
+
+/**
+ * Asks Alien to generate a secret input's value.
+ *
+ * @remarks
+ *
+ * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+ * connection strings, command lines and environment variables. It is generated
+ * once, when the deployment's input values are first resolved, and then kept
+ * with the deployment's other input values.
+ */
+export type PreparedDeploymentStackGenerate = {
+  /**
+   * Number of characters to generate.
+   */
+  length: number;
+};
+
+export type PreparedDeploymentStackGenerateUnion =
+  | PreparedDeploymentStackGenerate
+  | string;
 
 /**
  * Primitive stack input kind.
@@ -220,7 +242,7 @@ export type PreparedDeploymentStackValidation = {
 
 export type PreparedDeploymentStackValidationUnion =
   | PreparedDeploymentStackValidation
-  | any;
+  | string;
 
 /**
  * Stack input definition serialized into a release stack.
@@ -231,7 +253,7 @@ export type PreparedDeploymentStackInput = {
     | PreparedDeploymentStackDefaultNumber
     | PreparedDeploymentStackDefaultBoolean
     | PreparedDeploymentStackDefaultStringList
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -242,6 +264,7 @@ export type PreparedDeploymentStackInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<PreparedDeploymentStackEnv> | undefined;
+  generate?: PreparedDeploymentStackGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -270,7 +293,7 @@ export type PreparedDeploymentStackInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  validation?: PreparedDeploymentStackValidation | any | null | undefined;
+  validation?: PreparedDeploymentStackValidation | string | null | undefined;
 };
 
 export const PreparedDeploymentStackManagementEnum = {
@@ -496,7 +519,7 @@ export type PreparedDeploymentStackOverrideConditionResource = {
 
 export type PreparedDeploymentStackOverrideResourceConditionUnion =
   | PreparedDeploymentStackOverrideConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -504,7 +527,7 @@ export type PreparedDeploymentStackOverrideResourceConditionUnion =
 export type PreparedDeploymentStackOverrideGcpResource = {
   condition?:
     | PreparedDeploymentStackOverrideConditionResource
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -523,13 +546,17 @@ export type PreparedDeploymentStackOverrideCondition = {
 
 export type PreparedDeploymentStackOverrideConditionUnion =
   | PreparedDeploymentStackOverrideCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type PreparedDeploymentStackOverrideGcpStack = {
-  condition?: PreparedDeploymentStackOverrideCondition | any | null | undefined;
+  condition?:
+    | PreparedDeploymentStackOverrideCondition
+    | string
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -867,7 +894,7 @@ export type PreparedDeploymentStackExtendConditionResource = {
 
 export type PreparedDeploymentStackExtendResourceConditionUnion =
   | PreparedDeploymentStackExtendConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -875,7 +902,7 @@ export type PreparedDeploymentStackExtendResourceConditionUnion =
 export type PreparedDeploymentStackExtendGcpResource = {
   condition?:
     | PreparedDeploymentStackExtendConditionResource
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -894,13 +921,17 @@ export type PreparedDeploymentStackExtendCondition = {
 
 export type PreparedDeploymentStackExtendConditionUnion =
   | PreparedDeploymentStackExtendCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type PreparedDeploymentStackExtendGcpStack = {
-  condition?: PreparedDeploymentStackExtendCondition | any | null | undefined;
+  condition?:
+    | PreparedDeploymentStackExtendCondition
+    | string
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1246,7 +1277,7 @@ export type PreparedDeploymentStackProfileConditionResource = {
 
 export type PreparedDeploymentStackProfileResourceConditionUnion =
   | PreparedDeploymentStackProfileConditionResource
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
@@ -1254,7 +1285,7 @@ export type PreparedDeploymentStackProfileResourceConditionUnion =
 export type PreparedDeploymentStackProfileGcpResource = {
   condition?:
     | PreparedDeploymentStackProfileConditionResource
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1273,13 +1304,17 @@ export type PreparedDeploymentStackProfileCondition = {
 
 export type PreparedDeploymentStackProfileConditionUnion =
   | PreparedDeploymentStackProfileCondition
-  | any;
+  | string;
 
 /**
  * GCP-specific binding specification
  */
 export type PreparedDeploymentStackProfileGcpStack = {
-  condition?: PreparedDeploymentStackProfileCondition | any | null | undefined;
+  condition?:
+    | PreparedDeploymentStackProfileCondition
+    | string
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -1684,7 +1719,7 @@ export const PreparedDeploymentStackDefaultUnion$inboundSchema: z.ZodType<
   z.lazy(() => PreparedDeploymentStackDefaultNumber$inboundSchema),
   z.lazy(() => PreparedDeploymentStackDefaultBoolean$inboundSchema),
   z.lazy(() => PreparedDeploymentStackDefaultStringList$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function preparedDeploymentStackDefaultUnionFromJSON(
@@ -1707,7 +1742,7 @@ export const PreparedDeploymentStackTypeEnvEnum$inboundSchema: z.ZodEnum<
 export const PreparedDeploymentStackTypeUnion$inboundSchema: z.ZodType<
   PreparedDeploymentStackTypeUnion,
   unknown
-> = z.union([PreparedDeploymentStackTypeEnvEnum$inboundSchema, z.any()]);
+> = z.union([PreparedDeploymentStackTypeEnvEnum$inboundSchema, z.string()]);
 
 export function preparedDeploymentStackTypeUnionFromJSON(
   jsonString: string,
@@ -1727,7 +1762,7 @@ export const PreparedDeploymentStackEnv$inboundSchema: z.ZodType<
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
   type: z.nullable(
-    z.union([PreparedDeploymentStackTypeEnvEnum$inboundSchema, z.any()]),
+    z.union([PreparedDeploymentStackTypeEnvEnum$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -1738,6 +1773,44 @@ export function preparedDeploymentStackEnvFromJSON(
     jsonString,
     (x) => PreparedDeploymentStackEnv$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'PreparedDeploymentStackEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackGenerate$inboundSchema: z.ZodType<
+  PreparedDeploymentStackGenerate,
+  unknown
+> = z.object({
+  length: z.int(),
+});
+
+export function preparedDeploymentStackGenerateFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackGenerate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackGenerate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackGenerate' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackGenerateUnion$inboundSchema: z.ZodType<
+  PreparedDeploymentStackGenerateUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PreparedDeploymentStackGenerate$inboundSchema),
+  z.string(),
+]);
+
+export function preparedDeploymentStackGenerateUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackGenerateUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackGenerateUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackGenerateUnion' from JSON`,
   );
 }
 
@@ -1788,7 +1861,7 @@ export const PreparedDeploymentStackValidationUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => PreparedDeploymentStackValidation$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function preparedDeploymentStackValidationUnionFromJSON(
@@ -1813,12 +1886,18 @@ export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
       z.lazy(() => PreparedDeploymentStackDefaultNumber$inboundSchema),
       z.lazy(() => PreparedDeploymentStackDefaultBoolean$inboundSchema),
       z.lazy(() => PreparedDeploymentStackDefaultStringList$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => PreparedDeploymentStackEnv$inboundSchema))
     .optional(),
+  generate: z.nullable(
+    z.union([
+      z.lazy(() => PreparedDeploymentStackGenerate$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   id: z.string(),
   kind: PreparedDeploymentStackKind$inboundSchema,
   label: z.string(),
@@ -1831,7 +1910,7 @@ export const PreparedDeploymentStackInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => PreparedDeploymentStackValidation$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2133,7 +2212,7 @@ export const PreparedDeploymentStackOverrideResourceConditionUnion$inboundSchema
       z.lazy(() =>
         PreparedDeploymentStackOverrideConditionResource$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 
 export function preparedDeploymentStackOverrideResourceConditionUnionFromJSON(
@@ -2160,7 +2239,7 @@ export const PreparedDeploymentStackOverrideGcpResource$inboundSchema:
         z.lazy(() =>
           PreparedDeploymentStackOverrideConditionResource$inboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     scope: z.string(),
@@ -2211,7 +2290,7 @@ export function preparedDeploymentStackOverrideConditionFromJSON(
 export const PreparedDeploymentStackOverrideConditionUnion$inboundSchema:
   z.ZodType<PreparedDeploymentStackOverrideConditionUnion, unknown> = z.union([
     z.lazy(() => PreparedDeploymentStackOverrideCondition$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function preparedDeploymentStackOverrideConditionUnionFromJSON(
@@ -2238,7 +2317,7 @@ export const PreparedDeploymentStackOverrideGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => PreparedDeploymentStackOverrideCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -2718,7 +2797,7 @@ export const PreparedDeploymentStackExtendResourceConditionUnion$inboundSchema:
       z.lazy(() =>
         PreparedDeploymentStackExtendConditionResource$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 
 export function preparedDeploymentStackExtendResourceConditionUnionFromJSON(
@@ -2747,7 +2826,7 @@ export const PreparedDeploymentStackExtendGcpResource$inboundSchema: z.ZodType<
       z.lazy(() =>
         PreparedDeploymentStackExtendConditionResource$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -2793,7 +2872,7 @@ export function preparedDeploymentStackExtendConditionFromJSON(
 export const PreparedDeploymentStackExtendConditionUnion$inboundSchema:
   z.ZodType<PreparedDeploymentStackExtendConditionUnion, unknown> = z.union([
     z.lazy(() => PreparedDeploymentStackExtendCondition$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function preparedDeploymentStackExtendConditionUnionFromJSON(
@@ -2820,7 +2899,7 @@ export const PreparedDeploymentStackExtendGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => PreparedDeploymentStackExtendCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -3302,7 +3381,7 @@ export const PreparedDeploymentStackProfileResourceConditionUnion$inboundSchema:
       z.lazy(() =>
         PreparedDeploymentStackProfileConditionResource$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]);
 
 export function preparedDeploymentStackProfileResourceConditionUnionFromJSON(
@@ -3331,7 +3410,7 @@ export const PreparedDeploymentStackProfileGcpResource$inboundSchema: z.ZodType<
       z.lazy(() =>
         PreparedDeploymentStackProfileConditionResource$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),
@@ -3382,7 +3461,7 @@ export function preparedDeploymentStackProfileConditionFromJSON(
 export const PreparedDeploymentStackProfileConditionUnion$inboundSchema:
   z.ZodType<PreparedDeploymentStackProfileConditionUnion, unknown> = z.union([
     z.lazy(() => PreparedDeploymentStackProfileCondition$inboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function preparedDeploymentStackProfileConditionUnionFromJSON(
@@ -3409,7 +3488,7 @@ export const PreparedDeploymentStackProfileGcpStack$inboundSchema: z.ZodType<
   condition: z.nullable(
     z.union([
       z.lazy(() => PreparedDeploymentStackProfileCondition$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   scope: z.string(),

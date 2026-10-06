@@ -9,9 +9,9 @@
 const value: models.SourceEvent7 = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

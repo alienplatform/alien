@@ -66,6 +66,8 @@ use utoipa::OpenApi;
     StackStatus,
     StackResourceState,
     StackSettings,
+    ExternalBindings,
+    ExternalBinding,
     EndpointAccess,
     NetworkSettings,
     ComputeSettings,

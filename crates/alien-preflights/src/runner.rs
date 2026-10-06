@@ -369,6 +369,7 @@ impl PreflightRunner {
 
         // Run compile-time checks first (fast, no cloud API calls)
         let compile_summary = self.run_compile_time_checks(&stack, platform).await?;
+        let compile_checks_succeeded = compile_summary.success;
         all_results.extend(compile_summary.results);
 
         // Apply mutations BEFORE compatibility checks
@@ -408,12 +409,16 @@ impl PreflightRunner {
                 // These checks compare the prepared target with installed resources,
                 // including runtime-owned capacity changes. Do not duplicate that
                 // decision using a hash of the unprepared release.
-                if !compatibility_summary.success && all_results.iter().all(|result| result.success)
-                {
+                // Setup is where missing target prerequisites (such as a new
+                // external binding) can be supplied. They must not hide the
+                // independently required Frozen handoff behind a generic error.
+                // Intrinsically invalid releases still fail ordinary validation.
+                if !compatibility_summary.success && compile_checks_succeeded {
                     return Err(AlienError::new(ErrorData::SetupRequired {
                         message: compatibility_summary
                             .results
                             .iter()
+                            .chain(all_results.iter())
                             .flat_map(|result| result.errors.iter().cloned())
                             .collect::<Vec<_>>()
                             .join("; "),

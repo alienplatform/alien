@@ -26,7 +26,7 @@
 * [configureKeys](#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-* [configureRemoteSandbox](#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
+* [configureRemoteSandbox](#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
 * [ensureSandboxBaseImageRepository](#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 * [getCapabilityOverview](#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getRemoteOperatorSummary](#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
@@ -86,6 +86,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsList,
+  useProjectsListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsList,
+  invalidateAllProjectsList,
+} from "@alienplatform/platform-api/react-query/projectsList.js";
 ```
 
 ### Parameters
@@ -173,6 +201,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsCreateMutation
+} from "@alienplatform/platform-api/react-query/projectsCreate.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -249,6 +294,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGet,
+  useProjectsGetSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGet,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGet,
+  invalidateAllProjectsGet,
+} from "@alienplatform/platform-api/react-query/projectsGet.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProject" method="get" path="/v1/projects/{idOrName}" example="projectName" -->
@@ -299,6 +372,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGet,
+  useProjectsGetSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGet,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGet,
+  invalidateAllProjectsGet,
+} from "@alienplatform/platform-api/react-query/projectsGet.js";
 ```
 
 ### Parameters
@@ -369,13 +470,30 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("projectsDelete failed:", res.error);
   }
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsDeleteMutation
+} from "@alienplatform/platform-api/react-query/projectsDelete.js";
 ```
 
 ### Parameters
@@ -478,6 +596,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsUpdateMutation
+} from "@alienplatform/platform-api/react-query/projectsUpdate.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="updateProject" method="patch" path="/v1/projects/{idOrName}" example="projectName" -->
@@ -554,6 +689,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsUpdateMutation
+} from "@alienplatform/platform-api/react-query/projectsUpdate.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -571,7 +723,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 403, 404, 409, 422       | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -630,6 +782,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetGcpOAuthProvider,
+  useProjectsGetGcpOAuthProviderSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetGcpOAuthProvider,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetGcpOAuthProvider,
+  invalidateAllProjectsGetGcpOAuthProvider,
+} from "@alienplatform/platform-api/react-query/projectsGetGcpOAuthProvider.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectGcpOAuthProvider" method="get" path="/v1/projects/{idOrName}/gcp-oauth-provider" example="projectName" -->
@@ -680,6 +860,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetGcpOAuthProvider,
+  useProjectsGetGcpOAuthProviderSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetGcpOAuthProvider,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetGcpOAuthProvider,
+  invalidateAllProjectsGetGcpOAuthProvider,
+} from "@alienplatform/platform-api/react-query/projectsGetGcpOAuthProvider.js";
 ```
 
 ### Parameters
@@ -764,6 +972,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsUpdateGcpOAuthProviderMutation
+} from "@alienplatform/platform-api/react-query/projectsUpdateGcpOAuthProvider.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="updateProjectGcpOAuthProvider" method="put" path="/v1/projects/{idOrName}/gcp-oauth-provider" example="projectName" -->
@@ -822,6 +1047,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsUpdateGcpOAuthProviderMutation
+} from "@alienplatform/platform-api/react-query/projectsUpdateGcpOAuthProvider.js";
 ```
 
 ### Parameters
@@ -910,6 +1152,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureSourceMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureSource.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectSource" method="post" path="/v1/projects/{idOrName}/source" example="projectName" -->
@@ -974,6 +1233,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureSourceMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureSource.js";
 ```
 
 ### Parameters
@@ -1052,6 +1328,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetDeploymentPortalDomain,
+  useProjectsGetDeploymentPortalDomainSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetDeploymentPortalDomain,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetDeploymentPortalDomain,
+  invalidateAllProjectsGetDeploymentPortalDomain,
+} from "@alienplatform/platform-api/react-query/projectsGetDeploymentPortalDomain.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectDeploymentPortalDomain" method="get" path="/v1/projects/{idOrName}/deployment-portal-domain" example="projectName" -->
@@ -1102,6 +1406,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetDeploymentPortalDomain,
+  useProjectsGetDeploymentPortalDomainSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetDeploymentPortalDomain,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetDeploymentPortalDomain,
+  invalidateAllProjectsGetDeploymentPortalDomain,
+} from "@alienplatform/platform-api/react-query/projectsGetDeploymentPortalDomain.js";
 ```
 
 ### Parameters
@@ -1185,6 +1517,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsCreateFromTemplateMutation
+} from "@alienplatform/platform-api/react-query/projectsCreateFromTemplate.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1261,6 +1610,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetTemplateUrls,
+  useProjectsGetTemplateUrlsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetTemplateUrls,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetTemplateUrls,
+  invalidateAllProjectsGetTemplateUrls,
+} from "@alienplatform/platform-api/react-query/projectsGetTemplateUrls.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectTemplateUrls" method="get" path="/v1/projects/{idOrName}/template-urls" example="projectName" -->
@@ -1311,6 +1688,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetTemplateUrls,
+  useProjectsGetTemplateUrlsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetTemplateUrls,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetTemplateUrls,
+  invalidateAllProjectsGetTemplateUrls,
+} from "@alienplatform/platform-api/react-query/projectsGetTemplateUrls.js";
 ```
 
 ### Parameters
@@ -1389,6 +1794,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetDeploymentLinkSetup,
+  useProjectsGetDeploymentLinkSetupSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetDeploymentLinkSetup,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetDeploymentLinkSetup,
+  invalidateAllProjectsGetDeploymentLinkSetup,
+} from "@alienplatform/platform-api/react-query/projectsGetDeploymentLinkSetup.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectDeploymentLinkSetup" method="get" path="/v1/projects/{idOrName}/deployment-link-setup" example="projectName" -->
@@ -1441,6 +1874,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetDeploymentLinkSetup,
+  useProjectsGetDeploymentLinkSetupSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetDeploymentLinkSetup,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetDeploymentLinkSetup,
+  invalidateAllProjectsGetDeploymentLinkSetup,
+} from "@alienplatform/platform-api/react-query/projectsGetDeploymentLinkSetup.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1458,7 +1919,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 400, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1517,6 +1978,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetActiveRelease,
+  useProjectsGetActiveReleaseSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetActiveRelease,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetActiveRelease,
+  invalidateAllProjectsGetActiveRelease,
+} from "@alienplatform/platform-api/react-query/projectsGetActiveRelease.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectActiveRelease" method="get" path="/v1/projects/{idOrName}/active-release" example="projectName" -->
@@ -1567,6 +2056,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetActiveRelease,
+  useProjectsGetActiveReleaseSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetActiveRelease,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetActiveRelease,
+  invalidateAllProjectsGetActiveRelease,
+} from "@alienplatform/platform-api/react-query/projectsGetActiveRelease.js";
 ```
 
 ### Parameters
@@ -1645,6 +2162,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsPreviewModelsImpactMutation
+} from "@alienplatform/platform-api/react-query/projectsPreviewModelsImpact.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="previewProjectModelsImpact" method="post" path="/v1/projects/{idOrName}/project-capabilities/models/impact" example="projectName" -->
@@ -1695,6 +2229,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsPreviewModelsImpactMutation
+} from "@alienplatform/platform-api/react-query/projectsPreviewModelsImpact.js";
 ```
 
 ### Parameters
@@ -1772,6 +2323,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsSetCapabilitiesMutation
+} from "@alienplatform/platform-api/react-query/projectsSetCapabilities.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="setProjectCapabilities" method="put" path="/v1/projects/{idOrName}/project-capabilities" example="projectName" -->
@@ -1824,6 +2392,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsSetCapabilitiesMutation
+} from "@alienplatform/platform-api/react-query/projectsSetCapabilities.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1841,7 +2426,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -1900,6 +2485,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureDeploymentsMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureDeployments.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectDeployments" method="put" path="/v1/projects/{idOrName}/project-capabilities/deployments" example="projectName" -->
@@ -1952,6 +2554,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureDeploymentsMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureDeployments.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -1969,7 +2588,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2028,6 +2647,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetAiProviderHeaders,
+  useProjectsGetAiProviderHeadersSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetAiProviderHeaders,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetAiProviderHeaders,
+  invalidateAllProjectsGetAiProviderHeaders,
+} from "@alienplatform/platform-api/react-query/projectsGetAiProviderHeaders.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectAiProviderHeaders" method="get" path="/v1/projects/{idOrName}/ai-provider-headers" example="projectName" -->
@@ -2078,6 +2725,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetAiProviderHeaders,
+  useProjectsGetAiProviderHeadersSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetAiProviderHeaders,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetAiProviderHeaders,
+  invalidateAllProjectsGetAiProviderHeaders,
+} from "@alienplatform/platform-api/react-query/projectsGetAiProviderHeaders.js";
 ```
 
 ### Parameters
@@ -2156,6 +2831,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureAiProviderHeadersMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureAiProviderHeaders.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectAiProviderHeaders" method="put" path="/v1/projects/{idOrName}/ai-provider-headers" example="projectName" -->
@@ -2206,6 +2898,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureAiProviderHeadersMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureAiProviderHeaders.js";
 ```
 
 ### Parameters
@@ -2284,6 +2993,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureModelsMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureModels.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectModels" method="put" path="/v1/projects/{idOrName}/project-capabilities/models" example="projectName" -->
@@ -2336,6 +3062,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureModelsMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureModels.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2353,7 +3096,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2412,6 +3155,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureKeysMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureKeys.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectKeys" method="put" path="/v1/projects/{idOrName}/project-capabilities/keys" example="projectName" -->
@@ -2464,6 +3224,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureKeysMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureKeys.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2481,7 +3258,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2540,6 +3317,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureBucketsMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureBuckets.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectBuckets" method="put" path="/v1/projects/{idOrName}/project-capabilities/buckets" example="projectName" -->
@@ -2592,6 +3386,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureBucketsMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureBuckets.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2609,7 +3420,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2668,6 +3479,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureRegistryMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureRegistry.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="configureProjectRegistry" method="put" path="/v1/projects/{idOrName}/project-capabilities/registry" example="projectName" -->
@@ -2720,6 +3548,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureRegistryMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureRegistry.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2737,13 +3582,13 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## configureRemoteSandbox
 
-Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
+Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
 
 ### Example Usage: projectId
 
@@ -2795,6 +3640,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureRemoteSandboxMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureRemoteSandbox.js";
 ```
 ### Example Usage: projectName
 
@@ -2848,6 +3710,23 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsConfigureRemoteSandboxMutation
+} from "@alienplatform/platform-api/react-query/projectsConfigureRemoteSandbox.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -2865,8 +3744,8 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 403, 404            | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 400, 403, 404, 409, 422  | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## ensureSandboxBaseImageRepository
@@ -2924,6 +3803,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsEnsureSandboxBaseImageRepositoryMutation
+} from "@alienplatform/platform-api/react-query/projectsEnsureSandboxBaseImageRepository.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="ensureProjectSandboxBaseImageRepository" method="post" path="/v1/projects/{idOrName}/project-capabilities/remote-sandbox/base-image-repository" example="projectName" -->
@@ -2974,6 +3870,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsEnsureSandboxBaseImageRepositoryMutation
+} from "@alienplatform/platform-api/react-query/projectsEnsureSandboxBaseImageRepository.js";
 ```
 
 ### Parameters
@@ -3052,6 +3965,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetCapabilityOverview,
+  useProjectsGetCapabilityOverviewSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetCapabilityOverview,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetCapabilityOverview,
+  invalidateAllProjectsGetCapabilityOverview,
+} from "@alienplatform/platform-api/react-query/projectsGetCapabilityOverview.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectCapabilityOverview" method="get" path="/v1/projects/{idOrName}/project-capabilities/overview" example="projectName" -->
@@ -3102,6 +4043,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetCapabilityOverview,
+  useProjectsGetCapabilityOverviewSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetCapabilityOverview,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetCapabilityOverview,
+  invalidateAllProjectsGetCapabilityOverview,
+} from "@alienplatform/platform-api/react-query/projectsGetCapabilityOverview.js";
 ```
 
 ### Parameters
@@ -3180,6 +4149,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetRemoteOperatorSummary,
+  useProjectsGetRemoteOperatorSummarySuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetRemoteOperatorSummary,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetRemoteOperatorSummary,
+  invalidateAllProjectsGetRemoteOperatorSummary,
+} from "@alienplatform/platform-api/react-query/projectsGetRemoteOperatorSummary.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getRemoteOperatorProjectSummary" method="get" path="/v1/projects/{idOrName}/remote-operator-summary" example="projectName" -->
@@ -3230,6 +4227,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetRemoteOperatorSummary,
+  useProjectsGetRemoteOperatorSummarySuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetRemoteOperatorSummary,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetRemoteOperatorSummary,
+  invalidateAllProjectsGetRemoteOperatorSummary,
+} from "@alienplatform/platform-api/react-query/projectsGetRemoteOperatorSummary.js";
 ```
 
 ### Parameters
@@ -3310,6 +4335,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsAcceptRemoteOperatorImageMutation
+} from "@alienplatform/platform-api/react-query/projectsAcceptRemoteOperatorImage.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="acceptRemoteOperatorImage" method="post" path="/v1/projects/{idOrName}/remote-operator-summary/installations/{deploymentId}/accept-image" example="projectName" -->
@@ -3362,6 +4404,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsAcceptRemoteOperatorImageMutation
+} from "@alienplatform/platform-api/react-query/projectsAcceptRemoteOperatorImage.js";
 ```
 
 ### Parameters
@@ -3441,6 +4500,23 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsAcceptRemoteOperatorPermissionsMutation
+} from "@alienplatform/platform-api/react-query/projectsAcceptRemoteOperatorPermissions.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="acceptRemoteOperatorPermissions" method="post" path="/v1/projects/{idOrName}/remote-operator-summary/installations/{deploymentId}/accept-permissions" example="projectName" -->
@@ -3493,6 +4569,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useProjectsAcceptRemoteOperatorPermissionsMutation
+} from "@alienplatform/platform-api/react-query/projectsAcceptRemoteOperatorPermissions.js";
 ```
 
 ### Parameters
@@ -3569,6 +4662,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetAiUsage,
+  useProjectsGetAiUsageSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetAiUsage,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetAiUsage,
+  invalidateAllProjectsGetAiUsage,
+} from "@alienplatform/platform-api/react-query/projectsGetAiUsage.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectAiUsage" method="get" path="/v1/projects/{idOrName}/ai-metrics" example="projectName" -->
@@ -3619,6 +4740,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetAiUsage,
+  useProjectsGetAiUsageSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetAiUsage,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetAiUsage,
+  invalidateAllProjectsGetAiUsage,
+} from "@alienplatform/platform-api/react-query/projectsGetAiUsage.js";
 ```
 
 ### Parameters
@@ -3695,6 +4844,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetEncryptionUsage,
+  useProjectsGetEncryptionUsageSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetEncryptionUsage,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetEncryptionUsage,
+  invalidateAllProjectsGetEncryptionUsage,
+} from "@alienplatform/platform-api/react-query/projectsGetEncryptionUsage.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectEncryptionUsage" method="get" path="/v1/projects/{idOrName}/encryption-metrics" example="projectName" -->
@@ -3745,6 +4922,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetEncryptionUsage,
+  useProjectsGetEncryptionUsageSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetEncryptionUsage,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetEncryptionUsage,
+  invalidateAllProjectsGetEncryptionUsage,
+} from "@alienplatform/platform-api/react-query/projectsGetEncryptionUsage.js";
 ```
 
 ### Parameters
@@ -3821,6 +5026,34 @@ async function run() {
 
 run();
 ```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetSandboxMetrics,
+  useProjectsGetSandboxMetricsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetSandboxMetrics,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetSandboxMetrics,
+  invalidateAllProjectsGetSandboxMetrics,
+} from "@alienplatform/platform-api/react-query/projectsGetSandboxMetrics.js";
+```
 ### Example Usage: projectName
 
 <!-- UsageSnippet language="typescript" operationID="getProjectSandboxMetrics" method="get" path="/v1/projects/{idOrName}/sandbox-metrics" example="projectName" -->
@@ -3871,6 +5104,34 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useProjectsGetSandboxMetrics,
+  useProjectsGetSandboxMetricsSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchProjectsGetSandboxMetrics,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateProjectsGetSandboxMetrics,
+  invalidateAllProjectsGetSandboxMetrics,
+} from "@alienplatform/platform-api/react-query/projectsGetSandboxMetrics.js";
 ```
 
 ### Parameters

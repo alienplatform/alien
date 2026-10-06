@@ -27,14 +27,14 @@ export type Subject2 = {
   name?: string | null | undefined;
 };
 
-export type SubjectUnion2 = Subject2 | any;
+export type SubjectUnion2 = Subject2 | string;
 
 export type Event5 = {
   kind: string;
   message: string;
   raw?: any | null | undefined;
   severity: EventSeverity2;
-  subject?: Subject2 | any | null | undefined;
+  subject?: Subject2 | string | null | undefined;
   timestamp: Date;
 };
 
@@ -53,7 +53,7 @@ export type Memory5 = {
   value: number;
 };
 
-export type MemoryUnion5 = Memory5 | any;
+export type MemoryUnion5 = Memory5 | string;
 
 export const GetResourceDeploymentDetailReason12 = {
   Forbidden: "forbidden",
@@ -121,7 +121,7 @@ export type DataLocal3 = {
   events: Array<Event5>;
   image?: string | null | undefined;
   localUrl?: string | null | undefined;
-  memory?: Memory5 | any | null | undefined;
+  memory?: Memory5 | string | null | undefined;
   name?: string | null | undefined;
   portCount: number;
   restartCount?: number | null | undefined;
@@ -146,7 +146,7 @@ export type Cpu4 = {
   value: number;
 };
 
-export type CpuUnion4 = Cpu4 | any;
+export type CpuUnion4 = Cpu4 | string;
 
 export type InvolvedObject3 = {
   apiVersion?: string | null | undefined;
@@ -158,25 +158,25 @@ export type InvolvedObject3 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion3 = InvolvedObject3 | any;
+export type InvolvedObjectUnion3 = InvolvedObject3 | string;
 
 export type SourceEvent3 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = SourceEvent3 | any;
+export type SourceUnion3 = SourceEvent3 | string;
 
 export type Event4 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject3 | any | null | undefined;
+  involvedObject?: InvolvedObject3 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent3 | any | null | undefined;
+  source?: SourceEvent3 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -195,7 +195,7 @@ export type Memory4 = {
   value: number;
 };
 
-export type MemoryUnion4 = Memory4 | any;
+export type MemoryUnion4 = Memory4 | string;
 
 /**
  * Image a running container reports.
@@ -233,7 +233,7 @@ export type CpuPod2 = {
   value: number;
 };
 
-export type PodCpuUnion2 = CpuPod2 | any;
+export type PodCpuUnion2 = CpuPod2 | string;
 
 export const MemoryPodUnit2 = {
   Count: "count",
@@ -250,7 +250,7 @@ export type MemoryPod2 = {
   value: number;
 };
 
-export type PodMemoryUnion2 = MemoryPod2 | any;
+export type PodMemoryUnion2 = MemoryPod2 | string;
 
 export type OwnerReference2 = {
   controller: boolean;
@@ -261,8 +261,8 @@ export type OwnerReference2 = {
 
 export type Pod2 = {
   containers?: Array<Container2> | undefined;
-  cpu?: CpuPod2 | any | null | undefined;
-  memory?: MemoryPod2 | any | null | undefined;
+  cpu?: CpuPod2 | string | null | undefined;
+  memory?: MemoryPod2 | string | null | undefined;
   name: string;
   nodeName?: string | null | undefined;
   ownerReferences: Array<OwnerReference2>;
@@ -361,7 +361,7 @@ export type Workload2 = {
   updatedReplicas?: number | null | undefined;
 };
 
-export type WorkloadUnion2 = Workload2 | any;
+export type WorkloadUnion2 = Workload2 | string;
 
 export const WorkloadKind2 = {
   Deployment: "deployment",
@@ -373,16 +373,16 @@ export const WorkloadKind2 = {
 export type WorkloadKind2 = ClosedEnum<typeof WorkloadKind2>;
 
 export type DataKubernetes2 = {
-  cpu?: Cpu4 | any | null | undefined;
+  cpu?: Cpu4 | string | null | undefined;
   events: Array<Event4>;
-  memory?: Memory4 | any | null | undefined;
+  memory?: Memory4 | string | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod2>;
   replicas: Replicas3;
   restarts?: number | null | undefined;
   status: GetResourceDeploymentDetailDataStatus11;
-  workload?: Workload2 | any | null | undefined;
+  workload?: Workload2 | string | null | undefined;
   workloadKind: WorkloadKind2;
   backend: "kubernetes";
 };
@@ -402,7 +402,7 @@ export type Cpu3 = {
   value: number;
 };
 
-export type CpuUnion3 = Cpu3 | any;
+export type CpuUnion3 = Cpu3 | string;
 
 export type InvolvedObject2 = {
   details?: any | null | undefined;
@@ -413,14 +413,14 @@ export type InvolvedObject2 = {
   replicaId?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion2 = InvolvedObject2 | any;
+export type InvolvedObjectUnion2 = InvolvedObject2 | string;
 
 export type SourceEvent2 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = SourceEvent2 | any;
+export type SourceUnion2 = SourceEvent2 | string;
 
 export type Event3 = {
   count?: number | null | undefined;
@@ -428,12 +428,12 @@ export type Event3 = {
   eventId?: string | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject2 | any | null | undefined;
+  involvedObject?: InvolvedObject2 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent2 | any | null | undefined;
+  source?: SourceEvent2 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -452,7 +452,7 @@ export type Memory3 = {
   value: number;
 };
 
-export type MemoryUnion3 = Memory3 | any;
+export type MemoryUnion3 = Memory3 | string;
 
 export const CpuReplicaUnitUnit = {
   Count: "count",
@@ -469,7 +469,7 @@ export type CpuReplicaUnit = {
   value: number;
 };
 
-export type ReplicaUnitCpuUnion = CpuReplicaUnit | any;
+export type ReplicaUnitCpuUnion = CpuReplicaUnit | string;
 
 export const MemoryReplicaUnitUnit = {
   Count: "count",
@@ -486,13 +486,13 @@ export type MemoryReplicaUnit = {
   value: number;
 };
 
-export type ReplicaUnitMemoryUnion = MemoryReplicaUnit | any;
+export type ReplicaUnitMemoryUnion = MemoryReplicaUnit | string;
 
 export type ReplicaUnit = {
-  cpu?: CpuReplicaUnit | any | null | undefined;
+  cpu?: CpuReplicaUnit | string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryReplicaUnit | any | null | undefined;
+  memory?: MemoryReplicaUnit | string | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -586,11 +586,11 @@ export type GetResourceDeploymentDetailDataStatus10 = {
 export type DataHorizonPlatform = {
   attentionCount: number;
   containerId: string;
-  cpu?: Cpu3 | any | null | undefined;
+  cpu?: Cpu3 | string | null | undefined;
   events: Array<Event3>;
   image?: string | null | undefined;
   latestUpdateTimestamp?: string | null | undefined;
-  memory?: Memory3 | any | null | undefined;
+  memory?: Memory3 | string | null | undefined;
   observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
@@ -621,7 +621,7 @@ export type Cpu2 = {
   value: number;
 };
 
-export type CpuUnion2 = Cpu2 | any;
+export type CpuUnion2 = Cpu2 | string;
 
 export const EventSeverity1 = {
   Info: "info",
@@ -636,14 +636,14 @@ export type Subject1 = {
   name?: string | null | undefined;
 };
 
-export type SubjectUnion1 = Subject1 | any;
+export type SubjectUnion1 = Subject1 | string;
 
 export type Event2 = {
   kind: string;
   message: string;
   raw?: any | null | undefined;
   severity: EventSeverity1;
-  subject?: Subject1 | any | null | undefined;
+  subject?: Subject1 | string | null | undefined;
   timestamp: Date;
 };
 
@@ -662,7 +662,7 @@ export type Memory2 = {
   value: number;
 };
 
-export type MemoryUnion2 = Memory2 | any;
+export type MemoryUnion2 = Memory2 | string;
 
 export const ProcessCpuUnit = {
   Count: "count",
@@ -679,7 +679,7 @@ export type ProcessCpu = {
   value: number;
 };
 
-export type ProcessCpuUnion = ProcessCpu | any;
+export type ProcessCpuUnion = ProcessCpu | string;
 
 export const ProcessKind = {
   Container: "container",
@@ -703,12 +703,12 @@ export type ProcessMemory = {
   value: number;
 };
 
-export type ProcessMemoryUnion = ProcessMemory | any;
+export type ProcessMemoryUnion = ProcessMemory | string;
 
 export type Process = {
-  cpu?: ProcessCpu | any | null | undefined;
+  cpu?: ProcessCpu | string | null | undefined;
   kind: ProcessKind;
-  memory?: ProcessMemory | any | null | undefined;
+  memory?: ProcessMemory | string | null | undefined;
   name: string;
   phase?: string | null | undefined;
   pid?: number | null | undefined;
@@ -717,7 +717,7 @@ export type Process = {
   unitId: string;
 };
 
-export type ProcessUnion = Process | any;
+export type ProcessUnion = Process | string;
 
 export const GetResourceDeploymentDetailReason9 = {
   Forbidden: "forbidden",
@@ -779,12 +779,12 @@ export type GetResourceDeploymentDetailDataStatus9 = {
 
 export type DataLocal2 = {
   commandSupported: boolean;
-  cpu?: Cpu2 | any | null | undefined;
+  cpu?: Cpu2 | string | null | undefined;
   events: Array<Event2>;
   imagePathPresent: boolean;
-  memory?: Memory2 | any | null | undefined;
+  memory?: Memory2 | string | null | undefined;
   pid?: number | null | undefined;
-  process?: Process | any | null | undefined;
+  process?: Process | string | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
   status: GetResourceDeploymentDetailDataStatus9;
   triggerCount: number;
@@ -806,7 +806,7 @@ export type Cpu1 = {
   value: number;
 };
 
-export type CpuUnion1 = Cpu1 | any;
+export type CpuUnion1 = Cpu1 | string;
 
 export type InvolvedObject1 = {
   apiVersion?: string | null | undefined;
@@ -818,25 +818,25 @@ export type InvolvedObject1 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion1 = InvolvedObject1 | any;
+export type InvolvedObjectUnion1 = InvolvedObject1 | string;
 
 export type SourceEvent1 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = SourceEvent1 | any;
+export type SourceUnion1 = SourceEvent1 | string;
 
 export type Event1 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject1 | any | null | undefined;
+  involvedObject?: InvolvedObject1 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent1 | any | null | undefined;
+  source?: SourceEvent1 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -855,7 +855,7 @@ export type Memory1 = {
   value: number;
 };
 
-export type MemoryUnion1 = Memory1 | any;
+export type MemoryUnion1 = Memory1 | string;
 
 /**
  * Image a running container reports.
@@ -893,7 +893,7 @@ export type CpuPod1 = {
   value: number;
 };
 
-export type PodCpuUnion1 = CpuPod1 | any;
+export type PodCpuUnion1 = CpuPod1 | string;
 
 export const MemoryPodUnit1 = {
   Count: "count",
@@ -910,7 +910,7 @@ export type MemoryPod1 = {
   value: number;
 };
 
-export type PodMemoryUnion1 = MemoryPod1 | any;
+export type PodMemoryUnion1 = MemoryPod1 | string;
 
 export type OwnerReference1 = {
   controller: boolean;
@@ -921,8 +921,8 @@ export type OwnerReference1 = {
 
 export type Pod1 = {
   containers?: Array<Container1> | undefined;
-  cpu?: CpuPod1 | any | null | undefined;
-  memory?: MemoryPod1 | any | null | undefined;
+  cpu?: CpuPod1 | string | null | undefined;
+  memory?: MemoryPod1 | string | null | undefined;
   name: string;
   nodeName?: string | null | undefined;
   ownerReferences: Array<OwnerReference1>;
@@ -1021,7 +1021,7 @@ export type Workload1 = {
   updatedReplicas?: number | null | undefined;
 };
 
-export type WorkloadUnion1 = Workload1 | any;
+export type WorkloadUnion1 = Workload1 | string;
 
 export const WorkloadKind1 = {
   Deployment: "deployment",
@@ -1033,9 +1033,9 @@ export const WorkloadKind1 = {
 export type WorkloadKind1 = ClosedEnum<typeof WorkloadKind1>;
 
 export type DataKubernetes1 = {
-  cpu?: Cpu1 | any | null | undefined;
+  cpu?: Cpu1 | string | null | undefined;
   events: Array<Event1>;
-  memory?: Memory1 | any | null | undefined;
+  memory?: Memory1 | string | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod1>;
@@ -1043,7 +1043,7 @@ export type DataKubernetes1 = {
   restarts?: number | null | undefined;
   status: GetResourceDeploymentDetailDataStatus8;
   triggerCount: number;
-  workload?: Workload1 | any | null | undefined;
+  workload?: Workload1 | string | null | undefined;
   workloadKind: WorkloadKind1;
   backend: "kubernetes";
 };
@@ -1248,7 +1248,7 @@ export function subject2FromJSON(
 
 /** @internal */
 export const SubjectUnion2$inboundSchema: z.ZodType<SubjectUnion2, unknown> = z
-  .union([z.lazy(() => Subject2$inboundSchema), z.any()]);
+  .union([z.lazy(() => Subject2$inboundSchema), z.string()]);
 
 export function subjectUnion2FromJSON(
   jsonString: string,
@@ -1266,8 +1266,9 @@ export const Event5$inboundSchema: z.ZodType<Event5, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   severity: EventSeverity2$inboundSchema,
-  subject: z.nullable(z.union([z.lazy(() => Subject2$inboundSchema), z.any()]))
-    .optional(),
+  subject: z.nullable(
+    z.union([z.lazy(() => Subject2$inboundSchema), z.string()]),
+  ).optional(),
   timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
@@ -1304,7 +1305,7 @@ export function memory5FromJSON(
 
 /** @internal */
 export const MemoryUnion5$inboundSchema: z.ZodType<MemoryUnion5, unknown> = z
-  .union([z.lazy(() => Memory5$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory5$inboundSchema), z.string()]);
 
 export function memoryUnion5FromJSON(
   jsonString: string,
@@ -1396,8 +1397,9 @@ export const DataLocal3$inboundSchema: z.ZodType<DataLocal3, unknown> = z
     events: z.array(z.lazy(() => Event5$inboundSchema)),
     image: z.nullable(z.string()).optional(),
     localUrl: z.nullable(z.string()).optional(),
-    memory: z.nullable(z.union([z.lazy(() => Memory5$inboundSchema), z.any()]))
-      .optional(),
+    memory: z.nullable(
+      z.union([z.lazy(() => Memory5$inboundSchema), z.string()]),
+    ).optional(),
     name: z.nullable(z.string()).optional(),
     portCount: z.int(),
     restartCount: z.nullable(z.int()).optional(),
@@ -1441,7 +1443,7 @@ export function cpu4FromJSON(
 /** @internal */
 export const CpuUnion4$inboundSchema: z.ZodType<CpuUnion4, unknown> = z.union([
   z.lazy(() => Cpu4$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion4FromJSON(
@@ -1482,7 +1484,7 @@ export function involvedObject3FromJSON(
 export const InvolvedObjectUnion3$inboundSchema: z.ZodType<
   InvolvedObjectUnion3,
   unknown
-> = z.union([z.lazy(() => InvolvedObject3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject3$inboundSchema), z.string()]);
 
 export function involvedObjectUnion3FromJSON(
   jsonString: string,
@@ -1513,7 +1515,7 @@ export function sourceEvent3FromJSON(
 
 /** @internal */
 export const SourceUnion3$inboundSchema: z.ZodType<SourceUnion3, unknown> = z
-  .union([z.lazy(() => SourceEvent3$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent3$inboundSchema), z.string()]);
 
 export function sourceUnion3FromJSON(
   jsonString: string,
@@ -1535,7 +1537,7 @@ export const Event4$inboundSchema: z.ZodType<Event4, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject3$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -1544,7 +1546,7 @@ export const Event4$inboundSchema: z.ZodType<Event4, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent3$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -1582,7 +1584,7 @@ export function memory4FromJSON(
 
 /** @internal */
 export const MemoryUnion4$inboundSchema: z.ZodType<MemoryUnion4, unknown> = z
-  .union([z.lazy(() => Memory4$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory4$inboundSchema), z.string()]);
 
 export function memoryUnion4FromJSON(
   jsonString: string,
@@ -1635,7 +1637,7 @@ export function cpuPod2FromJSON(
 
 /** @internal */
 export const PodCpuUnion2$inboundSchema: z.ZodType<PodCpuUnion2, unknown> = z
-  .union([z.lazy(() => CpuPod2$inboundSchema), z.any()]);
+  .union([z.lazy(() => CpuPod2$inboundSchema), z.string()]);
 
 export function podCpuUnion2FromJSON(
   jsonString: string,
@@ -1672,7 +1674,7 @@ export function memoryPod2FromJSON(
 export const PodMemoryUnion2$inboundSchema: z.ZodType<
   PodMemoryUnion2,
   unknown
-> = z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryPod2$inboundSchema), z.string()]);
 
 export function podMemoryUnion2FromJSON(
   jsonString: string,
@@ -1708,10 +1710,11 @@ export function ownerReference2FromJSON(
 /** @internal */
 export const Pod2$inboundSchema: z.ZodType<Pod2, unknown> = z.object({
   containers: z.array(z.lazy(() => Container2$inboundSchema)).optional(),
-  cpu: z.nullable(z.union([z.lazy(() => CpuPod2$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod2$inboundSchema), z.string()]))
     .optional(),
-  memory: z.nullable(z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([z.lazy(() => MemoryPod2$inboundSchema), z.string()]),
+  ).optional(),
   name: z.string(),
   nodeName: z.nullable(z.string()).optional(),
   ownerReferences: z.array(z.lazy(() => OwnerReference2$inboundSchema)),
@@ -1872,7 +1875,7 @@ export function workload2FromJSON(
 
 /** @internal */
 export const WorkloadUnion2$inboundSchema: z.ZodType<WorkloadUnion2, unknown> =
-  z.union([z.lazy(() => Workload2$inboundSchema), z.any()]);
+  z.union([z.lazy(() => Workload2$inboundSchema), z.string()]);
 
 export function workloadUnion2FromJSON(
   jsonString: string,
@@ -1893,10 +1896,10 @@ export const DataKubernetes2$inboundSchema: z.ZodType<
   DataKubernetes2,
   unknown
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => Cpu4$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => Cpu4$inboundSchema), z.string()]))
     .optional(),
   events: z.array(z.lazy(() => Event4$inboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory4$inboundSchema), z.any()]))
+  memory: z.nullable(z.union([z.lazy(() => Memory4$inboundSchema), z.string()]))
     .optional(),
   name: z.string(),
   namespace: z.string(),
@@ -1905,7 +1908,7 @@ export const DataKubernetes2$inboundSchema: z.ZodType<
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => GetResourceDeploymentDetailDataStatus11$inboundSchema),
   workload: z.nullable(
-    z.union([z.lazy(() => Workload2$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Workload2$inboundSchema), z.string()]),
   ).optional(),
   workloadKind: WorkloadKind2$inboundSchema,
   backend: z.literal("kubernetes"),
@@ -1945,7 +1948,7 @@ export function cpu3FromJSON(
 /** @internal */
 export const CpuUnion3$inboundSchema: z.ZodType<CpuUnion3, unknown> = z.union([
   z.lazy(() => Cpu3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion3FromJSON(
@@ -1985,7 +1988,7 @@ export function involvedObject2FromJSON(
 export const InvolvedObjectUnion2$inboundSchema: z.ZodType<
   InvolvedObjectUnion2,
   unknown
-> = z.union([z.lazy(() => InvolvedObject2$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject2$inboundSchema), z.string()]);
 
 export function involvedObjectUnion2FromJSON(
   jsonString: string,
@@ -2016,7 +2019,7 @@ export function sourceEvent2FromJSON(
 
 /** @internal */
 export const SourceUnion2$inboundSchema: z.ZodType<SourceUnion2, unknown> = z
-  .union([z.lazy(() => SourceEvent2$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent2$inboundSchema), z.string()]);
 
 export function sourceUnion2FromJSON(
   jsonString: string,
@@ -2040,7 +2043,7 @@ export const Event3$inboundSchema: z.ZodType<Event3, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject2$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject2$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -2049,7 +2052,7 @@ export const Event3$inboundSchema: z.ZodType<Event3, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent2$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent2$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -2087,7 +2090,7 @@ export function memory3FromJSON(
 
 /** @internal */
 export const MemoryUnion3$inboundSchema: z.ZodType<MemoryUnion3, unknown> = z
-  .union([z.lazy(() => Memory3$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory3$inboundSchema), z.string()]);
 
 export function memoryUnion3FromJSON(
   jsonString: string,
@@ -2125,7 +2128,7 @@ export function cpuReplicaUnitFromJSON(
 export const ReplicaUnitCpuUnion$inboundSchema: z.ZodType<
   ReplicaUnitCpuUnion,
   unknown
-> = z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.string()]);
 
 export function replicaUnitCpuUnionFromJSON(
   jsonString: string,
@@ -2165,7 +2168,7 @@ export function memoryReplicaUnitFromJSON(
 export const ReplicaUnitMemoryUnion$inboundSchema: z.ZodType<
   ReplicaUnitMemoryUnion,
   unknown
-> = z.union([z.lazy(() => MemoryReplicaUnit$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryReplicaUnit$inboundSchema), z.string()]);
 
 export function replicaUnitMemoryUnionFromJSON(
   jsonString: string,
@@ -2181,12 +2184,12 @@ export function replicaUnitMemoryUnionFromJSON(
 export const ReplicaUnit$inboundSchema: z.ZodType<ReplicaUnit, unknown> = z
   .object({
     cpu: z.nullable(
-      z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.any()]),
+      z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.string()]),
     ).optional(),
     ip: z.nullable(z.string()).optional(),
     machineId: z.nullable(z.string()).optional(),
     memory: z.nullable(
-      z.union([z.lazy(() => MemoryReplicaUnit$inboundSchema), z.any()]),
+      z.union([z.lazy(() => MemoryReplicaUnit$inboundSchema), z.string()]),
     ).optional(),
     message: z.nullable(z.string()).optional(),
     metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -2315,12 +2318,12 @@ export const DataHorizonPlatform$inboundSchema: z.ZodType<
 > = z.object({
   attentionCount: z.int(),
   containerId: z.string(),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu3$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => Cpu3$inboundSchema), z.string()]))
     .optional(),
   events: z.array(z.lazy(() => Event3$inboundSchema)),
   image: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.nullable(z.string()).optional(),
-  memory: z.nullable(z.union([z.lazy(() => Memory3$inboundSchema), z.any()]))
+  memory: z.nullable(z.union([z.lazy(() => Memory3$inboundSchema), z.string()]))
     .optional(),
   observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$inboundSchema)),
@@ -2404,7 +2407,7 @@ export function cpu2FromJSON(
 /** @internal */
 export const CpuUnion2$inboundSchema: z.ZodType<CpuUnion2, unknown> = z.union([
   z.lazy(() => Cpu2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion2FromJSON(
@@ -2440,7 +2443,7 @@ export function subject1FromJSON(
 
 /** @internal */
 export const SubjectUnion1$inboundSchema: z.ZodType<SubjectUnion1, unknown> = z
-  .union([z.lazy(() => Subject1$inboundSchema), z.any()]);
+  .union([z.lazy(() => Subject1$inboundSchema), z.string()]);
 
 export function subjectUnion1FromJSON(
   jsonString: string,
@@ -2458,8 +2461,9 @@ export const Event2$inboundSchema: z.ZodType<Event2, unknown> = z.object({
   message: z.string(),
   raw: z.nullable(z.any()).optional(),
   severity: EventSeverity1$inboundSchema,
-  subject: z.nullable(z.union([z.lazy(() => Subject1$inboundSchema), z.any()]))
-    .optional(),
+  subject: z.nullable(
+    z.union([z.lazy(() => Subject1$inboundSchema), z.string()]),
+  ).optional(),
   timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
@@ -2496,7 +2500,7 @@ export function memory2FromJSON(
 
 /** @internal */
 export const MemoryUnion2$inboundSchema: z.ZodType<MemoryUnion2, unknown> = z
-  .union([z.lazy(() => Memory2$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory2$inboundSchema), z.string()]);
 
 export function memoryUnion2FromJSON(
   jsonString: string,
@@ -2533,7 +2537,7 @@ export function processCpuFromJSON(
 export const ProcessCpuUnion$inboundSchema: z.ZodType<
   ProcessCpuUnion,
   unknown
-> = z.union([z.lazy(() => ProcessCpu$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => ProcessCpu$inboundSchema), z.string()]);
 
 export function processCpuUnionFromJSON(
   jsonString: string,
@@ -2576,7 +2580,7 @@ export function processMemoryFromJSON(
 export const ProcessMemoryUnion$inboundSchema: z.ZodType<
   ProcessMemoryUnion,
   unknown
-> = z.union([z.lazy(() => ProcessMemory$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => ProcessMemory$inboundSchema), z.string()]);
 
 export function processMemoryUnionFromJSON(
   jsonString: string,
@@ -2590,11 +2594,11 @@ export function processMemoryUnionFromJSON(
 
 /** @internal */
 export const Process$inboundSchema: z.ZodType<Process, unknown> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => ProcessCpu$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => ProcessCpu$inboundSchema), z.string()]))
     .optional(),
   kind: ProcessKind$inboundSchema,
   memory: z.nullable(
-    z.union([z.lazy(() => ProcessMemory$inboundSchema), z.any()]),
+    z.union([z.lazy(() => ProcessMemory$inboundSchema), z.string()]),
   ).optional(),
   name: z.string(),
   phase: z.nullable(z.string()).optional(),
@@ -2616,7 +2620,7 @@ export function processFromJSON(
 
 /** @internal */
 export const ProcessUnion$inboundSchema: z.ZodType<ProcessUnion, unknown> = z
-  .union([z.lazy(() => Process$inboundSchema), z.any()]);
+  .union([z.lazy(() => Process$inboundSchema), z.string()]);
 
 export function processUnionFromJSON(
   jsonString: string,
@@ -2695,15 +2699,17 @@ export function getResourceDeploymentDetailDataStatus9FromJSON(
 export const DataLocal2$inboundSchema: z.ZodType<DataLocal2, unknown> = z
   .object({
     commandSupported: z.boolean(),
-    cpu: z.nullable(z.union([z.lazy(() => Cpu2$inboundSchema), z.any()]))
+    cpu: z.nullable(z.union([z.lazy(() => Cpu2$inboundSchema), z.string()]))
       .optional(),
     events: z.array(z.lazy(() => Event2$inboundSchema)),
     imagePathPresent: z.boolean(),
-    memory: z.nullable(z.union([z.lazy(() => Memory2$inboundSchema), z.any()]))
-      .optional(),
+    memory: z.nullable(
+      z.union([z.lazy(() => Memory2$inboundSchema), z.string()]),
+    ).optional(),
     pid: z.nullable(z.int()).optional(),
-    process: z.nullable(z.union([z.lazy(() => Process$inboundSchema), z.any()]))
-      .optional(),
+    process: z.nullable(
+      z.union([z.lazy(() => Process$inboundSchema), z.string()]),
+    ).optional(),
     readinessProbeOk: z.nullable(z.boolean()).optional(),
     status: z.lazy(() => GetResourceDeploymentDetailDataStatus9$inboundSchema),
     triggerCount: z.int(),
@@ -2744,7 +2750,7 @@ export function cpu1FromJSON(
 /** @internal */
 export const CpuUnion1$inboundSchema: z.ZodType<CpuUnion1, unknown> = z.union([
   z.lazy(() => Cpu1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function cpuUnion1FromJSON(
@@ -2785,7 +2791,7 @@ export function involvedObject1FromJSON(
 export const InvolvedObjectUnion1$inboundSchema: z.ZodType<
   InvolvedObjectUnion1,
   unknown
-> = z.union([z.lazy(() => InvolvedObject1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject1$inboundSchema), z.string()]);
 
 export function involvedObjectUnion1FromJSON(
   jsonString: string,
@@ -2816,7 +2822,7 @@ export function sourceEvent1FromJSON(
 
 /** @internal */
 export const SourceUnion1$inboundSchema: z.ZodType<SourceUnion1, unknown> = z
-  .union([z.lazy(() => SourceEvent1$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent1$inboundSchema), z.string()]);
 
 export function sourceUnion1FromJSON(
   jsonString: string,
@@ -2838,7 +2844,7 @@ export const Event1$inboundSchema: z.ZodType<Event1, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject1$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject1$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -2847,7 +2853,7 @@ export const Event1$inboundSchema: z.ZodType<Event1, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent1$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent1$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -2885,7 +2891,7 @@ export function memory1FromJSON(
 
 /** @internal */
 export const MemoryUnion1$inboundSchema: z.ZodType<MemoryUnion1, unknown> = z
-  .union([z.lazy(() => Memory1$inboundSchema), z.any()]);
+  .union([z.lazy(() => Memory1$inboundSchema), z.string()]);
 
 export function memoryUnion1FromJSON(
   jsonString: string,
@@ -2938,7 +2944,7 @@ export function cpuPod1FromJSON(
 
 /** @internal */
 export const PodCpuUnion1$inboundSchema: z.ZodType<PodCpuUnion1, unknown> = z
-  .union([z.lazy(() => CpuPod1$inboundSchema), z.any()]);
+  .union([z.lazy(() => CpuPod1$inboundSchema), z.string()]);
 
 export function podCpuUnion1FromJSON(
   jsonString: string,
@@ -2975,7 +2981,7 @@ export function memoryPod1FromJSON(
 export const PodMemoryUnion1$inboundSchema: z.ZodType<
   PodMemoryUnion1,
   unknown
-> = z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => MemoryPod1$inboundSchema), z.string()]);
 
 export function podMemoryUnion1FromJSON(
   jsonString: string,
@@ -3011,10 +3017,11 @@ export function ownerReference1FromJSON(
 /** @internal */
 export const Pod1$inboundSchema: z.ZodType<Pod1, unknown> = z.object({
   containers: z.array(z.lazy(() => Container1$inboundSchema)).optional(),
-  cpu: z.nullable(z.union([z.lazy(() => CpuPod1$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod1$inboundSchema), z.string()]))
     .optional(),
-  memory: z.nullable(z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([z.lazy(() => MemoryPod1$inboundSchema), z.string()]),
+  ).optional(),
   name: z.string(),
   nodeName: z.nullable(z.string()).optional(),
   ownerReferences: z.array(z.lazy(() => OwnerReference1$inboundSchema)),
@@ -3168,7 +3175,7 @@ export function workload1FromJSON(
 
 /** @internal */
 export const WorkloadUnion1$inboundSchema: z.ZodType<WorkloadUnion1, unknown> =
-  z.union([z.lazy(() => Workload1$inboundSchema), z.any()]);
+  z.union([z.lazy(() => Workload1$inboundSchema), z.string()]);
 
 export function workloadUnion1FromJSON(
   jsonString: string,
@@ -3189,10 +3196,10 @@ export const DataKubernetes1$inboundSchema: z.ZodType<
   DataKubernetes1,
   unknown
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => Cpu1$inboundSchema), z.any()]))
+  cpu: z.nullable(z.union([z.lazy(() => Cpu1$inboundSchema), z.string()]))
     .optional(),
   events: z.array(z.lazy(() => Event1$inboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory1$inboundSchema), z.any()]))
+  memory: z.nullable(z.union([z.lazy(() => Memory1$inboundSchema), z.string()]))
     .optional(),
   name: z.string(),
   namespace: z.string(),
@@ -3202,7 +3209,7 @@ export const DataKubernetes1$inboundSchema: z.ZodType<
   status: z.lazy(() => GetResourceDeploymentDetailDataStatus8$inboundSchema),
   triggerCount: z.int(),
   workload: z.nullable(
-    z.union([z.lazy(() => Workload1$inboundSchema), z.any()]),
+    z.union([z.lazy(() => Workload1$inboundSchema), z.string()]),
   ).optional(),
   workloadKind: WorkloadKind1$inboundSchema,
   backend: z.literal("kubernetes"),

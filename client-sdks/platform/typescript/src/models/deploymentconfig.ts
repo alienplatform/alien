@@ -7,88 +7,570 @@ import { remap as remap$ } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
-import {
-  DeploymentConfigBasePlatformUnion,
-  DeploymentConfigBasePlatformUnion$inboundSchema,
-  DeploymentConfigComputeBackendUnion,
-  DeploymentConfigComputeBackendUnion$inboundSchema,
-  DeploymentConfigDomainMetadataUnion,
-  DeploymentConfigDomainMetadataUnion$inboundSchema,
-  DeploymentConfigEnvironmentVariables,
-  DeploymentConfigEnvironmentVariables$inboundSchema,
-  DeploymentConfigExternalBindingsAi,
-  DeploymentConfigExternalBindingsAi$inboundSchema,
-  DeploymentConfigExternalBindingsContainerAppsEnvironment,
-  DeploymentConfigExternalBindingsContainerAppsEnvironment$inboundSchema,
-  DeploymentConfigExternalBindingsUnion6,
-  DeploymentConfigExternalBindingsUnion6$inboundSchema,
-} from "./deploymentconfigexternalbindingskubernetessecret.js";
-import {
-  DeploymentConfigBucketNameUnion1,
-  DeploymentConfigBucketNameUnion1$inboundSchema,
-  DeploymentConfigExternalBindingsBlob,
-  DeploymentConfigExternalBindingsBlob$inboundSchema,
-  DeploymentConfigExternalBindingsGcs,
-  DeploymentConfigExternalBindingsGcs$inboundSchema,
-  DeploymentConfigExternalBindingsLocalStorage,
-  DeploymentConfigExternalBindingsLocalStorage$inboundSchema,
-  DeploymentConfigExternalBindingsUnion2,
-  DeploymentConfigExternalBindingsUnion2$inboundSchema,
-  DeploymentConfigExternalBindingsUnion3,
-  DeploymentConfigExternalBindingsUnion3$inboundSchema,
-  DeploymentConfigExternalBindingsUnion4,
-  DeploymentConfigExternalBindingsUnion4$inboundSchema,
-  DeploymentConfigExternalBindingsUnion5,
-  DeploymentConfigExternalBindingsUnion5$inboundSchema,
-  DeploymentConfigTypeStorage1,
-  DeploymentConfigTypeStorage1$inboundSchema,
-} from "./deploymentconfigtypestorage1.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+} from "./externalbindingunion.js";
 
 /**
- * AWS S3 storage binding configuration
+ * Represents the target cloud platform.
  */
-export type DeploymentConfigExternalBindingsS3 = {
-  /**
-   * Represents a value that can be either a concrete value, a template expression,
-   *
-   * @remarks
-   * or a reference to a Kubernetes Secret
-   */
-  bucketName?: DeploymentConfigBucketNameUnion1 | null | undefined;
-  service: "s3";
-  type: DeploymentConfigTypeStorage1;
-};
-
+export const DeploymentConfigBasePlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
 /**
- * Service-type based storage binding that supports multiple storage providers
+ * Represents the target cloud platform.
  */
-export type DeploymentConfigExternalBindingsUnion1 =
-  | DeploymentConfigExternalBindingsS3
-  | DeploymentConfigExternalBindingsBlob
-  | DeploymentConfigExternalBindingsGcs
-  | DeploymentConfigExternalBindingsLocalStorage;
+export type DeploymentConfigBasePlatformEnum = ClosedEnum<
+  typeof DeploymentConfigBasePlatformEnum
+>;
+
+export type DeploymentConfigBasePlatformUnion =
+  | DeploymentConfigBasePlatformEnum
+  | string;
 
 /**
- * Represents a binding to pre-existing infrastructure.
+ * Configuration for a single container worker cluster.
  *
  * @remarks
  *
- * The binding type must match the resource type it's applied to.
- * Validated at runtime by the executor.
+ * Contains the cluster ID and management token needed to interact with
+ * the managed container control plane API for container operations.
  */
-export type DeploymentConfigExternalBindingsUnion7 =
-  | DeploymentConfigExternalBindingsAi
-  | DeploymentConfigExternalBindingsContainerAppsEnvironment
-  | DeploymentConfigExternalBindingsS3
-  | DeploymentConfigExternalBindingsBlob
-  | DeploymentConfigExternalBindingsGcs
-  | DeploymentConfigExternalBindingsLocalStorage
-  | DeploymentConfigExternalBindingsUnion2
-  | DeploymentConfigExternalBindingsUnion3
-  | DeploymentConfigExternalBindingsUnion4
-  | DeploymentConfigExternalBindingsUnion5
-  | DeploymentConfigExternalBindingsUnion6;
+export type DeploymentConfigClusters = {
+  /**
+   * Cluster ID (deterministic: workspace/project/deployment/resourceid)
+   */
+  clusterId: string;
+  /**
+   * Management token for API access (hm_...)
+   *
+   * @remarks
+   * Used by alien-deployment controllers to create/update containers
+   */
+  managementToken: string;
+};
+
+/**
+ * AWS Horizon machine image catalog.
+ */
+export type DeploymentConfigHorizonMachineImageAws = {
+  /**
+   * AMI IDs by architecture, then AWS region.
+   */
+  amis: { [k: string]: { [k: string]: string } };
+};
+
+export type DeploymentConfigHorizonMachineImageAwsUnion =
+  | DeploymentConfigHorizonMachineImageAws
+  | string;
+
+/**
+ * Azure Horizon machine image entry.
+ */
+export type DeploymentConfigAzureImages = {
+  /**
+   * Azure Compute Gallery image version ID.
+   */
+  imageVersionId: string;
+};
+
+/**
+ * Azure Horizon machine image catalog.
+ */
+export type DeploymentConfigHorizonMachineImageAzure = {
+  /**
+   * Images by architecture.
+   */
+  images: { [k: string]: DeploymentConfigAzureImages };
+};
+
+export type DeploymentConfigHorizonMachineImageAzureUnion =
+  | DeploymentConfigHorizonMachineImageAzure
+  | string;
+
+/**
+ * Base image metadata for the Horizon machine image.
+ */
+export type DeploymentConfigBaseImage = {
+  /**
+   * Base OS image name.
+   */
+  name: string;
+  /**
+   * Base OS image version or channel.
+   */
+  version: string;
+};
+
+/**
+ * GCP Horizon machine image entry.
+ */
+export type DeploymentConfigGcpImages = {
+  /**
+   * Source image self link or image-family URL.
+   */
+  sourceImage: string;
+};
+
+/**
+ * GCP Horizon machine image catalog.
+ */
+export type DeploymentConfigHorizonMachineImageGcp = {
+  /**
+   * Images by architecture.
+   */
+  images: { [k: string]: DeploymentConfigGcpImages };
+};
+
+export type DeploymentConfigHorizonMachineImageGcpUnion =
+  | DeploymentConfigHorizonMachineImageGcp
+  | string;
+
+/**
+ * Download artifact for one horizond release platform.
+ */
+export type DeploymentConfigHorizondArtifacts = {
+  /**
+   * Runtime isolation capability generation of the immutable artifact, not live readiness.
+   */
+  runtimeIsolationGeneration?: number | undefined;
+  /**
+   * SHA-256 digest for the artifact payload.
+   */
+  sha256: string;
+  /**
+   * HTTPS URL for the artifact.
+   */
+  url: string;
+};
+
+/**
+ * Horizon machine image catalog.
+ *
+ * @remarks
+ *
+ * Platform resolves concrete provider images from this catalog during rollout.
+ */
+export type DeploymentConfigHorizonMachineImage = {
+  aws?: DeploymentConfigHorizonMachineImageAws | string | null | undefined;
+  azure?: DeploymentConfigHorizonMachineImageAzure | string | null | undefined;
+  /**
+   * Base image metadata for the Horizon machine image.
+   */
+  baseImage: DeploymentConfigBaseImage;
+  /**
+   * Logical image channel, such as prod, staging, or canary.
+   */
+  channel: string;
+  /**
+   * Image manifest creation timestamp.
+   */
+  createdAt: string;
+  gcp?: DeploymentConfigHorizonMachineImageGcp | string | null | undefined;
+  /**
+   * Git commit SHA used to build the image.
+   */
+  gitSha: string;
+  /**
+   * Per-architecture horizond artifacts by release-platform key.
+   */
+  horizondArtifacts: { [k: string]: DeploymentConfigHorizondArtifacts };
+  /**
+   * horizond daemon version baked into the image.
+   */
+  horizondVersion: string;
+  /**
+   * Published immutable machine image version.
+   */
+  machineImageVersion: string;
+  /**
+   * Runtime isolation capability generation of the immutable artifact, not live readiness.
+   */
+  runtimeIsolationGeneration?: number | undefined;
+};
+
+export type DeploymentConfigHorizonMachineImageUnion =
+  | DeploymentConfigHorizonMachineImage
+  | string;
+
+export const DeploymentConfigComputeBackendType = {
+  Horizon: "horizon",
+} as const;
+export type DeploymentConfigComputeBackendType = ClosedEnum<
+  typeof DeploymentConfigComputeBackendType
+>;
+
+/**
+ * Compute backend for Container and Worker resources.
+ *
+ * @remarks
+ *
+ * Determines how compute workloads are orchestrated on cloud platforms.
+ * When None, the platform default is used for cloud platforms.
+ */
+export type DeploymentConfigComputeBackendHorizon = {
+  /**
+   * Cluster configurations (one per ComputeCluster resource)
+   *
+   * @remarks
+   * Key: ComputeCluster resource ID from stack
+   * Value: Cluster ID and management token for that cluster
+   */
+  clusters: { [k: string]: DeploymentConfigClusters };
+  horizonMachineImage?:
+    | DeploymentConfigHorizonMachineImage
+    | string
+    | null
+    | undefined;
+  /**
+   * Horizon control-plane API base URL.
+   */
+  url: string;
+  type: DeploymentConfigComputeBackendType;
+};
+
+export type DeploymentConfigComputeBackendUnion =
+  | DeploymentConfigComputeBackendHorizon
+  | string;
+
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export const DeploymentConfigAliasCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type DeploymentConfigAliasCertificateStatus = ClosedEnum<
+  typeof DeploymentConfigAliasCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const DeploymentConfigAliasDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type DeploymentConfigAliasDnsStatus = ClosedEnum<
+  typeof DeploymentConfigAliasDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type DeploymentConfigAlias = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: DeploymentConfigAliasCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: DeploymentConfigAliasDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export const DeploymentConfigCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type DeploymentConfigCertificateStatus = ClosedEnum<
+  typeof DeploymentConfigCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const DeploymentConfigDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type DeploymentConfigDnsStatus = ClosedEnum<
+  typeof DeploymentConfigDnsStatus
+>;
+
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export const DeploymentConfigEndpointsCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type DeploymentConfigEndpointsCertificateStatus = ClosedEnum<
+  typeof DeploymentConfigEndpointsCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const DeploymentConfigEndpointsDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type DeploymentConfigEndpointsDnsStatus = ClosedEnum<
+  typeof DeploymentConfigEndpointsDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type DeploymentConfigEndpoints = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: DeploymentConfigEndpointsCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: DeploymentConfigEndpointsDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
+ * Certificate and DNS metadata for a public resource.
+ *
+ * @remarks
+ *
+ * The direct fields describe the primary endpoint hostname. `endpoints`
+ * contains endpoint-scoped metadata keyed by endpoint name. `aliases` contains
+ * additional managed hostnames that route directly to the primary endpoint.
+ */
+export type DeploymentConfigResources = {
+  /**
+   * Additional managed hostnames for the resource.
+   */
+  aliases?: Array<DeploymentConfigAlias> | undefined;
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: DeploymentConfigCertificateStatus;
+  /**
+   * Last DNS error message.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: DeploymentConfigDnsStatus;
+  /**
+   * Endpoint-scoped metadata keyed by endpoint name.
+   */
+  endpoints?: { [k: string]: DeploymentConfigEndpoints } | undefined;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
+ * Domain metadata for auto-managed public resources (no private keys).
+ */
+export type DeploymentConfigDomainMetadata = {
+  /**
+   * Base domain for auto-generated domains (e.g., "vpc.direct").
+   */
+  baseDomain: string;
+  /**
+   * Hosted zone ID for DNS records.
+   */
+  hostedZoneId: string;
+  /**
+   * Deployment public subdomain (e.g., "k8f2j3").
+   */
+  publicSubdomain: string;
+  /**
+   * Metadata per resource ID.
+   */
+  resources: { [k: string]: DeploymentConfigResources };
+};
+
+export type DeploymentConfigDomainMetadataUnion =
+  | DeploymentConfigDomainMetadata
+  | string;
+
+/**
+ * Type of environment variable
+ */
+export const DeploymentConfigEnvironmentVariablesType = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Type of environment variable
+ */
+export type DeploymentConfigEnvironmentVariablesType = ClosedEnum<
+  typeof DeploymentConfigEnvironmentVariablesType
+>;
+
+/**
+ * Environment variable for deployment
+ */
+export type DeploymentConfigVariable = {
+  /**
+   * Variable name
+   */
+  name: string;
+  /**
+   * Target resource patterns (null = all resources, Some = wildcard patterns)
+   */
+  targetResources?: Array<string> | null | undefined;
+  /**
+   * Type of environment variable
+   */
+  type: DeploymentConfigEnvironmentVariablesType;
+  /**
+   * Variable value (decrypted - deployment has access to decryption keys)
+   */
+  value: string;
+};
+
+/**
+ * Snapshot of environment variables at a point in time
+ */
+export type DeploymentConfigEnvironmentVariables = {
+  /**
+   * ISO 8601 timestamp when snapshot was created
+   */
+  createdAt: string;
+  /**
+   * Deterministic hash of all variables (for change detection)
+   */
+  hash: string;
+  /**
+   * Environment variables in the snapshot
+   */
+  variables: Array<DeploymentConfigVariable>;
+};
 
 export const DeploymentConfigPlatformKubernetes = {
   Kubernetes: "kubernetes",
@@ -168,7 +650,7 @@ export type DeploymentConfigManagementConfigUnion =
   | DeploymentConfigManagementConfigAws
   | DeploymentConfigManagementConfigGcp
   | DeploymentConfigManagementConfigKubernetes
-  | any;
+  | string;
 
 /**
  * OTLP log export configuration for a deployment.
@@ -230,7 +712,9 @@ export type DeploymentConfigMonitoring = {
   resourceAttributes?: { [k: string]: string } | undefined;
 };
 
-export type DeploymentConfigMonitoringUnion = DeploymentConfigMonitoring | any;
+export type DeploymentConfigMonitoringUnion =
+  | DeploymentConfigMonitoring
+  | string;
 
 /**
  * Failure-domain policy selected for a compute pool.
@@ -251,10 +735,10 @@ export type DeploymentConfigFailureDomains2 = {
 
 export type DeploymentConfigFailureDomainsUnion2 =
   | DeploymentConfigFailureDomains2
-  | any;
+  | string;
 
 export type DeploymentConfigPoolsAutoscale = {
-  failureDomains?: DeploymentConfigFailureDomains2 | any | null | undefined;
+  failureDomains?: DeploymentConfigFailureDomains2 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -289,10 +773,10 @@ export type DeploymentConfigFailureDomains1 = {
 
 export type DeploymentConfigFailureDomainsUnion1 =
   | DeploymentConfigFailureDomains1
-  | any;
+  | string;
 
 export type DeploymentConfigPoolsFixed = {
-  failureDomains?: DeploymentConfigFailureDomains1 | any | null | undefined;
+  failureDomains?: DeploymentConfigFailureDomains1 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -329,7 +813,7 @@ export type DeploymentConfigCompute = {
   } | undefined;
 };
 
-export type DeploymentConfigComputeUnion = DeploymentConfigCompute | any;
+export type DeploymentConfigComputeUnion = DeploymentConfigCompute | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -351,7 +835,7 @@ export type DeploymentConfigAwsStackSettings = {
 
 export type DeploymentConfigStackSettingsAwsUnion =
   | DeploymentConfigAwsStackSettings
-  | any;
+  | string;
 
 export type DeploymentConfigAzureStackSettings = {
   keyVaultCertificateId: string;
@@ -360,7 +844,7 @@ export type DeploymentConfigAzureStackSettings = {
 
 export type DeploymentConfigStackSettingsAzureUnion =
   | DeploymentConfigAzureStackSettings
-  | any;
+  | string;
 
 export type DeploymentConfigGcpStackSettings = {
   certificateName: string;
@@ -368,7 +852,7 @@ export type DeploymentConfigGcpStackSettings = {
 
 export type DeploymentConfigStackSettingsGcpUnion =
   | DeploymentConfigGcpStackSettings
-  | any;
+  | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -393,16 +877,16 @@ export type DeploymentConfigDomainsKubernetes = {
 
 export type DeploymentConfigDomainsKubernetesUnion =
   | DeploymentConfigDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type DeploymentConfigDomainsCertificate = {
-  aws?: DeploymentConfigAwsStackSettings | any | null | undefined;
-  azure?: DeploymentConfigAzureStackSettings | any | null | undefined;
-  gcp?: DeploymentConfigGcpStackSettings | any | null | undefined;
-  kubernetes?: DeploymentConfigDomainsKubernetes | any | null | undefined;
+  aws?: DeploymentConfigAwsStackSettings | string | null | undefined;
+  azure?: DeploymentConfigAzureStackSettings | string | null | undefined;
+  gcp?: DeploymentConfigGcpStackSettings | string | null | undefined;
+  kubernetes?: DeploymentConfigDomainsKubernetes | string | null | undefined;
 };
 
 /**
@@ -448,7 +932,7 @@ export type DeploymentConfigPublicEndpointTargetMachineAddresses = {
 export type DeploymentConfigPublicEndpointTargetUnion =
   | DeploymentConfigPublicEndpointTargetLoadBalancer
   | DeploymentConfigPublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -469,22 +953,26 @@ export type DeploymentConfigDomains = {
   publicEndpointTarget?:
     | DeploymentConfigPublicEndpointTargetLoadBalancer
     | DeploymentConfigPublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type DeploymentConfigDomainsUnion = DeploymentConfigDomains | any;
+export type DeploymentConfigDomainsUnion = DeploymentConfigDomains | string;
 
 /**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
+ * Reachability of the deployment's public endpoints, fixed at setup.
  */
-export type DeploymentConfigStackSettingsExternalBindings = {};
+export const DeploymentConfigEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type DeploymentConfigEndpointAccess = ClosedEnum<
+  typeof DeploymentConfigEndpointAccess
+>;
 
 /**
  * How heartbeat health checks are handled.
@@ -513,7 +1001,7 @@ export type DeploymentConfigCloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type DeploymentConfigCloudUnion = DeploymentConfigCloud | any;
+export type DeploymentConfigCloudUnion = DeploymentConfigCloud | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -534,7 +1022,7 @@ export type DeploymentConfigOwnership = ClosedEnum<
  * Kubernetes cluster setup settings.
  */
 export type DeploymentConfigCluster = {
-  cloud?: DeploymentConfigCloud | any | null | undefined;
+  cloud?: DeploymentConfigCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -545,7 +1033,7 @@ export type DeploymentConfigCluster = {
   ownership: DeploymentConfigOwnership;
 };
 
-export type DeploymentConfigClusterUnion = DeploymentConfigCluster | any;
+export type DeploymentConfigClusterUnion = DeploymentConfigCluster | string;
 
 export type DeploymentConfigCertificateNone2 = {
   mode: "none";
@@ -683,7 +1171,7 @@ export type DeploymentConfigProviderUnion4 =
   | DeploymentConfigProviderAwsAlb4
   | DeploymentConfigProviderAzureApplicationGatewayForContainers4
   | DeploymentConfigProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -713,7 +1201,7 @@ export type DeploymentConfigRouteGateway2 = {
     | DeploymentConfigProviderAwsAlb4
     | DeploymentConfigProviderAzureApplicationGatewayForContainers4
     | DeploymentConfigProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -791,7 +1279,7 @@ export type DeploymentConfigProviderUnion3 =
   | DeploymentConfigProviderAwsAlb3
   | DeploymentConfigProviderAzureApplicationGatewayForContainers3
   | DeploymentConfigProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -817,7 +1305,7 @@ export type DeploymentConfigRouteIngress2 = {
     | DeploymentConfigProviderAwsAlb3
     | DeploymentConfigProviderAzureApplicationGatewayForContainers3
     | DeploymentConfigProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -987,7 +1475,7 @@ export type DeploymentConfigProviderUnion2 =
   | DeploymentConfigProviderAwsAlb2
   | DeploymentConfigProviderAzureApplicationGatewayForContainers2
   | DeploymentConfigProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -1017,7 +1505,7 @@ export type DeploymentConfigRouteGateway1 = {
     | DeploymentConfigProviderAwsAlb2
     | DeploymentConfigProviderAzureApplicationGatewayForContainers2
     | DeploymentConfigProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -1095,7 +1583,7 @@ export type DeploymentConfigProviderUnion1 =
   | DeploymentConfigProviderAwsAlb1
   | DeploymentConfigProviderAzureApplicationGatewayForContainers1
   | DeploymentConfigProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -1121,7 +1609,7 @@ export type DeploymentConfigRouteIngress1 = {
     | DeploymentConfigProviderAwsAlb1
     | DeploymentConfigProviderAzureApplicationGatewayForContainers1
     | DeploymentConfigProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -1166,7 +1654,7 @@ export type DeploymentConfigExposureUnion =
   | DeploymentConfigExposureCustom
   | DeploymentConfigExposureGenerated
   | DeploymentConfigExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -1179,17 +1667,19 @@ export type DeploymentConfigExposureUnion =
  * cluster.
  */
 export type DeploymentConfigKubernetes = {
-  cluster?: DeploymentConfigCluster | any | null | undefined;
+  cluster?: DeploymentConfigCluster | string | null | undefined;
   exposure?:
     | DeploymentConfigExposureCustom
     | DeploymentConfigExposureGenerated
     | DeploymentConfigExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type DeploymentConfigKubernetesUnion = DeploymentConfigKubernetes | any;
+export type DeploymentConfigKubernetesUnion =
+  | DeploymentConfigKubernetes
+  | string;
 
 export const DeploymentConfigTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1317,7 +1807,7 @@ export type DeploymentConfigNetworkUnion =
   | DeploymentConfigNetworkByoVnetAzure
   | DeploymentConfigNetworkUseDefault
   | DeploymentConfigNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1361,36 +1851,29 @@ export type DeploymentConfigUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type DeploymentConfigStackSettings = {
-  compute?: DeploymentConfigCompute | any | null | undefined;
+  compute?: DeploymentConfigCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: DeploymentConfigDeploymentModel | undefined;
-  domains?: DeploymentConfigDomains | any | null | undefined;
+  domains?: DeploymentConfigDomains | string | null | undefined;
   /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
+   * Reachability of the deployment's public endpoints, fixed at setup.
    */
-  externalBindings?:
-    | DeploymentConfigStackSettingsExternalBindings
-    | null
-    | undefined;
+  endpointAccess?: DeploymentConfigEndpointAccess | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: DeploymentConfigHeartbeats | undefined;
-  kubernetes?: DeploymentConfigKubernetes | any | null | undefined;
+  kubernetes?: DeploymentConfigKubernetes | string | null | undefined;
   network?:
     | DeploymentConfigNetworkByoVpcAws
     | DeploymentConfigNetworkByoVpcGcp
     | DeploymentConfigNetworkByoVnetAzure
     | DeploymentConfigNetworkUseDefault
     | DeploymentConfigNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1414,6 +1897,37 @@ export type DeploymentConfigStackSettings = {
 };
 
 /**
+ * Replace one replica's persistent volume with a new volume made from a snapshot.
+ *
+ * @remarks
+ *
+ * The controller stops the replica, snapshots the volume it is about to
+ * replace (so the restore can be undone), creates the new volume in the same
+ * zone, starts the replica on it, and deletes the replaced volume.
+ */
+export type DeploymentConfigVolumeRestore = {
+  /**
+   * Replica ordinal whose volume is replaced
+   */
+  ordinal: number;
+  /**
+   * Unique ID of this request. A controller performs each request once.
+   */
+  requestId: string;
+  /**
+   * ID of the container resource that owns the volume
+   */
+  resourceId: string;
+  /**
+   * Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
+   *
+   * @remarks
+   * Engine snapshot name, or an Azure snapshot resource ID
+   */
+  snapshotId: string;
+};
+
+/**
  * Deployment configuration
  */
 export type DeploymentConfig = {
@@ -1425,8 +1939,12 @@ export type DeploymentConfig = {
    * This requires running with elevated cloud credentials.
    */
   allowFrozenChanges?: boolean | undefined;
-  basePlatform?: DeploymentConfigBasePlatformUnion | null | undefined;
-  computeBackend?: DeploymentConfigComputeBackendUnion | null | undefined;
+  basePlatform?: DeploymentConfigBasePlatformEnum | string | null | undefined;
+  computeBackend?:
+    | DeploymentConfigComputeBackendHorizon
+    | string
+    | null
+    | undefined;
   /**
    * Human-readable deployment name for cloud console metadata.
    *
@@ -1446,7 +1964,7 @@ export type DeploymentConfig = {
    * and K8s can pull images from the manager's `/v2/` endpoint.
    */
   deploymentToken?: string | null | undefined;
-  domainMetadata?: DeploymentConfigDomainMetadataUnion | null | undefined;
+  domainMetadata?: DeploymentConfigDomainMetadata | string | null | undefined;
   /**
    * Snapshot of environment variables at a point in time
    */
@@ -1458,20 +1976,7 @@ export type DeploymentConfig = {
    *
    * Validated at runtime: binding type must match resource type.
    */
-  externalBindings?: {
-    [k: string]:
-      | DeploymentConfigExternalBindingsAi
-      | DeploymentConfigExternalBindingsContainerAppsEnvironment
-      | DeploymentConfigExternalBindingsS3
-      | DeploymentConfigExternalBindingsBlob
-      | DeploymentConfigExternalBindingsGcs
-      | DeploymentConfigExternalBindingsLocalStorage
-      | DeploymentConfigExternalBindingsUnion2
-      | DeploymentConfigExternalBindingsUnion3
-      | DeploymentConfigExternalBindingsUnion4
-      | DeploymentConfigExternalBindingsUnion5
-      | DeploymentConfigExternalBindingsUnion6;
-  } | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | undefined;
   /**
    * Deployer-provided stack input values, keyed by input id. A resource
    *
@@ -1497,7 +2002,7 @@ export type DeploymentConfig = {
     | DeploymentConfigManagementConfigAws
     | DeploymentConfigManagementConfigGcp
     | DeploymentConfigManagementConfigKubernetes
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1512,7 +2017,7 @@ export type DeploymentConfig = {
    * When None (e.g., `alien dev`), controllers use image URIs as-is.
    */
   managerUrl?: string | null | undefined;
-  monitoring?: DeploymentConfigMonitoring | any | null | undefined;
+  monitoring?: DeploymentConfigMonitoring | string | null | undefined;
   /**
    * Native image registry host+prefix for platforms that require it.
    *
@@ -1575,80 +2080,605 @@ export type DeploymentConfig = {
    * is platform-derived (from the Manager's ServiceAccount).
    */
   stackSettings?: DeploymentConfigStackSettings | undefined;
+  /**
+   * IDs of applicable secret inputs stored for this exact deployment target.
+   *
+   * @remarks
+   * Trusted presence metadata only: never values, gate answers, or authority.
+   * Absent on legacy targets; an explicit empty list means no stored secrets.
+   */
+  storedSecretInputIds?: Array<string> | undefined;
+  /**
+   * Operator requests to replace a replica's persistent volume with a new
+   *
+   * @remarks
+   * volume made from a snapshot. A container controller performs each
+   * request once, identified by its `request_id`, and reports it in
+   * `ContainerOutputs.volumes`. Only a volume that a controller reports in
+   * `ContainerOutputs.volumes` can be the target of a request.
+   */
+  volumeRestores?: Array<DeploymentConfigVolumeRestore> | undefined;
 };
 
 /** @internal */
-export const DeploymentConfigExternalBindingsS3$inboundSchema: z.ZodType<
-  DeploymentConfigExternalBindingsS3,
+export const DeploymentConfigBasePlatformEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigBasePlatformEnum
+> = z.enum(DeploymentConfigBasePlatformEnum);
+
+/** @internal */
+export const DeploymentConfigBasePlatformUnion$inboundSchema: z.ZodType<
+  DeploymentConfigBasePlatformUnion,
+  unknown
+> = z.union([DeploymentConfigBasePlatformEnum$inboundSchema, z.string()]);
+
+export function deploymentConfigBasePlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigBasePlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigBasePlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigBasePlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigClusters$inboundSchema: z.ZodType<
+  DeploymentConfigClusters,
   unknown
 > = z.object({
-  bucketName: z.nullable(DeploymentConfigBucketNameUnion1$inboundSchema)
-    .optional(),
-  service: z.literal("s3"),
-  type: DeploymentConfigTypeStorage1$inboundSchema,
+  clusterId: z.string(),
+  managementToken: z.string(),
 });
 
-export function deploymentConfigExternalBindingsS3FromJSON(
+export function deploymentConfigClustersFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentConfigExternalBindingsS3, SDKValidationError> {
+): SafeParseResult<DeploymentConfigClusters, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      DeploymentConfigExternalBindingsS3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentConfigExternalBindingsS3' from JSON`,
+    (x) => DeploymentConfigClusters$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigClusters' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentConfigExternalBindingsUnion1$inboundSchema: z.ZodType<
-  DeploymentConfigExternalBindingsUnion1,
+export const DeploymentConfigHorizonMachineImageAws$inboundSchema: z.ZodType<
+  DeploymentConfigHorizonMachineImageAws,
   unknown
-> = z.union([
-  z.lazy(() => DeploymentConfigExternalBindingsS3$inboundSchema),
-  DeploymentConfigExternalBindingsBlob$inboundSchema,
-  DeploymentConfigExternalBindingsGcs$inboundSchema,
-  DeploymentConfigExternalBindingsLocalStorage$inboundSchema,
-]);
+> = z.object({
+  amis: z.record(z.string(), z.record(z.string(), z.string())),
+});
 
-export function deploymentConfigExternalBindingsUnion1FromJSON(
+export function deploymentConfigHorizonMachineImageAwsFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentConfigExternalBindingsUnion1, SDKValidationError> {
+): SafeParseResult<DeploymentConfigHorizonMachineImageAws, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentConfigExternalBindingsUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentConfigExternalBindingsUnion1' from JSON`,
+      DeploymentConfigHorizonMachineImageAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageAws' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentConfigExternalBindingsUnion7$inboundSchema: z.ZodType<
-  DeploymentConfigExternalBindingsUnion7,
-  unknown
-> = z.union([
-  DeploymentConfigExternalBindingsAi$inboundSchema,
-  DeploymentConfigExternalBindingsContainerAppsEnvironment$inboundSchema,
-  z.union([
-    z.lazy(() => DeploymentConfigExternalBindingsS3$inboundSchema),
-    DeploymentConfigExternalBindingsBlob$inboundSchema,
-    DeploymentConfigExternalBindingsGcs$inboundSchema,
-    DeploymentConfigExternalBindingsLocalStorage$inboundSchema,
-  ]),
-  DeploymentConfigExternalBindingsUnion2$inboundSchema,
-  DeploymentConfigExternalBindingsUnion3$inboundSchema,
-  DeploymentConfigExternalBindingsUnion4$inboundSchema,
-  DeploymentConfigExternalBindingsUnion5$inboundSchema,
-  DeploymentConfigExternalBindingsUnion6$inboundSchema,
-]);
+export const DeploymentConfigHorizonMachineImageAwsUnion$inboundSchema:
+  z.ZodType<DeploymentConfigHorizonMachineImageAwsUnion, unknown> = z.union([
+    z.lazy(() => DeploymentConfigHorizonMachineImageAws$inboundSchema),
+    z.string(),
+  ]);
 
-export function deploymentConfigExternalBindingsUnion7FromJSON(
+export function deploymentConfigHorizonMachineImageAwsUnionFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentConfigExternalBindingsUnion7, SDKValidationError> {
+): SafeParseResult<
+  DeploymentConfigHorizonMachineImageAwsUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentConfigExternalBindingsUnion7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentConfigExternalBindingsUnion7' from JSON`,
+      DeploymentConfigHorizonMachineImageAwsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageAwsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigAzureImages$inboundSchema: z.ZodType<
+  DeploymentConfigAzureImages,
+  unknown
+> = z.object({
+  imageVersionId: z.string(),
+});
+
+export function deploymentConfigAzureImagesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigAzureImages, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigAzureImages$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigAzureImages' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizonMachineImageAzure$inboundSchema: z.ZodType<
+  DeploymentConfigHorizonMachineImageAzure,
+  unknown
+> = z.object({
+  images: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigAzureImages$inboundSchema),
+  ),
+});
+
+export function deploymentConfigHorizonMachineImageAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentConfigHorizonMachineImageAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigHorizonMachineImageAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizonMachineImageAzureUnion$inboundSchema:
+  z.ZodType<DeploymentConfigHorizonMachineImageAzureUnion, unknown> = z.union([
+    z.lazy(() => DeploymentConfigHorizonMachineImageAzure$inboundSchema),
+    z.string(),
+  ]);
+
+export function deploymentConfigHorizonMachineImageAzureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentConfigHorizonMachineImageAzureUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigHorizonMachineImageAzureUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageAzureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigBaseImage$inboundSchema: z.ZodType<
+  DeploymentConfigBaseImage,
+  unknown
+> = z.object({
+  name: z.string(),
+  version: z.string(),
+});
+
+export function deploymentConfigBaseImageFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigBaseImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigBaseImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigBaseImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigGcpImages$inboundSchema: z.ZodType<
+  DeploymentConfigGcpImages,
+  unknown
+> = z.object({
+  sourceImage: z.string(),
+});
+
+export function deploymentConfigGcpImagesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigGcpImages, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigGcpImages$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigGcpImages' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizonMachineImageGcp$inboundSchema: z.ZodType<
+  DeploymentConfigHorizonMachineImageGcp,
+  unknown
+> = z.object({
+  images: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigGcpImages$inboundSchema),
+  ),
+});
+
+export function deploymentConfigHorizonMachineImageGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigHorizonMachineImageGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigHorizonMachineImageGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizonMachineImageGcpUnion$inboundSchema:
+  z.ZodType<DeploymentConfigHorizonMachineImageGcpUnion, unknown> = z.union([
+    z.lazy(() => DeploymentConfigHorizonMachineImageGcp$inboundSchema),
+    z.string(),
+  ]);
+
+export function deploymentConfigHorizonMachineImageGcpUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentConfigHorizonMachineImageGcpUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigHorizonMachineImageGcpUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageGcpUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizondArtifacts$inboundSchema: z.ZodType<
+  DeploymentConfigHorizondArtifacts,
+  unknown
+> = z.object({
+  runtimeIsolationGeneration: z.int().optional(),
+  sha256: z.string(),
+  url: z.string(),
+});
+
+export function deploymentConfigHorizondArtifactsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigHorizondArtifacts, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigHorizondArtifacts$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigHorizondArtifacts' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizonMachineImage$inboundSchema: z.ZodType<
+  DeploymentConfigHorizonMachineImage,
+  unknown
+> = z.object({
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigHorizonMachineImageAws$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigHorizonMachineImageAzure$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  baseImage: z.lazy(() => DeploymentConfigBaseImage$inboundSchema),
+  channel: z.string(),
+  createdAt: z.string(),
+  gcp: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigHorizonMachineImageGcp$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  gitSha: z.string(),
+  horizondArtifacts: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigHorizondArtifacts$inboundSchema),
+  ),
+  horizondVersion: z.string(),
+  machineImageVersion: z.string(),
+  runtimeIsolationGeneration: z.int().optional(),
+});
+
+export function deploymentConfigHorizonMachineImageFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigHorizonMachineImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigHorizonMachineImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigHorizonMachineImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigHorizonMachineImageUnion$inboundSchema: z.ZodType<
+  DeploymentConfigHorizonMachineImageUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentConfigHorizonMachineImage$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentConfigHorizonMachineImageUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentConfigHorizonMachineImageUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigHorizonMachineImageUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentConfigHorizonMachineImageUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigComputeBackendType$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigComputeBackendType
+> = z.enum(DeploymentConfigComputeBackendType);
+
+/** @internal */
+export const DeploymentConfigComputeBackendHorizon$inboundSchema: z.ZodType<
+  DeploymentConfigComputeBackendHorizon,
+  unknown
+> = z.object({
+  clusters: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigClusters$inboundSchema),
+  ),
+  horizonMachineImage: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigHorizonMachineImage$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  url: z.string(),
+  type: DeploymentConfigComputeBackendType$inboundSchema,
+});
+
+export function deploymentConfigComputeBackendHorizonFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigComputeBackendHorizon, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigComputeBackendHorizon$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigComputeBackendHorizon' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigComputeBackendUnion$inboundSchema: z.ZodType<
+  DeploymentConfigComputeBackendUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentConfigComputeBackendHorizon$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentConfigComputeBackendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigComputeBackendUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigComputeBackendUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigComputeBackendUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigAliasCertificateStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigAliasCertificateStatus
+> = z.enum(DeploymentConfigAliasCertificateStatus);
+
+/** @internal */
+export const DeploymentConfigAliasDnsStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigAliasDnsStatus
+> = z.enum(DeploymentConfigAliasDnsStatus);
+
+/** @internal */
+export const DeploymentConfigAlias$inboundSchema: z.ZodType<
+  DeploymentConfigAlias,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus: DeploymentConfigAliasCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: DeploymentConfigAliasDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function deploymentConfigAliasFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigAlias, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigAlias$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigAlias' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigCertificateStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigCertificateStatus
+> = z.enum(DeploymentConfigCertificateStatus);
+
+/** @internal */
+export const DeploymentConfigDnsStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigDnsStatus
+> = z.enum(DeploymentConfigDnsStatus);
+
+/** @internal */
+export const DeploymentConfigEndpointsCertificateStatus$inboundSchema:
+  z.ZodEnum<typeof DeploymentConfigEndpointsCertificateStatus> = z.enum(
+    DeploymentConfigEndpointsCertificateStatus,
+  );
+
+/** @internal */
+export const DeploymentConfigEndpointsDnsStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigEndpointsDnsStatus
+> = z.enum(DeploymentConfigEndpointsDnsStatus);
+
+/** @internal */
+export const DeploymentConfigEndpoints$inboundSchema: z.ZodType<
+  DeploymentConfigEndpoints,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus: DeploymentConfigEndpointsCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: DeploymentConfigEndpointsDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function deploymentConfigEndpointsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigEndpoints, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigEndpoints$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigEndpoints' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigResources$inboundSchema: z.ZodType<
+  DeploymentConfigResources,
+  unknown
+> = z.object({
+  aliases: z.array(z.lazy(() => DeploymentConfigAlias$inboundSchema))
+    .optional(),
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus: DeploymentConfigCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: DeploymentConfigDnsStatus$inboundSchema,
+  endpoints: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigEndpoints$inboundSchema),
+  ).optional(),
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function deploymentConfigResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigDomainMetadata$inboundSchema: z.ZodType<
+  DeploymentConfigDomainMetadata,
+  unknown
+> = z.object({
+  baseDomain: z.string(),
+  hostedZoneId: z.string(),
+  publicSubdomain: z.string(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigResources$inboundSchema),
+  ),
+});
+
+export function deploymentConfigDomainMetadataFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigDomainMetadata, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigDomainMetadata$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigDomainMetadata' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigDomainMetadataUnion$inboundSchema: z.ZodType<
+  DeploymentConfigDomainMetadataUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentConfigDomainMetadata$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentConfigDomainMetadataUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigDomainMetadataUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigDomainMetadataUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigDomainMetadataUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigEnvironmentVariablesType$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigEnvironmentVariablesType
+> = z.enum(DeploymentConfigEnvironmentVariablesType);
+
+/** @internal */
+export const DeploymentConfigVariable$inboundSchema: z.ZodType<
+  DeploymentConfigVariable,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: DeploymentConfigEnvironmentVariablesType$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentConfigVariableFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigVariable, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigVariable$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigVariable' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigEnvironmentVariables$inboundSchema: z.ZodType<
+  DeploymentConfigEnvironmentVariables,
+  unknown
+> = z.object({
+  createdAt: z.string(),
+  hash: z.string(),
+  variables: z.array(z.lazy(() => DeploymentConfigVariable$inboundSchema)),
+});
+
+export function deploymentConfigEnvironmentVariablesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigEnvironmentVariables, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigEnvironmentVariables$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigEnvironmentVariables' from JSON`,
   );
 }
 
@@ -1765,7 +2795,7 @@ export const DeploymentConfigManagementConfigUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentConfigManagementConfigAws$inboundSchema),
   z.lazy(() => DeploymentConfigManagementConfigGcp$inboundSchema),
   z.lazy(() => DeploymentConfigManagementConfigKubernetes$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigManagementConfigUnionFromJSON(
@@ -1805,7 +2835,10 @@ export function deploymentConfigMonitoringFromJSON(
 export const DeploymentConfigMonitoringUnion$inboundSchema: z.ZodType<
   DeploymentConfigMonitoringUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentConfigMonitoring$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => DeploymentConfigMonitoring$inboundSchema),
+  z.string(),
+]);
 
 export function deploymentConfigMonitoringUnionFromJSON(
   jsonString: string,
@@ -1842,7 +2875,7 @@ export const DeploymentConfigFailureDomainsUnion2$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentConfigFailureDomains2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigFailureDomainsUnion2FromJSON(
@@ -1864,7 +2897,7 @@ export const DeploymentConfigPoolsAutoscale$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigFailureDomains2$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1912,7 +2945,7 @@ export const DeploymentConfigFailureDomainsUnion1$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentConfigFailureDomains1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigFailureDomainsUnion1FromJSON(
@@ -1934,7 +2967,7 @@ export const DeploymentConfigPoolsFixed$inboundSchema: z.ZodType<
   failure_domains: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigFailureDomains1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -2003,7 +3036,7 @@ export function deploymentConfigComputeFromJSON(
 export const DeploymentConfigComputeUnion$inboundSchema: z.ZodType<
   DeploymentConfigComputeUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentConfigCompute$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentConfigCompute$inboundSchema), z.string()]);
 
 export function deploymentConfigComputeUnionFromJSON(
   jsonString: string,
@@ -2044,7 +3077,7 @@ export const DeploymentConfigStackSettingsAwsUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentConfigAwsStackSettings$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigStackSettingsAwsUnionFromJSON(
@@ -2084,7 +3117,7 @@ export const DeploymentConfigStackSettingsAzureUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentConfigAzureStackSettings$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigStackSettingsAzureUnionFromJSON(
@@ -2127,7 +3160,7 @@ export const DeploymentConfigStackSettingsGcpUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentConfigGcpStackSettings$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigStackSettingsGcpUnionFromJSON(
@@ -2184,7 +3217,7 @@ export const DeploymentConfigDomainsKubernetesUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentConfigDomainsKubernetes$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigDomainsKubernetesUnionFromJSON(
@@ -2206,25 +3239,25 @@ export const DeploymentConfigDomainsCertificate$inboundSchema: z.ZodType<
   aws: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigAwsStackSettings$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   azure: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigAzureStackSettings$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   gcp: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigGcpStackSettings$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigDomainsKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2325,7 +3358,7 @@ export const DeploymentConfigPublicEndpointTargetUnion$inboundSchema: z.ZodType<
   z.lazy(() =>
     DeploymentConfigPublicEndpointTargetMachineAddresses$inboundSchema
   ),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigPublicEndpointTargetUnionFromJSON(
@@ -2363,7 +3396,7 @@ export const DeploymentConfigDomains$inboundSchema: z.ZodType<
       z.lazy(() =>
         DeploymentConfigPublicEndpointTargetMachineAddresses$inboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -2382,7 +3415,7 @@ export function deploymentConfigDomainsFromJSON(
 export const DeploymentConfigDomainsUnion$inboundSchema: z.ZodType<
   DeploymentConfigDomainsUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentConfigDomains$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentConfigDomains$inboundSchema), z.string()]);
 
 export function deploymentConfigDomainsUnionFromJSON(
   jsonString: string,
@@ -2395,26 +3428,9 @@ export function deploymentConfigDomainsUnionFromJSON(
 }
 
 /** @internal */
-export const DeploymentConfigStackSettingsExternalBindings$inboundSchema:
-  z.ZodType<DeploymentConfigStackSettingsExternalBindings, unknown> = z.object(
-    {},
-  );
-
-export function deploymentConfigStackSettingsExternalBindingsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentConfigStackSettingsExternalBindings,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentConfigStackSettingsExternalBindings$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentConfigStackSettingsExternalBindings' from JSON`,
-  );
-}
+export const DeploymentConfigEndpointAccess$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigEndpointAccess
+> = z.enum(DeploymentConfigEndpointAccess);
 
 /** @internal */
 export const DeploymentConfigHeartbeats$inboundSchema: z.ZodEnum<
@@ -2449,7 +3465,7 @@ export function deploymentConfigCloudFromJSON(
 export const DeploymentConfigCloudUnion$inboundSchema: z.ZodType<
   DeploymentConfigCloudUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentConfigCloud$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentConfigCloud$inboundSchema), z.string()]);
 
 export function deploymentConfigCloudUnionFromJSON(
   jsonString: string,
@@ -2472,7 +3488,7 @@ export const DeploymentConfigCluster$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => DeploymentConfigCloud$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentConfigCloud$inboundSchema), z.string()]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: DeploymentConfigOwnership$inboundSchema,
@@ -2492,7 +3508,7 @@ export function deploymentConfigClusterFromJSON(
 export const DeploymentConfigClusterUnion$inboundSchema: z.ZodType<
   DeploymentConfigClusterUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentConfigCluster$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DeploymentConfigCluster$inboundSchema), z.string()]);
 
 export function deploymentConfigClusterUnionFromJSON(
   jsonString: string,
@@ -2738,7 +3754,7 @@ export const DeploymentConfigProviderUnion4$inboundSchema: z.ZodType<
     DeploymentConfigProviderAzureApplicationGatewayForContainers4$inboundSchema
   ),
   z.lazy(() => DeploymentConfigProviderGkeGateway4$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigProviderUnion4FromJSON(
@@ -2768,7 +3784,7 @@ export const DeploymentConfigRouteGateway2$inboundSchema: z.ZodType<
         DeploymentConfigProviderAzureApplicationGatewayForContainers4$inboundSchema
       ),
       z.lazy(() => DeploymentConfigProviderGkeGateway4$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -2880,7 +3896,7 @@ export const DeploymentConfigProviderUnion3$inboundSchema: z.ZodType<
     DeploymentConfigProviderAzureApplicationGatewayForContainers3$inboundSchema
   ),
   z.lazy(() => DeploymentConfigProviderGkeGateway3$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigProviderUnion3FromJSON(
@@ -2909,7 +3925,7 @@ export const DeploymentConfigRouteIngress2$inboundSchema: z.ZodType<
         DeploymentConfigProviderAzureApplicationGatewayForContainers3$inboundSchema
       ),
       z.lazy(() => DeploymentConfigProviderGkeGateway3$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3208,7 +4224,7 @@ export const DeploymentConfigProviderUnion2$inboundSchema: z.ZodType<
     DeploymentConfigProviderAzureApplicationGatewayForContainers2$inboundSchema
   ),
   z.lazy(() => DeploymentConfigProviderGkeGateway2$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigProviderUnion2FromJSON(
@@ -3238,7 +4254,7 @@ export const DeploymentConfigRouteGateway1$inboundSchema: z.ZodType<
         DeploymentConfigProviderAzureApplicationGatewayForContainers2$inboundSchema
       ),
       z.lazy(() => DeploymentConfigProviderGkeGateway2$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3350,7 +4366,7 @@ export const DeploymentConfigProviderUnion1$inboundSchema: z.ZodType<
     DeploymentConfigProviderAzureApplicationGatewayForContainers1$inboundSchema
   ),
   z.lazy(() => DeploymentConfigProviderGkeGateway1$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigProviderUnion1FromJSON(
@@ -3379,7 +4395,7 @@ export const DeploymentConfigRouteIngress1$inboundSchema: z.ZodType<
         DeploymentConfigProviderAzureApplicationGatewayForContainers1$inboundSchema
       ),
       z.lazy(() => DeploymentConfigProviderGkeGateway1$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3474,7 +4490,7 @@ export const DeploymentConfigExposureUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentConfigExposureCustom$inboundSchema),
   z.lazy(() => DeploymentConfigExposureGenerated$inboundSchema),
   z.lazy(() => DeploymentConfigExposureDisabled$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigExposureUnionFromJSON(
@@ -3493,14 +4509,14 @@ export const DeploymentConfigKubernetes$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   cluster: z.nullable(
-    z.union([z.lazy(() => DeploymentConfigCluster$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentConfigCluster$inboundSchema), z.string()]),
   ).optional(),
   exposure: z.nullable(
     z.union([
       z.lazy(() => DeploymentConfigExposureCustom$inboundSchema),
       z.lazy(() => DeploymentConfigExposureGenerated$inboundSchema),
       z.lazy(() => DeploymentConfigExposureDisabled$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3519,7 +4535,10 @@ export function deploymentConfigKubernetesFromJSON(
 export const DeploymentConfigKubernetesUnion$inboundSchema: z.ZodType<
   DeploymentConfigKubernetesUnion,
   unknown
-> = z.union([z.lazy(() => DeploymentConfigKubernetes$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => DeploymentConfigKubernetes$inboundSchema),
+  z.string(),
+]);
 
 export function deploymentConfigKubernetesUnionFromJSON(
   jsonString: string,
@@ -3695,7 +4714,7 @@ export const DeploymentConfigNetworkUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentConfigNetworkByoVnetAzure$inboundSchema),
   z.lazy(() => DeploymentConfigNetworkUseDefault$inboundSchema),
   z.lazy(() => DeploymentConfigNetworkCreate$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentConfigNetworkUnionFromJSON(
@@ -3724,18 +4743,22 @@ export const DeploymentConfigStackSettings$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   compute: z.nullable(
-    z.union([z.lazy(() => DeploymentConfigCompute$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentConfigCompute$inboundSchema), z.string()]),
   ).optional(),
   deploymentModel: DeploymentConfigDeploymentModel$inboundSchema.optional(),
   domains: z.nullable(
-    z.union([z.lazy(() => DeploymentConfigDomains$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DeploymentConfigDomains$inboundSchema), z.string()]),
   ).optional(),
+  endpointAccess: DeploymentConfigEndpointAccess$inboundSchema.optional(),
   externalBindings: z.nullable(
-    z.lazy(() => DeploymentConfigStackSettingsExternalBindings$inboundSchema),
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
   heartbeats: DeploymentConfigHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
-    z.union([z.lazy(() => DeploymentConfigKubernetes$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => DeploymentConfigKubernetes$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   network: z.nullable(
     z.union([
@@ -3744,7 +4767,7 @@ export const DeploymentConfigStackSettings$inboundSchema: z.ZodType<
       z.lazy(() => DeploymentConfigNetworkByoVnetAzure$inboundSchema),
       z.lazy(() => DeploymentConfigNetworkUseDefault$inboundSchema),
       z.lazy(() => DeploymentConfigNetworkCreate$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(
@@ -3765,38 +4788,54 @@ export function deploymentConfigStackSettingsFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigVolumeRestore$inboundSchema: z.ZodType<
+  DeploymentConfigVolumeRestore,
+  unknown
+> = z.object({
+  ordinal: z.int(),
+  requestId: z.string(),
+  resourceId: z.string(),
+  snapshotId: z.string(),
+});
+
+export function deploymentConfigVolumeRestoreFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigVolumeRestore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigVolumeRestore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigVolumeRestore' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentConfig$inboundSchema: z.ZodType<
   DeploymentConfig,
   unknown
 > = z.object({
   allowFrozenChanges: z.boolean().optional(),
-  basePlatform: z.nullable(DeploymentConfigBasePlatformUnion$inboundSchema)
-    .optional(),
-  computeBackend: z.nullable(DeploymentConfigComputeBackendUnion$inboundSchema)
-    .optional(),
-  deploymentName: z.nullable(z.string()).optional(),
-  deploymentToken: z.nullable(z.string()).optional(),
-  domainMetadata: z.nullable(DeploymentConfigDomainMetadataUnion$inboundSchema)
-    .optional(),
-  environmentVariables: DeploymentConfigEnvironmentVariables$inboundSchema,
-  externalBindings: z.record(
-    z.string(),
+  basePlatform: z.nullable(
+    z.union([DeploymentConfigBasePlatformEnum$inboundSchema, z.string()]),
+  ).optional(),
+  computeBackend: z.nullable(
     z.union([
-      DeploymentConfigExternalBindingsAi$inboundSchema,
-      DeploymentConfigExternalBindingsContainerAppsEnvironment$inboundSchema,
-      z.union([
-        z.lazy(() => DeploymentConfigExternalBindingsS3$inboundSchema),
-        DeploymentConfigExternalBindingsBlob$inboundSchema,
-        DeploymentConfigExternalBindingsGcs$inboundSchema,
-        DeploymentConfigExternalBindingsLocalStorage$inboundSchema,
-      ]),
-      DeploymentConfigExternalBindingsUnion2$inboundSchema,
-      DeploymentConfigExternalBindingsUnion3$inboundSchema,
-      DeploymentConfigExternalBindingsUnion4$inboundSchema,
-      DeploymentConfigExternalBindingsUnion5$inboundSchema,
-      DeploymentConfigExternalBindingsUnion6$inboundSchema,
+      z.lazy(() => DeploymentConfigComputeBackendHorizon$inboundSchema),
+      z.string(),
     ]),
   ).optional(),
+  deploymentName: z.nullable(z.string()).optional(),
+  deploymentToken: z.nullable(z.string()).optional(),
+  domainMetadata: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigDomainMetadata$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  environmentVariables: z.lazy(() =>
+    DeploymentConfigEnvironmentVariables$inboundSchema
+  ),
+  externalBindings: z.record(z.string(), ExternalBindingUnion$inboundSchema)
+    .optional(),
   inputValues: z.record(z.string(), z.nullable(z.any())).optional(),
   labelDomain: z.nullable(z.string()).optional(),
   managementConfig: z.nullable(
@@ -3805,12 +4844,15 @@ export const DeploymentConfig$inboundSchema: z.ZodType<
       z.lazy(() => DeploymentConfigManagementConfigAws$inboundSchema),
       z.lazy(() => DeploymentConfigManagementConfigGcp$inboundSchema),
       z.lazy(() => DeploymentConfigManagementConfigKubernetes$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   managerUrl: z.nullable(z.string()).optional(),
   monitoring: z.nullable(
-    z.union([z.lazy(() => DeploymentConfigMonitoring$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => DeploymentConfigMonitoring$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   nativeImageHost: z.nullable(z.string()).optional(),
   observeAllNamespaces: z.boolean().optional(),
@@ -3820,6 +4862,10 @@ export const DeploymentConfig$inboundSchema: z.ZodType<
   ).optional(),
   stackSettings: z.lazy(() => DeploymentConfigStackSettings$inboundSchema)
     .optional(),
+  storedSecretInputIds: z.array(z.string()).optional(),
+  volumeRestores: z.array(
+    z.lazy(() => DeploymentConfigVolumeRestore$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentConfigFromJSON(

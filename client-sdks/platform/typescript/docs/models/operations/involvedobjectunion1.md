@@ -9,9 +9,9 @@
 const value: operations.InvolvedObject1 = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

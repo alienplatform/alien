@@ -26,7 +26,7 @@ export const NetworkEnum = {
 export type NetworkEnum = ClosedEnum<typeof NetworkEnum>;
 
 /**
- * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
+ * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in log ingestion when not set.
  */
 export type OtlpConfig = {
   /**
@@ -58,7 +58,7 @@ export type NewManagerRequest = {
    */
   network?: NetworkEnum | undefined;
   /**
-   * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
+   * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in log ingestion when not set.
    */
   otlpConfig?: OtlpConfig | undefined;
 };

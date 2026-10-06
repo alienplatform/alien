@@ -22,6 +22,17 @@ export default defineConfig({
       inferred: true,
       version: "4",
       importPath: "zod",
+      override: [
+        {
+          type: "schemaName",
+          pattern: /^Value$/,
+          options: {
+            // utoipa exports serde_json::Value as an empty schema. Match its JSON
+            // domain without accepting undefined/functions or losing expression keys.
+            wrapOutput: () => "z.json()",
+          },
+        },
+      ],
       transformers: {
         name: (name, type) => {
           if (type === "function") {

@@ -29,12 +29,21 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
     },
     data: {
       items: [],
+      unregisteredSetups: [
+        {
+          deploymentGroupId: "<id>",
+          name: "<value>",
+          platform: "kubernetes",
+          createdAt: new Date("2024-03-02T14:19:50.314Z"),
+          valuesExpireAt: new Date("2024-04-11T22:30:19.364Z"),
+        },
+      ],
     },
   },
   release: {
-    status: "error",
-    freshness: "fresh",
-    sourceUpdatedAt: new Date("2026-07-09T09:43:35.200Z"),
+    status: "ready",
+    freshness: "unknown",
+    sourceUpdatedAt: new Date("2026-08-24T09:44:42.664Z"),
     error: {
       code: "<value>",
       message: "<value>",
@@ -57,8 +66,8 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
   },
   access: {
     status: "unavailable",
-    freshness: "unknown",
-    sourceUpdatedAt: null,
+    freshness: "fresh",
+    sourceUpdatedAt: new Date("2024-09-24T15:28:43.771Z"),
     error: {
       code: "<value>",
       message: "<value>",
@@ -71,8 +80,8 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
   },
   operations: {
     status: "ready",
-    freshness: "unknown",
-    sourceUpdatedAt: null,
+    freshness: "fresh",
+    sourceUpdatedAt: new Date("2024-05-17T16:26:04.347Z"),
     error: {
       code: "<value>",
       message: "<value>",
@@ -89,9 +98,9 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
     },
   },
   activity: {
-    status: "ready",
+    status: "empty",
     freshness: "stale",
-    sourceUpdatedAt: new Date("2025-02-15T18:34:32.158Z"),
+    sourceUpdatedAt: new Date("2024-03-25T22:05:37.381Z"),
     error: {
       code: "<value>",
       message: "<value>",
@@ -125,22 +134,23 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
         pluginVersion: "<value>",
         operation: "<value>",
         tier: null,
+        accessRequestId: "<id>",
         commandState: "SUCCEEDED",
-        verificationState: "verified",
-        createdAt: new Date("2024-12-22T11:58:06.410Z"),
-        updatedAt: new Date("2024-12-20T02:15:50.612Z"),
+        verificationState: "pending",
+        createdAt: new Date("2024-12-20T02:15:50.612Z"),
+        updatedAt: new Date("2024-03-28T12:17:18.067Z"),
         verification: {
-          state: "skipped",
-          attempts: 371867,
-          maxAttempts: 533116,
-          deadline: new Date("2024-06-09T09:14:41.952Z"),
+          state: "verified",
+          attempts: 533116,
+          maxAttempts: 249676,
+          deadline: new Date("2025-03-26T23:32:49.615Z"),
           reason: "<value>",
         },
         sensitiveOutput: {
-          kind: "none",
+          kind: "requireConfirmation",
         },
-        resultAvailable: false,
-        completedAt: new Date("2025-12-16T19:53:47.814Z"),
+        resultAvailable: true,
+        completedAt: new Date("2025-05-08T17:12:42.798Z"),
       },
     },
   },

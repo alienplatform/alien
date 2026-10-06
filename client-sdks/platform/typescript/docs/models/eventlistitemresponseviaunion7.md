@@ -9,9 +9,9 @@
 const value: models.EventListItemResponseViaEnum7 = "mcp";
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

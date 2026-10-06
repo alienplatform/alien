@@ -10,8 +10,8 @@ let value: ConfigureRemoteSandboxRequest = {};
 
 ## Fields
 
-| Field                                                                                        | Type                                                                                         | Required                                                                                     | Description                                                                                  |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `baseImage`                                                                                  | *string*                                                                                     | :heavy_minus_sign:                                                                           | N/A                                                                                          |
-| `azure`                                                                                      | [models.ConfigureRemoteSandboxRequestAzure](../models/configureremotesandboxrequestazure.md) | :heavy_minus_sign:                                                                           | N/A                                                                                          |
-| `maxLifetimeSeconds`                                                                         | *number*                                                                                     | :heavy_minus_sign:                                                                           | N/A                                                                                          |
+| Field                     | Type                      | Required                  | Description               |
+| ------------------------- | ------------------------- | ------------------------- | ------------------------- |
+| `customImage`             | *string*                  | :heavy_minus_sign:        | N/A                       |
+| `maxLifetimeSeconds`      | *number*                  | :heavy_minus_sign:        | N/A                       |
+| `azureIdleSuspendSeconds` | *number*                  | :heavy_minus_sign:        | N/A                       |

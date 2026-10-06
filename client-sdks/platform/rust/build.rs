@@ -35,7 +35,9 @@ fn run() {
         serde_json::from_value(filtered_spec).unwrap()
     };
     let mut generator = progenitor::Generator::new(
-        GenerationSettings::new().with_interface(InterfaceStyle::Builder),
+        GenerationSettings::new()
+            .with_interface(InterfaceStyle::Builder)
+            .with_crate("std", progenitor::CrateVers::Any, None),
     );
 
     let tokens = generator.generate_tokens(&spec).unwrap();

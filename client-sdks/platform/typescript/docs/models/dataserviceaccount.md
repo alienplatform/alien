@@ -27,8 +27,8 @@ let value: DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "timed-out",
+          severity: "warning",
           source: "<value>",
         },
       ],

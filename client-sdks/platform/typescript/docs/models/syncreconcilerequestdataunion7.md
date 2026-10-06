@@ -19,7 +19,7 @@ const value: models.DataAwsDynamoDb = {
       {
         message: "<value>",
         reason: "not-installed",
-        severity: "error",
+        severity: "warning",
         source: "<value>",
       },
     ],

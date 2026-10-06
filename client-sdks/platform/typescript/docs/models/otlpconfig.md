@@ -1,6 +1,6 @@
 # OtlpConfig
 
-Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
+Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in log ingestion when not set.
 
 ## Example Usage
 

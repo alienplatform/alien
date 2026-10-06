@@ -45,7 +45,7 @@ export type ManagerHeartbeatRequest = {
    */
   version?: string | undefined;
   /**
-   * Manager public URL (for accessing DeepStore endpoints)
+   * Manager public URL (for accessing log ingestion endpoints)
    */
   url: string;
   managementConfigs: ManagerManagementConfigs;

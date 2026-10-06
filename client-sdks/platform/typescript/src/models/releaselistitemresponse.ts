@@ -57,7 +57,7 @@ export type Rollout = {
 /**
  * Platform user who created the release, included when ?include=createdBy is used
  */
-export type CreatedBy = {
+export type ReleaseListItemResponseCreatedBy = {
   /**
    * User ID
    */
@@ -116,7 +116,7 @@ export type ReleaseListItemResponse = {
   /**
    * Platform user who created the release, included when ?include=createdBy is used
    */
-  createdBy?: CreatedBy | null | undefined;
+  createdBy?: ReleaseListItemResponseCreatedBy | null | undefined;
 };
 
 /** @internal */
@@ -180,20 +180,23 @@ export function rolloutFromJSON(
 }
 
 /** @internal */
-export const CreatedBy$inboundSchema: z.ZodType<CreatedBy, unknown> = z.object({
+export const ReleaseListItemResponseCreatedBy$inboundSchema: z.ZodType<
+  ReleaseListItemResponseCreatedBy,
+  unknown
+> = z.object({
   id: z.string(),
   name: z.string(),
   email: z.string(),
   image: z.nullable(z.string()),
 });
 
-export function createdByFromJSON(
+export function releaseListItemResponseCreatedByFromJSON(
   jsonString: string,
-): SafeParseResult<CreatedBy, SDKValidationError> {
+): SafeParseResult<ReleaseListItemResponseCreatedBy, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CreatedBy$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreatedBy' from JSON`,
+    (x) => ReleaseListItemResponseCreatedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseListItemResponseCreatedBy' from JSON`,
   );
 }
 
@@ -220,7 +223,9 @@ export const ReleaseListItemResponse$inboundSchema: z.ZodType<
     z.lazy(() => ReleaseListItemResponseProject$inboundSchema),
   ).optional(),
   rollout: z.nullable(z.lazy(() => Rollout$inboundSchema)).optional(),
-  createdBy: z.nullable(z.lazy(() => CreatedBy$inboundSchema)).optional(),
+  createdBy: z.nullable(
+    z.lazy(() => ReleaseListItemResponseCreatedBy$inboundSchema),
+  ).optional(),
 });
 
 export function releaseListItemResponseFromJSON(

@@ -24,12 +24,12 @@ export type UpdateDeploymentComputeRequestFailureDomains2 = {
 
 export type UpdateDeploymentComputeRequestFailureDomainsUnion2 =
   | UpdateDeploymentComputeRequestFailureDomains2
-  | any;
+  | string;
 
 export type UpdateDeploymentComputeRequestPoolsAutoscale = {
   failureDomains?:
     | UpdateDeploymentComputeRequestFailureDomains2
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -66,12 +66,12 @@ export type UpdateDeploymentComputeRequestFailureDomains1 = {
 
 export type UpdateDeploymentComputeRequestFailureDomainsUnion1 =
   | UpdateDeploymentComputeRequestFailureDomains1
-  | any;
+  | string;
 
 export type UpdateDeploymentComputeRequestPoolsFixed = {
   failureDomains?:
     | UpdateDeploymentComputeRequestFailureDomains1
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -114,10 +114,10 @@ export type UpdateDeploymentComputeRequestCompute = {
 
 export type UpdateDeploymentComputeRequestComputeUnion =
   | UpdateDeploymentComputeRequestCompute
-  | any;
+  | string;
 
 export type UpdateDeploymentComputeRequest = {
-  compute?: UpdateDeploymentComputeRequestCompute | any | null | undefined;
+  compute?: UpdateDeploymentComputeRequestCompute | string | null | undefined;
 };
 
 /** @internal */
@@ -150,7 +150,7 @@ export function updateDeploymentComputeRequestFailureDomains2ToJSON(
 /** @internal */
 export type UpdateDeploymentComputeRequestFailureDomainsUnion2$Outbound =
   | UpdateDeploymentComputeRequestFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const UpdateDeploymentComputeRequestFailureDomainsUnion2$outboundSchema:
@@ -159,7 +159,7 @@ export const UpdateDeploymentComputeRequestFailureDomainsUnion2$outboundSchema:
     UpdateDeploymentComputeRequestFailureDomainsUnion2
   > = z.union([
     z.lazy(() => UpdateDeploymentComputeRequestFailureDomains2$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function updateDeploymentComputeRequestFailureDomainsUnion2ToJSON(
@@ -177,7 +177,7 @@ export function updateDeploymentComputeRequestFailureDomainsUnion2ToJSON(
 export type UpdateDeploymentComputeRequestPoolsAutoscale$Outbound = {
   failure_domains?:
     | UpdateDeploymentComputeRequestFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -197,7 +197,7 @@ export const UpdateDeploymentComputeRequestPoolsAutoscale$outboundSchema:
         z.lazy(() =>
           UpdateDeploymentComputeRequestFailureDomains2$outboundSchema
         ),
-        z.any(),
+        z.string(),
       ]),
     ).optional(),
     machine: z.nullable(z.string()).optional(),
@@ -251,7 +251,7 @@ export function updateDeploymentComputeRequestFailureDomains1ToJSON(
 /** @internal */
 export type UpdateDeploymentComputeRequestFailureDomainsUnion1$Outbound =
   | UpdateDeploymentComputeRequestFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const UpdateDeploymentComputeRequestFailureDomainsUnion1$outboundSchema:
@@ -260,7 +260,7 @@ export const UpdateDeploymentComputeRequestFailureDomainsUnion1$outboundSchema:
     UpdateDeploymentComputeRequestFailureDomainsUnion1
   > = z.union([
     z.lazy(() => UpdateDeploymentComputeRequestFailureDomains1$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function updateDeploymentComputeRequestFailureDomainsUnion1ToJSON(
@@ -278,7 +278,7 @@ export function updateDeploymentComputeRequestFailureDomainsUnion1ToJSON(
 export type UpdateDeploymentComputeRequestPoolsFixed$Outbound = {
   failure_domains?:
     | UpdateDeploymentComputeRequestFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -296,7 +296,7 @@ export const UpdateDeploymentComputeRequestPoolsFixed$outboundSchema: z.ZodType<
       z.lazy(() =>
         UpdateDeploymentComputeRequestFailureDomains1$outboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -380,7 +380,7 @@ export function updateDeploymentComputeRequestComputeToJSON(
 /** @internal */
 export type UpdateDeploymentComputeRequestComputeUnion$Outbound =
   | UpdateDeploymentComputeRequestCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const UpdateDeploymentComputeRequestComputeUnion$outboundSchema:
@@ -389,7 +389,7 @@ export const UpdateDeploymentComputeRequestComputeUnion$outboundSchema:
     UpdateDeploymentComputeRequestComputeUnion
   > = z.union([
     z.lazy(() => UpdateDeploymentComputeRequestCompute$outboundSchema),
-    z.any(),
+    z.string(),
   ]);
 
 export function updateDeploymentComputeRequestComputeUnionToJSON(
@@ -407,7 +407,7 @@ export function updateDeploymentComputeRequestComputeUnionToJSON(
 export type UpdateDeploymentComputeRequest$Outbound = {
   compute?:
     | UpdateDeploymentComputeRequestCompute$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -420,7 +420,7 @@ export const UpdateDeploymentComputeRequest$outboundSchema: z.ZodType<
   compute: z.nullable(
     z.union([
       z.lazy(() => UpdateDeploymentComputeRequestCompute$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });

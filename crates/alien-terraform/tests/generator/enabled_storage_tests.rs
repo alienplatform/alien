@@ -293,8 +293,8 @@ fn every_gcp_storage_block_carries_the_gate() {
     assert!(
         gated
             .iter()
-            .any(|found| found == "google_project_iam_member"),
-        "the project-scoped signBlob grant renders through the service-account \
+            .any(|found| found == "google_service_account_iam_member"),
+        "the self-scoped signBlob grant renders through the service-account \
          path, not this emitter, so it must still follow the bucket's gate:\n{main}"
     );
     assert!(

@@ -94,6 +94,9 @@ pub struct HorizonAzureMachineImages {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizondArtifact {
+    /// Runtime isolation capability generation of the immutable artifact, not live readiness.
+    #[serde(default)]
+    pub runtime_isolation_generation: u32,
     /// HTTPS URL for the artifact.
     pub url: String,
     /// SHA-256 digest for the artifact payload.
@@ -107,6 +110,9 @@ pub struct HorizondArtifact {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonMachineImage {
+    /// Runtime isolation capability generation of the immutable artifact, not live readiness.
+    #[serde(default)]
+    pub runtime_isolation_generation: u32,
     /// Logical image channel, such as prod, staging, or canary.
     pub channel: String,
     /// Published immutable machine image version.
@@ -169,4 +175,98 @@ pub enum ComputeBackend {
     // Kubernetes(KubernetesCredentials),
     // /// AWS ECS Fargate (serverless containers)
     // EcsFargate,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::{HorizonMachineImage, HorizondArtifact};
+
+    fn legacy_catalog() -> Value {
+        json!({
+            "channel": "stable",
+            "machineImageVersion": "1",
+            "horizondVersion": "1",
+            "gitSha": "abc123",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "baseImage": { "name": "linux", "version": "1" },
+            "horizondArtifacts": {
+                "linux-arm64": { "url": "https://example.com/arm64", "sha256": "a".repeat(64) },
+                "linux-amd64": { "url": "https://example.com/amd64", "sha256": "b".repeat(64) }
+            },
+            "aws": { "amis": { "arm64": { "us-east-1": "ami-example" } } },
+            "gcp": { "images": { "arm64": { "sourceImage": "example-image" } } },
+            "azure": { "images": { "arm64": { "imageVersionId": "example-version" } } }
+        })
+    }
+
+    #[test]
+    fn runtime_isolation_generation_legacy_catalog_defaults_to_zero() {
+        let mut expected = legacy_catalog();
+        let catalog: HorizonMachineImage = serde_json::from_value(expected.clone()).unwrap();
+        assert_eq!(catalog.runtime_isolation_generation, 0);
+        expected["runtimeIsolationGeneration"] = json!(0);
+        for (arch, artifact) in &catalog.horizond_artifacts {
+            assert_eq!(artifact.runtime_isolation_generation, 0);
+            let decoded: HorizondArtifact =
+                serde_json::from_value(expected["horizondArtifacts"][arch].clone()).unwrap();
+            assert_eq!(&decoded, artifact);
+            expected["horizondArtifacts"][arch]["runtimeIsolationGeneration"] = json!(0);
+            assert_eq!(
+                serde_json::to_value(decoded).unwrap(),
+                expected["horizondArtifacts"][arch]
+            );
+        }
+        assert_eq!(serde_json::to_value(catalog).unwrap(), expected);
+    }
+
+    #[test]
+    fn runtime_isolation_generation_roundtrips_catalog_and_each_artifact() {
+        let mut expected = legacy_catalog();
+        expected["runtimeIsolationGeneration"] = json!(1);
+        for artifact in expected["horizondArtifacts"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            artifact["runtimeIsolationGeneration"] = json!(1);
+        }
+        let catalog: HorizonMachineImage = serde_json::from_value(expected.clone()).unwrap();
+        assert_eq!(catalog.runtime_isolation_generation, 1);
+        for (arch, artifact) in &catalog.horizond_artifacts {
+            assert_eq!(artifact.runtime_isolation_generation, 1);
+            let encoded = serde_json::to_value(artifact).unwrap();
+            assert_eq!(encoded, expected["horizondArtifacts"][arch]);
+            assert_eq!(
+                serde_json::from_value::<HorizondArtifact>(encoded).unwrap(),
+                *artifact
+            );
+        }
+        assert_eq!(serde_json::to_value(catalog).unwrap(), expected);
+    }
+
+    #[test]
+    fn runtime_isolation_generation_rejects_invalid_numbers_and_types() {
+        for invalid in [
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!(null),
+            json!(4294967296_u64),
+        ] {
+            let mut catalog = legacy_catalog();
+            catalog["runtimeIsolationGeneration"] = invalid.clone();
+            assert!(serde_json::from_value::<HorizonMachineImage>(catalog).is_err());
+            for arch in ["linux-arm64", "linux-amd64"] {
+                let mut catalog = legacy_catalog();
+                catalog["horizondArtifacts"][arch]["runtimeIsolationGeneration"] = invalid.clone();
+                assert!(serde_json::from_value::<HorizondArtifact>(
+                    catalog["horizondArtifacts"][arch].clone()
+                )
+                .is_err());
+                assert!(serde_json::from_value::<HorizonMachineImage>(catalog).is_err());
+            }
+        }
+    }
 }
