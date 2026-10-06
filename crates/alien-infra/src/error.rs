@@ -230,6 +230,21 @@ pub enum ErrorData {
         max_times: u32,
     },
 
+    /// A workload update was accepted, but its rollout was not confirmed before the wait ended.
+    ///
+    /// The accepted configuration stays desired downstream, so the rollout can still complete
+    /// later. Retrying the update checks it again.
+    #[error(
+        code = "ROLLOUT_UNCONFIRMED",
+        message = "The update to '{resource_id}' was accepted, but its rollout was not confirmed in time. It may still complete once the workload's machines can receive it. Retry to check again.",
+        retryable = "false",
+        internal = "false"
+    )]
+    RolloutUnconfirmed {
+        /// ID of the resource whose update was accepted
+        resource_id: String,
+    },
+
     /// Platform configuration is missing or invalid.
     #[error(
         code = "client_config_INVALID",
