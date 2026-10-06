@@ -807,6 +807,31 @@ pub async fn create_initial_deployment(
         return Ok(existing.id.clone());
     }
 
+    // Old clients omitted the group ID. Without an explicit identity, a same-name
+    // deployment in another group cannot safely be distinguished from an intentional one.
+    let outside = client
+        .list_deployments()
+        .name(deployment_name)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to check for an existing local deployment".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    if outside.next_cursor.is_some()
+        || outside.items.iter().any(|deployment| {
+            deployment.name == deployment_name
+                && deployment.platform == alien_manager_api::types::Platform::Local
+        })
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: "A same-name local deployment may exist outside local-dev. Stop the manager and select its ID with alien dev --deployment-name dep_... to preserve its state".to_string(),
+        }));
+    }
+
     // Create deployment
     info!("Creating initial deployment '{}'...", deployment_name);
 
@@ -1443,7 +1468,9 @@ mod tests {
             let mut unrelated = deployment("api");
             unrelated["id"] = serde_json::json!("dep_other");
             unrelated["deploymentGroupId"] = serde_json::json!("dg_other");
-            items.insert(0, unrelated);
+            if !items.is_empty() {
+                items.insert(0, unrelated);
+            }
             Json(serde_json::json!({ "items": items }))
         }
         async fn create(
@@ -1499,6 +1526,100 @@ mod tests {
             .expect("the full dev session also reuses durable state");
         assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_local_migration_requires_identity_and_preserves_state() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("dev-server.db");
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let subject = Subject::system();
+        let legacy = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "legacy".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let before = store
+            .create_deployment(
+                &subject,
+                CreateDeploymentParams {
+                    name: "api".to_string(),
+                    deployment_group_id: legacy.id,
+                    platform: alien_core::Platform::Local,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: Default::default(),
+                    stack_state: Some(StackState::with_resource_prefix(
+                        alien_core::Platform::Local,
+                        "retained".to_string(),
+                    )),
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        drop(store);
+        assert!(
+            refresh_local_deployment_environment(directory.path(), "api", &[])
+                .await
+                .is_err(),
+            "a same-name deployment in another group must not be adopted implicitly"
+        );
+        let variables = vec![CliEnvVar {
+            name: "APP_KEY".to_string(),
+            value: "updated".to_string(),
+            is_secret: false,
+            target_resources: None,
+        }];
+        refresh_local_deployment_environment(directory.path(), &before.id, &variables)
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let after = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let groups = store.list_deployment_groups(&subject).await.unwrap();
+        let canonical = groups
+            .iter()
+            .find(|group| group.name == "local-dev")
+            .unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.deployment_group_id, canonical.id);
+        assert_eq!(after.stack_state, before.stack_state);
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(
+            after.user_environment_variables.unwrap()[0].value,
+            "updated"
+        );
+        assert_eq!(
+            store
+                .list_deployments(&subject, &DeploymentFilter::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .unwrap();
     }
 
     #[test]

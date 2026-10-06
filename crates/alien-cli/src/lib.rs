@@ -58,6 +58,7 @@ use crate::ui::{
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::AlienManager;
+use alien_manager_api::{Client as AlienManagerClient, SdkResultExt as _};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::env;
 use std::io::IsTerminal;
@@ -1405,7 +1406,7 @@ async fn run_dev_session(
         );
 
         let deployment_name = if deployment_name.starts_with("dep_") {
-            local_dev_client(port)
+            AlienManagerClient::new(&format!("http://localhost:{port}"))
                 .get_deployment()
                 .id(&deployment_name)
                 .send()
