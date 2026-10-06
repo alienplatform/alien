@@ -504,7 +504,19 @@ mod tests {
 
     #[tokio::test]
     async fn local_manager_destroy_removes_frozen_storage_with_its_own_services() {
-        let fixture = local_storage_fixture().await;
+        let mut fixture = local_storage_fixture().await;
+        let mut failed = StackResourceState::new_pending(
+            "storage".to_string(),
+            Resource::new(Storage::new("never-created".to_string()).build()),
+            None,
+            Vec::new(),
+        );
+        failed.lifecycle = Some(ResourceLifecycle::Frozen);
+        failed.status = ResourceStatus::ProvisionFailed;
+        fixture
+            .state
+            .resources
+            .insert("never-created".to_string(), failed);
         let neighbor = fixture.directory.path().join("neighbor.txt");
         std::fs::write(&neighbor, b"outside storage").expect("neighbor marker");
         let current = DeploymentState::builder()
