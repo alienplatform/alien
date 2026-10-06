@@ -476,9 +476,12 @@ fn prepare_for_destroy_matching(
                         }
                     }
                     Ok(None) => {
-                        if mode == DestroyPreparationMode::Teardown
-                            && resource_state.status != ResourceStatus::ProvisionFailed
-                        {
+                        let never_provisioned = resource_state.status
+                            == ResourceStatus::ProvisionFailed
+                            && resource_state.outputs.is_none()
+                            && resource_state.last_failed_state.is_none()
+                            && resource_state.previous_config.is_none();
+                        if mode == DestroyPreparationMode::Teardown && !never_provisioned {
                             return Err(AlienError::new(
                                 ErrorData::ResourceStateSerializationFailed {
                                     resource_id: resource_id.clone(),
