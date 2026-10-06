@@ -106,6 +106,13 @@ use mockall::automock;
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait PlatformServiceProvider: Send + Sync {
+    /// Setup authority available to this runtime without a separate setup handoff.
+    fn runtime_setup_authority(
+        &self,
+        _platform: alien_core::Platform,
+    ) -> Option<alien_core::InitialSetupAuthority> {
+        None
+    }
     // AWS clients
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>>;
     async fn get_aws_bedrock_client(&self, config: &AwsClientConfig)
@@ -514,6 +521,17 @@ impl DefaultPlatformServiceProvider {
 
 #[async_trait::async_trait]
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
+    fn runtime_setup_authority(
+        &self,
+        platform: alien_core::Platform,
+    ) -> Option<alien_core::InitialSetupAuthority> {
+        #[cfg(feature = "local")]
+        if platform == alien_core::Platform::Local && self.local_bindings.is_some() {
+            return Some(alien_core::InitialSetupAuthority::DirectSetup);
+        }
+        let _ = platform;
+        None
+    }
     // AWS implementations
     async fn get_aws_bedrock_client(
         &self,

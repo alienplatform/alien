@@ -1417,6 +1417,27 @@ impl LocalContainerManager {
             .clamp(0, u32::MAX.into()) as u32)
     }
 
+    /// Whether Docker still has the desired container, including a manually stopped one.
+    pub async fn container_exists(&self, container_id: &str) -> Result<bool> {
+        match self
+            .docker
+            .inspect_container(&format!("alien-{container_id}"), None)
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(false),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "inspect".to_string(),
+                    reason: "Failed to check whether the container exists".to_string(),
+                }),
+        }
+    }
+
     /// Verifies that the container process is running and, when configured,
     /// that its declared HTTP health endpoint returns a successful status.
     pub async fn check_health(

@@ -476,6 +476,22 @@ impl LocalContainerController {
                 })
             })?;
 
+        if !container_mgr.container_exists(&config.id).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to inspect container '{}'", config.id),
+                resource_id: Some(config.id.clone()),
+            },
+        )? {
+            // Absence is drift of a desired Live workload, not a failed health probe.
+            self.container_info = None;
+            self.consecutive_health_failures = 0;
+            self.restart_count = None;
+            return Ok(HandlerAction::Continue {
+                state: StartingContainer,
+                suggested_delay: None,
+            });
+        }
+
         let health_result = if let Some(health) = &config.health_check {
             container_mgr
                 .check_health(
@@ -660,10 +676,13 @@ impl LocalContainerController {
     );
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
-    terminal_state!(
-        state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+    #[handler(state = RefreshFailed, on_failure = RefreshFailed, status = ResourceStatus::RefreshFailed)]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     // ─────────────── HELPER METHODS ──────────────────────────────────────
 
@@ -866,7 +885,121 @@ fn emit_local_container_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+
+    use futures::FutureExt;
+
+    use crate::{core::controller_test::SingleControllerExecutor, ResourceController};
+
+    #[tokio::test]
+    #[ignore = "requires Docker and registry access"]
+    async fn removed_unchanged_container_recovers_from_ready_and_refresh_failed() {
+        let directory = tempfile::tempdir().unwrap();
+        let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+        let manager = bindings.container_manager().unwrap();
+        let services = Arc::new(crate::DefaultPlatformServiceProvider::with_local_bindings(
+            bindings,
+        ));
+        let id = format!("recovery-{}", std::process::id());
+        let config = Container::new(id.clone())
+            .permissions("default-profile".to_string())
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "64Mi".to_string(),
+                desired: "64Mi".to_string(),
+            })
+            .code(ContainerCode::Image {
+                image: "alpine:3.22".to_string(),
+            })
+            .command(vec!["sleep".to_string(), "300".to_string()])
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(LocalContainerController::default())
+            .platform(Platform::Local)
+            .client_config(alien_core::ClientConfig::Local {
+                state_directory: directory.path().to_string_lossy().into_owned(),
+            })
+            .service_provider(services.clone())
+            .build()
+            .await
+            .unwrap();
+        let verification = AssertUnwindSafe(async {
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let first = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .container_info
+                .as_ref()
+                .unwrap()
+                .docker_container_id
+                .clone();
+            manager.delete_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            let second = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .container_info
+                .as_ref()
+                .unwrap()
+                .docker_container_id
+                .clone();
+            assert_ne!(first, second);
+            assert!(manager.is_running(&id).await);
+
+            // A present, deliberately stopped container must not be recreated.
+            manager.stop_container(&id).await.unwrap();
+            for _ in 0..2 {
+                let error = executor
+                    .step()
+                    .await
+                    .err()
+                    .expect("a present stopped container must fail its health check");
+                assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+                assert!(error.message.contains("Container health check failed"));
+                assert_eq!(executor.status(), ResourceStatus::Running);
+            }
+            assert!(!manager.is_running(&id).await);
+            assert!(manager.container_exists(&id).await.unwrap());
+
+            // The production executor moves to failure after its retry policy is exhausted.
+            let mut failed_controller = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .clone();
+            failed_controller.transition_to_failure();
+            executor = SingleControllerExecutor::builder()
+                .resource(config.clone())
+                .controller(failed_controller)
+                .platform(Platform::Local)
+                .client_config(alien_core::ClientConfig::Local {
+                    state_directory: directory.path().to_string_lossy().into_owned(),
+                })
+                .service_provider(services.clone())
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
+
+            // Once absent, even an already failed health checkpoint can recover.
+            manager.delete_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert!(manager.is_running(&id).await);
+        })
+        .catch_unwind()
+        .await;
+        manager.delete_container(&id).await.unwrap();
+        if let Err(panic) = verification {
+            std::panic::resume_unwind(panic);
+        }
+    }
 
     #[test]
     fn tcp_binding_and_named_outputs_describe_the_published_endpoint() {
