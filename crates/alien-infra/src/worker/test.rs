@@ -30,6 +30,31 @@ pub fn test_worker_deletes_issued(identifier: &str) -> Vec<Worker> {
         .collect()
 }
 
+/// Every config the test controller deployed to a worker: in CreateWorker, where a real
+/// controller creates the function with its code, and in UpdateStart, where it updates it.
+static DEPLOYED_CONFIGS: Mutex<Vec<(String, Worker)>> = Mutex::new(Vec::new());
+
+/// The configs deployed to the worker with this identifier, in order. Unlike the config the
+/// executor records for the resource, this is what the worker actually received.
+///
+/// Process-wide, so tests that read it should give their workers unique ids.
+pub fn test_worker_configs_deployed(identifier: &str) -> Vec<Worker> {
+    DEPLOYED_CONFIGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(deployed_to, _)| deployed_to == identifier)
+        .map(|(_, config)| config.clone())
+        .collect()
+}
+
+fn record_deployed_config(identifier: &str, config: &Worker) {
+    DEPLOYED_CONFIGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((identifier.to_string(), config.clone()));
+}
+
 #[controller]
 pub struct TestWorkerController {
     /// The identifier of the Test worker, available after creation.
@@ -253,6 +278,7 @@ impl TestWorkerController {
             }));
         }
 
+        record_deployed_config(identifier, target_func);
         info!(
             "→ [test-create] Start polling (0/{}) for worker readiness `{}`",
             CREATE_POLL_COUNT, identifier
@@ -428,6 +454,7 @@ impl TestWorkerController {
             })
         })?;
 
+        record_deployed_config(identifier, target_func);
         info!(
             "→ [test-update] Start UpdateCode polling (0/{}) `{}`",
             UPDATE_POLL_COUNT, identifier
