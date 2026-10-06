@@ -161,11 +161,17 @@ fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resou
 /// Older prepared stacks stored resource grants only in the explicit permission profile.
 /// Capturing those same grants is metadata migration, not a setup-owned IAM change.
 fn unchanged_legacy_service_account_grants(
+    platform: Platform,
     old_stack: &Stack,
     new_stack: &Stack,
     old: &Resource,
     new: &Resource,
 ) -> Result<bool> {
+    // AWS treats these captured grants as comparison metadata. Other providers
+    // consume them in identity bindings and still require setup for migration.
+    if platform != Platform::Aws {
+        return Ok(false);
+    }
     let (Some(old_account), Some(new_account)) = (
         old.downcast_ref::<ServiceAccount>(),
         new.downcast_ref::<ServiceAccount>(),
@@ -269,6 +275,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &new_entry.config,
                     )
                     && !unchanged_legacy_service_account_grants(
+                        self.platform,
                         old_stack,
                         new_stack,
                         &old_entry.config,
@@ -340,7 +347,12 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert!(result.success, "{:?}", result.errors);
+            assert_eq!(
+                result.success,
+                platform == Platform::Aws,
+                "{:?}",
+                result.errors
+            );
         }
     }
 
