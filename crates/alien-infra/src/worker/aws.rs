@@ -507,7 +507,7 @@ impl AwsWorkerController {
                 self.arn = Some(arn);
                 self.worker_name = Some(aws_worker_name);
                 return Ok(HandlerAction::Continue {
-                    state: CreateAdoptedApplyingCode,
+                    state: CreateAdoptedApplyingConfig,
                     suggested_delay: Some(Duration::from_secs(3)),
                 });
             }
@@ -563,8 +563,9 @@ impl AwsWorkerController {
             },
         )?;
 
+        // The rest of the create flow runs as it would after a fresh create.
         Ok(HandlerAction::Continue {
-            state: CreateAdoptedApplyingConfig,
+            state: CreateWaitForActive,
             suggested_delay: Some(Duration::from_secs(3)),
         })
     }
@@ -591,9 +592,17 @@ impl AwsWorkerController {
         }
 
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &cfg.id);
-        let request = self
+        let mut request = self
             .desired_configuration_request(ctx, cfg, &aws_worker_name)
             .await?;
+        // The adopted function may be attached to a VPC the desired config no longer has.
+        // Lambda keeps a placement the request leaves out; empty lists detach it.
+        if request.vpc_config.is_none() {
+            request.vpc_config = Some(VpcConfig {
+                subnet_ids: Some(Vec::new()),
+                security_group_ids: Some(Vec::new()),
+            });
+        }
         client
             .update_function_configuration(&arn, request)
             .await
@@ -603,9 +612,10 @@ impl AwsWorkerController {
                 resource_id: Some(cfg.id.clone()),
             })?;
 
-        // The rest of the create flow runs as it would after a fresh create.
+        // The role goes first, so the desired image never runs with an older role's
+        // permissions.
         Ok(HandlerAction::Continue {
-            state: CreateWaitForActive,
+            state: CreateAdoptedApplyingCode,
             suggested_delay: Some(Duration::from_secs(3)),
         })
     }
@@ -6846,8 +6856,12 @@ mod tests {
         mock_lambda
             .expect_update_function_configuration()
             .returning(move |function, request| {
+                let vpc_detached = request.vpc_config.as_ref().is_some_and(|vpc| {
+                    vpc.subnet_ids.as_ref().is_some_and(Vec::is_empty)
+                        && vpc.security_group_ids.as_ref().is_some_and(Vec::is_empty)
+                });
                 calls.lock().unwrap().push(format!(
-                    "UpdateFunctionConfiguration {function} timeout={:?} memory={:?} role_set={}",
+                    "UpdateFunctionConfiguration {function} timeout={:?} memory={:?} role_set={} vpc_detached={vpc_detached}",
                     request.timeout,
                     request.memory_size,
                     request.role.is_some()
@@ -6897,8 +6911,9 @@ mod tests {
     }
 
     /// A create whose function was made but whose progress was never saved runs again and
-    /// finds its own function under the name. It adopts it, brings it to the desired image
-    /// and configuration once Lambda allows updates, and finishes the create.
+    /// finds its own function under the name. It adopts it, brings it to the desired
+    /// configuration (detaching any VPC the desired config lacks) and then the desired image
+    /// once Lambda allows updates, and finishes the create.
     #[tokio::test]
     async fn test_create_adopts_its_own_function_after_a_lost_checkpoint() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -6916,10 +6931,10 @@ mod tests {
                 "CreateFunction".to_string(),
                 "GetFunction test-custom-func".to_string(),
                 format!(
-                    "UpdateFunctionCode {arn} 123456789012.dkr.ecr.us-east-1.amazonaws.com/custom:latest"
+                    "UpdateFunctionConfiguration {arn} timeout=Some(120) memory=Some(512) role_set=true vpc_detached=true"
                 ),
                 format!(
-                    "UpdateFunctionConfiguration {arn} timeout=Some(120) memory=Some(512) role_set=true"
+                    "UpdateFunctionCode {arn} 123456789012.dkr.ecr.us-east-1.amazonaws.com/custom:latest"
                 ),
             ]
         );
