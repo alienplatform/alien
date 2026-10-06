@@ -1428,6 +1428,12 @@ mod tests {
             assert_eq!(manager.lists_after_delete, 2);
         }
 
+        assert!(
+            destroy_local_deployment(port, "api", true).await.is_err(),
+            "the remaining same-name deployment outside local-dev must never be deleted"
+        );
+        assert_eq!(manager.lock().unwrap().deleted.len(), 1);
+
         let error = destroy_local_deployment(port, "missing", false)
             .await
             .expect_err("an unknown name is refused");
