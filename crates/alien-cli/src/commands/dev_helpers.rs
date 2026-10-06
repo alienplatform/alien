@@ -18,10 +18,13 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::{
+    auth::Subject,
     providers::{
         in_memory_telemetry::InMemoryTelemetryBackend, local_credentials::LocalCredentialResolver,
         permissive_auth::PermissiveAuthValidator,
     },
+    stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
+    traits::deployment_store::{DeploymentFilter, DeploymentStore},
     LogBuffer,
 };
 use alien_manager_api::types::{CreateReleaseRequest, StackByPlatform};
@@ -173,11 +176,6 @@ async fn refresh_local_deployment_environment(
     name: &str,
     variables: &[CliEnvVar],
 ) -> Result<()> {
-    use alien_manager::{
-        auth::Subject,
-        stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
-        traits::deployment_store::{DeploymentFilter, DeploymentStore},
-    };
     let path = state_dir.join("dev-server.db");
     if !path.exists() {
         return Ok(());
@@ -1052,6 +1050,9 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+    use alien_manager::traits::deployment_store::{
+        CreateDeploymentGroupParams, CreateDeploymentParams,
+    };
     use axum::{
         extract::{Path as AxumPath, State},
         http::StatusCode,
@@ -1248,13 +1249,6 @@ mod tests {
 
     #[tokio::test]
     async fn session_environment_refresh_preserves_deployment_and_clears_old_values() {
-        use alien_manager::{
-            auth::Subject,
-            stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
-            traits::deployment_store::{
-                CreateDeploymentGroupParams, CreateDeploymentParams, DeploymentStore,
-            },
-        };
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("dev-server.db");
         let store = SqliteDeploymentStore::new(Arc::new(
