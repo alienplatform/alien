@@ -155,7 +155,12 @@ async fn ensure_server_running_internal(
     ensure_dev_port_available(port)?;
 
     if let Some(name) = deployment_name {
-        refresh_local_deployment_environment(name, &user_env_vars).await?;
+        refresh_local_deployment_environment(
+            &get_current_dir()?.join(".alien"),
+            name,
+            &user_env_vars,
+        )
+        .await?;
     }
 
     start_embedded_dev_manager(port).await
@@ -163,13 +168,17 @@ async fn ensure_server_running_internal(
 
 /// The full dev session owns this stopped manager's database. Refresh its CLI
 /// environment before execution resumes, preserving deployment identity and data.
-async fn refresh_local_deployment_environment(name: &str, variables: &[CliEnvVar]) -> Result<()> {
+async fn refresh_local_deployment_environment(
+    state_dir: &Path,
+    name: &str,
+    variables: &[CliEnvVar],
+) -> Result<()> {
     use alien_manager::{
         auth::Subject,
         stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
         traits::deployment_store::{DeploymentFilter, DeploymentStore},
     };
-    let path = get_current_dir()?.join(".alien/dev-server.db");
+    let path = state_dir.join("dev-server.db");
     if !path.exists() {
         return Ok(());
     }
@@ -1235,6 +1244,99 @@ mod tests {
             .expect("the full dev session also reuses durable state");
         assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_environment_refresh_preserves_deployment_and_clears_old_values() {
+        use alien_manager::{
+            auth::Subject,
+            stores::sqlite::{SqliteDatabase, SqliteDeploymentStore},
+            traits::deployment_store::{
+                CreateDeploymentGroupParams, CreateDeploymentParams, DeploymentStore,
+            },
+        };
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("dev-server.db");
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let subject = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "local-dev".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let before = store
+            .create_deployment(
+                &subject,
+                CreateDeploymentParams {
+                    name: "api".to_string(),
+                    deployment_group_id: group.id,
+                    platform: alien_core::Platform::Local,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: Default::default(),
+                    stack_state: Some(StackState::with_resource_prefix(
+                        alien_core::Platform::Local,
+                        "retained".to_string(),
+                    )),
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        drop(store);
+        let variables = vec![CliEnvVar {
+            name: "APP_KEY".to_string(),
+            value: "new-value".to_string(),
+            is_secret: true,
+            target_resources: Some(vec!["api".to_string()]),
+        }];
+        refresh_local_deployment_environment(directory.path(), "api", &variables)
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let after = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.stack_state.unwrap().resource_prefix, "retained");
+        let actual = after.user_environment_variables.unwrap();
+        assert_eq!(actual[0].value, "new-value");
+        assert_eq!(
+            actual[0].var_type,
+            alien_core::EnvironmentVariableType::Secret
+        );
+        assert_eq!(actual[0].target_resources, Some(vec!["api".to_string()]));
+        drop(store);
+        refresh_local_deployment_environment(directory.path(), "api", &[])
+            .await
+            .unwrap();
+        let store = SqliteDeploymentStore::new(Arc::new(
+            SqliteDatabase::new(&path.to_string_lossy()).await.unwrap(),
+        ));
+        let cleared = store
+            .get_deployment(&subject, &before.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.user_environment_variables.unwrap().is_empty());
+        assert_eq!(cleared.stack_state.unwrap().resource_prefix, "retained");
     }
 
     #[test]
