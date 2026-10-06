@@ -5,6 +5,24 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The selected Docker configuration cannot be used.
+    #[error(
+        code = "DOCKER_CONFIGURATION_INVALID",
+        message = "Docker configuration is invalid: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    DockerConfigurationInvalid { message: String },
+
+    /// The selected endpoint requires an unavailable transport.
+    #[error(
+        code = "DOCKER_TRANSPORT_UNSUPPORTED",
+        message = "Docker transport '{transport}' is unsupported: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    DockerTransportUnsupported { transport: String, message: String },
+
     /// Failed to create or access local directory.
     #[error(
         code = "LOCAL_DIRECTORY_ERROR",

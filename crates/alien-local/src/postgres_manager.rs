@@ -305,7 +305,7 @@ impl LocalPostgresManager {
         // Listen on loopback plus the docker bridge gateway when present, so a same-stack local
         // container can reach pg via `host.docker.internal` — never 0.0.0.0, so pg stays off every
         // public/LAN interface. Falls back to loopback-only when the bridge gateway can't be bound.
-        let listen_addresses = match bindable_docker_bridge_gateway().await {
+        let listen_addresses = match bindable_docker_bridge_gateway().await? {
             Some(gateway) => format!("127.0.0.1,{gateway}"),
             None => {
                 debug!(

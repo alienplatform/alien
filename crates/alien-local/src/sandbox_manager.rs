@@ -108,11 +108,7 @@ pub struct LocalSandboxManager {
 impl LocalSandboxManager {
     /// Connects to the local Docker daemon.
     pub fn new(state_dir: PathBuf) -> Result<Self> {
-        let docker = Docker::connect_with_local_defaults()
-            .into_alien_error()
-            .context(ErrorData::DockerConnectionFailed {
-                reason: "could not reach the local Docker daemon".to_string(),
-            })?;
+        let docker = crate::connect_docker()?;
 
         Ok(Self { docker, state_dir })
     }
