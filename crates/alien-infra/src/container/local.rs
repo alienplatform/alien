@@ -881,7 +881,9 @@ fn emit_local_container_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+
+    use futures::FutureExt;
 
     use crate::core::controller_test::SingleControllerExecutor;
 
@@ -920,45 +922,52 @@ mod tests {
             .build()
             .await
             .unwrap();
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
-        let first = executor
-            .internal_state::<LocalContainerController>()
-            .unwrap()
-            .container_info
-            .as_ref()
-            .unwrap()
-            .docker_container_id
-            .clone();
-        manager.delete_container(&id).await.unwrap();
-        executor.step().await.unwrap();
-        executor.run_until_terminal().await.unwrap();
-        let second = executor
-            .internal_state::<LocalContainerController>()
-            .unwrap()
-            .container_info
-            .as_ref()
-            .unwrap()
-            .docker_container_id
-            .clone();
-        assert_ne!(first, second);
-        assert!(manager.is_running(&id).await);
+        let verification = AssertUnwindSafe(async {
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let first = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .container_info
+                .as_ref()
+                .unwrap()
+                .docker_container_id
+                .clone();
+            manager.delete_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            let second = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .container_info
+                .as_ref()
+                .unwrap()
+                .docker_container_id
+                .clone();
+            assert_ne!(first, second);
+            assert!(manager.is_running(&id).await);
 
-        // A present, deliberately stopped container must not be recreated.
-        manager.stop_container(&id).await.unwrap();
-        let _ = executor.step().await;
-        assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
-        let _ = executor.step().await;
-        assert!(!manager.is_running(&id).await);
-        assert!(manager.container_exists(&id).await.unwrap());
+            // A present, deliberately stopped container must not be recreated.
+            manager.stop_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
+            executor.step().await.unwrap();
+            assert!(!manager.is_running(&id).await);
+            assert!(manager.container_exists(&id).await.unwrap());
 
-        // Once absent, even an already failed health checkpoint can recover.
+            // Once absent, even an already failed health checkpoint can recover.
+            manager.delete_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert!(manager.is_running(&id).await);
+        })
+        .catch_unwind()
+        .await;
         manager.delete_container(&id).await.unwrap();
-        executor.step().await.unwrap();
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
-        assert!(manager.is_running(&id).await);
-        manager.delete_container(&id).await.unwrap();
+        if let Err(panic) = verification {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     #[test]
