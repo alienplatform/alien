@@ -129,16 +129,17 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
 }
 
 /// A kernel or sandbox runtime without ambient capabilities (Linux < 4.3, older gVisor) rejects
-/// PR_CAP_AMBIENT with EINVAL. The arguments are constant, so EINVAL can only mean unsupported,
-/// and the capset to zero inheritable that follows would clear an ambient set anyway.
+/// PR_CAP_AMBIENT with EINVAL. Accepting it is safe only because every caller follows with a
+/// capset that zeroes the inheritable set, which empties the ambient set as well; a caller that
+/// does not must not use this.
 #[cfg(target_os = "linux")]
 unsafe fn clear_ambient_capabilities() -> io::Result<()> {
     if libc::prctl(
         libc::PR_CAP_AMBIENT,
-        libc::PR_CAP_AMBIENT_CLEAR_ALL,
-        0,
-        0,
-        0,
+        libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+        0 as libc::c_ulong,
+        0 as libc::c_ulong,
+        0 as libc::c_ulong,
     ) == 0
     {
         return Ok(());
@@ -395,6 +396,157 @@ mod tests {
                 libc::WEXITSTATUS(status),
                 0,
                 "the drop must succeed without ambient capabilities"
+            );
+        }
+    }
+
+    /// Root only: raising an ambient capability needs one in the permitted set.
+    #[test]
+    fn an_ambient_capability_is_emptied_even_when_clear_all_is_rejected() {
+        if unsafe { libc::geteuid() } != 0 {
+            return;
+        }
+        #[cfg(target_arch = "x86_64")]
+        const ARCH: u32 = 0xc000003e;
+        #[cfg(target_arch = "aarch64")]
+        const ARCH: u32 = 0xc00000b7;
+        const CAP_KILL: u32 = 5;
+        #[repr(C)]
+        struct Header {
+            version: u32,
+            pid: i32,
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct Data {
+            effective: u32,
+            permitted: u32,
+            inheritable: u32,
+        }
+        let stmt = |code, k| libc::sock_filter {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        };
+        let jump = |k, jt, jf| libc::sock_filter {
+            code: 0x15,
+            jt,
+            jf,
+            k,
+        };
+        // Rejects only PR_CAP_AMBIENT_CLEAR_ALL, so PR_CAP_AMBIENT_IS_SET still answers.
+        let mut filter = [
+            stmt(0x20, 4),
+            jump(ARCH, 0, 7),
+            stmt(0x20, 0),
+            jump(libc::SYS_prctl as u32, 0, 5),
+            stmt(0x20, 16),
+            jump(libc::PR_CAP_AMBIENT as u32, 0, 3),
+            stmt(0x20, 24),
+            jump(libc::PR_CAP_AMBIENT_CLEAR_ALL as u32, 0, 1),
+            stmt(0x06, 0x00050000 | libc::EINVAL as u32),
+            stmt(0x06, 0x7fff0000),
+        ];
+        let program = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_mut_ptr(),
+        };
+        let identity = ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        };
+        unsafe {
+            let pid = libc::fork();
+            assert!(pid >= 0, "fork must succeed");
+            if pid == 0 {
+                // Become the identity first, keeping the permitted set: the kernel empties the
+                // ambient set on any root-to-user switch, so a drop that changed the uid would
+                // hide whether the capset does.
+                if libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0
+                    || libc::setgid(identity.gid) != 0
+                    || libc::setuid(identity.uid) != 0
+                {
+                    libc::_exit(10);
+                }
+                let header = Header {
+                    version: 0x20080522,
+                    pid: 0,
+                };
+                let mut data = [Data {
+                    effective: 0,
+                    permitted: 0,
+                    inheritable: 0,
+                }; 2];
+                if libc::syscall(libc::SYS_capget, &header, data.as_mut_ptr()) != 0 {
+                    libc::_exit(11);
+                }
+                data[0].inheritable |= 1 << CAP_KILL;
+                if libc::syscall(libc::SYS_capset, &header, data.as_ptr()) != 0 {
+                    libc::_exit(12);
+                }
+                if libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_RAISE,
+                    CAP_KILL,
+                    0,
+                    0,
+                ) != 0
+                    || libc::prctl(
+                        libc::PR_CAP_AMBIENT,
+                        libc::PR_CAP_AMBIENT_IS_SET,
+                        CAP_KILL,
+                        0,
+                        0,
+                    ) != 1
+                {
+                    libc::_exit(13);
+                }
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                    || libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) != 0
+                {
+                    libc::_exit(14);
+                }
+                if libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_CLEAR_ALL,
+                    0,
+                    0,
+                    0,
+                ) != -1
+                    || *libc::__errno_location() != libc::EINVAL
+                    || libc::prctl(
+                        libc::PR_CAP_AMBIENT,
+                        libc::PR_CAP_AMBIENT_IS_SET,
+                        CAP_KILL,
+                        0,
+                        0,
+                    ) != 1
+                {
+                    libc::_exit(15);
+                }
+                if drop_to(identity).is_err() {
+                    libc::_exit(1);
+                }
+                if libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_IS_SET,
+                    CAP_KILL,
+                    0,
+                    0,
+                ) != 0
+                {
+                    libc::_exit(2);
+                }
+                libc::_exit(0);
+            }
+            let mut status = 0;
+            assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+            assert!(libc::WIFEXITED(status), "child was killed: {status}");
+            assert_eq!(
+                libc::WEXITSTATUS(status),
+                0,
+                "the ambient set must be empty after the drop"
             );
         }
     }
