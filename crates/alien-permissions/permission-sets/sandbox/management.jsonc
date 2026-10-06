@@ -85,9 +85,9 @@
           ]
         },
         // The stack binding is the resource group, and at that scope a holder can terminate
-        // sandboxes in every sandbox group there, as `provision` notes. The resource binding is
-        // narrower but undeliverable today: neither the setup path (`worker/dispatch-command`
-        // only) nor the runtime path (Kubernetes only) compiles resource-scoped management for it.
+        // sandboxes in every sandbox group there, as `provision` notes. The narrower resource
+        // binding, on the sandbox group itself, is rendered by the Terraform setup for each
+        // profile that holds this set; the runtime path compiles it for Kubernetes only.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
