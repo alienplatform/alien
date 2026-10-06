@@ -818,10 +818,8 @@ mod tests {
                     Json(serde_json::json!({ "managerUrl": manager_url, "projectId": PROJECT }))
                 }),
             )
-            .route(
-                "/v1/deployments/{id}",
-                get(deployment).delete(request_delete),
-            )
+            .route("/v1/deployments/{id}", get(deployment))
+            .route("/v1/deployments/{id}/delete", post(request_delete))
             .route("/v1/sync/acquire", post(acquire))
             .route("/v1/deployments/{id}/token", post(token))
             .with_state(state.clone());
