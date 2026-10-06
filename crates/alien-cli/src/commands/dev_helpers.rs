@@ -1322,9 +1322,6 @@ mod tests {
     /// reuses the existing deployment, whose inputs were fixed at creation.
     #[tokio::test]
     async fn create_initial_deployment_sends_inputs() {
-        use axum::{extract::State, routing::get, Json, Router};
-        use std::sync::{Arc, Mutex};
-
         fn deployment(name: &str) -> serde_json::Value {
             serde_json::json!({
                 "id": "dep_1",
