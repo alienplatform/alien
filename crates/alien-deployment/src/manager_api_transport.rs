@@ -719,8 +719,8 @@ mod tests {
         .await
         .expect("confirmed removed record is completed deletion");
         assert!(matches!(result, SetupDeleteAcquireOutcome::AlreadyDeleted));
-        acquire.assert_calls_async(1).await;
-        lookup.assert_calls_async(1).await;
+        acquire.assert_async().await;
+        lookup.assert_async().await;
     }
 
     #[tokio::test]
@@ -745,10 +745,11 @@ mod tests {
             DeploymentModel::Push,
         )
         .await
-        .expect_err("lookup failure must not report deleted");
+        .err()
+        .expect("lookup failure must not report deleted");
         assert_eq!(error.http_status_code, Some(500));
-        acquire.assert_calls_async(1).await;
-        lookup.assert_calls_async(1).await;
+        acquire.assert_async().await;
+        lookup.assert_async().await;
     }
 
     #[test]
