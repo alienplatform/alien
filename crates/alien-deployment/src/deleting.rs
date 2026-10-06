@@ -605,10 +605,22 @@ mod tests {
                 b"stored data"
             );
         }
+        let mut retry_state = step.next_state;
+        let mut never_created = StackResourceState::new_pending(
+            "storage".to_string(),
+            Resource::new(Storage::new("never-created".to_string()).build()),
+            None,
+            Vec::new(),
+        );
+        never_created.lifecycle = Some(ResourceLifecycle::Frozen);
+        never_created.status = ResourceStatus::ProvisionFailed;
+        retry_state
+            .resources
+            .insert("never-created".to_string(), never_created);
         let failed = DeploymentState::builder()
             .status(DeploymentStatus::DeleteFailed)
             .platform(Platform::Local)
-            .stack_state(step.next_state)
+            .stack_state(retry_state)
             .retry_requested(true)
             .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
             .build();
