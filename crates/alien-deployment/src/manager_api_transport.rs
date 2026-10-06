@@ -996,22 +996,6 @@ mod tests {
     #[tokio::test]
     async fn actual_setup_loop_checkpoints_handoff_once_before_release() {
         let server = MockServer::start_async().await;
-        let reconcile = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .path("/v1/sync/reconcile")
-                    .json_body_includes(r#"{"state":{"status":"provisioning"}}"#);
-                then.status(200)
-                    .json_body(serde_json::json!({"success":true,"current":{}}));
-            })
-            .await;
-        let release = server
-            .mock_async(|when, then| {
-                when.method(POST).path("/v1/sync/release");
-                then.status(200);
-            })
-            .await;
-        let client = ManagerClient::new(&server.base_url());
         let mut state = running_state();
         state.status = alien_core::DeploymentStatus::InitialSetup;
         state.platform = Platform::Test;
@@ -1028,6 +1012,24 @@ mod tests {
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             ..Default::default()
         });
+        let mut checkpointed = state.clone();
+        checkpointed.status = alien_core::DeploymentStatus::Provisioning;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"provisioning"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":checkpointed}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
         let mut config = deployment_config();
         let claim = ExecutionClaim {
             operation_id: "operation-1".to_string(),
@@ -1065,8 +1067,8 @@ mod tests {
         .expect("checkpointed setup handoff should release");
         assert_eq!(result.steps_executed, 1);
         assert_eq!(result.loop_result.stop_reason, LoopStopReason::Handoff);
-        reconcile.assert_calls_async(1).await;
-        release.assert_calls_async(1).await;
+        reconcile.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
     }
 
     #[tokio::test]
@@ -1121,8 +1123,8 @@ mod tests {
         assert!(serde_json::to_string(&error)
             .unwrap()
             .contains("execution profile is missing"));
-        reconcile.assert_calls_async(0).await;
-        release.assert_calls_async(1).await;
+        reconcile.assert_hits_async(0).await;
+        release.assert_hits_async(1).await;
     }
 
     #[tokio::test]
@@ -1140,7 +1142,7 @@ mod tests {
             };
             let reconcile = server.mock_async(|when, then| {
                 when.method(POST).path("/v1/sync/reconcile")
-                    .json_body_includes(r#"{"executionClaim":{"operationId":"operation-1","attemptId":"attempt-1"}}"#);
+                    .json_body_partial(r#"{"executionClaim":{"operationId":"operation-1","attemptId":"attempt-1"}}"#);
                 then.status(200).json_body(serde_json::json!({"success":true,"current":state}));
             }).await;
             let release = server.mock_async(|when, then| {
@@ -1183,8 +1185,8 @@ mod tests {
                     LoopOutcome::Success
                 );
             }
-            reconcile.assert_calls_async(1).await;
-            release.assert_calls_async(1).await;
+            reconcile.assert_hits_async(1).await;
+            release.assert_hits_async(1).await;
         }
     }
 
@@ -1201,7 +1203,7 @@ mod tests {
                 .mock_async(|when, then| {
                     when.method(POST)
                         .path("/v1/sync/reconcile")
-                        .json_body_includes(r#"{"state":{"status":"running"}}"#);
+                        .json_body_partial(r#"{"state":{"status":"running"}}"#);
                     then.status(200)
                         .json_body(serde_json::json!({"success":true,"current":state}));
                 })
@@ -1215,8 +1217,12 @@ mod tests {
             let result = match stop.clone() {
                 Some(stop_reason) => Ok(RunnerResult {
                     loop_result: LoopResult {
+                        outcome: if stop_reason == LoopStopReason::BudgetExceeded {
+                            LoopOutcome::Failure
+                        } else {
+                            LoopOutcome::Neutral
+                        },
                         stop_reason,
-                        outcome: LoopOutcome::Neutral,
                         final_status: state.status,
                     },
                     steps_executed: 1,
@@ -1241,11 +1247,16 @@ mod tests {
                     .expect_err("runner error must survive finalization")
                     .message
                     .contains("checkpoint rejected"));
+            } else if stop == Some(LoopStopReason::BudgetExceeded) {
+                assert!(result
+                    .expect_err("exhausted budget remains a failure")
+                    .message
+                    .contains("deployment failed"));
             } else {
-                result.expect("nonterminal result should finalize");
+                result.expect("delayed result should finalize");
             }
-            reconcile.assert_calls_async(1).await;
-            release.assert_calls_async(1).await;
+            reconcile.assert_hits_async(1).await;
+            release.assert_hits_async(1).await;
         }
     }
 
@@ -1290,8 +1301,8 @@ mod tests {
             .causes
             .iter()
             .any(|cause| cause.message.contains("release")));
-        reconcile.assert_calls_async(0).await;
-        release.assert_calls_async(1).await;
+        reconcile.assert_hits_async(0).await;
+        release.assert_hits_async(1).await;
     }
 
     #[tokio::test]
