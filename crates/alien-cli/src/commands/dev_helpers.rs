@@ -811,7 +811,6 @@ pub async fn create_initial_deployment(
     // deployment in another group cannot safely be distinguished from an intentional one.
     let outside = client
         .list_deployments()
-        .name(deployment_name)
         .send()
         .await
         .into_sdk_error()
