@@ -368,7 +368,7 @@ resource "azurerm_role_assignment" "agents_execution_c24cf47c_5077_412d_a19c_452
   scope              = azapi_resource.agents.id
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
-  description        = "Allows running commands and moving files inside an existing sandbox (sandbox/execute), for the execution identity on this sandbox group."
+  description        = "Container Apps SandboxGroup Data Owner, held on this sandbox group by the execution identity."
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -398,7 +398,7 @@ resource "azurerm_role_assignment" "other_execution_c24cf47c_5077_412d_a19c_4520
   scope              = azapi_resource.other.id
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
-  description        = "Allows running commands and moving files inside an existing sandbox (sandbox/execute), for the execution identity on this sandbox group."
+  description        = "Container Apps SandboxGroup Data Owner, held on this sandbox group by the execution identity."
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]

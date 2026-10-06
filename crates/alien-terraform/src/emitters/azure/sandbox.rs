@@ -381,13 +381,15 @@ fn emit_image_management(
 /// definitions are the setup-owned ones `emit_setup_resource_role_definitions` renders for the
 /// same profile and set.
 ///
-/// Each assignment is addressed by sandbox, profile and role, the role by its predefined GUID or
-/// its custom key, so reordering a profile, swapping two sets that resolve to one role, or
-/// rewording a role's display name keeps the same Terraform address and Azure name: a changed
-/// address would destroy and recreate an assignment Azure still holds, which it refuses.
+/// Each assignment is addressed by sandbox, profile and role, a predefined role by its GUID and a
+/// custom role by its set and key, so reordering a profile, swapping two sets that resolve to one
+/// predefined role, or rewording a role's display name keeps the same Terraform address and Azure
+/// name: a changed address would destroy and recreate an assignment Azure still holds, which it
+/// refuses.
 ///
-/// Management never reaches this loop: the stack keeps that profile in `Stack::management()`,
-/// outside `permission_profiles()`, and its sandbox grant is `emit_image_management`'s.
+/// The management identity never reaches this loop. The stack keeps it in `Stack::management()`,
+/// outside `permission_profiles()`, and a user profile named `management` gets no service account,
+/// so `service_account_principal_id` skips it. Its sandbox grant is `emit_image_management`'s.
 fn emit_workload_access(
     ctx: &EmitContext<'_>,
     label: &str,
@@ -404,28 +406,17 @@ fn emit_workload_access(
         };
         // `sandbox/execute` and `sandbox/remote-execute` both resolve to the data-plane role, and
         // Azure refuses a second assignment of one role to one principal at one scope.
-        let mut seen_roles = HashSet::new();
-        for (name, stack_wide) in sandbox_permission_set_names(profile, ctx.resource_id)? {
-            // The setup renders one role definition per (profile, set id) and takes inline sets
-            // too, so an inline set reusing this id anywhere in the profile could be the one that
-            // definition was rendered from, and this grant would bind its actions.
-            if profile.0.values().flatten().any(
-                |reference| matches!(reference, PermissionSetReference::Inline(set) if set.id == name),
-            ) {
-                return Err(refused(
-                    name,
-                    ctx.resource_id,
-                    "an inline permission set in the profile reuses this built-in id; inline sets need their own ids",
-                ));
-            }
+        let mut seen_predefined_roles = HashSet::new();
+        for (name, stack_wide) in
+            sandbox_permission_set_names(profile_name, profile, ctx.resource_id)?
+        {
+            let refuse = |reason: &str| refused(profile_name, name, ctx.resource_id, reason);
             if name == "sandbox/provision" {
                 if stack_wide {
                     continue;
                 }
-                return Err(refused(
-                    name,
-                    ctx.resource_id,
-                    "Azure delivers provisioning at the resource group only, so a workload profile cannot hold it per sandbox group",
+                return Err(refuse(
+                    "sandbox/provision is compiled at stack scope only on Azure; under \"*\" it is held at the resource group and reaches every sandbox group there",
                 ));
             }
             let permission_set = alien_permissions::get_permission_set(name).ok_or_else(|| {
@@ -443,9 +434,7 @@ fn emit_workload_access(
                 continue;
             }
             if !supports_azure_resource_binding(permission_set) {
-                return Err(refused(
-                    name,
-                    ctx.resource_id,
+                return Err(refuse(
                     "the set has no Azure resource binding to place on a sandbox group",
                 ));
             }
@@ -458,36 +447,54 @@ fn emit_workload_access(
                         ctx.resource_id
                     ),
                 })?;
-            let description = format!(
-                "{} ({name}), for the {profile_name} identity on this sandbox group.",
-                permission_set.description
-            );
 
             for binding in &plan.bindings {
                 // Each assignment below is scoped to the created group, so a set declaring any
                 // other resource scope is refused rather than rendered somewhere it did not ask for.
                 if !binding.scope.ends_with(&group_scope_suffix) {
-                    return Err(refused(
-                        name,
-                        ctx.resource_id,
-                        &format!(
-                            "the set binds on '{}', and this grant is placed on the sandbox group only",
-                            binding.scope
-                        ),
-                    ));
+                    return Err(refuse(&format!(
+                        "the set binds on '{}', and this grant is placed on the sandbox group only",
+                        binding.scope
+                    )));
                 }
-                let (role_segment, role_definition_id) = match &binding.role_definition {
+                // The description follows the role, not the set naming it, so whichever of two
+                // sets resolving to one predefined role renders, the attribute is the same.
+                let (role_segment, role_definition_id, description) = match &binding.role_definition
+                {
                     AzureRoleDefinitionRef::Predefined { role_definition_id } => {
-                        let guid = role_definition_id
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(role_definition_id.as_str());
+                        let guid = sanitize_role_label(
+                            role_definition_id
+                                .rsplit_once('/')
+                                .map_or(role_definition_id.as_str(), |(_, guid)| guid),
+                        );
+                        if !seen_predefined_roles.insert(guid.clone()) {
+                            continue;
+                        }
                         (
-                            sanitize_role_label(guid),
+                            guid,
                             expr::template(role_definition_id.clone()),
+                            format!(
+                                "{}, held on this sandbox group by the {profile_name} identity.",
+                                binding.role_name
+                            ),
                         )
                     }
                     AzureRoleDefinitionRef::Custom { key } => {
+                        // The setup renders one role definition per (profile, set id) from the
+                        // first reference with that id that binds on an Azure resource, inline
+                        // sets included, so an inline set reusing this id could be the one that
+                        // definition was rendered from, and this grant would bind its actions.
+                        if profile.0.values().flatten().any(|reference| {
+                            matches!(
+                                reference,
+                                PermissionSetReference::Inline(set)
+                                    if set.id == name && supports_azure_resource_binding(set)
+                            )
+                        }) {
+                            return Err(refuse(
+                                "an inline permission set in the profile reuses this built-in id; inline sets need their own ids",
+                            ));
+                        }
                         let custom_index = plan
                             .custom_roles
                             .iter()
@@ -505,20 +512,25 @@ fn emit_workload_access(
                             &binding.role_name,
                             custom_index,
                         );
-                        let role_definition_id = expr::traversal([
-                            "azurerm_role_definition",
-                            role_label.as_str(),
-                            "role_definition_resource_id",
-                        ]);
+                        // A custom key carries an explicit entry label alone, which two sets can
+                        // share, so the set id keeps their assignments apart.
                         (
-                            sanitize_role_label(&azure_resource_role_key_segment(key)),
-                            role_definition_id,
+                            sanitize_role_label(&format!(
+                                "{name}_{}",
+                                azure_resource_role_key_segment(key)
+                            )),
+                            expr::traversal([
+                                "azurerm_role_definition",
+                                role_label.as_str(),
+                                "role_definition_resource_id",
+                            ]),
+                            format!(
+                                "{} ({name}), held on this sandbox group by the {profile_name} identity.",
+                                permission_set.description
+                            ),
                         )
                     }
                 };
-                if !seen_roles.insert(role_segment.clone()) {
-                    continue;
-                }
                 let profile_segment = sanitize_role_label(profile_name);
                 fragment.resource_blocks.push(resource_block(
                     "azurerm_role_assignment",
@@ -535,7 +547,7 @@ fn emit_workload_access(
                         attr("scope", expr::traversal(["azapi_resource", label, "id"])),
                         attr("role_definition_id", role_definition_id),
                         attr("principal_id", principal_id.clone()),
-                        attr("description", Expression::String(description.clone())),
+                        attr("description", Expression::String(description)),
                     ],
                 ));
             }
@@ -546,9 +558,16 @@ fn emit_workload_access(
 }
 
 /// A grant the setup will not render on a sandbox group. Not retryable: the stack has to change.
-fn refused(permission_set_id: &str, resource_id: &str, reason: &str) -> AlienError<ErrorData> {
+fn refused(
+    profile_name: &str,
+    permission_set_id: &str,
+    resource_id: &str,
+    reason: &str,
+) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::OperationNotSupported {
-        operation: format!("grant {permission_set_id} on sandbox {resource_id}"),
+        operation: format!(
+            "grant {permission_set_id} to profile {profile_name} on sandbox {resource_id}"
+        ),
         reason: reason.to_string(),
     })
 }
@@ -568,11 +587,13 @@ fn has_azure_stack_binding(permission_set: &PermissionSet) -> bool {
 /// whatever order the profile lists them in. The flag marks a `"*"` entry.
 ///
 /// Only references by name qualify; the role definition an id resolves to here is the built-in
-/// set's. A keyed inline set is refused. An inline set under `"*"` is the service-account
-/// emitter's when it binds at the stack, and is refused when it binds at the sandbox group only,
-/// because no setup emitter would deliver it. A keyed set of another resource type has no
-/// sandbox-group scope to render on.
+/// set's. A keyed inline set is refused. An inline `sandbox/*` set under `"*"` is the
+/// service-account emitter's when it binds at the stack, and is refused when it binds at the
+/// sandbox group only, because no setup emitter would deliver it; an inline `"*"` set with any
+/// other id is not examined here. A keyed set of another resource type has no sandbox-group scope
+/// to render on.
 fn sandbox_permission_set_names<'a>(
+    profile_name: &str,
     profile: &'a PermissionProfile,
     resource_id: &str,
 ) -> Result<Vec<(&'a str, bool)>> {
@@ -582,6 +603,7 @@ fn sandbox_permission_set_names<'a>(
             PermissionSetReference::Name(name) if name.starts_with("sandbox/") => name.as_str(),
             PermissionSetReference::Name(name) => {
                 return Err(refused(
+                    profile_name,
                     name,
                     resource_id,
                     "only sandbox/* permission sets can be granted on a sandbox",
@@ -589,6 +611,7 @@ fn sandbox_permission_set_names<'a>(
             }
             PermissionSetReference::Inline(set) => {
                 return Err(refused(
+                    profile_name,
                     &set.id,
                     resource_id,
                     "only built-in permission sets referenced by name can be granted on a sandbox",
@@ -614,6 +637,7 @@ fn sandbox_permission_set_names<'a>(
                     && !has_azure_stack_binding(set) =>
             {
                 return Err(refused(
+                    profile_name,
                     &set.id,
                     resource_id,
                     "an inline set bound at the sandbox group only is delivered by no setup emitter; grant a built-in set, or bind it at the stack",
