@@ -20,7 +20,7 @@ use alien_core::{
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
     acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
-    ManagerApiTransport, SetupDeleteAcquireOutcome,
+    release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
 use alien_deployment::runner::{preserve_semantic_failure, RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -534,34 +534,6 @@ async fn destroy_tracked_deployment(
             })?;
     }
 
-    // A setup-capable runtime can delete the record immediately. Wait for its
-    // completion or acquire the handoff before fetching state for our loop.
-    let pre_delete_stack_settings: alien_core::StackSettings = pre_delete_deployment
-        .stack_settings
-        .map(serde_json::from_value)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize deployment settings before teardown".to_string(),
-        })?
-        .unwrap_or_default();
-    // Acquire → step loop → reconcile → release
-    let session = format!("cli-destroy-{}", Uuid::new_v4());
-    let acquire_outcome = acquire_setup_delete_deployment(
-        &manager_client,
-        &tracked_deployment.deployment_id,
-        &session,
-        pre_delete_stack_settings.deployment_model,
-    )
-    .await
-    .context(ErrorData::ConfigurationError {
-        message: "Failed to acquire deployment lock for deletion".to_string(),
-    })?;
-    let execution_claim = match acquire_outcome {
-        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
-        SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
-    };
-
     // Run the deletion step loop
     let client_config =
         ClientConfig::from_std_env(platform)
@@ -570,17 +542,9 @@ async fn destroy_tracked_deployment(
                 message: format!("Failed to build client config for platform {:?}", platform),
             })?;
 
-    // Fetch deployment state
-    let deployment = manager_client
-        .get_deployment()
-        .id(&tracked_deployment.deployment_id)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
-        .into_inner();
+    // Prepare from the record read before requesting deletion. The runtime can
+    // remove it immediately after that request.
+    let deployment = pre_delete_deployment;
 
     let status: DeploymentStatus =
         serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
@@ -656,31 +620,67 @@ async fn destroy_tracked_deployment(
         config.external_bindings = external_bindings;
     }
 
-    // Re-fetch under lock
-    let deployment = manager_client
-        .get_deployment()
-        .id(&tracked_deployment.deployment_id)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to re-fetch deployment under lock".to_string(),
-        })?
-        .into_inner();
+    // Acquire → step loop → reconcile → release
+    let session = format!("cli-destroy-{}", Uuid::new_v4());
+    let acquire_outcome = acquire_setup_delete_deployment(
+        &manager_client,
+        &tracked_deployment.deployment_id,
+        &session,
+        stack_settings.deployment_model,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to acquire deployment lock for deletion".to_string(),
+    })?;
+    let execution_claim = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+        SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
+    };
 
-    current.status = serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
-        .into_alien_error()
+    let preparation: Result<()> = async {
+        // Re-fetch under lock
+        let deployment = manager_client
+            .get_deployment()
+            .id(&tracked_deployment.deployment_id)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to re-fetch deployment under lock".to_string(),
+            })?
+            .into_inner();
+
+        current.status =
+            serde_json::from_value(serde_json::Value::String(deployment.status.clone()))
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: format!("Unknown deployment status: {}", deployment.status),
+                })?;
+        current.stack_state = deployment
+            .stack_state
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stack_state".to_string(),
+            })?;
+
+        Ok(())
+    }
+    .await;
+    if let Err(error) = preparation {
+        let release = release_deployment(
+            &manager_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            execution_claim.as_ref(),
+        )
+        .await
         .context(ErrorData::ConfigurationError {
-            message: format!("Unknown deployment status: {}", deployment.status),
-        })?;
-    current.stack_state = deployment
-        .stack_state
-        .map(serde_json::from_value)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize stack_state".to_string(),
-        })?;
+            message: "Failed to release deployment lock after preparation failed".to_string(),
+        });
+        return combine_operation_and_finalization(Err(error), release);
+    }
 
     let transport = ManagerApiTransport::with_execution_claim(
         manager_client.clone(),
