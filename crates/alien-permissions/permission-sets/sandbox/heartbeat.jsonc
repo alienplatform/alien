@@ -36,8 +36,10 @@
           "actions": ["Microsoft.App/sandboxGroups/read"]
         },
         // The stack binding is the resource group, wider than the one group this heartbeat reports
-        // on, as `provision` notes. The resource binding is narrower but not deliverable for a
-        // sandbox today; see `sandbox/management`. The stack grant reaches provisioning state only.
+        // on, as `provision` notes. The narrower resource binding, on the sandbox group itself, is
+        // rendered by the Terraform setup only for a workload profile that names the sandbox; a
+        // `"*"` holder and the management identity still hold this set at the resource group. The
+        // stack grant reaches provisioning state only.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"

@@ -17,7 +17,7 @@ use crate::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
         remote_bindings_role_label, remote_stack_management_label, required_label,
         sanitize_role_label, service_account_principal_id, setup_execution_role_label,
-        setup_management_role_label, tags,
+        setup_management_role_label, supports_azure_resource_binding, tags,
     },
     expr,
 };
@@ -31,6 +31,7 @@ use alien_permissions::{
     BindingTarget,
 };
 use hcl::expr::Expression;
+use std::collections::HashSet;
 
 /// The preview API version the sandbox group is created at. Must match the ARM and data-plane
 /// clients: ARM still answers older previews, so a version that drifts here fails as a response
@@ -368,14 +369,19 @@ fn emit_image_management(
     Ok(())
 }
 
-/// Grants each workload identity its `sandbox/*` sets on this group.
+/// Grants each workload identity the `sandbox/*` sets it holds on this group.
 ///
-/// `sandbox/execute` binds at resource scope alone — the role reaches inside a sandbox, and the
-/// only stack-wide scope Azure RBAC offers is the resource group — so the identity's stack-wide
-/// grants never carry it and this is the one place it lands. A profile keyed `"*"` counts the same
-/// as one keyed by the sandbox: the preflight that authors link grants trusts a `"*"` entry to
-/// cover the link. Custom role definitions are the setup-owned ones
-/// `emit_setup_resource_role_definitions` renders for the same profile and set.
+/// The service-account emitter delivers a profile's `"*"` sets at the resource group, which is as
+/// narrow as an Azure stack binding gets, so from `"*"` only sets with no stack binding land here:
+/// `sandbox/execute`, whose role reaches inside a sandbox. Such a holder gets one assignment per
+/// sandbox group in the deployment and never one at the resource group. An entry keyed by this
+/// sandbox grants every resource-bound set it names on this group alone. The profile is the
+/// grant; a Worker link is not checked. Custom role definitions are the setup-owned ones
+/// `emit_setup_resource_role_definitions` renders for the same profile and set, and the two agree
+/// on which sets qualify through `supports_azure_resource_binding`.
+///
+/// Management never reaches this loop: the stack keeps that profile in `Stack::management()`,
+/// outside `permission_profiles()`, and its sandbox grant is `emit_image_management`'s.
 fn emit_workload_access(
     ctx: &EmitContext<'_>,
     label: &str,
@@ -385,11 +391,15 @@ fn emit_workload_access(
         "/providers/Microsoft.App/sandboxGroups/{}",
         sandbox_group_name(ctx)
     );
+    let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
             continue;
         };
-        for reference in sandbox_permission_refs(profile, ctx.resource_id) {
+        // `sandbox/execute` and `sandbox/remote-execute` both resolve to the data-plane role, and
+        // Azure refuses a second assignment of one role to one principal at one scope.
+        let mut seen_roles = HashSet::new();
+        for (reference, stack_wide) in sandbox_permission_refs(profile, ctx.resource_id)? {
             let permission_set = reference
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 .ok_or_else(|| {
@@ -401,18 +411,19 @@ fn emit_workload_access(
                         ),
                     })
                 })?;
-            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            if permission_set.id.ends_with("/provision")
+                || !supports_azure_resource_binding(&permission_set)
+                || (stack_wide && has_azure_stack_binding(&permission_set))
             {
                 continue;
             }
 
-            let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
             let plan = AzureRuntimePermissionsGenerator::new()
                 .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
                 .context(ErrorData::GenericError {
                     message: format!(
-                        "failed to generate Azure sandbox grants for '{}'",
-                        permission_set.id
+                        "failed to generate Azure sandbox grants for '{}' on sandbox '{}'",
+                        permission_set.id, ctx.resource_id
                     ),
                 })?;
 
@@ -423,8 +434,8 @@ fn emit_workload_access(
                 if !binding.scope.ends_with(&group_scope_suffix) {
                     return Err(AlienError::new(ErrorData::GenericError {
                         message: format!(
-                            "{} must bind on the sandbox group; it binds on '{}'",
-                            permission_set.id, binding.scope
+                            "permission set '{}' on sandbox '{}' must bind on the sandbox group; it binds on '{}'",
+                            permission_set.id, ctx.resource_id, binding.scope
                         ),
                     }));
                 }
@@ -439,7 +450,10 @@ fn emit_workload_access(
                             .position(|role| &role.key == key)
                             .ok_or_else(|| {
                                 AlienError::new(ErrorData::GenericError {
-                                    message: format!("missing generated Azure role '{key}'"),
+                                    message: format!(
+                                        "Azure sandbox permission set '{}' on sandbox '{}' generated a binding for missing custom role '{key}'",
+                                        permission_set.id, ctx.resource_id
+                                    ),
                                 })
                             })?;
                         let role_label = setup_execution_role_label(
@@ -454,6 +468,9 @@ fn emit_workload_access(
                         ])
                     }
                 };
+                if !seen_roles.insert(role_definition_id.to_string()) {
+                    continue;
+                }
                 fragment.resource_blocks.push(resource_block(
                     "azurerm_role_assignment",
                     &format!("{label}_{}_{set_segment}_{index}", sanitize_role_label(profile_name)),
@@ -465,8 +482,8 @@ fn emit_workload_access(
                                 permission_set.id
                             )),
                         ),
-                        // The created group, which orders the assignment after it as the remote
-                        // grant's does.
+                        // Referencing the created group orders this assignment after it, as the
+                        // remote grant does.
                         attr("scope", expr::traversal(["azapi_resource", label, "id"])),
                         attr("role_definition_id", role_definition_id),
                         attr("principal_id", principal_id.clone()),
@@ -479,26 +496,49 @@ fn emit_workload_access(
     Ok(())
 }
 
-/// The profile's `sandbox/*` references for this sandbox, keyed by its id or by `"*"`, each set
-/// once.
+fn has_azure_stack_binding(permission_set: &alien_core::PermissionSet) -> bool {
+    permission_set
+        .platforms
+        .azure
+        .iter()
+        .flatten()
+        .any(|permission| permission.binding.stack.is_some())
+}
+
+/// The profile's references for this sandbox, each set once: every set keyed by the sandbox id,
+/// then the `sandbox/*` sets keyed `"*"` the keyed entry did not already name. The flag marks a
+/// `"*"` reference. A keyed entry naming a set of another resource type is refused: there is no
+/// sandbox-group scope it could render on.
 fn sandbox_permission_refs<'a>(
     profile: &'a PermissionProfile,
     resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let mut refs: Vec<&PermissionSetReference> = Vec::new();
-    let keyed = profile.0.get(resource_id).into_iter().flatten();
-    let stack_wide = profile
+) -> Result<Vec<(&'a PermissionSetReference, bool)>> {
+    let mut refs: Vec<(&PermissionSetReference, bool)> = Vec::new();
+    for reference in profile.0.get(resource_id).into_iter().flatten() {
+        if !reference.id().starts_with("sandbox/") {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "permission set '{}' is keyed on sandbox '{resource_id}' but is not a sandbox/* set",
+                    reference.id()
+                ),
+            }));
+        }
+        if !refs.iter().any(|(seen, _)| seen.id() == reference.id()) {
+            refs.push((reference, false));
+        }
+    }
+    for reference in profile
         .0
         .get("*")
         .into_iter()
         .flatten()
-        .filter(|reference| reference.id().starts_with("sandbox/"));
-    for reference in keyed.chain(stack_wide) {
-        if !refs.iter().any(|seen| seen.id() == reference.id()) {
-            refs.push(reference);
+        .filter(|reference| reference.id().starts_with("sandbox/"))
+    {
+        if !refs.iter().any(|(seen, _)| seen.id() == reference.id()) {
+            refs.push((reference, true));
         }
     }
-    refs
+    Ok(refs)
 }
 
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {

@@ -528,7 +528,7 @@ fn resource_scoped_permission_refs<'a>(
     refs
 }
 
-fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
+pub fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
     permission_set
         .platforms
         .azure

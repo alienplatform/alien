@@ -208,6 +208,15 @@ locals {
         region        = var.azure_location
         resourceGroup = var.azure_resource_group_name
       }
+    },
+    {
+      id   = "other"
+      type = "sandbox"
+      importData = {
+        sandboxGroup  = replace(lower("${local.resource_prefix}-other"), "_", "-")
+        region        = var.azure_location
+        resourceGroup = var.azure_resource_group_name
+      }
     }
   ]
   default_container_apps_environment_logs_name = replace(lower("${local.resource_prefix}-default_container_apps_environment-logs"), "_", "-")
@@ -299,6 +308,42 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
   ]
 }
 
+resource "azurerm_role_definition" "execution_sa_custom_microsoft_app_sandbox_groups_sandboxes_write_permissions" {
+  name               = "${local.resource_prefix}-execution-sa-microsoft_app_sandbox_groups_sandboxes_write_permissions"
+  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-microsoft_app_sandbox_groups_sandboxes_write_permissions")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Used by ${local.deployment_name}. Allows creating and terminating sandboxes (no access to sandbox contents). Resource prefix: ${local.resource_prefix}."
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.App/sandboxGroups/sandboxes/count/read",
+      "Microsoft.App/sandboxGroups/sandboxes/delete",
+      "Microsoft.App/sandboxGroups/sandboxes/read",
+      "Microsoft.App/sandboxGroups/sandboxes/write"
+    ]
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "execution_sa_sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions_assignment" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.execution_sa_custom_microsoft_app_sandbox_groups_sandboxes_write_permissions.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 === agents.tf ===
 resource "azapi_resource" "agents" {
   type      = "Microsoft.App/sandboxGroups@2026-02-01-preview"
@@ -318,19 +363,38 @@ resource "azapi_resource" "agents" {
   ]
 }
 
-resource "azurerm_role_assignment" "agents_execution_sandbox_management_0" {
-  name               = uuidv5("oid", "deployment:azure:sandbox-workload:${local.resource_prefix}:agents:execution:sandbox/management:0")
+resource "azurerm_role_assignment" "agents_execution_sandbox_execute_0" {
+  name               = uuidv5("oid", "deployment:azure:sandbox-workload:${local.resource_prefix}:agents:execution:sandbox/execute:0")
   scope              = azapi_resource.agents.id
-  role_definition_id = azurerm_role_definition.setup_execution_sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions_0.role_definition_resource_id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
-resource "azurerm_role_assignment" "agents_execution_sandbox_execute_0" {
-  name               = uuidv5("oid", "deployment:azure:sandbox-workload:${local.resource_prefix}:agents:execution:sandbox/execute:0")
-  scope              = azapi_resource.agents.id
+=== other.tf ===
+resource "azapi_resource" "other" {
+  type      = "Microsoft.App/sandboxGroups@2026-02-01-preview"
+  name      = replace(lower("${local.resource_prefix}-other"), "_", "-")
+  parent_id = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  location  = var.azure_location
+  body      = {}
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "other"
+    "resource-type" = "sandbox"
+  }
+  schema_validation_enabled = false
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "other_execution_sandbox_execute_0" {
+  name               = uuidv5("oid", "deployment:azure:sandbox-workload:${local.resource_prefix}:other:execution:sandbox/execute:0")
+  scope              = azapi_resource.other.id
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
@@ -361,9 +425,12 @@ resource "terraform_data" "deployment_registration" {
     azurerm_log_analytics_workspace.default_container_apps_environment_logs,
     azurerm_container_app_environment.default_container_apps_environment,
     azurerm_user_assigned_identity.execution_sa,
+    azurerm_role_definition.execution_sa_custom_microsoft_app_sandbox_groups_sandboxes_write_permissions,
+    azurerm_role_assignment.execution_sa_sandbox_management_microsoft_app_sandbox_groups_sandboxes_write_permissions_assignment,
     azapi_resource.agents,
-    azurerm_role_assignment.agents_execution_sandbox_management_0,
-    azurerm_role_assignment.agents_execution_sandbox_execute_0
+    azurerm_role_assignment.agents_execution_sandbox_execute_0,
+    azapi_resource.other,
+    azurerm_role_assignment.other_execution_sandbox_execute_0
   ]
 }
 

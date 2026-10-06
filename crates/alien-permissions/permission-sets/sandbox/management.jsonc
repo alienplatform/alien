@@ -86,8 +86,10 @@
         },
         // The stack binding is the resource group, and at that scope a holder can terminate
         // sandboxes in every sandbox group there, as `provision` notes. The narrower resource
-        // binding, on the sandbox group itself, is rendered by the Terraform setup for each
-        // profile that holds this set; the runtime path compiles it for Kubernetes only.
+        // binding, on the sandbox group itself, is rendered by the Terraform setup only for a
+        // workload profile that names the sandbox; a `"*"` holder and the management identity
+        // still hold this set at the resource group. The runtime path compiles it for
+        // Kubernetes only.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
