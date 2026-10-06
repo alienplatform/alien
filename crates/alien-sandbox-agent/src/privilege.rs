@@ -129,11 +129,11 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
     Ok(())
 }
 
-/// Empties the ambient capability set; EINVAL (no ambient support, as on Linux < 4.3 or older
-/// gVisor) counts as already empty.
-///
-/// Callers follow with a capset that zeroes the inheritable set, which empties the ambient set as
-/// well; a caller that does not must not use this.
+/// Empties the ambient capability set. EINVAL is tolerated because every caller follows with a
+/// capset that zeroes the inheritable set, and that capset empties the ambient set whether or not
+/// this call did; a caller that does not must not use this. A kernel without ambient support
+/// (Linux < 4.3, or the gVisor that GCP Agent Platform runs) answers every `PR_CAP_AMBIENT` with
+/// EINVAL.
 #[cfg(target_os = "linux")]
 fn clear_ambient_capabilities() -> io::Result<()> {
     let cleared = unsafe {
