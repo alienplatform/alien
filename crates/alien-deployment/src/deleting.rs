@@ -482,17 +482,18 @@ mod tests {
         let fixture = local_storage_fixture().await;
         let neighbor = fixture.directory.path().join("neighbor.txt");
         std::fs::write(&neighbor, b"outside storage").expect("neighbor marker");
-        let current = DeploymentState {
-            status: DeploymentStatus::DeletePending,
-            platform: Platform::Local,
-            stack_state: Some(fixture.state),
-            runtime_metadata: Some(RuntimeMetadata {
+        let current = DeploymentState::builder()
+            .status(DeploymentStatus::DeletePending)
+            .platform(Platform::Local)
+            .stack_state(fixture.state)
+            .runtime_metadata(RuntimeMetadata {
                 initial_setup_authority: InitialSetupAuthority::DirectSetup,
                 prepared_stack: Some(fixture.prepared),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
+            })
+            .retry_requested(false)
+            .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
         let mut state = handle_delete_pending(
             current,
             fixture.config.clone(),
