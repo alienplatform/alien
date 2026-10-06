@@ -43,6 +43,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::time::Duration;
@@ -120,6 +121,43 @@ fn owned_tag_filters(resource_prefix: &str, resource_id: &str) -> Vec<Filter> {
         .collect();
     filters.sort_by(|a, b| a.name.cmp(&b.name));
     filters
+}
+
+/// Tag that carries the token of the create call that made an object. A create records a
+/// fresh token in controller state before it calls AWS, so after a lost response the object
+/// that call made is found by its exact token, never by a match on name or CIDR alone.
+const CREATE_ATTEMPT_TAG: &str = "CreateAttempt";
+
+fn new_create_attempt_token() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn create_attempt_tag(token: &str) -> (String, String) {
+    (CREATE_ATTEMPT_TAG.to_string(), token.to_string())
+}
+
+/// Ownership-tag filters plus the create-attempt token.
+fn create_attempt_filters(resource_prefix: &str, resource_id: &str, token: &str) -> Vec<Filter> {
+    let mut filters = owned_tag_filters(resource_prefix, resource_id);
+    filters.push(Filter {
+        name: format!("tag:{CREATE_ATTEMPT_TAG}"),
+        values: vec![token.to_string()],
+    });
+    filters
+}
+
+fn has_create_attempt_tags(
+    tag_set: Option<&TagSet>,
+    resource_prefix: &str,
+    resource_id: &str,
+    token: &str,
+) -> bool {
+    has_owned_tags(tag_set, resource_prefix, resource_id)
+        && tag_set.is_some_and(|set| {
+            set.items
+                .iter()
+                .any(|tag| tag.key == CREATE_ATTEMPT_TAG && tag.value == token)
+        })
 }
 
 fn has_owned_tags(tag_set: Option<&TagSet>, resource_prefix: &str, resource_id: &str) -> bool {
@@ -712,6 +750,27 @@ pub struct AwsNetworkController {
     #[serde(default)]
     pub subnets_by_failure_domain: BTreeMap<String, AwsFailureDomainSubnets>,
     pub is_byo_vpc: bool,
+
+    /// Token of the latest `create_vpc` call, recorded before the call and tagged on the VPC.
+    #[serde(default)]
+    pub(crate) vpc_create_token: Option<String>,
+    /// The subnet whose `create_subnet` call is in flight: recorded before the call, cleared
+    /// once its ID is recorded.
+    #[serde(default)]
+    pub(crate) subnet_create_attempt: Option<SubnetCreateAttempt>,
+    /// Token tagged on the NAT gateway, recorded before `create_nat_gateway`.
+    #[serde(default)]
+    pub(crate) nat_gateway_create_token: Option<String>,
+}
+
+/// A `create_subnet` call that may have created a subnet whose ID is not recorded yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SubnetCreateAttempt {
+    pub(crate) token: String,
+    pub(crate) cidr: String,
+    /// `Public` or `Private`.
+    pub(crate) subnet_type: String,
 }
 
 impl AwsNetworkController {
@@ -893,30 +952,30 @@ impl AwsNetworkController {
             })
     }
 
-    /// Find the VPC an earlier `create_vpc` of this controller made with `cidr`: one that
-    /// carries this resource's ownership tags and that CIDR.
+    /// Find the VPC the `create_vpc` call with this attempt token made: one with this
+    /// resource's ownership tags, the token tag and `cidr`.
     ///
-    /// More than one match is an error: several such VPCs mean leftovers that need a human
-    /// to decide.
-    async fn find_owned_vpc(
+    /// More than one match is an error, because one call creates at most one VPC.
+    async fn find_vpc_by_create_attempt(
         &self,
         ctx: &ResourceControllerContext<'_>,
-        resource_prefix: &str,
         resource_id: &str,
+        token: &str,
         cidr: &str,
     ) -> Result<Option<String>> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let resource_prefix = ctx.resource_prefix;
 
         let response = client
             .describe_vpcs(
                 DescribeVpcsRequest::builder()
-                    .filters(owned_tag_filters(resource_prefix, resource_id))
+                    .filters(create_attempt_filters(resource_prefix, resource_id, token))
                     .build(),
             )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to look up a VPC created by an earlier attempt".to_string(),
+                message: "Failed to look up the VPC of an earlier create attempt".to_string(),
                 resource_id: Some(resource_id.to_string()),
             })?;
 
@@ -927,12 +986,17 @@ impl AwsNetworkController {
             .into_iter()
             .filter(|vpc| {
                 vpc.cidr_block.as_deref() == Some(cidr)
-                    && has_owned_tags(vpc.tag_set.as_ref(), resource_prefix, resource_id)
+                    && has_create_attempt_tags(
+                        vpc.tag_set.as_ref(),
+                        resource_prefix,
+                        resource_id,
+                        token,
+                    )
             })
             .map(|vpc| {
                 vpc.vpc_id.ok_or_else(|| {
                     AlienError::new(ErrorData::CloudPlatformError {
-                        message: format!("Owned VPC with CIDR {cidr} has no ID"),
+                        message: format!("VPC of create attempt {token} has no ID"),
                         resource_id: Some(resource_id.to_string()),
                     })
                 })
@@ -944,13 +1008,107 @@ impl AwsNetworkController {
             [vpc_id] => Ok(Some(vpc_id.clone())),
             _ => Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
-                    "Found {} VPCs with CIDR {cidr} tagged for this network ({}); delete the extra VPCs and retry",
+                    "Found {} VPCs for create attempt {token} ({}); delete the extra VPCs and retry",
                     vpc_ids.len(),
                     vpc_ids.join(", ")
                 ),
                 resource_id: Some(resource_id.to_string()),
             })),
         }
+    }
+
+    /// Find the subnet the `create_subnet` call of `attempt` made in `vpc_id`.
+    async fn find_subnet_by_create_attempt(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        attempt: &SubnetCreateAttempt,
+        resource_id: &str,
+    ) -> Result<Option<String>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let mut filters = create_attempt_filters(ctx.resource_prefix, resource_id, &attempt.token);
+        filters.push(Filter {
+            name: "vpc-id".to_string(),
+            values: vec![vpc_id.to_string()],
+        });
+        filters.push(Filter {
+            name: "cidr-block".to_string(),
+            values: vec![attempt.cidr.clone()],
+        });
+
+        let subnets = client
+            .describe_subnets(DescribeSubnetsRequest::builder().filters(filters).build())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to look up subnet {} of an earlier create attempt",
+                    attempt.cidr
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .subnet_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+
+        // A CIDR is unique within a VPC, so at most one subnet can match.
+        Ok(subnets
+            .into_iter()
+            .filter(|subnet| {
+                subnet.cidr_block.as_deref() == Some(attempt.cidr.as_str())
+                    && has_create_attempt_tags(
+                        subnet.tag_set.as_ref(),
+                        ctx.resource_prefix,
+                        resource_id,
+                        &attempt.token,
+                    )
+            })
+            .find_map(|subnet| subnet.subnet_id))
+    }
+
+    /// Find the NAT gateway tagged with this create-attempt token that is not yet deleted.
+    async fn find_nat_gateway_by_create_attempt(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        token: &str,
+        resource_id: &str,
+    ) -> Result<Option<String>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let nat_gateways = client
+            .describe_nat_gateways(
+                DescribeNatGatewaysRequest::builder()
+                    .filters(create_attempt_filters(
+                        ctx.resource_prefix,
+                        resource_id,
+                        token,
+                    ))
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to look up the NAT Gateway of an earlier create attempt"
+                    .to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .nat_gateway_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+
+        Ok(nat_gateways
+            .into_iter()
+            .filter(|nat_gateway| {
+                nat_gateway.state.as_deref() != Some("deleted")
+                    && has_create_attempt_tags(
+                        nat_gateway.tag_set.as_ref(),
+                        ctx.resource_prefix,
+                        resource_id,
+                        token,
+                    )
+            })
+            .find_map(|nat_gateway| nat_gateway.nat_gateway_id))
     }
 
     /// Whether the internet gateway is attached (or attaching) to `vpc_id`.
@@ -996,7 +1154,7 @@ impl AwsNetworkController {
     /// exist. Subnet CIDRs are derived from the VPC CIDR, so a subnet with that CIDR in our
     /// VPC is the one an earlier attempt created; it must also carry our ownership tags.
     async fn ensure_subnet(
-        &self,
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         subnet: SubnetSpec<'_>,
     ) -> Result<String> {
@@ -1011,47 +1169,29 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
-        let existing = client
-            .describe_subnets(
-                DescribeSubnetsRequest::builder()
-                    .filters(vec![
-                        Filter {
-                            name: "vpc-id".to_string(),
-                            values: vec![vpc_id.to_string()],
-                        },
-                        Filter {
-                            name: "cidr-block".to_string(),
-                            values: vec![cidr.to_string()],
-                        },
-                    ])
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to look up subnet {cidr} in VPC '{vpc_id}'"),
-                resource_id: Some(resource_id.to_string()),
-            })?
-            .subnet_set
-            .and_then(|set| set.items.into_iter().next());
-
-        if let Some(subnet) = existing {
-            let subnet_id = subnet.subnet_id.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!("Subnet {cidr} in VPC '{vpc_id}' has no ID"),
-                    resource_id: Some(resource_id.to_string()),
-                })
-            })?;
-            if !has_owned_tags(subnet.tag_set.as_ref(), ctx.resource_prefix, resource_id) {
-                return Err(AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Subnet '{subnet_id}' ({cidr}) in VPC '{vpc_id}' was not created by this network"
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                }));
+        // A recorded attempt for this CIDR means `create_subnet` was called and its response
+        // may have been lost. Only the subnet carrying that attempt's token is ours.
+        if let Some(attempt) = self
+            .subnet_create_attempt
+            .clone()
+            .filter(|attempt| attempt.cidr == cidr)
+        {
+            if let Some(subnet_id) = self
+                .find_subnet_by_create_attempt(ctx, vpc_id, &attempt, resource_id)
+                .await?
+            {
+                info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet created by an earlier attempt");
+                self.subnet_create_attempt = None;
+                return Ok(subnet_id);
             }
-            info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet created by an earlier attempt");
-            return Ok(subnet_id);
         }
+
+        let token = new_create_attempt_token();
+        self.subnet_create_attempt = Some(SubnetCreateAttempt {
+            token: token.clone(),
+            cidr: cidr.to_string(),
+            subnet_type: subnet_type.to_string(),
+        });
 
         let response = client
             .create_subnet(
@@ -1064,7 +1204,10 @@ impl AwsNetworkController {
                         resource_id,
                         "subnet",
                         name,
-                        [("Type".to_string(), subnet_type.to_string())],
+                        [
+                            ("Type".to_string(), subnet_type.to_string()),
+                            create_attempt_tag(&token),
+                        ],
                     )])
                     .build(),
             )
@@ -1077,12 +1220,72 @@ impl AwsNetworkController {
                 resource_id: Some(resource_id.to_string()),
             })?;
 
-        response.subnet.and_then(|s| s.subnet_id).ok_or_else(|| {
+        let subnet_id = response.subnet.and_then(|s| s.subnet_id).ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: format!("Subnet {cidr} created but no subnet ID returned"),
                 resource_id: Some(resource_id.to_string()),
             })
-        })
+        })?;
+        // The caller records the ID before its next call.
+        self.subnet_create_attempt = None;
+        Ok(subnet_id)
+    }
+
+    /// Record the objects that create calls made but whose responses were lost: the VPC, an
+    /// in-flight subnet and the NAT gateway. Each is looked up by its create-attempt token;
+    /// nothing found means that call created nothing.
+    async fn recover_lost_creates(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<()> {
+        if self.vpc_id.is_none() {
+            if let (Some(token), Some(cidr)) =
+                (self.vpc_create_token.clone(), self.cidr_block.clone())
+            {
+                if let Some(vpc_id) = self
+                    .find_vpc_by_create_attempt(ctx, resource_id, &token, &cidr)
+                    .await?
+                {
+                    info!(vpc_id = %vpc_id, "Recovered the VPC of a create whose response was lost");
+                    self.vpc_id = Some(vpc_id);
+                }
+            }
+        }
+
+        if let (Some(attempt), Some(vpc_id)) =
+            (self.subnet_create_attempt.clone(), self.vpc_id.clone())
+        {
+            if let Some(subnet_id) = self
+                .find_subnet_by_create_attempt(ctx, &vpc_id, &attempt, resource_id)
+                .await?
+            {
+                info!(subnet_id = %subnet_id, "Recovered the subnet of a create whose response was lost");
+                let recorded = if attempt.subnet_type == "Public" {
+                    &mut self.public_subnet_ids
+                } else {
+                    &mut self.private_subnet_ids
+                };
+                if !recorded.contains(&subnet_id) {
+                    recorded.push(subnet_id);
+                }
+            }
+            self.subnet_create_attempt = None;
+        }
+
+        if self.nat_gateway_id.is_none() {
+            if let Some(token) = self.nat_gateway_create_token.clone() {
+                if let Some(nat_gateway_id) = self
+                    .find_nat_gateway_by_create_attempt(ctx, &token, resource_id)
+                    .await?
+                {
+                    info!(nat_gateway_id = %nat_gateway_id, "Recovered the NAT Gateway of a create whose response was lost");
+                    self.nat_gateway_id = Some(nat_gateway_id);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn forget_subnet(&mut self, subnet_id: &str) {
@@ -1655,15 +1858,17 @@ impl AwsNetworkController {
             });
         }
 
-        // The CIDR is recorded right before `create_vpc`, so a recorded CIDR without a VPC ID
-        // means an earlier attempt called `create_vpc` and may have lost the response. Only
-        // then is an existing VPC rediscovered, and only one with our ownership tags and that
-        // CIDR. A VPC tagged for this network that no attempt of this controller created
-        // (left behind by an earlier instance) is never adopted. State persisted before the
-        // CIDR was recorded ahead of the create has no CIDR here, so it creates a new VPC.
-        if let Some(attempted_cidr) = self.cidr_block.clone() {
+        // A recorded attempt token without a VPC ID means `create_vpc` was called and its
+        // response may have been lost. Only the VPC carrying that token (and the attempted
+        // CIDR) is ours; a VPC merely tagged for this network, such as one left by an earlier
+        // instance of the resource, is never adopted. When the token finds nothing, the call
+        // created nothing, and the next call gets a new token. State persisted before tokens
+        // existed has none, so it creates a new VPC.
+        if let (Some(token), Some(attempted_cidr)) =
+            (self.vpc_create_token.clone(), self.cidr_block.clone())
+        {
             if let Some(vpc_id) = self
-                .find_owned_vpc(ctx, ctx.resource_prefix, &config.id, &attempted_cidr)
+                .find_vpc_by_create_attempt(ctx, &config.id, &token, &attempted_cidr)
                 .await?
             {
                 info!(vpc_id = %vpc_id, cidr = %attempted_cidr, "Found the VPC created by an earlier attempt");
@@ -1687,13 +1892,21 @@ impl AwsNetworkController {
             }
         };
 
+        let token = new_create_attempt_token();
+        self.vpc_create_token = Some(token.clone());
         info!(cidr = %vpc_cidr, "Creating VPC");
 
         let create_response = client
             .create_vpc(
                 CreateVpcRequest::builder()
                     .cidr_block(vpc_cidr.clone())
-                    .tag_specifications(self.create_tags(ctx.resource_prefix, &config.id, "vpc"))
+                    .tag_specifications(vec![self.create_tag_specification(
+                        ctx.resource_prefix,
+                        &config.id,
+                        "vpc",
+                        format!("{}-vpc", ctx.resource_prefix),
+                        [create_attempt_tag(&token)],
+                    )])
                     .build(),
             )
             .await
@@ -2356,20 +2569,27 @@ impl AwsNetworkController {
 
         info!(allocation_id = %allocation_id, "Creating NAT Gateway");
 
-        // An Elastic IP backs at most one NAT gateway, so a token derived from it is unique
-        // to this gateway. When a retry repeats the call after a lost response, AWS returns
-        // the gateway the first call created.
+        // An Elastic IP backs at most one NAT gateway, so a client token derived from it is
+        // unique to this gateway. When a retry repeats the call after a lost response, AWS
+        // returns the gateway the first call created, so the attempt token (which lets delete
+        // find a gateway whose ID was never recorded) stays the same across retries too.
+        let attempt_token = self
+            .nat_gateway_create_token
+            .get_or_insert_with(new_create_attempt_token)
+            .clone();
         let nat_response = client
             .create_nat_gateway(
                 CreateNatGatewayRequest::builder()
                     .subnet_id(public_subnet_id.clone())
                     .allocation_id(allocation_id.clone())
                     .connectivity_type("public".to_string())
-                    .tag_specifications(self.create_tags(
+                    .tag_specifications(vec![self.create_tag_specification(
                         ctx.resource_prefix,
                         &config.id,
                         "natgateway",
-                    ))
+                        format!("{}-natgateway", ctx.resource_prefix),
+                        [create_attempt_tag(&attempt_token)],
+                    )])
                     .client_token(nat_gateway_client_token(&allocation_id))
                     .build(),
             )
@@ -2946,6 +3166,10 @@ impl AwsNetworkController {
             });
         }
 
+        // A create whose response was lost left an object with no recorded ID. Find each one by
+        // the exact token of its create call, so the steps below delete it.
+        self.recover_lost_creates(ctx, &config.id).await?;
+
         // If no VPC was created, nothing to delete
         if self.vpc_id.is_none() {
             info!(network_id = %config.id, "No VPC created - nothing to delete");
@@ -3519,6 +3743,9 @@ impl AwsNetworkController {
                 .collect(),
             subnets_by_failure_domain: BTreeMap::new(),
             is_byo_vpc: false,
+            vpc_create_token: None,
+            subnet_create_attempt: None,
+            nat_gateway_create_token: None,
             _internal_stay_count: None,
         }
     }
@@ -3557,6 +3784,9 @@ impl AwsNetworkController {
                 .collect(),
             subnets_by_failure_domain: BTreeMap::new(),
             is_byo_vpc: true,
+            vpc_create_token: None,
+            subnet_create_attempt: None,
+            nat_gateway_create_token: None,
             _internal_stay_count: None,
         }
     }
@@ -3607,6 +3837,31 @@ mod controller_state_tests {
             .map(|(key, value)| json!({ "key": key, "value": value }))
             .collect();
         json!({ "item": tags })
+    }
+
+    /// Ownership tags plus the tag of the create call with this token.
+    fn attempt_tags_json(token: &str) -> serde_json::Value {
+        let mut tags = owned_tags_json();
+        tags["item"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "key": CREATE_ATTEMPT_TAG, "value": token }));
+        tags
+    }
+
+    fn filters_token(filters: Option<&Vec<Filter>>) -> Option<String> {
+        filters?
+            .iter()
+            .find(|f| f.name == format!("tag:{CREATE_ATTEMPT_TAG}"))
+            .map(|f| f.values[0].clone())
+    }
+
+    fn tag_value(specs: Option<&Vec<TagSpecification>>, key: &str) -> Option<String> {
+        specs?
+            .iter()
+            .flat_map(|spec| &spec.tags)
+            .find(|tag| tag.key == key)
+            .map(|tag| tag.value.clone())
     }
 
     fn not_found() -> AlienError<CloudClientErrorData> {
@@ -3744,26 +3999,30 @@ mod controller_state_tests {
     async fn creating_vpc_records_the_owned_vpc_left_by_a_lost_response() {
         let mut ec2 = MockEc2Api::new();
         expect_two_zones(&mut ec2);
-        // Only the ownership-tag lookup runs: no CIDR search (it would see the owned VPC's
-        // range as taken) and no create. A tagged VPC with another CIDR is a leftover the
-        // attempted create did not make.
+        // Only the attempt-token lookup runs: no CIDR search (it would see the VPC's range as
+        // taken) and no create. A VPC with our ownership tags and the same CIDR but another
+        // create's token is a leftover this attempt did not make.
         ec2.expect_describe_vpcs()
             .times(1)
-            .withf(|request| is_owned_tag_lookup(request.filters.as_ref()))
+            .withf(|request| {
+                is_owned_tag_lookup(request.filters.as_ref())
+                    && filters_token(request.filters.as_ref()).as_deref() == Some("attempt-1")
+            })
             .returning(|_| {
                 Ok(parse(json!({ "vpcSet": { "item": [
-                    { "vpcId": "vpc-leftover", "cidrBlock": "100.71.0.0/16", "tagSet": owned_tags_json() },
-                    { "vpcId": "vpc-lost", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() }
+                    { "vpcId": "vpc-leftover", "cidrBlock": "100.70.0.0/16", "tagSet": attempt_tags_json("attempt-0") },
+                    { "vpcId": "vpc-lost", "cidrBlock": "100.70.0.0/16", "tagSet": attempt_tags_json("attempt-1") }
                 ]}})))
             });
         ec2.expect_create_vpc().times(0);
 
-        // The recorded CIDR without a VPC ID: `create_vpc` was called and its response lost.
+        // A recorded attempt without a VPC ID: `create_vpc` was called and its response lost.
         let mut executor = executor(
             ec2,
             AwsNetworkController {
                 state: AwsNetworkState::CreatingVpc,
                 cidr_block: Some("100.70.0.0/16".to_string()),
+                vpc_create_token: Some("attempt-1".to_string()),
                 ..Default::default()
             },
             None,
@@ -3783,8 +4042,8 @@ mod controller_state_tests {
         expect_two_zones(&mut ec2);
         ec2.expect_describe_vpcs().times(1).returning(|_| {
             Ok(parse(json!({ "vpcSet": { "item": [
-                { "vpcId": "vpc-a", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() },
-                { "vpcId": "vpc-b", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() }
+                { "vpcId": "vpc-a", "cidrBlock": "100.70.0.0/16", "tagSet": attempt_tags_json("attempt-1") },
+                { "vpcId": "vpc-b", "cidrBlock": "100.70.0.0/16", "tagSet": attempt_tags_json("attempt-1") }
             ]}})))
         });
         ec2.expect_create_vpc().times(0);
@@ -3794,6 +4053,7 @@ mod controller_state_tests {
             AwsNetworkController {
                 state: AwsNetworkState::CreatingVpc,
                 cidr_block: Some("100.70.0.0/16".to_string()),
+                vpc_create_token: Some("attempt-1".to_string()),
                 ..Default::default()
             },
             None,
@@ -3862,7 +4122,13 @@ mod controller_state_tests {
         });
         let cidrs = Arc::new(Mutex::new(Vec::new()));
         let seen = cidrs.clone();
+        let tokens = Arc::new(Mutex::new(Vec::new()));
+        let seen_tokens = tokens.clone();
         ec2.expect_create_vpc().times(2).returning(move |request| {
+            seen_tokens.lock().unwrap().push(
+                tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("the VPC carries its create-attempt token"),
+            );
             let mut seen = seen.lock().unwrap();
             seen.push(request.cidr_block);
             if seen.len() == 1 {
@@ -3888,6 +4154,15 @@ mod controller_state_tests {
         let cidrs = cidrs.lock().unwrap();
         assert_eq!(cidrs.len(), 2);
         assert_eq!(cidrs[0], cidrs[1], "a retry must not move to another /16");
+        let tokens = tokens.lock().unwrap();
+        assert_ne!(
+            tokens[0], tokens[1],
+            "a create that made nothing is retried as a new attempt"
+        );
+        assert_eq!(
+            controller(&executor).vpc_create_token.as_ref(),
+            Some(&tokens[1])
+        );
         assert_eq!(unfiltered_lookups.load(Ordering::SeqCst), 1);
         assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
     }
@@ -4068,29 +4343,34 @@ mod controller_state_tests {
         );
     }
 
+    fn with_subnet_attempt(mut controller: AwsNetworkController) -> AwsNetworkController {
+        controller.subnet_create_attempt = Some(SubnetCreateAttempt {
+            token: "attempt-1".to_string(),
+            cidr: "10.0.0.0/20".to_string(),
+            subnet_type: "Public".to_string(),
+        });
+        controller
+    }
+
     #[tokio::test]
     async fn subnet_created_by_a_lost_response_is_recorded_not_recreated() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_describe_subnets().returning(|request| {
-            let filters = request.filters.expect("lookup by VPC and CIDR");
+        // Only the subnet with a recorded attempt is looked up, by its exact token.
+        ec2.expect_describe_subnets().times(1).returning(|request| {
+            let filters = request.filters.expect("lookup by VPC, CIDR and token");
             assert!(filters
                 .iter()
                 .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
-            let cidr = filters
+            assert!(filters
                 .iter()
-                .find(|f| f.name == "cidr-block")
-                .map(|f| f.values[0].clone())
-                .expect("cidr filter");
-            if cidr == "10.0.0.0/20" {
-                Ok(parse(json!({ "subnetSet": { "item": [{
-                    "subnetId": "subnet-lost",
-                    "vpcId": "vpc-1",
-                    "cidrBlock": cidr,
-                    "tagSet": owned_tags_json()
-                }]}})))
-            } else {
-                Ok(parse(json!({})))
-            }
+                .any(|f| f.name == "cidr-block" && f.values == ["10.0.0.0/20"]));
+            assert_eq!(filters_token(Some(&filters)).as_deref(), Some("attempt-1"));
+            Ok(parse(json!({ "subnetSet": { "item": [{
+                "subnetId": "subnet-lost",
+                "vpcId": "vpc-1",
+                "cidrBlock": "10.0.0.0/20",
+                "tagSet": attempt_tags_json("attempt-1")
+            }]}})))
         });
         ec2.expect_create_subnet().times(3).returning(|request| {
             assert_ne!(request.cidr_block, "10.0.0.0/20");
@@ -4101,7 +4381,7 @@ mod controller_state_tests {
 
         let mut executor = executor(
             ec2,
-            after_vpc(AwsNetworkState::CreatingSubnets),
+            with_subnet_attempt(after_vpc(AwsNetworkState::CreatingSubnets)),
             Some("10.0.0.0/16"),
         )
         .await;
@@ -4110,30 +4390,56 @@ mod controller_state_tests {
         let state = controller(&executor);
         assert_eq!(state.public_subnet_ids, ["subnet-lost", "subnet-16"]);
         assert_eq!(state.private_subnet_ids, ["subnet-128", "subnet-144"]);
+        assert_eq!(state.subnet_create_attempt, None);
     }
 
     #[tokio::test]
-    async fn subnet_in_our_vpc_without_our_tags_is_an_error() {
+    async fn subnet_from_another_create_attempt_is_not_adopted() {
         let mut ec2 = MockEc2Api::new();
+        // Same VPC, CIDR and ownership tags, but another create call's token.
         ec2.expect_describe_subnets().times(1).returning(|_| {
             Ok(parse(json!({ "subnetSet": { "item": [{
-                "subnetId": "subnet-foreign",
+                "subnetId": "subnet-other",
+                "vpcId": "vpc-1",
                 "cidrBlock": "10.0.0.0/20",
-                "tagSet": { "item": [{ "key": "resource", "value": "someone-else" }] }
+                "tagSet": attempt_tags_json("attempt-0")
             }]}})))
         });
-        ec2.expect_create_subnet().times(0);
+        let new_token = Arc::new(Mutex::new(None));
+        let seen = new_token.clone();
+        ec2.expect_create_subnet()
+            .times(1)
+            .returning(move |request| {
+                *seen.lock().unwrap() =
+                    tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG);
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        message: "InvalidSubnet.Conflict".to_string(),
+                        resource_type: "EC2 Resource".to_string(),
+                        resource_name: request.cidr_block,
+                    },
+                ))
+            });
 
         let mut executor = executor(
             ec2,
-            after_vpc(AwsNetworkState::CreatingSubnets),
+            with_subnet_attempt(after_vpc(AwsNetworkState::CreatingSubnets)),
             Some("10.0.0.0/16"),
         )
         .await;
 
-        let error = executor.step().await.expect_err("foreign subnet");
-        assert!(error.to_string().contains("subnet-foreign"), "{error}");
-        assert!(controller(&executor).public_subnet_ids.is_empty());
+        executor
+            .step()
+            .await
+            .expect_err("AWS refuses the conflicting subnet");
+        let state = controller(&executor);
+        assert!(state.public_subnet_ids.is_empty());
+        let attempt = state
+            .subnet_create_attempt
+            .as_ref()
+            .expect("the new attempt is recorded");
+        assert_ne!(attempt.token, "attempt-1");
+        assert_eq!(Some(&attempt.token), new_token.lock().unwrap().as_ref());
     }
 
     #[tokio::test]
@@ -4224,7 +4530,13 @@ mod controller_state_tests {
                 request.client_token.as_deref(),
                 Some("alien-nat-eipalloc-1")
             );
+            // The tag delete uses to find a gateway whose ID was never recorded.
+            assert_eq!(
+                tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG),
+                state.nat_gateway_create_token
+            );
         }
+        assert!(state.nat_gateway_create_token.is_some());
     }
 
     #[tokio::test]
@@ -4273,6 +4585,193 @@ mod controller_state_tests {
     }
 
     // ─────────────── Delete ───────────────
+
+    /// A failed create, as the executor hands it to delete when it replaces the resource.
+    fn failed_create(controller: AwsNetworkController) -> AwsNetworkController {
+        AwsNetworkController {
+            state: AwsNetworkState::CreateFailed,
+            ..controller
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_recovers_the_vpc_of_a_lost_create_response() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .withf(|request| {
+                filters_token(request.filters.as_ref()).as_deref() == Some("attempt-1")
+            })
+            .returning(|_| {
+                Ok(parse(json!({ "vpcSet": { "item": [{
+                    "vpcId": "vpc-lost",
+                    "cidrBlock": "10.0.0.0/16",
+                    "tagSet": attempt_tags_json("attempt-1")
+                }]}})))
+            });
+        ec2.expect_delete_vpc()
+            .times(1)
+            .withf(|id| id == "vpc-lost")
+            .returning(|_| Ok(()));
+
+        let mut executor = executor(
+            ec2,
+            failed_create(AwsNetworkController {
+                cidr_block: Some("10.0.0.0/16".to_string()),
+                vpc_create_token: Some("attempt-1".to_string()),
+                ..Default::default()
+            }),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_without_a_create_attempt_token_looks_nothing_up() {
+        // State persisted before attempt tokens: a CIDR but no token says nothing about
+        // which VPC, if any, the create made.
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs().times(0);
+        ec2.expect_delete_vpc().times(0);
+
+        let mut executor = executor(
+            ec2,
+            failed_create(AwsNetworkController {
+                cidr_block: Some("10.0.0.0/16".to_string()),
+                ..Default::default()
+            }),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_recovers_the_subnet_of_a_lost_create_response() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_subnets().times(1).returning(|request| {
+            let filters = request.filters.expect("lookup by VPC, CIDR and token");
+            assert!(filters
+                .iter()
+                .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
+            assert_eq!(filters_token(Some(&filters)).as_deref(), Some("attempt-1"));
+            Ok(parse(json!({ "subnetSet": { "item": [{
+                "subnetId": "subnet-lost",
+                "vpcId": "vpc-1",
+                "cidrBlock": "10.0.0.0/20",
+                "tagSet": attempt_tags_json("attempt-1")
+            }]}})))
+        });
+        let log = calls.clone();
+        ec2.expect_delete_subnet().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("delete_subnet {id}"));
+            Ok(())
+        });
+        let log = calls.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("delete_vpc {id}"));
+            Ok(())
+        });
+
+        let mut executor = executor(
+            ec2,
+            failed_create(with_subnet_attempt(after_vpc(
+                AwsNetworkState::CreatingSubnets,
+            ))),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["delete_subnet subnet-lost", "delete_vpc vpc-1"],
+            "the recovered subnet is deleted before the VPC it blocks"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_recovers_the_nat_gateway_of_a_lost_create_response() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ec2 = MockEc2Api::new();
+        let log = calls.clone();
+        ec2.expect_describe_nat_gateways().returning(move |request| {
+            if let Some(token) = filters_token(request.filters.as_ref()) {
+                assert_eq!(token, "attempt-1");
+                return Ok(parse(json!({ "natGatewaySet": { "item": [{
+                    "natGatewayId": "nat-lost",
+                    "state": "available",
+                    "tagSet": attempt_tags_json("attempt-1")
+                }]}})));
+            }
+            log.lock().unwrap().push("describe_nat_gateways deleted".to_string());
+            Ok(parse(json!({ "natGatewaySet": { "item": [{ "natGatewayId": "nat-lost", "state": "deleted" }] } })))
+        });
+        let log = calls.clone();
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(move |id| {
+                log.lock().unwrap().push(format!("delete_nat_gateway {id}"));
+                Ok(parse(json!({ "natGatewayId": id })))
+            });
+        let log = calls.clone();
+        ec2.expect_release_address().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("release_address {id}"));
+            Ok(())
+        });
+        let log = calls.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |id| {
+            log.lock().unwrap().push(format!("delete_vpc {id}"));
+            Ok(())
+        });
+
+        let mut executor = executor(
+            ec2,
+            failed_create(AwsNetworkController {
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                nat_gateway_create_token: Some("attempt-1".to_string()),
+                ..after_vpc(AwsNetworkState::CreatingNatGateway)
+            }),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.delete().expect("delete transition");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete completes");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "delete_nat_gateway nat-lost",
+                "describe_nat_gateways deleted",
+                "release_address eipalloc-1",
+                "delete_vpc vpc-1",
+            ],
+            "the recovered NAT gateway is deleted before its Elastic IP is released"
+        );
+    }
 
     #[tokio::test]
     async fn delete_waits_for_nat_gateway_deletion_before_releasing_its_elastic_ip() {
@@ -4759,9 +5258,8 @@ mod controller_state_tests {
         ec2.expect_attach_internet_gateway()
             .times(1)
             .returning(|_| Ok(()));
-        ec2.expect_describe_subnets()
-            .times(4)
-            .returning(|_| Ok(parse(json!({}))));
+        // No create attempt is outstanding, so no subnet is looked up before its create.
+        ec2.expect_describe_subnets().times(0);
         ec2.expect_create_subnet().times(4).returning(|request| {
             Ok(parse(
                 json!({ "subnet": { "subnetId": subnet_id_for(&request.cidr_block) } }),
