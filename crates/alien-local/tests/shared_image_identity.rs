@@ -3,6 +3,7 @@ use bollard::Docker;
 use dockdash::{Arch, Image};
 use futures::FutureExt;
 use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+use uuid::Uuid;
 
 #[tokio::test]
 #[ignore = "requires Docker and registry access"]
@@ -13,18 +14,53 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
     } else {
         Arch::Amd64
     };
+    let test_identity = Uuid::new_v4().to_string();
     let (first_image, _) = Image::builder()
         .from("alpine:3.22")
+        .env("ALIEN_IDENTITY_TEST", &test_identity)
         .platform("linux", &arch)
         .build()
         .await
         .unwrap();
     let (second_image, _) = Image::builder()
         .from("alpine:3.22")
+        .env("ALIEN_IDENTITY_TEST", &test_identity)
         .platform("linux", &arch)
         .build()
         .await
         .unwrap();
+    assert_eq!(first_image.config_digest(), second_image.config_digest());
+    let docker = Docker::connect_with_local_defaults().unwrap();
+    let mut archive = tar::Archive::new(std::fs::File::open(first_image.path()).unwrap());
+    let index = archive
+        .entries_with_seek()
+        .unwrap()
+        .find_map(|entry| {
+            let entry = entry.unwrap();
+            let path = entry.path().unwrap().into_owned();
+            (path.strip_prefix(".").unwrap_or(&path) == std::path::Path::new("index.json"))
+                .then(|| serde_json::from_reader::<_, serde_json::Value>(entry).unwrap())
+        })
+        .expect("OCI index");
+    let candidates = [
+        index["manifests"][0]["digest"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+        first_image.config_digest().to_string(),
+    ];
+    for candidate in &candidates {
+        assert!(
+            matches!(
+                docker.inspect_image(candidate).await,
+                Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404,
+                    ..
+                })
+            ),
+            "test image must be absent before concurrent imports"
+        );
+    }
     let manager = Arc::new(LocalContainerManager::new(directory.path().to_path_buf()).unwrap());
     let config = |image: String| ContainerConfig {
         image,
@@ -53,7 +89,6 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
             config(second_image.path().to_string_lossy().into_owned())
         )
     );
-    let docker = Docker::connect_with_local_defaults().unwrap();
     let inspect = AssertUnwindSafe(async {
         let first = first.unwrap();
         let second = second.unwrap();
@@ -78,6 +113,29 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
     .await;
     manager.delete_container(&first_name).await.unwrap();
     manager.delete_container(&second_name).await.unwrap();
+    let mut removed = false;
+    for candidate in &candidates {
+        match docker.remove_image(candidate, None, None).await {
+            Ok(_) => {
+                removed = true;
+                break;
+            }
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {}
+            Err(error) => panic!("image cleanup failed: {error}"),
+        }
+    }
+    assert!(removed, "the concurrently imported image must be removed");
+    for candidate in &candidates {
+        assert!(matches!(
+            docker.inspect_image(candidate).await,
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            })
+        ));
+    }
     if let Err(panic) = inspect {
         std::panic::resume_unwind(panic);
     }
