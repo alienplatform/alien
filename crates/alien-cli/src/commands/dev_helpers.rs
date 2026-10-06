@@ -778,7 +778,7 @@ pub async fn create_initial_deployment(
         .body_map(|body| {
             let mut b = body
                 .name(deployment_name)
-                .deployment_group_id(&group_id)
+                .deployment_group_id(group_id.clone())
                 .platform(alien_manager_api::types::Platform::Local)
                 .input_values(input_values.into_iter().collect::<serde_json::Map<_, _>>());
             if let Some(ref vars) = env_vars {
