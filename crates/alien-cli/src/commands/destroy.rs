@@ -534,6 +534,34 @@ async fn destroy_tracked_deployment(
             })?;
     }
 
+    // A setup-capable runtime can delete the record immediately. Wait for its
+    // completion or acquire the handoff before fetching state for our loop.
+    let pre_delete_stack_settings: alien_core::StackSettings = pre_delete_deployment
+        .stack_settings
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize deployment settings before teardown".to_string(),
+        })?
+        .unwrap_or_default();
+    // Acquire → step loop → reconcile → release
+    let session = format!("cli-destroy-{}", Uuid::new_v4());
+    let acquire_outcome = acquire_setup_delete_deployment(
+        &manager_client,
+        &tracked_deployment.deployment_id,
+        &session,
+        pre_delete_stack_settings.deployment_model,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to acquire deployment lock for deletion".to_string(),
+    })?;
+    let execution_claim = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+        SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
+    };
+
     // Run the deletion step loop
     let client_config =
         ClientConfig::from_std_env(platform)
@@ -627,23 +655,6 @@ async fn destroy_tracked_deployment(
     if let Some(external_bindings) = stack_settings.external_bindings.clone() {
         config.external_bindings = external_bindings;
     }
-
-    // Acquire → step loop → reconcile → release
-    let session = format!("cli-destroy-{}", Uuid::new_v4());
-    let acquire_outcome = acquire_setup_delete_deployment(
-        &manager_client,
-        &tracked_deployment.deployment_id,
-        &session,
-        stack_settings.deployment_model,
-    )
-    .await
-    .context(ErrorData::ConfigurationError {
-        message: "Failed to acquire deployment lock for deletion".to_string(),
-    })?;
-    let execution_claim = match acquire_outcome {
-        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
-        SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
-    };
 
     // Re-fetch under lock
     let deployment = manager_client
