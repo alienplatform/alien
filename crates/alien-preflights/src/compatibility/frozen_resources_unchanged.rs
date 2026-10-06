@@ -1,10 +1,11 @@
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::is_same_architecture_aws_machine;
 use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Platform,
-    Resource, ResourceLifecycle, Sandbox, SandboxCode, Stack,
+    Resource, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
 };
+use alien_error::Context;
 use std::collections::{HashMap, HashSet};
 
 /// Validates that frozen resources haven't been added or modified during stack updates.
@@ -157,6 +158,48 @@ fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resou
     normalized == *new_sandbox
 }
 
+/// Older prepared stacks stored resource grants only in the explicit permission profile.
+/// Capturing those same grants is metadata migration, not a setup-owned IAM change.
+fn unchanged_legacy_service_account_grants(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    old: &Resource,
+    new: &Resource,
+) -> Result<bool> {
+    let (Some(old_account), Some(new_account)) = (
+        old.downcast_ref::<ServiceAccount>(),
+        new.downcast_ref::<ServiceAccount>(),
+    ) else {
+        return Ok(false);
+    };
+    if !old_account.resource_permission_sets.is_empty()
+        || new_account.resource_permission_sets.is_empty()
+    {
+        return Ok(false);
+    }
+    let Some(profile_name) = old_account.id.strip_suffix("-sa") else {
+        return Ok(false);
+    };
+    let Some(profile) = old_stack.permissions.profiles.get(profile_name) else {
+        return Ok(false);
+    };
+    if new_stack.permissions.profiles.get(profile_name) != Some(profile) {
+        return Ok(false);
+    }
+    let captured = ServiceAccount::from_permission_profile(old_account.id.clone(), profile, |id| {
+        alien_permissions::get_permission_set(id).cloned()
+    })
+    .context(ErrorData::StackCompatibilityCheckFailed {
+        check_name: "Frozen resources shouldn't be added or modified during updates".to_string(),
+        message: "Failed to resolve the installed service account's explicit grants".to_string(),
+        old_resource_id: Some(old_account.id.clone()),
+        new_resource_id: Some(new_account.id.clone()),
+    })?;
+    let mut normalized = old_account.clone();
+    normalized.resource_permission_sets = captured.resource_permission_sets;
+    Ok(normalized == *new_account)
+}
+
 #[async_trait::async_trait]
 impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     fn description(&self) -> &'static str {
@@ -225,6 +268,12 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     )
+                    && !unchanged_legacy_service_account_grants(
+                        old_stack,
+                        new_stack,
+                        &old_entry.config,
+                        &new_entry.config,
+                    )?
                 {
                     let details = machine_changes_needing_setup(
                         self.platform,
@@ -262,6 +311,100 @@ mod tests {
         CapacityGroup, ComputeCluster, Resource, ResourceEntry, ResourceLifecycle, Stack, Storage,
     };
     use indexmap::IndexMap;
+
+    fn account_stack(profile: alien_core::permissions::PermissionProfile, captured: bool) -> Stack {
+        let mut account =
+            ServiceAccount::from_permission_profile("reader-sa".to_string(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap();
+        if !captured {
+            account.resource_permission_sets.clear();
+        }
+        Stack::new("stack".to_string())
+            .permissions(PermissionsConfig::new().with_profile("reader", profile))
+            .add(account, ResourceLifecycle::Frozen)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn legacy_resource_grants_can_be_captured_without_setup() {
+        let profile = alien_core::permissions::PermissionProfile::new()
+            .resource("objects", ["storage/data-read", "storage/data-write"])
+            .resource("database", ["postgres/data-access"]);
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let result = FrozenResourcesUnchangedCheck { platform }
+                .check(
+                    &account_stack(profile.clone(), false),
+                    &account_stack(profile.clone(), true),
+                )
+                .await
+                .unwrap();
+            assert!(result.success, "{:?}", result.errors);
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_grant_capture_rejects_permission_changes_and_missing_profiles() {
+        use alien_core::permissions::PermissionProfile;
+        let profile = PermissionProfile::new().resource("objects", ["storage/data-read"]);
+        let old = account_stack(profile.clone(), false);
+        let target = account_stack(profile.clone(), true);
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+        for changed in [
+            PermissionProfile::new()
+                .resource("objects", ["storage/data-read", "storage/data-write"]),
+            PermissionProfile::new().resource("other", ["storage/data-read"]),
+            PermissionProfile::new().resource("objects", ["storage/data-write"]),
+            profile.clone().resource("*", ["storage/data-read"]),
+        ] {
+            assert!(
+                !check
+                    .check(&old, &account_stack(changed, true))
+                    .await
+                    .unwrap()
+                    .success
+            );
+        }
+        let mut missing_profile = old.clone();
+        missing_profile.permissions.profiles.clear();
+        assert!(
+            !check
+                .check(&missing_profile, &target)
+                .await
+                .unwrap()
+                .success
+        );
+        let mut changed_capture = target.clone();
+        changed_capture
+            .resources
+            .get_mut("reader-sa")
+            .unwrap()
+            .config
+            .downcast_mut::<ServiceAccount>()
+            .unwrap()
+            .resource_permission_sets
+            .insert(
+                "other".to_string(),
+                target.resources["reader-sa"]
+                    .config
+                    .downcast_ref::<ServiceAccount>()
+                    .unwrap()
+                    .resource_permission_sets["objects"]
+                    .clone(),
+            );
+        assert!(!check.check(&old, &changed_capture).await.unwrap().success);
+        assert!(
+            !check
+                .check(&target, &changed_capture)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(!check.check(&target, &old).await.unwrap().success);
+    }
 
     #[tokio::test]
     async fn test_unchanged_frozen_resources_success() {
