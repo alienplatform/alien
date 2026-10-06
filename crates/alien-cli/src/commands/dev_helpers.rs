@@ -1601,7 +1601,10 @@ mod tests {
             .unwrap();
         assert_eq!(after.id, before.id);
         assert_eq!(after.deployment_group_id, canonical.id);
-        assert_eq!(after.stack_state, before.stack_state);
+        assert_eq!(
+            serde_json::to_value(&after.stack_state).unwrap(),
+            serde_json::to_value(&before.stack_state).unwrap()
+        );
         assert_eq!(after.status, before.status);
         assert_eq!(after.created_at, before.created_at);
         assert_eq!(
