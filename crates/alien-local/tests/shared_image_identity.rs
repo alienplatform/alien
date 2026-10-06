@@ -1,5 +1,4 @@
 use alien_local::{ContainerConfig, LocalContainerManager};
-use bollard::Docker;
 use dockdash::{Arch, Image};
 use futures::FutureExt;
 use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
@@ -47,7 +46,7 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
         .await
         .unwrap();
     assert_eq!(first_image.config_digest(), second_image.config_digest());
-    let docker = Docker::connect_with_local_defaults().unwrap();
+    let docker = alien_local::connect_docker().unwrap();
     let mut archive = tar::Archive::new(std::fs::File::open(first_image.path()).unwrap());
     let index = archive
         .entries_with_seek()
@@ -150,7 +149,7 @@ async fn registry_container_uses_and_labels_its_immutable_image_id() {
     let directory = tempfile::tempdir().unwrap();
     let manager = LocalContainerManager::new(directory.path().to_path_buf()).unwrap();
     let name = format!("registry-identity-{}", Uuid::new_v4());
-    let docker = Docker::connect_with_local_defaults().unwrap();
+    let docker = alien_local::connect_docker().unwrap();
     let result = manager
         .start_container(&name, config("alpine:3.22".to_string()))
         .await;

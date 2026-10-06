@@ -1,4 +1,4 @@
-//! Docker CLI-compatible endpoint selection without changing process environment.
+//! Docker endpoint selection from the documented context and host settings.
 
 use std::{
     collections::HashMap,
@@ -19,7 +19,26 @@ use crate::{ErrorData, Result};
 /// TLS and SSH require transports this client does not currently support; they
 /// fail explicitly rather than connecting without the requested protection.
 pub fn connect_docker() -> Result<Docker> {
-    DockerEnvironment::capture()?.connect()
+    connect_docker_with_host().map(|(docker, _)| docker)
+}
+
+/// Keep subprocesses on the same endpoint captured by their API client.
+pub(crate) fn connect_docker_with_host() -> Result<(Docker, String)> {
+    let endpoint = DockerEnvironment::capture()?.endpoint()?;
+    Ok((connect_endpoint(&endpoint)?, endpoint))
+}
+
+/// Build a CLI command pinned to an already validated, non-TLS endpoint.
+pub(crate) fn docker_command(endpoint: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("docker");
+    command
+        .arg("--host")
+        .arg(endpoint)
+        .env_remove("DOCKER_CONTEXT")
+        .env_remove("DOCKER_TLS")
+        .env_remove("DOCKER_TLS_VERIFY")
+        .env_remove("DOCKER_CERT_PATH");
+    command
 }
 
 #[derive(Default)]
@@ -140,6 +159,7 @@ impl DockerEnvironment {
         Ok(endpoint.host.clone())
     }
 
+    #[cfg(test)]
     fn connect(&self) -> Result<Docker> {
         connect_endpoint(&self.endpoint()?)
     }
@@ -160,18 +180,7 @@ fn connect_endpoint(host: &str) -> Result<Docker> {
         "unix" => Docker::connect_with_unix(if address.is_empty() { "/var/run/docker.sock" } else { address }, 120, API_DEFAULT_VERSION),
         #[cfg(windows)]
         "npipe" => Docker::connect_with_named_pipe(if address.is_empty() { "//./pipe/docker_engine" } else { address }, 120, API_DEFAULT_VERSION),
-        "tcp" => {
-            let address = if address.is_empty() { "localhost:2375" } else { address };
-            let mut url = Url::parse(&format!("http://{address}"))
-                .into_alien_error().context(config_error("Invalid TCP endpoint; specify tcp://host:port".into()))?;
-            if url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() || url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
-                return Err(AlienError::new(config_error("TCP endpoint must contain only a host and optional port".into())));
-            }
-            if url.port().is_none() {
-                url.set_port(Some(2375)).map_err(|_| AlienError::new(config_error("Invalid TCP port".into())))?;
-            }
-            Docker::connect_with_http(url.as_str().trim_end_matches('/'), 120, API_DEFAULT_VERSION)
-        }
+        "tcp" => Docker::connect_with_http(&tcp_endpoint(address)?, 120, API_DEFAULT_VERSION),
         _ => return Err(AlienError::new(unsupported(scheme, "Select a supported Unix/npipe or plaintext TCP Docker endpoint; use the Docker CLI for SSH or TLS"))),
     };
     connection
@@ -181,6 +190,36 @@ fn connect_endpoint(host: &str) -> Result<Docker> {
                 "Cannot initialize the selected Docker endpoint; check its socket and Docker daemon"
                     .into(),
         })
+}
+
+fn tcp_endpoint(address: &str) -> Result<String> {
+    let address = if address.is_empty() {
+        "localhost:2375".into()
+    } else if address.starts_with(':') {
+        format!("localhost{address}")
+    } else {
+        address.to_string()
+    };
+    // Parse with the original scheme so explicit port 80 is not normalized
+    // away as HTTP's default port and accidentally replaced with port 2375.
+    let url = Url::parse(&format!("tcp://{address}"))
+        .into_alien_error()
+        .context(config_error(
+            "Invalid TCP endpoint; specify tcp://host:port".into(),
+        ))?;
+    if url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AlienError::new(config_error(
+            "TCP endpoint must contain only a host and optional port".into(),
+        )));
+    }
+    let host = url.host().expect("host validated above");
+    Ok(format!("http://{host}:{}", url.port().unwrap_or(2375)))
 }
 
 fn config_error(message: String) -> ErrorData {
@@ -234,11 +273,9 @@ struct ContextEndpoint {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     #[cfg(unix)]
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::UnixListener,
-    };
+    use tokio::net::UnixListener;
 
     fn fixture() -> (TempDir, DockerEnvironment) {
         let directory = TempDir::new().expect("temporary Docker config");
@@ -274,8 +311,8 @@ mod tests {
         assert_eq!(environment.endpoint().unwrap(), "unix:///explicit.sock");
         environment.context = Some("default".into());
         assert!(matches!(
-            environment.endpoint().unwrap_err().data,
-            ErrorData::DockerTransportUnsupported { .. }
+            environment.endpoint().unwrap_err().error,
+            Some(ErrorData::DockerTransportUnsupported { .. })
         ));
         environment.tls = false;
         assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
@@ -292,22 +329,22 @@ mod tests {
         fs::write(environment.config_dir.join("config.json"), b"invalid json").unwrap();
         let error = environment.endpoint().unwrap_err();
         assert!(matches!(
-            error.data,
-            ErrorData::DockerConfigurationInvalid { .. }
+            error.error,
+            Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
         assert!(std::error::Error::source(&error).is_some());
         environment.context = Some("missing".into());
         environment.host = Some("unix:///other.sock".into());
         let error = environment.endpoint().unwrap_err();
         assert!(matches!(
-            error.data,
-            ErrorData::DockerConfigurationInvalid { .. }
+            error.error,
+            Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
         assert!(std::error::Error::source(&error).is_some());
         write_context(&environment, "missing", "");
         assert!(matches!(
-            environment.endpoint().unwrap_err().data,
-            ErrorData::DockerConfigurationInvalid { .. }
+            environment.endpoint().unwrap_err().error,
+            Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
         let id = format!("{:x}", Sha256::digest(b"missing"));
         fs::write(
@@ -320,8 +357,8 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            environment.endpoint().unwrap_err().data,
-            ErrorData::DockerConfigurationInvalid { .. }
+            environment.endpoint().unwrap_err().error,
+            Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
     }
 
@@ -339,13 +376,13 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("ca.pem"), "fixture certificate").unwrap();
         assert!(matches!(
-            environment.connect().unwrap_err().data,
-            ErrorData::DockerTransportUnsupported { .. }
+            environment.connect().unwrap_err().error,
+            Some(ErrorData::DockerTransportUnsupported { .. })
         ));
         for host in ["ssh://localhost", "https://localhost:2376", "fd://3"] {
             assert!(matches!(
-                connect_endpoint(host).unwrap_err().data,
-                ErrorData::DockerTransportUnsupported { .. }
+                connect_endpoint(host).unwrap_err().error,
+                Some(ErrorData::DockerTransportUnsupported { .. })
             ));
         }
         for host in [
@@ -355,8 +392,8 @@ mod tests {
             "tcp://localhost?x=1",
         ] {
             assert!(matches!(
-                connect_endpoint(host).unwrap_err().data,
-                ErrorData::DockerConfigurationInvalid { .. }
+                connect_endpoint(host).unwrap_err().error,
+                Some(ErrorData::DockerConfigurationInvalid { .. })
             ));
         }
     }
@@ -401,6 +438,47 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[test]
+    fn tcp_normalization_preserves_explicit_ports_and_ipv6() {
+        for (address, expected) in [
+            ("localhost:80", "http://localhost:80"),
+            ("localhost", "http://localhost:2375"),
+            ("", "http://localhost:2375"),
+            (":1234", "http://localhost:1234"),
+            ("[::1]:1234", "http://[::1]:1234"),
+        ] {
+            assert_eq!(tcp_endpoint(address).unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_tcp_host_sends_real_api_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("tcp://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let count = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8(request[..count].to_vec()).unwrap();
+            assert!(
+                request.lines().next().unwrap().ends_with("/_ping HTTP/1.1"),
+                "{request}"
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
+                .await
+                .unwrap();
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            connect_endpoint(&endpoint).unwrap().ping(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+    }
+
     /// Run in a child process with an isolated Docker config and dedicated engine.
     /// This exercises the public production environment capture, not just inputs.
     #[tokio::test]
@@ -420,17 +498,67 @@ mod tests {
         );
     }
 
-    /// The old connector must fail against the same isolated nondefault context.
+    /// Prove subprocess pinning against a real engine after context selection changes.
+    #[tokio::test]
+    #[ignore = "requires a dedicated Docker engine and Docker CLI"]
+    async fn dedicated_pinned_subprocess() {
+        let (docker, endpoint) = connect_docker_with_host().expect("selected endpoint");
+        let selected = docker
+            .info()
+            .await
+            .expect("selected engine info")
+            .id
+            .expect("engine ID");
+        let directory = TempDir::new().unwrap();
+        fs::write(
+            directory.path().join("config.json"),
+            r#"{"currentContext":"missing"}"#,
+        )
+        .unwrap();
+        let output = docker_command(&endpoint)
+            .env("DOCKER_CONFIG", directory.path())
+            .env("DOCKER_HOST", "unix:///nonexistent-fixture.sock")
+            .args(["info", "--format", "{{.ID}}"])
+            .output()
+            .await
+            .expect("Docker CLI");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), selected);
+    }
+
+    /// Validate production error capture in an isolated child process.
+    #[test]
+    #[ignore = "requires isolated invalid Docker configuration"]
+    fn dedicated_configuration_error() {
+        let expected = env::var("ALIEN_TEST_DOCKER_ERROR_CODE").expect("expected error code");
+        let error = connect_docker().expect_err("invalid selection must fail");
+        assert_eq!(error.code, expected);
+        assert!(!error.retryable);
+    }
+
+    /// The old connector must fail to select the same isolated context engine.
     #[tokio::test]
     #[ignore = "requires isolated config selecting a nondefault socket"]
     async fn dedicated_engine_baseline() {
-        let result = match Docker::connect_with_local_defaults() {
-            Ok(docker) => docker.ping().await,
-            Err(error) => Err(error),
-        };
-        assert!(
-            result.is_err(),
-            "old connector unexpectedly reached a daemon"
-        );
+        let selected = connect_docker()
+            .expect("selected endpoint")
+            .info()
+            .await
+            .expect("dedicated engine info");
+        assert!(selected.id.is_some());
+        match Docker::connect_with_local_defaults() {
+            Ok(docker) => match docker.info().await {
+                Ok(other) => assert_ne!(
+                    other.id, selected.id,
+                    "baseline unexpectedly selected the context engine"
+                ),
+                Err(_) => {} // The old endpoint being unreachable also proves failure.
+            },
+            Err(_) => {} // No default socket: the old connector cannot initialize.
+        }
     }
 }

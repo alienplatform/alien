@@ -12,7 +12,13 @@ use crate::{ErrorData, Result};
 /// Returns a Docker bridge gateway that belongs to the private range used by
 /// Local services and is bindable by this host.
 pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>> {
-    let docker = crate::connect_docker()?;
+    let docker = match crate::connect_docker() {
+        Ok(docker) => docker,
+        // A Docker engine is optional for native services. Configuration and
+        // unsupported transport errors still propagate; no other daemon is tried.
+        Err(error) if error.code == "DOCKER_CONNECTION_FAILED" => return Ok(None),
+        Err(error) => return Err(error),
+    };
     // Bridge discovery is optional on hosts without a local bridge (for
     // example Docker Desktop). Endpoint selection errors above are mandatory.
     let gateway = async {
