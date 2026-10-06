@@ -158,7 +158,7 @@ export type CommandDeploymentInfoEnvironmentInfoUnion =
   | CommandDeploymentInfoEnvironmentInfoLocal
   | CommandDeploymentInfoEnvironmentInfoAws
   | CommandDeploymentInfoEnvironmentInfoTest
-  | any;
+  | string;
 
 export type CommandDeploymentInfo = {
   /**
@@ -180,7 +180,7 @@ export type CommandDeploymentInfo = {
     | CommandDeploymentInfoEnvironmentInfoLocal
     | CommandDeploymentInfoEnvironmentInfoAws
     | CommandDeploymentInfoEnvironmentInfoTest
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -373,7 +373,7 @@ export const CommandDeploymentInfoEnvironmentInfoUnion$inboundSchema: z.ZodType<
   z.lazy(() => CommandDeploymentInfoEnvironmentInfoLocal$inboundSchema),
   z.lazy(() => CommandDeploymentInfoEnvironmentInfoAws$inboundSchema),
   z.lazy(() => CommandDeploymentInfoEnvironmentInfoTest$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function commandDeploymentInfoEnvironmentInfoUnionFromJSON(
@@ -408,7 +408,7 @@ export const CommandDeploymentInfo$inboundSchema: z.ZodType<
       z.lazy(() => CommandDeploymentInfoEnvironmentInfoLocal$inboundSchema),
       z.lazy(() => CommandDeploymentInfoEnvironmentInfoAws$inboundSchema),
       z.lazy(() => CommandDeploymentInfoEnvironmentInfoTest$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   managerId: z.string(),

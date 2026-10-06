@@ -23,6 +23,18 @@ const value: models.ConfigCloudformation = {
 };
 ```
 
+### `models.ConfigGcpSandboxImage`
+
+```typescript
+const value: models.ConfigGcpSandboxImage = {
+  agentImage: "<value>",
+  baseImage: "<value>",
+  customImage: "<value>",
+  managerUrl: "https://stark-subexpression.com",
+  type: "gcp-sandbox-image",
+};
+```
+
 ### `models.ConfigHelm`
 
 ```typescript

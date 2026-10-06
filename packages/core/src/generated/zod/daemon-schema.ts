@@ -34,7 +34,7 @@ get "links"(){
 get "memory"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.").optional()
               },
-"permissions": z.string(),
+"permissions": z.string().describe("Named workload permission profile. Absent means no workload cloud identity.").nullish(),
 "pool": z.string().describe("Capacity group/pool to run on for backends that expose machine pools.").nullish(),
 get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the daemon.").optional()

@@ -9,9 +9,9 @@
 const value: models.DeploymentStateStackStateLifecycleEnum = "frozen";
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

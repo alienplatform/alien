@@ -40,6 +40,12 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[builder(default)]
     pub input_values: HashMap<String, serde_json::Value>,
+    /// IDs of applicable secret inputs stored for this exact deployment target.
+    /// Trusted presence metadata only: never values, gate answers, or authority.
+    /// Absent on legacy targets; an explicit empty list means no stored secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub stored_secret_input_ids: Option<Vec<String>>,
     /// Allow frozen resource changes during updates
     /// When true, skips the frozen resources compatibility check.
     /// This requires running with elevated cloud credentials.
@@ -237,11 +243,72 @@ mod input_values_tests {
         let config: DeploymentConfig =
             serde_json::from_value(json).expect("old shape deserializes");
         assert!(config.input_values.is_empty());
+        assert!(config.stored_secret_input_ids.is_none());
 
         let round = serde_json::to_value(&config).expect("serializes");
+        assert!(round.get("storedSecretInputIds").is_none());
         assert!(
             round.get("inputValues").is_none(),
             "empty map must not serialize"
+        );
+    }
+    #[test]
+    fn stored_secret_presence_roundtrips_without_values_or_gate_answers() {
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(config.stored_secret_input_ids.is_none());
+        config.stored_secret_input_ids = Some(Vec::new());
+        let empty = serde_json::to_value(&config).unwrap();
+        assert_eq!(empty["storedSecretInputIds"], serde_json::json!([]));
+        assert_eq!(
+            serde_json::from_value::<DeploymentConfig>(empty)
+                .unwrap()
+                .stored_secret_input_ids,
+            Some(Vec::new())
+        );
+        config.stored_secret_input_ids =
+            Some(vec!["apiKey".to_string(), "enableFeature".to_string()]);
+        let wire = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            wire["storedSecretInputIds"],
+            serde_json::json!(["apiKey", "enableFeature"])
+        );
+        assert!(wire.get("inputValues").is_none());
+        let decoded: DeploymentConfig = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            decoded.stored_secret_input_ids,
+            config.stored_secret_input_ids
+        );
+        assert_eq!(serde_json::to_value(decoded.clone()).unwrap(), wire);
+        assert!(decoded.input_values.is_empty());
+        for default in [false, true] {
+            let input: crate::StackInputDefinition = serde_json::from_value(serde_json::json!({
+                "id": "enableFeature", "kind": "boolean", "providedBy": ["deployer"],
+                "required": false, "label": "Enable feature", "description": "", "default": crate::StackInputDefaultValue::Boolean(default)
+            }))
+            .unwrap();
+            assert_eq!(
+                crate::gate_resolves_true(
+                    &[input],
+                    "enableFeature",
+                    &decoded.input_values,
+                    "worker"
+                )
+                .unwrap(),
+                default
+            );
+        }
+        assert!(
+            crate::gate_resolves_true(&[], "enableFeature", &decoded.input_values, "worker")
+                .is_err()
         );
     }
 }

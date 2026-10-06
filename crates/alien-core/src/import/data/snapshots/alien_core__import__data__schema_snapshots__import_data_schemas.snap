@@ -103,6 +103,13 @@ expression: schemas
         "description": "IAM instance profile ARN for cluster machines.",
         "type": "string"
       },
+      "isolatedInstanceProfileArn": {
+        "description": "Optional isolated node instance profile ARN.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "securityGroupId": {
         "description": "Security group ID attached to cluster machines.",
         "type": "string"
@@ -884,6 +891,27 @@ expression: schemas
       "identityId": {
         "description": "Resource ID of the user-assigned identity attached to cluster VMs.",
         "type": "string"
+      },
+      "isolatedIdentityClientId": {
+        "description": "Optional isolated node identity client ID.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "isolatedIdentityId": {
+        "description": "Optional isolated node identity resource ID.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "isolatedIdentityPrincipalId": {
+        "description": "Optional isolated node identity principal ID.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "kubeletIdentityClientId": {
         "description": "kubelet UAMI client id used by node pools.",

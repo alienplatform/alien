@@ -1,8 +1,8 @@
 mod common;
 
 use alien_permissions::{
-    generators::AwsRuntimePermissionsGenerator, get_permission_set, BindingTarget,
-    PermissionContext,
+    generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
+    get_permission_set, BindingTarget, PermissionContext,
 };
 use common::*;
 use insta::assert_json_snapshot;
@@ -669,28 +669,64 @@ fn test_container_provision_can_mutate_compacted_load_balancer_names() {
 }
 
 #[test]
-fn test_compute_cluster_management_can_pass_stack_prefixed_instance_roles() {
-    let generator = AwsRuntimePermissionsGenerator::new();
-    let permission_set =
-        get_permission_set("compute-cluster/management").expect("permission set exists");
-    let context = create_test_context();
-
-    let result = generator
-        .generate_policy(permission_set, BindingTarget::Stack, &context)
-        .expect("Should generate AWS policy successfully");
-
-    let pass_role_statement = result
-        .statement
-        .iter()
-        .find(|statement| statement.action.contains(&"iam:PassRole".to_string()))
-        .expect("compute-cluster management should grant PassRole");
-
-    assert!(
-        pass_role_statement
-            .resource
-            .contains(&"arn:aws:iam::123456789012:role/my-stack-*".to_string()),
-        "PassRole must cover CloudFormation-generated compute instance role names"
-    );
+fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
+    for id in ["compute-cluster/management", "compute-cluster/provision"] {
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let generated = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set(id).expect("permission set exists"),
+                    target,
+                    &create_test_context(),
+                )
+                .expect("compute permissions should render");
+            let serialized = serde_json::to_string(&generated).unwrap();
+            let policy: AwsIamPolicy = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(policy, generated);
+            for (action, resource) in [
+                (
+                    "iam:GetInstanceProfile",
+                    "arn:aws:iam::123456789012:instance-profile/*",
+                ),
+                ("iam:GetRole", "arn:aws:iam::123456789012:role/my-stack-*"),
+                ("iam:PassRole", "arn:aws:iam::123456789012:role/my-stack-*"),
+            ] {
+                let grants = policy
+                    .statement
+                    .iter()
+                    .filter(|statement| {
+                        statement.action.iter().any(|candidate| candidate == action)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(grants.len(), 1, "{id} / {target} / {action}");
+                let grant = grants[0];
+                assert_eq!(grant.effect, "Allow");
+                assert_eq!(grant.action, [action]);
+                assert_eq!(grant.resource, [resource]);
+                assert!(grant.not_resource.is_empty());
+                assert!(grant.condition.is_none());
+            }
+            // The existing service-linked-role bootstrap is the only IAM write.
+            for action in policy
+                .statement
+                .iter()
+                .flat_map(|statement| &statement.action)
+            {
+                assert!(!action.starts_with("sts:"), "{id} / {target} / {action}");
+                if action.starts_with("iam:") {
+                    assert!(
+                        matches!(
+                            action.as_str(),
+                            "iam:GetInstanceProfile"
+                                | "iam:GetRole"
+                                | "iam:PassRole"
+                                | "iam:CreateServiceLinkedRole"
+                        ),
+                        "unexpected IAM action: {id} / {target} / {action}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

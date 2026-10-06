@@ -11,6 +11,7 @@ import * as z from "zod";
 export const AwsComputeClusterImportDataSchema = z.object({
     "clusterId": z.string().describe("Cluster identifier used by container orchestration."),
 "instanceProfileArn": z.string().describe("IAM instance profile ARN for cluster machines."),
+"isolatedInstanceProfileArn": z.string().describe("Optional isolated node instance profile ARN.").nullish(),
 "securityGroupId": z.string().describe("Security group ID attached to cluster machines.")
     }).describe("AWS ComputeCluster ImportData.")
 

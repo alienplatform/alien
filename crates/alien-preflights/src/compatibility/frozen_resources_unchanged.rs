@@ -594,6 +594,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolved_signing_scope_changes_require_setup_with_unchanged_names() {
+        let current = alien_permissions::get_permission_set("storage/data-read")
+            .unwrap()
+            .clone();
+        let mut previous = current.clone();
+        for entry in previous.platforms.gcp.as_mut().unwrap() {
+            if entry.grant.permissions.as_ref().is_some_and(|permissions| {
+                permissions
+                    .iter()
+                    .any(|permission| permission == "iam.serviceAccounts.signBlob")
+            }) {
+                entry.binding.resource.as_mut().unwrap().scope =
+                    "projects/${projectName}".to_string();
+            }
+        }
+        let profile =
+            alien_core::PermissionProfile::new().resource("objects", ["storage/data-read"]);
+        let old_account = alien_core::ServiceAccount::from_permission_profile(
+            "reader-sa".to_string(),
+            &profile,
+            |_| Some(previous.clone()),
+        )
+        .unwrap();
+        let new_account = alien_core::ServiceAccount::from_permission_profile(
+            "reader-sa".to_string(),
+            &profile,
+            |_| Some(current.clone()),
+        )
+        .unwrap();
+        let stack = |account| {
+            Stack::new("example".to_string())
+                .add(account, ResourceLifecycle::Frozen)
+                .build()
+        };
+        let result = FrozenResourcesUnchangedCheck {
+            platform: Platform::Gcp,
+        }
+        .check(&stack(old_account), &stack(new_account))
+        .await
+        .unwrap();
+        assert!(!result.success);
+        assert!(!result.errors.is_empty());
+        let mut old_node = compute_cluster(2);
+        old_node.node_permissions = Some(alien_core::PermissionProfile::new().resource(
+            "objects",
+            [alien_core::PermissionSetReference::Inline(previous)],
+        ));
+        let mut new_node = old_node.clone();
+        new_node.node_permissions = Some(alien_core::PermissionProfile::new().resource(
+            "objects",
+            [alien_core::PermissionSetReference::Inline(current)],
+        ));
+        let result = FrozenResourcesUnchangedCheck {
+            platform: Platform::Gcp,
+        }
+        .check(&compute_stack(old_node), &compute_stack(new_node))
+        .await
+        .unwrap();
+        assert!(!result.success);
+        assert!(!result.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_grant_content_changes_require_setup() {
+        let mut old = compute_cluster(2);
+        old.node_permissions =
+            Some(alien_core::PermissionProfile::new().resource("objects", ["storage/data-read"]));
+        let mut changed = old.clone();
+        changed.node_permissions =
+            Some(alien_core::PermissionProfile::new().resource("objects", ["storage/data-write"]));
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let result = FrozenResourcesUnchangedCheck { platform }
+                .check(&compute_stack(old.clone()), &compute_stack(changed.clone()))
+                .await
+                .unwrap();
+            assert!(!result.success);
+            assert!(!result.errors.is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn compute_capacity_is_runtime_manageable() {
         let result = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,

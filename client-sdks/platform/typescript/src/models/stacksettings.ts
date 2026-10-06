@@ -5,6 +5,11 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$Outbound,
+  ExternalBindingUnion$outboundSchema,
+} from "./externalbindingunion.js";
 
 /**
  * Failure-domain policy selected for a compute pool.
@@ -25,10 +30,10 @@ export type StackSettingsFailureDomains2 = {
 
 export type StackSettingsFailureDomainsUnion2 =
   | StackSettingsFailureDomains2
-  | any;
+  | string;
 
 export type StackSettingsPoolsAutoscale = {
-  failureDomains?: StackSettingsFailureDomains2 | any | null | undefined;
+  failureDomains?: StackSettingsFailureDomains2 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -63,10 +68,10 @@ export type StackSettingsFailureDomains1 = {
 
 export type StackSettingsFailureDomainsUnion1 =
   | StackSettingsFailureDomains1
-  | any;
+  | string;
 
 export type StackSettingsPoolsFixed = {
-  failureDomains?: StackSettingsFailureDomains1 | any | null | undefined;
+  failureDomains?: StackSettingsFailureDomains1 | string | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -103,7 +108,7 @@ export type StackSettingsCompute = {
     | undefined;
 };
 
-export type StackSettingsComputeUnion = StackSettingsCompute | any;
+export type StackSettingsComputeUnion = StackSettingsCompute | string;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -123,20 +128,20 @@ export type StackSettingsAws = {
   certificateArn: string;
 };
 
-export type StackSettingsAwsUnion = StackSettingsAws | any;
+export type StackSettingsAwsUnion = StackSettingsAws | string;
 
 export type StackSettingsAzure = {
   keyVaultCertificateId: string;
   keyVaultResourceId?: string | null | undefined;
 };
 
-export type StackSettingsAzureUnion = StackSettingsAzure | any;
+export type StackSettingsAzureUnion = StackSettingsAzure | string;
 
 export type StackSettingsGcp = {
   certificateName: string;
 };
 
-export type StackSettingsGcpUnion = StackSettingsGcp | any;
+export type StackSettingsGcpUnion = StackSettingsGcp | string;
 
 /**
  * Namespace-scoped Kubernetes TLS Secret reference.
@@ -161,16 +166,16 @@ export type StackSettingsDomainsKubernetes = {
 
 export type StackSettingsDomainsKubernetesUnion =
   | StackSettingsDomainsKubernetes
-  | any;
+  | string;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type StackSettingsDomainsCertificate = {
-  aws?: StackSettingsAws | any | null | undefined;
-  azure?: StackSettingsAzure | any | null | undefined;
-  gcp?: StackSettingsGcp | any | null | undefined;
-  kubernetes?: StackSettingsDomainsKubernetes | any | null | undefined;
+  aws?: StackSettingsAws | string | null | undefined;
+  azure?: StackSettingsAzure | string | null | undefined;
+  gcp?: StackSettingsGcp | string | null | undefined;
+  kubernetes?: StackSettingsDomainsKubernetes | string | null | undefined;
 };
 
 /**
@@ -216,7 +221,7 @@ export type StackSettingsPublicEndpointTargetMachineAddresses = {
 export type StackSettingsPublicEndpointTargetUnion =
   | StackSettingsPublicEndpointTargetLoadBalancer
   | StackSettingsPublicEndpointTargetMachineAddresses
-  | any;
+  | string;
 
 /**
  * Domain configuration for the stack.
@@ -237,22 +242,26 @@ export type StackSettingsDomains = {
   publicEndpointTarget?:
     | StackSettingsPublicEndpointTargetLoadBalancer
     | StackSettingsPublicEndpointTargetMachineAddresses
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type StackSettingsDomainsUnion = StackSettingsDomains | any;
+export type StackSettingsDomainsUnion = StackSettingsDomains | string;
 
 /**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
+ * Reachability of the deployment's public endpoints, fixed at setup.
  */
-export type StackSettingsExternalBindings = {};
+export const StackSettingsEndpointAccess = {
+  Internet: "internet",
+  Private: "private",
+} as const;
+/**
+ * Reachability of the deployment's public endpoints, fixed at setup.
+ */
+export type StackSettingsEndpointAccess = ClosedEnum<
+  typeof StackSettingsEndpointAccess
+>;
 
 /**
  * How heartbeat health checks are handled.
@@ -281,7 +290,7 @@ export type StackSettingsCloud = {
   subscriptionId?: string | null | undefined;
 };
 
-export type StackSettingsCloudUnion = StackSettingsCloud | any;
+export type StackSettingsCloudUnion = StackSettingsCloud | string;
 
 /**
  * Ownership model for the Kubernetes cluster.
@@ -300,7 +309,7 @@ export type StackSettingsOwnership = ClosedEnum<typeof StackSettingsOwnership>;
  * Kubernetes cluster setup settings.
  */
 export type StackSettingsCluster = {
-  cloud?: StackSettingsCloud | any | null | undefined;
+  cloud?: StackSettingsCloud | string | null | undefined;
   /**
    * Namespace where the Alien chart and application resources run.
    */
@@ -311,7 +320,7 @@ export type StackSettingsCluster = {
   ownership: StackSettingsOwnership;
 };
 
-export type StackSettingsClusterUnion = StackSettingsCluster | any;
+export type StackSettingsClusterUnion = StackSettingsCluster | string;
 
 export type StackSettingsCertificateNone2 = {
   mode: "none";
@@ -447,7 +456,7 @@ export type StackSettingsProviderUnion4 =
   | StackSettingsProviderAwsAlb4
   | StackSettingsProviderAzureApplicationGatewayForContainers4
   | StackSettingsProviderGkeGateway4
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -477,7 +486,7 @@ export type StackSettingsRouteGateway2 = {
     | StackSettingsProviderAwsAlb4
     | StackSettingsProviderAzureApplicationGatewayForContainers4
     | StackSettingsProviderGkeGateway4
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -553,7 +562,7 @@ export type StackSettingsProviderUnion3 =
   | StackSettingsProviderAwsAlb3
   | StackSettingsProviderAzureApplicationGatewayForContainers3
   | StackSettingsProviderGkeGateway3
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -579,7 +588,7 @@ export type StackSettingsRouteIngress2 = {
     | StackSettingsProviderAwsAlb3
     | StackSettingsProviderAzureApplicationGatewayForContainers3
     | StackSettingsProviderGkeGateway3
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -747,7 +756,7 @@ export type StackSettingsProviderUnion2 =
   | StackSettingsProviderAwsAlb2
   | StackSettingsProviderAzureApplicationGatewayForContainers2
   | StackSettingsProviderGkeGateway2
-  | any;
+  | string;
 
 /**
  * Shared Gateway API route profile values.
@@ -777,7 +786,7 @@ export type StackSettingsRouteGateway1 = {
     | StackSettingsProviderAwsAlb2
     | StackSettingsProviderAzureApplicationGatewayForContainers2
     | StackSettingsProviderGkeGateway2
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -853,7 +862,7 @@ export type StackSettingsProviderUnion1 =
   | StackSettingsProviderAwsAlb1
   | StackSettingsProviderAzureApplicationGatewayForContainers1
   | StackSettingsProviderGkeGateway1
-  | any;
+  | string;
 
 /**
  * Shared Ingress route profile values.
@@ -879,7 +888,7 @@ export type StackSettingsRouteIngress1 = {
     | StackSettingsProviderAwsAlb1
     | StackSettingsProviderAzureApplicationGatewayForContainers1
     | StackSettingsProviderGkeGateway1
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -924,7 +933,7 @@ export type StackSettingsExposureUnion =
   | StackSettingsExposureCustom
   | StackSettingsExposureGenerated
   | StackSettingsExposureDisabled
-  | any;
+  | string;
 
 /**
  * Kubernetes runtime substrate configuration.
@@ -937,17 +946,17 @@ export type StackSettingsExposureUnion =
  * cluster.
  */
 export type StackSettingsKubernetes = {
-  cluster?: StackSettingsCluster | any | null | undefined;
+  cluster?: StackSettingsCluster | string | null | undefined;
   exposure?:
     | StackSettingsExposureCustom
     | StackSettingsExposureGenerated
     | StackSettingsExposureDisabled
-    | any
+    | string
     | null
     | undefined;
 };
 
-export type StackSettingsKubernetesUnion = StackSettingsKubernetes | any;
+export type StackSettingsKubernetesUnion = StackSettingsKubernetes | string;
 
 export const StackSettingsTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -1075,7 +1084,7 @@ export type StackSettingsNetworkUnion =
   | StackSettingsNetworkByoVnetAzure
   | StackSettingsNetworkUseDefault
   | StackSettingsNetworkCreate
-  | any;
+  | string;
 
 /**
  * How telemetry (logs, metrics, traces) is handled.
@@ -1115,33 +1124,29 @@ export type StackSettingsUpdates = ClosedEnum<typeof StackSettingsUpdates>;
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type StackSettings = {
-  compute?: StackSettingsCompute | any | null | undefined;
+  compute?: StackSettingsCompute | string | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: StackSettingsDeploymentModel | undefined;
-  domains?: StackSettingsDomains | any | null | undefined;
+  domains?: StackSettingsDomains | string | null | undefined;
   /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
+   * Reachability of the deployment's public endpoints, fixed at setup.
    */
-  externalBindings?: StackSettingsExternalBindings | null | undefined;
+  endpointAccess?: StackSettingsEndpointAccess | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
   heartbeats?: StackSettingsHeartbeats | undefined;
-  kubernetes?: StackSettingsKubernetes | any | null | undefined;
+  kubernetes?: StackSettingsKubernetes | string | null | undefined;
   network?:
     | StackSettingsNetworkByoVpcAws
     | StackSettingsNetworkByoVpcGcp
     | StackSettingsNetworkByoVnetAzure
     | StackSettingsNetworkUseDefault
     | StackSettingsNetworkCreate
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -1192,7 +1197,7 @@ export function stackSettingsFailureDomains2ToJSON(
 /** @internal */
 export type StackSettingsFailureDomainsUnion2$Outbound =
   | StackSettingsFailureDomains2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsFailureDomainsUnion2$outboundSchema: z.ZodType<
@@ -1200,7 +1205,7 @@ export const StackSettingsFailureDomainsUnion2$outboundSchema: z.ZodType<
   StackSettingsFailureDomainsUnion2
 > = z.union([
   z.lazy(() => StackSettingsFailureDomains2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsFailureDomainsUnion2ToJSON(
@@ -1217,7 +1222,7 @@ export function stackSettingsFailureDomainsUnion2ToJSON(
 export type StackSettingsPoolsAutoscale$Outbound = {
   failure_domains?:
     | StackSettingsFailureDomains2$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1234,7 +1239,7 @@ export const StackSettingsPoolsAutoscale$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => StackSettingsFailureDomains2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1285,7 +1290,7 @@ export function stackSettingsFailureDomains1ToJSON(
 /** @internal */
 export type StackSettingsFailureDomainsUnion1$Outbound =
   | StackSettingsFailureDomains1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsFailureDomainsUnion1$outboundSchema: z.ZodType<
@@ -1293,7 +1298,7 @@ export const StackSettingsFailureDomainsUnion1$outboundSchema: z.ZodType<
   StackSettingsFailureDomainsUnion1
 > = z.union([
   z.lazy(() => StackSettingsFailureDomains1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsFailureDomainsUnion1ToJSON(
@@ -1310,7 +1315,7 @@ export function stackSettingsFailureDomainsUnion1ToJSON(
 export type StackSettingsPoolsFixed$Outbound = {
   failure_domains?:
     | StackSettingsFailureDomains1$Outbound
-    | any
+    | string
     | null
     | undefined;
   machine?: string | null | undefined;
@@ -1326,7 +1331,7 @@ export const StackSettingsPoolsFixed$outboundSchema: z.ZodType<
   failureDomains: z.nullable(
     z.union([
       z.lazy(() => StackSettingsFailureDomains1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   machine: z.nullable(z.string()).optional(),
@@ -1402,13 +1407,13 @@ export function stackSettingsComputeToJSON(
 /** @internal */
 export type StackSettingsComputeUnion$Outbound =
   | StackSettingsCompute$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsComputeUnion$outboundSchema: z.ZodType<
   StackSettingsComputeUnion$Outbound,
   StackSettingsComputeUnion
-> = z.union([z.lazy(() => StackSettingsCompute$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsCompute$outboundSchema), z.string()]);
 
 export function stackSettingsComputeUnionToJSON(
   stackSettingsComputeUnion: StackSettingsComputeUnion,
@@ -1445,13 +1450,13 @@ export function stackSettingsAwsToJSON(
 }
 
 /** @internal */
-export type StackSettingsAwsUnion$Outbound = StackSettingsAws$Outbound | any;
+export type StackSettingsAwsUnion$Outbound = StackSettingsAws$Outbound | string;
 
 /** @internal */
 export const StackSettingsAwsUnion$outboundSchema: z.ZodType<
   StackSettingsAwsUnion$Outbound,
   StackSettingsAwsUnion
-> = z.union([z.lazy(() => StackSettingsAws$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsAws$outboundSchema), z.string()]);
 
 export function stackSettingsAwsUnionToJSON(
   stackSettingsAwsUnion: StackSettingsAwsUnion,
@@ -1487,13 +1492,13 @@ export function stackSettingsAzureToJSON(
 /** @internal */
 export type StackSettingsAzureUnion$Outbound =
   | StackSettingsAzure$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsAzureUnion$outboundSchema: z.ZodType<
   StackSettingsAzureUnion$Outbound,
   StackSettingsAzureUnion
-> = z.union([z.lazy(() => StackSettingsAzure$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsAzure$outboundSchema), z.string()]);
 
 export function stackSettingsAzureUnionToJSON(
   stackSettingsAzureUnion: StackSettingsAzureUnion,
@@ -1525,13 +1530,13 @@ export function stackSettingsGcpToJSON(
 }
 
 /** @internal */
-export type StackSettingsGcpUnion$Outbound = StackSettingsGcp$Outbound | any;
+export type StackSettingsGcpUnion$Outbound = StackSettingsGcp$Outbound | string;
 
 /** @internal */
 export const StackSettingsGcpUnion$outboundSchema: z.ZodType<
   StackSettingsGcpUnion$Outbound,
   StackSettingsGcpUnion
-> = z.union([z.lazy(() => StackSettingsGcp$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsGcp$outboundSchema), z.string()]);
 
 export function stackSettingsGcpUnionToJSON(
   stackSettingsGcpUnion: StackSettingsGcpUnion,
@@ -1590,7 +1595,7 @@ export function stackSettingsDomainsKubernetesToJSON(
 /** @internal */
 export type StackSettingsDomainsKubernetesUnion$Outbound =
   | StackSettingsDomainsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsDomainsKubernetesUnion$outboundSchema: z.ZodType<
@@ -1598,7 +1603,7 @@ export const StackSettingsDomainsKubernetesUnion$outboundSchema: z.ZodType<
   StackSettingsDomainsKubernetesUnion
 > = z.union([
   z.lazy(() => StackSettingsDomainsKubernetes$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsDomainsKubernetesUnionToJSON(
@@ -1613,10 +1618,14 @@ export function stackSettingsDomainsKubernetesUnionToJSON(
 
 /** @internal */
 export type StackSettingsDomainsCertificate$Outbound = {
-  aws?: StackSettingsAws$Outbound | any | null | undefined;
-  azure?: StackSettingsAzure$Outbound | any | null | undefined;
-  gcp?: StackSettingsGcp$Outbound | any | null | undefined;
-  kubernetes?: StackSettingsDomainsKubernetes$Outbound | any | null | undefined;
+  aws?: StackSettingsAws$Outbound | string | null | undefined;
+  azure?: StackSettingsAzure$Outbound | string | null | undefined;
+  gcp?: StackSettingsGcp$Outbound | string | null | undefined;
+  kubernetes?:
+    | StackSettingsDomainsKubernetes$Outbound
+    | string
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -1625,18 +1634,18 @@ export const StackSettingsDomainsCertificate$outboundSchema: z.ZodType<
   StackSettingsDomainsCertificate
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => StackSettingsAws$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsAws$outboundSchema), z.string()]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => StackSettingsAzure$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsAzure$outboundSchema), z.string()]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => StackSettingsGcp$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsGcp$outboundSchema), z.string()]),
   ).optional(),
   kubernetes: z.nullable(
     z.union([
       z.lazy(() => StackSettingsDomainsKubernetes$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1740,7 +1749,7 @@ export function stackSettingsPublicEndpointTargetMachineAddressesToJSON(
 export type StackSettingsPublicEndpointTargetUnion$Outbound =
   | StackSettingsPublicEndpointTargetLoadBalancer$Outbound
   | StackSettingsPublicEndpointTargetMachineAddresses$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsPublicEndpointTargetUnion$outboundSchema: z.ZodType<
@@ -1751,7 +1760,7 @@ export const StackSettingsPublicEndpointTargetUnion$outboundSchema: z.ZodType<
   z.lazy(() =>
     StackSettingsPublicEndpointTargetMachineAddresses$outboundSchema
   ),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsPublicEndpointTargetUnionToJSON(
@@ -1774,7 +1783,7 @@ export type StackSettingsDomains$Outbound = {
   publicEndpointTarget?:
     | StackSettingsPublicEndpointTargetLoadBalancer$Outbound
     | StackSettingsPublicEndpointTargetMachineAddresses$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -1798,7 +1807,7 @@ export const StackSettingsDomains$outboundSchema: z.ZodType<
       z.lazy(() =>
         StackSettingsPublicEndpointTargetMachineAddresses$outboundSchema
       ),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -1814,13 +1823,13 @@ export function stackSettingsDomainsToJSON(
 /** @internal */
 export type StackSettingsDomainsUnion$Outbound =
   | StackSettingsDomains$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsDomainsUnion$outboundSchema: z.ZodType<
   StackSettingsDomainsUnion$Outbound,
   StackSettingsDomainsUnion
-> = z.union([z.lazy(() => StackSettingsDomains$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsDomains$outboundSchema), z.string()]);
 
 export function stackSettingsDomainsUnionToJSON(
   stackSettingsDomainsUnion: StackSettingsDomainsUnion,
@@ -1831,23 +1840,9 @@ export function stackSettingsDomainsUnionToJSON(
 }
 
 /** @internal */
-export type StackSettingsExternalBindings$Outbound = {};
-
-/** @internal */
-export const StackSettingsExternalBindings$outboundSchema: z.ZodType<
-  StackSettingsExternalBindings$Outbound,
-  StackSettingsExternalBindings
-> = z.object({});
-
-export function stackSettingsExternalBindingsToJSON(
-  stackSettingsExternalBindings: StackSettingsExternalBindings,
-): string {
-  return JSON.stringify(
-    StackSettingsExternalBindings$outboundSchema.parse(
-      stackSettingsExternalBindings,
-    ),
-  );
-}
+export const StackSettingsEndpointAccess$outboundSchema: z.ZodEnum<
+  typeof StackSettingsEndpointAccess
+> = z.enum(StackSettingsEndpointAccess);
 
 /** @internal */
 export const StackSettingsHeartbeats$outboundSchema: z.ZodEnum<
@@ -1890,13 +1885,13 @@ export function stackSettingsCloudToJSON(
 /** @internal */
 export type StackSettingsCloudUnion$Outbound =
   | StackSettingsCloud$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsCloudUnion$outboundSchema: z.ZodType<
   StackSettingsCloudUnion$Outbound,
   StackSettingsCloudUnion
-> = z.union([z.lazy(() => StackSettingsCloud$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsCloud$outboundSchema), z.string()]);
 
 export function stackSettingsCloudUnionToJSON(
   stackSettingsCloudUnion: StackSettingsCloudUnion,
@@ -1913,7 +1908,7 @@ export const StackSettingsOwnership$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type StackSettingsCluster$Outbound = {
-  cloud?: StackSettingsCloud$Outbound | any | null | undefined;
+  cloud?: StackSettingsCloud$Outbound | string | null | undefined;
   namespace?: string | null | undefined;
   ownership: string;
 };
@@ -1924,7 +1919,7 @@ export const StackSettingsCluster$outboundSchema: z.ZodType<
   StackSettingsCluster
 > = z.object({
   cloud: z.nullable(
-    z.union([z.lazy(() => StackSettingsCloud$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsCloud$outboundSchema), z.string()]),
   ).optional(),
   namespace: z.nullable(z.string()).optional(),
   ownership: StackSettingsOwnership$outboundSchema,
@@ -1941,13 +1936,13 @@ export function stackSettingsClusterToJSON(
 /** @internal */
 export type StackSettingsClusterUnion$Outbound =
   | StackSettingsCluster$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsClusterUnion$outboundSchema: z.ZodType<
   StackSettingsClusterUnion$Outbound,
   StackSettingsClusterUnion
-> = z.union([z.lazy(() => StackSettingsCluster$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsCluster$outboundSchema), z.string()]);
 
 export function stackSettingsClusterUnionToJSON(
   stackSettingsClusterUnion: StackSettingsClusterUnion,
@@ -2232,7 +2227,7 @@ export type StackSettingsProviderUnion4$Outbound =
   | StackSettingsProviderAwsAlb4$Outbound
   | StackSettingsProviderAzureApplicationGatewayForContainers4$Outbound
   | StackSettingsProviderGkeGateway4$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsProviderUnion4$outboundSchema: z.ZodType<
@@ -2244,7 +2239,7 @@ export const StackSettingsProviderUnion4$outboundSchema: z.ZodType<
     StackSettingsProviderAzureApplicationGatewayForContainers4$outboundSchema
   ),
   z.lazy(() => StackSettingsProviderGkeGateway4$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsProviderUnion4ToJSON(
@@ -2268,7 +2263,7 @@ export type StackSettingsRouteGateway2$Outbound = {
     | StackSettingsProviderAwsAlb4$Outbound
     | StackSettingsProviderAzureApplicationGatewayForContainers4$Outbound
     | StackSettingsProviderGkeGateway4$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -2291,7 +2286,7 @@ export const StackSettingsRouteGateway2$outboundSchema: z.ZodType<
         StackSettingsProviderAzureApplicationGatewayForContainers4$outboundSchema
       ),
       z.lazy(() => StackSettingsProviderGkeGateway4$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -2414,7 +2409,7 @@ export type StackSettingsProviderUnion3$Outbound =
   | StackSettingsProviderAwsAlb3$Outbound
   | StackSettingsProviderAzureApplicationGatewayForContainers3$Outbound
   | StackSettingsProviderGkeGateway3$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsProviderUnion3$outboundSchema: z.ZodType<
@@ -2426,7 +2421,7 @@ export const StackSettingsProviderUnion3$outboundSchema: z.ZodType<
     StackSettingsProviderAzureApplicationGatewayForContainers3$outboundSchema
   ),
   z.lazy(() => StackSettingsProviderGkeGateway3$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsProviderUnion3ToJSON(
@@ -2449,7 +2444,7 @@ export type StackSettingsRouteIngress2$Outbound = {
     | StackSettingsProviderAwsAlb3$Outbound
     | StackSettingsProviderAzureApplicationGatewayForContainers3$Outbound
     | StackSettingsProviderGkeGateway3$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -2471,7 +2466,7 @@ export const StackSettingsRouteIngress2$outboundSchema: z.ZodType<
         StackSettingsProviderAzureApplicationGatewayForContainers3$outboundSchema
       ),
       z.lazy(() => StackSettingsProviderGkeGateway3$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -2827,7 +2822,7 @@ export type StackSettingsProviderUnion2$Outbound =
   | StackSettingsProviderAwsAlb2$Outbound
   | StackSettingsProviderAzureApplicationGatewayForContainers2$Outbound
   | StackSettingsProviderGkeGateway2$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsProviderUnion2$outboundSchema: z.ZodType<
@@ -2839,7 +2834,7 @@ export const StackSettingsProviderUnion2$outboundSchema: z.ZodType<
     StackSettingsProviderAzureApplicationGatewayForContainers2$outboundSchema
   ),
   z.lazy(() => StackSettingsProviderGkeGateway2$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsProviderUnion2ToJSON(
@@ -2863,7 +2858,7 @@ export type StackSettingsRouteGateway1$Outbound = {
     | StackSettingsProviderAwsAlb2$Outbound
     | StackSettingsProviderAzureApplicationGatewayForContainers2$Outbound
     | StackSettingsProviderGkeGateway2$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "gateway";
@@ -2886,7 +2881,7 @@ export const StackSettingsRouteGateway1$outboundSchema: z.ZodType<
         StackSettingsProviderAzureApplicationGatewayForContainers2$outboundSchema
       ),
       z.lazy(() => StackSettingsProviderGkeGateway2$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("gateway"),
@@ -3009,7 +3004,7 @@ export type StackSettingsProviderUnion1$Outbound =
   | StackSettingsProviderAwsAlb1$Outbound
   | StackSettingsProviderAzureApplicationGatewayForContainers1$Outbound
   | StackSettingsProviderGkeGateway1$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsProviderUnion1$outboundSchema: z.ZodType<
@@ -3021,7 +3016,7 @@ export const StackSettingsProviderUnion1$outboundSchema: z.ZodType<
     StackSettingsProviderAzureApplicationGatewayForContainers1$outboundSchema
   ),
   z.lazy(() => StackSettingsProviderGkeGateway1$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsProviderUnion1ToJSON(
@@ -3044,7 +3039,7 @@ export type StackSettingsRouteIngress1$Outbound = {
     | StackSettingsProviderAwsAlb1$Outbound
     | StackSettingsProviderAzureApplicationGatewayForContainers1$Outbound
     | StackSettingsProviderGkeGateway1$Outbound
-    | any
+    | string
     | null
     | undefined;
   routeApi: "ingress";
@@ -3066,7 +3061,7 @@ export const StackSettingsRouteIngress1$outboundSchema: z.ZodType<
         StackSettingsProviderAzureApplicationGatewayForContainers1$outboundSchema
       ),
       z.lazy(() => StackSettingsProviderGkeGateway1$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   routeApi: z.literal("ingress"),
@@ -3178,7 +3173,7 @@ export type StackSettingsExposureUnion$Outbound =
   | StackSettingsExposureCustom$Outbound
   | StackSettingsExposureGenerated$Outbound
   | StackSettingsExposureDisabled$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsExposureUnion$outboundSchema: z.ZodType<
@@ -3188,7 +3183,7 @@ export const StackSettingsExposureUnion$outboundSchema: z.ZodType<
   z.lazy(() => StackSettingsExposureCustom$outboundSchema),
   z.lazy(() => StackSettingsExposureGenerated$outboundSchema),
   z.lazy(() => StackSettingsExposureDisabled$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsExposureUnionToJSON(
@@ -3201,12 +3196,12 @@ export function stackSettingsExposureUnionToJSON(
 
 /** @internal */
 export type StackSettingsKubernetes$Outbound = {
-  cluster?: StackSettingsCluster$Outbound | any | null | undefined;
+  cluster?: StackSettingsCluster$Outbound | string | null | undefined;
   exposure?:
     | StackSettingsExposureCustom$Outbound
     | StackSettingsExposureGenerated$Outbound
     | StackSettingsExposureDisabled$Outbound
-    | any
+    | string
     | null
     | undefined;
 };
@@ -3217,14 +3212,14 @@ export const StackSettingsKubernetes$outboundSchema: z.ZodType<
   StackSettingsKubernetes
 > = z.object({
   cluster: z.nullable(
-    z.union([z.lazy(() => StackSettingsCluster$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsCluster$outboundSchema), z.string()]),
   ).optional(),
   exposure: z.nullable(
     z.union([
       z.lazy(() => StackSettingsExposureCustom$outboundSchema),
       z.lazy(() => StackSettingsExposureGenerated$outboundSchema),
       z.lazy(() => StackSettingsExposureDisabled$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });
@@ -3240,13 +3235,13 @@ export function stackSettingsKubernetesToJSON(
 /** @internal */
 export type StackSettingsKubernetesUnion$Outbound =
   | StackSettingsKubernetes$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsKubernetesUnion$outboundSchema: z.ZodType<
   StackSettingsKubernetesUnion$Outbound,
   StackSettingsKubernetesUnion
-> = z.union([z.lazy(() => StackSettingsKubernetes$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => StackSettingsKubernetes$outboundSchema), z.string()]);
 
 export function stackSettingsKubernetesUnionToJSON(
   stackSettingsKubernetesUnion: StackSettingsKubernetesUnion,
@@ -3455,7 +3450,7 @@ export type StackSettingsNetworkUnion$Outbound =
   | StackSettingsNetworkByoVnetAzure$Outbound
   | StackSettingsNetworkUseDefault$Outbound
   | StackSettingsNetworkCreate$Outbound
-  | any;
+  | string;
 
 /** @internal */
 export const StackSettingsNetworkUnion$outboundSchema: z.ZodType<
@@ -3467,7 +3462,7 @@ export const StackSettingsNetworkUnion$outboundSchema: z.ZodType<
   z.lazy(() => StackSettingsNetworkByoVnetAzure$outboundSchema),
   z.lazy(() => StackSettingsNetworkUseDefault$outboundSchema),
   z.lazy(() => StackSettingsNetworkCreate$outboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function stackSettingsNetworkUnionToJSON(
@@ -3490,19 +3485,23 @@ export const StackSettingsUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type StackSettings$Outbound = {
-  compute?: StackSettingsCompute$Outbound | any | null | undefined;
+  compute?: StackSettingsCompute$Outbound | string | null | undefined;
   deploymentModel?: string | undefined;
-  domains?: StackSettingsDomains$Outbound | any | null | undefined;
-  externalBindings?: StackSettingsExternalBindings$Outbound | null | undefined;
+  domains?: StackSettingsDomains$Outbound | string | null | undefined;
+  endpointAccess?: string | undefined;
+  externalBindings?:
+    | { [k: string]: ExternalBindingUnion$Outbound }
+    | null
+    | undefined;
   heartbeats?: string | undefined;
-  kubernetes?: StackSettingsKubernetes$Outbound | any | null | undefined;
+  kubernetes?: StackSettingsKubernetes$Outbound | string | null | undefined;
   network?:
     | StackSettingsNetworkByoVpcAws$Outbound
     | StackSettingsNetworkByoVpcGcp$Outbound
     | StackSettingsNetworkByoVnetAzure$Outbound
     | StackSettingsNetworkUseDefault$Outbound
     | StackSettingsNetworkCreate$Outbound
-    | any
+    | string
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
@@ -3516,18 +3515,19 @@ export const StackSettings$outboundSchema: z.ZodType<
   StackSettings
 > = z.object({
   compute: z.nullable(
-    z.union([z.lazy(() => StackSettingsCompute$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsCompute$outboundSchema), z.string()]),
   ).optional(),
   deploymentModel: StackSettingsDeploymentModel$outboundSchema.optional(),
   domains: z.nullable(
-    z.union([z.lazy(() => StackSettingsDomains$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsDomains$outboundSchema), z.string()]),
   ).optional(),
+  endpointAccess: StackSettingsEndpointAccess$outboundSchema.optional(),
   externalBindings: z.nullable(
-    z.lazy(() => StackSettingsExternalBindings$outboundSchema),
+    z.record(z.string(), ExternalBindingUnion$outboundSchema),
   ).optional(),
   heartbeats: StackSettingsHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
-    z.union([z.lazy(() => StackSettingsKubernetes$outboundSchema), z.any()]),
+    z.union([z.lazy(() => StackSettingsKubernetes$outboundSchema), z.string()]),
   ).optional(),
   network: z.nullable(
     z.union([
@@ -3536,7 +3536,7 @@ export const StackSettings$outboundSchema: z.ZodType<
       z.lazy(() => StackSettingsNetworkByoVnetAzure$outboundSchema),
       z.lazy(() => StackSettingsNetworkUseDefault$outboundSchema),
       z.lazy(() => StackSettingsNetworkCreate$outboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   publicEndpoints: z.nullable(

@@ -207,7 +207,7 @@ export type DeploymentInfoSetupConfigDefaultUnion =
   | DeploymentInfoSetupConfigDefaultNumber
   | DeploymentInfoSetupConfigDefaultBoolean
   | DeploymentInfoSetupConfigDefaultStringList
-  | any;
+  | string;
 
 /**
  * Environment variable handling for a stack input mapping.
@@ -225,7 +225,7 @@ export type DeploymentInfoSetupConfigTypeEnvEnum = ClosedEnum<
 
 export type DeploymentInfoSetupConfigTypeUnion =
   | DeploymentInfoSetupConfigTypeEnvEnum
-  | any;
+  | string;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
@@ -239,8 +239,29 @@ export type DeploymentInfoSetupConfigEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?: DeploymentInfoSetupConfigTypeEnvEnum | any | null | undefined;
+  type?: DeploymentInfoSetupConfigTypeEnvEnum | string | null | undefined;
 };
+
+/**
+ * Asks Alien to generate a secret input's value.
+ *
+ * @remarks
+ *
+ * The value is an alphanumeric string (`A-Z`, `a-z`, `0-9`), so it is safe in
+ * connection strings, command lines and environment variables. It is generated
+ * once, when the deployment's input values are first resolved, and then kept
+ * with the deployment's other input values.
+ */
+export type DeploymentInfoSetupConfigGenerate = {
+  /**
+   * Number of characters to generate.
+   */
+  length: number;
+};
+
+export type DeploymentInfoSetupConfigGenerateUnion =
+  | DeploymentInfoSetupConfigGenerate
+  | string;
 
 /**
  * Primitive stack input kind.
@@ -338,7 +359,7 @@ export type DeploymentInfoSetupConfigValidation = {
 
 export type DeploymentInfoSetupConfigValidationUnion =
   | DeploymentInfoSetupConfigValidation
-  | any;
+  | string;
 
 /**
  * Stack input definition serialized into a release stack.
@@ -349,7 +370,7 @@ export type DeploymentInfoSetupConfigInput = {
     | DeploymentInfoSetupConfigDefaultNumber
     | DeploymentInfoSetupConfigDefaultBoolean
     | DeploymentInfoSetupConfigDefaultStringList
-    | any
+    | string
     | null
     | undefined;
   /**
@@ -360,6 +381,7 @@ export type DeploymentInfoSetupConfigInput = {
    * Runtime env-var mappings for v1 input resolution.
    */
   env?: Array<DeploymentInfoSetupConfigEnv> | undefined;
+  generate?: DeploymentInfoSetupConfigGenerate | string | null | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -388,7 +410,7 @@ export type DeploymentInfoSetupConfigInput = {
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  validation?: DeploymentInfoSetupConfigValidation | any | null | undefined;
+  validation?: DeploymentInfoSetupConfigValidation | string | null | undefined;
 };
 
 export type DeploymentInfoSetupConfig = {
@@ -713,7 +735,7 @@ export const DeploymentInfoSetupConfigDefaultUnion$inboundSchema: z.ZodType<
   z.lazy(() => DeploymentInfoSetupConfigDefaultNumber$inboundSchema),
   z.lazy(() => DeploymentInfoSetupConfigDefaultBoolean$inboundSchema),
   z.lazy(() => DeploymentInfoSetupConfigDefaultStringList$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoSetupConfigDefaultUnionFromJSON(
@@ -736,7 +758,7 @@ export const DeploymentInfoSetupConfigTypeEnvEnum$inboundSchema: z.ZodEnum<
 export const DeploymentInfoSetupConfigTypeUnion$inboundSchema: z.ZodType<
   DeploymentInfoSetupConfigTypeUnion,
   unknown
-> = z.union([DeploymentInfoSetupConfigTypeEnvEnum$inboundSchema, z.any()]);
+> = z.union([DeploymentInfoSetupConfigTypeEnvEnum$inboundSchema, z.string()]);
 
 export function deploymentInfoSetupConfigTypeUnionFromJSON(
   jsonString: string,
@@ -757,7 +779,7 @@ export const DeploymentInfoSetupConfigEnv$inboundSchema: z.ZodType<
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
   type: z.nullable(
-    z.union([DeploymentInfoSetupConfigTypeEnvEnum$inboundSchema, z.any()]),
+    z.union([DeploymentInfoSetupConfigTypeEnvEnum$inboundSchema, z.string()]),
   ).optional(),
 });
 
@@ -768,6 +790,44 @@ export function deploymentInfoSetupConfigEnvFromJSON(
     jsonString,
     (x) => DeploymentInfoSetupConfigEnv$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DeploymentInfoSetupConfigEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigGenerate$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigGenerate,
+  unknown
+> = z.object({
+  length: z.int(),
+});
+
+export function deploymentInfoSetupConfigGenerateFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigGenerate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoSetupConfigGenerate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigGenerate' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigGenerateUnion$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigGenerateUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoSetupConfigGenerate$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentInfoSetupConfigGenerateUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigGenerateUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigGenerateUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigGenerateUnion' from JSON`,
   );
 }
 
@@ -819,7 +879,7 @@ export const DeploymentInfoSetupConfigValidationUnion$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => DeploymentInfoSetupConfigValidation$inboundSchema),
-  z.any(),
+  z.string(),
 ]);
 
 export function deploymentInfoSetupConfigValidationUnionFromJSON(
@@ -849,12 +909,18 @@ export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
       z.lazy(() => DeploymentInfoSetupConfigDefaultNumber$inboundSchema),
       z.lazy(() => DeploymentInfoSetupConfigDefaultBoolean$inboundSchema),
       z.lazy(() => DeploymentInfoSetupConfigDefaultStringList$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
   description: z.string(),
   env: z.array(z.lazy(() => DeploymentInfoSetupConfigEnv$inboundSchema))
     .optional(),
+  generate: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentInfoSetupConfigGenerate$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   id: z.string(),
   kind: DeploymentInfoSetupConfigKind$inboundSchema,
   label: z.string(),
@@ -867,7 +933,7 @@ export const DeploymentInfoSetupConfigInput$inboundSchema: z.ZodType<
   validation: z.nullable(
     z.union([
       z.lazy(() => DeploymentInfoSetupConfigValidation$inboundSchema),
-      z.any(),
+      z.string(),
     ]),
   ).optional(),
 });

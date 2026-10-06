@@ -14,7 +14,7 @@ use alien_core::{
     ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
     NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
     StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -1244,6 +1244,27 @@ fn apply_resource_dependencies(
                 .resources
                 .get(dependency.id())
                 .is_some_and(|entry| entry.config.downcast_ref::<RemoteBindings>().is_some())
+            {
+                continue;
+            }
+            // Node grants reference both the role and Storage in their own policy. The
+            // executor edge orders cluster completion, not creation of every fragment:
+            // stamping it onto the role can cycle through a workload identity. Explicit
+            // edges to the same target have no separate origin and retain this ordering
+            // through the policy's actual references.
+            if dependency.resource_type() == &Storage::RESOURCE_TYPE
+                && stack.resources.get(dependency.id()).is_some_and(|target| {
+                    target
+                        .config
+                        .downcast_ref::<Storage>()
+                        .is_some_and(|storage| storage.id == dependency.id())
+                })
+                && entry
+                    .config
+                    .downcast_ref::<ComputeCluster>()
+                    .and_then(|cluster| cluster.node_permissions.as_ref())
+                    .and_then(|profile| profile.0.get(dependency.id()))
+                    .is_some_and(|references| !references.is_empty())
             {
                 continue;
             }
@@ -2998,6 +3019,209 @@ impl DomainParameterDefaults {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{PermissionProfile, Resource, ResourceRef};
+
+    fn node_dependency_fixture() -> (Stack, IndexMap<String, Vec<String>>, CfTemplate) {
+        let mut stack = Stack::new("example".to_string())
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .node_permissions(
+                        PermissionProfile::new().resource("objects", ["storage/data-read"]),
+                    )
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("ordinary".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        stack.resources.get_mut("compute").unwrap().dependencies = vec![
+            ResourceRef::new(Storage::RESOURCE_TYPE, "objects"),
+            ResourceRef::new(Storage::RESOURCE_TYPE, "ordinary"),
+        ];
+        let ids = indexmap! {
+            "compute".to_string() => vec!["NodeRole".to_string(), "NodePolicy".to_string()],
+            "objects".to_string() => vec!["Bucket".to_string()],
+            "ordinary".to_string() => vec!["OtherBucket".to_string()],
+        };
+        let mut template = CfTemplate::default();
+        for (id, kind) in [
+            ("NodeRole", "AWS::IAM::Role"),
+            ("NodePolicy", "AWS::IAM::Policy"),
+            ("Bucket", "AWS::S3::Bucket"),
+            ("OtherBucket", "AWS::S3::Bucket"),
+        ] {
+            template.resources.insert(
+                id.to_string(),
+                CfResource::new(id.to_string(), kind.to_string()),
+            );
+        }
+        let policy = template.resources.get_mut("NodePolicy").unwrap();
+        policy.properties.insert(
+            "Roles".to_string(),
+            CfExpression::list([CfExpression::ref_("NodeRole")]),
+        );
+        policy.properties.insert(
+            "PolicyDocument".to_string(),
+            CfExpression::object([
+                ("Version", CfExpression::from("2012-10-17")),
+                (
+                    "Statement",
+                    CfExpression::list([CfExpression::object([
+                        ("Effect", CfExpression::from("Allow")),
+                        ("Action", CfExpression::from("s3:GetObject")),
+                        ("Resource", CfExpression::get_att("Bucket", "Arn")),
+                    ])]),
+                ),
+            ]),
+        );
+        (stack, ids, template)
+    }
+
+    #[test]
+    fn node_storage_order_is_projected_without_changing_policy_or_executor_edges() {
+        for location in ["managed", "gated", "external"] {
+            let (stack, mut ids, mut template) = node_dependency_fixture();
+            let target = if location == "gated" {
+                template.resources.get_mut("Bucket").unwrap().condition =
+                    Some("Enabled".to_string());
+                template.resources.get_mut("NodePolicy").unwrap().condition =
+                    Some("Enabled".to_string());
+                CfExpression::if_(
+                    "Enabled",
+                    CfExpression::get_att("Bucket", "Arn"),
+                    CfExpression::no_value(),
+                )
+            } else if location == "external" {
+                template.resources.shift_remove("Bucket");
+                ids.shift_remove("objects");
+                CfExpression::from("arn:aws:s3:::existing-objects/*")
+            } else {
+                CfExpression::get_att("Bucket", "Arn")
+            };
+            let CfExpression::Object(document) = template
+                .resources
+                .get_mut("NodePolicy")
+                .unwrap()
+                .properties
+                .get_mut("PolicyDocument")
+                .unwrap()
+            else {
+                panic!("policy document")
+            };
+            let CfExpression::List(statements) = document.get_mut("Statement").unwrap() else {
+                panic!("statements")
+            };
+            let CfExpression::Object(statement) = &mut statements[0] else {
+                panic!("statement")
+            };
+            statement.insert("Resource".to_string(), target);
+            let policy = template.resources["NodePolicy"].clone();
+            let dependencies = stack.resources["compute"].dependencies.clone();
+            apply_resource_dependencies(&stack, &ids, &mut template);
+            for id in ["NodeRole", "NodePolicy"] {
+                assert_eq!(
+                    template.resources[id].depends_on,
+                    vec!["OtherBucket".to_string()]
+                );
+            }
+            assert_eq!(
+                template.resources["NodePolicy"].properties,
+                policy.properties
+            );
+            assert_eq!(template.resources["NodePolicy"].condition, policy.condition);
+            assert_eq!(stack.resources["compute"].dependencies, dependencies);
+            let once = template.clone();
+            apply_resource_dependencies(&stack, &ids, &mut template);
+            assert_eq!(template, once);
+        }
+    }
+
+    #[test]
+    fn ordinary_or_invalid_node_targets_keep_physical_dependencies() {
+        for case in [
+            "no-profile",
+            "empty",
+            "other-target",
+            "wrong-ref-type",
+            "wrong-target-type",
+            "missing",
+            "mismatched-id",
+            "non-node",
+        ] {
+            let (mut stack, ids, mut template) = node_dependency_fixture();
+            match case {
+                "no-profile" => {
+                    stack
+                        .resources
+                        .get_mut("compute")
+                        .unwrap()
+                        .config
+                        .downcast_mut::<ComputeCluster>()
+                        .unwrap()
+                        .node_permissions = None
+                }
+                "empty" => stack
+                    .resources
+                    .get_mut("compute")
+                    .unwrap()
+                    .config
+                    .downcast_mut::<ComputeCluster>()
+                    .unwrap()
+                    .node_permissions
+                    .as_mut()
+                    .unwrap()
+                    .0
+                    .get_mut("objects")
+                    .unwrap()
+                    .clear(),
+                "other-target" => {
+                    stack
+                        .resources
+                        .get_mut("compute")
+                        .unwrap()
+                        .config
+                        .downcast_mut::<ComputeCluster>()
+                        .unwrap()
+                        .node_permissions =
+                        Some(PermissionProfile::new().resource("elsewhere", ["storage/data-read"]))
+                }
+                "wrong-ref-type" => {
+                    stack.resources.get_mut("compute").unwrap().dependencies[0] =
+                        ResourceRef::new(ComputeCluster::RESOURCE_TYPE, "objects")
+                }
+                "wrong-target-type" => {
+                    stack.resources.get_mut("objects").unwrap().config =
+                        Resource::new(ComputeCluster::new("objects".to_string()).build())
+                }
+                "missing" => {
+                    stack.resources.shift_remove("objects");
+                }
+                "mismatched-id" => {
+                    stack.resources.get_mut("objects").unwrap().config =
+                        Resource::new(Storage::new("different".to_string()).build())
+                }
+                "non-node" => {
+                    stack.resources.get_mut("compute").unwrap().config =
+                        Resource::new(Storage::new("compute".to_string()).build())
+                }
+                _ => unreachable!(),
+            }
+            apply_resource_dependencies(&stack, &ids, &mut template);
+            for id in ["NodeRole", "NodePolicy"] {
+                assert_eq!(
+                    template.resources[id].depends_on,
+                    vec!["Bucket".to_string(), "OtherBucket".to_string()],
+                    "{case}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn quotes_yaml_1_1_boolean_like_strings_in_object_values() {

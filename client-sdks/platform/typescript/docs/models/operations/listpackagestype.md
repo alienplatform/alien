@@ -13,5 +13,5 @@ let value: ListPackagesType = "sandbox-bundle";
 ## Values
 
 ```typescript
-"cli" | "cloudformation" | "helm" | "operator-image" | "sandbox-bundle" | "terraform"
+"cli" | "cloudformation" | "gcp-sandbox-image" | "helm" | "operator-image" | "sandbox-bundle" | "terraform"
 ```

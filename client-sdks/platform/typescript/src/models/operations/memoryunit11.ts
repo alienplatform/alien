@@ -1523,7 +1523,7 @@ export type Cpu11 = {
   value: number;
 };
 
-export type CpuUnion11 = Cpu11 | any;
+export type CpuUnion11 = Cpu11 | string;
 
 export type InvolvedObject9 = {
   apiVersion?: string | null | undefined;
@@ -1535,25 +1535,25 @@ export type InvolvedObject9 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion9 = InvolvedObject9 | any;
+export type InvolvedObjectUnion9 = InvolvedObject9 | string;
 
 export type SourceEvent9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = SourceEvent9 | any;
+export type SourceUnion9 = SourceEvent9 | string;
 
 export type Event12 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject9 | any | null | undefined;
+  involvedObject?: InvolvedObject9 | string | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SourceEvent9 | any | null | undefined;
+  source?: SourceEvent9 | string | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3694,7 +3694,7 @@ export function cpu11FromJSON(
 
 /** @internal */
 export const CpuUnion11$inboundSchema: z.ZodType<CpuUnion11, unknown> = z.union(
-  [z.lazy(() => Cpu11$inboundSchema), z.any()],
+  [z.lazy(() => Cpu11$inboundSchema), z.string()],
 );
 
 export function cpuUnion11FromJSON(
@@ -3735,7 +3735,7 @@ export function involvedObject9FromJSON(
 export const InvolvedObjectUnion9$inboundSchema: z.ZodType<
   InvolvedObjectUnion9,
   unknown
-> = z.union([z.lazy(() => InvolvedObject9$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject9$inboundSchema), z.string()]);
 
 export function involvedObjectUnion9FromJSON(
   jsonString: string,
@@ -3766,7 +3766,7 @@ export function sourceEvent9FromJSON(
 
 /** @internal */
 export const SourceUnion9$inboundSchema: z.ZodType<SourceUnion9, unknown> = z
-  .union([z.lazy(() => SourceEvent9$inboundSchema), z.any()]);
+  .union([z.lazy(() => SourceEvent9$inboundSchema), z.string()]);
 
 export function sourceUnion9FromJSON(
   jsonString: string,
@@ -3788,7 +3788,7 @@ export const Event12$inboundSchema: z.ZodType<Event12, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject9$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject9$inboundSchema), z.string()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -3797,7 +3797,7 @@ export const Event12$inboundSchema: z.ZodType<Event12, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([z.lazy(() => SourceEvent9$inboundSchema), z.any()]),
+    z.union([z.lazy(() => SourceEvent9$inboundSchema), z.string()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });

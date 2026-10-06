@@ -60,9 +60,9 @@ const value: models.CreateSetupRegistrationOperationRequestNetworkByoVnetAzure =
   };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

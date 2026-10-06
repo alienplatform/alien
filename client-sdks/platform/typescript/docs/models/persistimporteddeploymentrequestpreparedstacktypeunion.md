@@ -10,9 +10,9 @@ const value: models.PersistImportedDeploymentRequestPreparedStackTypeEnvEnum =
   "secret";
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

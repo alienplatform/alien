@@ -269,6 +269,11 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || resource.contains("${resourceName}")
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
+                        || documented_compute_instance_profile_metadata_scope(
+                            permission_set_id,
+                            actions,
+                            resource,
+                        )
                         || documented_same_account_ecr_metadata_scope(actions, resource)
                         || documented_aoss_id_scoped_collection_resource(actions, resource)
                         || documented_run_instances_companion_resource(actions, resource)
@@ -349,6 +354,82 @@ fn documented_aoss_id_scoped_collection_resource(actions: &[String], resource: &
     // to be a principal of the collection's data-access policy.
     actions.iter().all(|action| action == "aoss:APIAccessAll")
         && resource == "arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"
+}
+
+fn documented_compute_instance_profile_metadata_scope(
+    permission_set_id: &str,
+    actions: &[String],
+    resource: &str,
+) -> bool {
+    // The actual profile ARN is unavailable in this context, and generated profile
+    // names need not carry the stack prefix. Role metadata reads and PassRole stay
+    // prefix-scoped; this exception permits only account-local profile metadata.
+    matches!(
+        permission_set_id,
+        "compute-cluster/management" | "compute-cluster/provision"
+    ) && actions == ["iam:GetInstanceProfile"]
+        && resource == "arn:aws:iam::${awsAccountId}:instance-profile/*"
+}
+
+#[test]
+fn compute_instance_profile_metadata_scope_exception_is_exact() {
+    let resource = "arn:aws:iam::${awsAccountId}:instance-profile/*";
+    let actions = vec!["iam:GetInstanceProfile".to_string()];
+    for id in ["compute-cluster/management", "compute-cluster/provision"] {
+        assert!(documented_compute_instance_profile_metadata_scope(
+            id, &actions, resource
+        ));
+        assert!(!documented_compute_instance_profile_metadata_scope(
+            id,
+            &[],
+            resource
+        ));
+        for extra in [
+            "iam:AddRoleToInstanceProfile",
+            "iam:PassRole",
+            "sts:AssumeRole",
+            "sts:GetSessionToken",
+            "iam:GetRole",
+            "iam:*",
+            "iam:GetInstanceProfile",
+        ] {
+            let mixed = vec![actions[0].clone(), extra.to_string()];
+            assert!(!documented_compute_instance_profile_metadata_scope(
+                id, &mixed, resource
+            ));
+            if extra != "iam:GetInstanceProfile" {
+                assert!(!documented_compute_instance_profile_metadata_scope(
+                    id,
+                    &[extra.to_string()],
+                    resource,
+                ));
+            }
+        }
+        for wrong_resource in [
+            "arn:aws:iam::${managingAccountId}:instance-profile/*",
+            "arn:aws:iam::999999999999:instance-profile/*",
+            "arn:aws:iam::*:instance-profile/*",
+            "arn:aws:iam::${awsAccountId}:*",
+            "arn:aws:iam::${awsAccountId}:role/*",
+            "*",
+        ] {
+            assert!(!documented_compute_instance_profile_metadata_scope(
+                id,
+                &actions,
+                wrong_resource
+            ));
+        }
+    }
+    for wrong_id in [
+        "compute-cluster/heartbeat",
+        "worker/management",
+        "compute-cluster/management-extra",
+        "",
+    ] {
+        assert!(!documented_compute_instance_profile_metadata_scope(
+            wrong_id, &actions, resource
+        ));
+    }
 }
 
 fn documented_same_account_ecr_metadata_scope(actions: &[String], resource: &str) -> bool {

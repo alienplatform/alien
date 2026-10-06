@@ -12,9 +12,9 @@ const value: operations.Memory3 = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

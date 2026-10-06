@@ -12,9 +12,9 @@ const value: models.TargetReleaseOverrideCondition = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 
