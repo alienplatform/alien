@@ -1,6 +1,12 @@
 //! Docker endpoint selection from the documented context and host settings.
 
-use std::{collections::HashMap, env, fs, io::ErrorKind, path::PathBuf, process::Command};
+use std::{
+    collections::HashMap,
+    env, fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::{Docker, API_DEFAULT_VERSION};
@@ -30,7 +36,7 @@ pub(crate) fn connect_optional_docker() -> Result<Option<Docker>> {
     let unconfigured_default = environment.context.is_none()
         && environment.host.is_none()
         && (context.is_empty() || context == "default");
-    let endpoint = environment.endpoint_for_context(&context)?;
+    let endpoint = environment.endpoint_for_context(&context, inspect_context)?;
     match connect_endpoint(&endpoint) {
         Ok(docker) => Ok(Some(docker)),
         Err(error) if unconfigured_default && error.code == "DOCKER_CONNECTION_FAILED" => Ok(None),
@@ -128,10 +134,21 @@ impl DockerEnvironment {
     }
 
     fn endpoint(&self) -> Result<String> {
-        self.endpoint_for_context(&self.selected_context()?)
+        self.endpoint_with(inspect_context)
     }
 
-    fn endpoint_for_context(&self, context: &str) -> Result<String> {
+    fn endpoint_with(
+        &self,
+        inspect: impl FnOnce(&Path, &str) -> Result<Vec<u8>>,
+    ) -> Result<String> {
+        self.endpoint_for_context(&self.selected_context()?, inspect)
+    }
+
+    fn endpoint_for_context(
+        &self,
+        context: &str,
+        inspect: impl FnOnce(&Path, &str) -> Result<Vec<u8>>,
+    ) -> Result<String> {
         if context.is_empty() || context == "default" {
             let host = self.host.clone().unwrap_or_else(default_host);
             if self.tls && !is_socket(&host) {
@@ -147,28 +164,11 @@ impl DockerEnvironment {
         let config_dir = self.config_dir.as_ref().ok_or_else(|| AlienError::new(config_error(
             "Set DOCKER_CONFIG to inspect the selected named context when the home directory is unavailable".into(),
         )))?;
-        let output = Command::new("docker")
-            .env("DOCKER_CONFIG", config_dir)
-            .env_remove("DOCKER_HOST")
-            .env_remove("DOCKER_CONTEXT")
-            .env_remove("DOCKER_TLS")
-            .env_remove("DOCKER_TLS_VERIFY")
-            .env_remove("DOCKER_CERT_PATH")
-            .args(["context", "inspect", context, "--format", "{{json .}}"])
-            .output()
-            .into_alien_error()
-            .context(config_error("Cannot inspect selected Docker context; install Docker CLI and select an existing context".into()))?;
-        if !output.status.success() {
-            // Do not expose CLI stderr: context metadata can contain credentials.
-            return Err(std::io::Error::other(format!("docker context inspect exited with {}", output.status)))
-                .into_alien_error()
-                .context(config_error(format!("Cannot inspect Docker context '{context}'; select an existing context with 'docker context use'")));
-        }
-        let metadata: ContextMetadata = serde_json::from_slice(&output.stdout)
+        let metadata: ContextMetadata = serde_json::from_slice(&inspect(config_dir, context)?)
             .into_alien_error()
             .context(config_error(
-            "Docker CLI returned invalid context metadata".into(),
-        ))?;
+                "Docker CLI returned invalid context metadata".into(),
+            ))?;
         if metadata.name != context {
             return Err(AlienError::new(config_error(
                 "Docker CLI returned a different context than requested".into(),
@@ -197,9 +197,30 @@ impl DockerEnvironment {
     }
 
     #[cfg(test)]
-    fn connect(&self) -> Result<Docker> {
-        connect_endpoint(&self.endpoint()?)
+    fn connect_with(&self, inspect: impl FnOnce(&Path, &str) -> Result<Vec<u8>>) -> Result<Docker> {
+        connect_endpoint(&self.endpoint_with(inspect)?)
     }
+}
+
+fn inspect_context(config_dir: &Path, context: &str) -> Result<Vec<u8>> {
+    let output = Command::new("docker")
+            .env("DOCKER_CONFIG", config_dir)
+            .env_remove("DOCKER_HOST")
+            .env_remove("DOCKER_CONTEXT")
+            .env_remove("DOCKER_TLS")
+            .env_remove("DOCKER_TLS_VERIFY")
+            .env_remove("DOCKER_CERT_PATH")
+            .args(["context", "inspect", context, "--format", "{{json .}}"])
+            .output()
+            .into_alien_error()
+            .context(config_error("Cannot inspect selected Docker context; install Docker CLI and select an existing context".into()))?;
+    if !output.status.success() {
+        // Do not expose CLI stderr: context metadata can contain credentials.
+        return Err(std::io::Error::other(format!("docker context inspect exited with {}", output.status)))
+                .into_alien_error()
+                .context(config_error(format!("Cannot inspect Docker context '{context}'; select an existing context with 'docker context use'")));
+    }
+    Ok(output.stdout)
 }
 
 fn is_socket(host: &str) -> bool {
@@ -322,41 +343,39 @@ mod tests {
     #[test]
     fn absent_configuration_does_not_block_host_or_native_default() {
         let mut environment = DockerEnvironment::default();
-        assert_eq!(environment.endpoint().unwrap(), default_host());
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            default_host()
+        );
         environment.host = Some("tcp://localhost:1234".into());
         environment.context = Some("missing".into());
-        assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "tcp://localhost:1234"
+        );
         environment.host = None;
         assert_eq!(
-            environment.endpoint().unwrap_err().code,
+            environment.endpoint_with(fixture_inspect).unwrap_err().code,
             "DOCKER_CONFIGURATION_INVALID"
         );
         environment.context = Some("default".into());
-        assert_eq!(environment.endpoint().unwrap(), default_host());
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            default_host()
+        );
     }
 
-    // Fixture directory names from Docker's public SHA256 context-store format.
-    fn context_id(name: &str) -> &'static str {
-        match name {
-            "stored" => "87b04e58961f9a99d853d4046a0b5b793e7c3e4bbd21f5aca8fb17c20cdb1d8b",
-            "explicit" => "3b283e93debf035e990dfce1f21468476dc57c69313c5574f43ad1a185840277",
-            "missing" => "ffa63583dfa6706b87d284b86b0d693a161e4840aad2c5cf6b5d27c3b9621f7d",
-            "secure" => "6a934b45144e3758911efa29ed68fb2d420fa7bd568739cdcda9251fa9609b1e",
-            "fixture" => "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
-            _ => panic!("unknown fixture context"),
-        }
+    fn fixture_inspect(directory: &Path, context: &str) -> Result<Vec<u8>> {
+        fs::read(directory.join(format!("{context}.json")))
+            .into_alien_error()
+            .context(config_error(
+                "Context inspection fixture is unavailable".into(),
+            ))
     }
 
     fn write_context(environment: &DockerEnvironment, name: &str, host: &str) {
-        let id = context_id(name);
-        let directory = environment
-            .config_dir
-            .as_ref()
-            .unwrap()
-            .join("contexts/meta")
-            .join(id);
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("meta.json"), serde_json::to_vec(&serde_json::json!({"Name": name, "Endpoints": {"docker": {"Host": host, "SkipTLSVerify": false}}})).unwrap()).unwrap();
+        let directory = environment.config_dir.as_ref().unwrap();
+        fs::write(directory.join(format!("{name}.json")), serde_json::to_vec(&serde_json::json!({"Name": name, "Endpoints": {"docker": {"Host": host, "SkipTLSVerify": false}}})).unwrap()).unwrap();
     }
 
     #[test]
@@ -369,27 +388,51 @@ mod tests {
             r#"{"currentContext":"stored"}"#,
         )
         .unwrap();
-        assert_eq!(environment.endpoint().unwrap(), "unix:///stored.sock");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "unix:///stored.sock"
+        );
         environment.host = Some("tcp://localhost:1234".into());
-        assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "tcp://localhost:1234"
+        );
         environment.context = Some("explicit".into());
-        assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "tcp://localhost:1234"
+        );
         environment.host = None;
         environment.tls = true; // Named contexts ignore environment TLS options.
-        assert_eq!(environment.endpoint().unwrap(), "unix:///explicit.sock");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "unix:///explicit.sock"
+        );
         environment.host = Some("tcp://localhost:1234".into());
         environment.context = Some("default".into());
         assert!(matches!(
-            environment.endpoint().unwrap_err().error,
+            environment
+                .endpoint_with(fixture_inspect)
+                .unwrap_err()
+                .error,
             Some(ErrorData::DockerTransportUnsupported { .. })
         ));
         environment.tls = false;
-        assert_eq!(environment.endpoint().unwrap(), "tcp://localhost:1234");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "tcp://localhost:1234"
+        );
         environment.host = None;
-        assert_eq!(environment.endpoint().unwrap(), default_host());
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            default_host()
+        );
         environment.context = None;
         fs::remove_file(environment.config_dir.as_ref().unwrap().join("config.json")).unwrap();
-        assert_eq!(environment.endpoint().unwrap(), default_host());
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            default_host()
+        );
     }
 
     #[test]
@@ -400,7 +443,7 @@ mod tests {
             b"invalid json",
         )
         .unwrap();
-        let error = environment.endpoint().unwrap_err();
+        let error = environment.endpoint_with(fixture_inspect).unwrap_err();
         assert!(matches!(
             error.error,
             Some(ErrorData::DockerConfigurationInvalid { .. })
@@ -408,7 +451,7 @@ mod tests {
         assert!(std::error::Error::source(&error).is_some());
         environment.context = Some("missing".into());
 
-        let error = environment.endpoint().unwrap_err();
+        let error = environment.endpoint_with(fixture_inspect).unwrap_err();
         assert!(matches!(
             error.error,
             Some(ErrorData::DockerConfigurationInvalid { .. })
@@ -416,32 +459,22 @@ mod tests {
         assert!(std::error::Error::source(&error).is_some());
         write_context(&environment, "missing", "");
         assert!(matches!(
-            environment.endpoint().unwrap_err().error,
-            Some(ErrorData::DockerConfigurationInvalid { .. })
-        ));
-        let id = context_id("missing");
-        fs::write(
             environment
-                .config_dir
-                .as_ref()
-                .unwrap()
-                .join("contexts/meta")
-                .join(id)
-                .join("meta.json"),
-            r#"{"Name":"missing","Endpoints":{}}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            environment.endpoint().unwrap_err().error,
+                .endpoint_with(fixture_inspect)
+                .unwrap_err()
+                .error,
             Some(ErrorData::DockerConfigurationInvalid { .. })
         ));
         let path = environment
             .config_dir
             .as_ref()
             .unwrap()
-            .join("contexts/meta")
-            .join(context_id("missing"))
-            .join("meta.json");
+            .join("missing.json");
+        fs::write(&path, r#"{"Name":"missing","Endpoints":{}}"#).unwrap();
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap_err().code,
+            "DOCKER_CONFIGURATION_INVALID"
+        );
         for metadata in [
             "invalid json",
             "null",
@@ -449,7 +482,7 @@ mod tests {
             r#"{"Name":"missing","Endpoints":{"docker":{"Host":42}}}"#,
         ] {
             fs::write(&path, metadata).unwrap();
-            let error = environment.endpoint().unwrap_err();
+            let error = environment.endpoint_with(fixture_inspect).unwrap_err();
             assert_eq!(error.code, "DOCKER_CONFIGURATION_INVALID");
             assert!(!error.retryable);
         }
@@ -460,18 +493,10 @@ mod tests {
         let (_directory, mut environment) = fixture();
         environment.context = Some("secure".into());
         write_context(&environment, "secure", "tcp://localhost:2376");
-        let id = context_id("secure");
-        let directory = environment
-            .config_dir
-            .as_ref()
-            .unwrap()
-            .join("contexts/tls")
-            .join(id)
-            .join("docker");
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("ca.pem"), "fixture certificate").unwrap();
+        fs::write(environment.config_dir.as_ref().unwrap().join("secure.json"),
+            serde_json::to_vec(&serde_json::json!({"Name":"secure","Endpoints":{"docker":{"Host":"tcp://localhost:2376"}},"TLSMaterial":{"docker":["ca.pem"]}})).unwrap()).unwrap();
         assert!(matches!(
-            environment.connect().unwrap_err().error,
+            environment.connect_with(fixture_inspect).unwrap_err().error,
             Some(ErrorData::DockerTransportUnsupported { .. })
         ));
         for host in ["ssh://localhost", "https://localhost:2376", "fd://3"] {
@@ -498,21 +523,18 @@ mod tests {
         let (_directory, mut environment) = fixture();
         environment.context = Some("secure".into());
         environment.tls = true;
-        let path = environment
-            .config_dir
-            .as_ref()
-            .unwrap()
-            .join("contexts/meta")
-            .join(context_id("secure"))
-            .join("meta.json");
+        let path = environment.config_dir.as_ref().unwrap().join("secure.json");
         write_context(&environment, "secure", "unix:///fixture.sock");
         fs::write(&path, r#"{"Name":"secure","Endpoints":{"docker":{"Host":"unix:///fixture.sock","SkipTLSVerify":true}}}"#).unwrap();
-        assert_eq!(environment.endpoint().unwrap(), "unix:///fixture.sock");
+        assert_eq!(
+            environment.endpoint_with(fixture_inspect).unwrap(),
+            "unix:///fixture.sock"
+        );
         // For TCP, Docker CLI tlsConfig enables TLS when SkipTLSVerify is true,
         // including when no certificate files are present. Never downgrade it.
         fs::write(&path, r#"{"Name":"secure","Endpoints":{"docker":{"Host":"tcp://localhost:2376","SkipTLSVerify":true}}}"#).unwrap();
         assert_eq!(
-            environment.endpoint().unwrap_err().code,
+            environment.endpoint_with(fixture_inspect).unwrap_err().code,
             "DOCKER_TRANSPORT_UNSUPPORTED"
         );
     }
@@ -549,7 +571,7 @@ mod tests {
         });
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            environment.connect().unwrap().ping(),
+            environment.connect_with(fixture_inspect).unwrap().ping(),
         )
         .await
         .unwrap()
@@ -670,6 +692,18 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), selected);
+    }
+
+    /// Run with a cleared child environment and no Docker executable in PATH.
+    #[test]
+    #[ignore = "requires an isolated child environment without HOME or Docker configuration"]
+    fn native_default_without_home() {
+        assert!(env::var_os("HOME").is_none());
+        assert!(env::var_os("USERPROFILE").is_none());
+        assert!(env::var_os("DOCKER_CONFIG").is_none());
+        let environment = DockerEnvironment::capture().expect("native default capture");
+        assert_eq!(environment.endpoint().unwrap(), default_host());
+        connect_optional_docker().expect("native optional Docker must not require a home");
     }
 
     /// Validate production error capture in an isolated child process.
