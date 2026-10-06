@@ -201,6 +201,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 &selected_platforms,
                 public_subdomain.as_deref(),
                 &name,
+                includes_application,
             )?),
             description: None,
             entry_point: None,
@@ -430,6 +431,7 @@ fn platform_onboard_deployment_setup_config(
     platforms: &[Platform],
     public_subdomain: Option<&str>,
     customer_name: &str,
+    includes_application: bool,
 ) -> Result<alien_platform_api::types::DeploymentSetupConfigInput> {
     use alien_platform_api::types;
 
@@ -503,25 +505,44 @@ fn platform_onboard_deployment_setup_config(
                     types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Pull,
                     types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Airgapped,
                 ],
-                allowed_heartbeats_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On,
-                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::Off,
-                ],
-                allowed_network_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None,
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Create,
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Default,
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Byo,
-                ],
-                allowed_telemetry_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off,
-                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Auto,
-                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::ApprovalRequired,
-                ],
-                allowed_updates_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::Auto,
-                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired,
-                ],
+                // A link with only capabilities installs a built-in package that registers no
+                // network, telemetry off, approval-required updates and heartbeats on. Allowing
+                // any other mode lets the setup request one that package does not accept.
+                allowed_heartbeats_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On,
+                        types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::Off,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On]
+                },
+                allowed_network_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None,
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Create,
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Default,
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Byo,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None]
+                },
+                allowed_telemetry_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off,
+                        types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Auto,
+                        types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::ApprovalRequired,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off]
+                },
+                allowed_updates_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::Auto,
+                        types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired]
+                },
                 defaults: None,
             }),
         }),
@@ -2015,6 +2036,7 @@ mod tests {
             &[Platform::Aws],
             None,
             "Acme Corp",
+            true,
         )
         .expect("setup config should be valid");
 
@@ -2025,6 +2047,36 @@ mod tests {
                 .and_then(|metadata| metadata.0.get("customerName")),
             Some(&serde_json::Value::String("Acme Corp".to_string()))
         );
+    }
+
+    #[test]
+    fn a_capability_only_link_allows_the_settings_its_package_registers() {
+        use alien_platform_api::types::{
+            DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem as Heartbeats,
+            DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem as Network,
+            DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem as Telemetry,
+            DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem as Updates,
+        };
+
+        let config = platform_onboard_deployment_setup_config(
+            Vec::new(),
+            &[Platform::Aws],
+            None,
+            "Acme Corp",
+            false,
+        )
+        .expect("setup config should be valid");
+        let stack = config
+            .policy
+            .and_then(|policy| policy.stack_settings)
+            .expect("the link carries a stack-settings policy");
+
+        // Allowing a mode the built-in capability package does not register lets the setup
+        // request it, and that setup cannot complete.
+        assert_eq!(stack.allowed_telemetry_modes, vec![Telemetry::Off]);
+        assert_eq!(stack.allowed_network_modes, vec![Network::None]);
+        assert_eq!(stack.allowed_updates_modes, vec![Updates::ApprovalRequired]);
+        assert_eq!(stack.allowed_heartbeats_modes, vec![Heartbeats::On]);
     }
 
     #[test]
