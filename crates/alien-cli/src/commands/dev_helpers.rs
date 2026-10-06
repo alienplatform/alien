@@ -36,6 +36,7 @@ use alien_manager_api::SdkResultExt;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -143,7 +144,7 @@ async fn ensure_server_running_internal(
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "port".to_string(),
                 message: format!(
-                    "Another `alien dev` manager is already running on port {port}. Stop it first (Ctrl+C in that terminal, or kill the process), then rerun `alien dev`. If you need multiple sessions, use a different port with `alien dev --port <port>`."
+                    "Another `alien dev` manager is already running on port {port}. Stop it first (Ctrl+C in that terminal, or kill the process), then rerun `alien dev`. For simultaneous sessions, use separate project directories and different ports."
                 ),
             }));
         }
@@ -168,6 +169,7 @@ async fn ensure_server_running_internal(
 
     ensure_dev_port_available(port)?;
 
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
     if let Some(name) = deployment_name {
         refresh_local_deployment_environment(
             &get_current_dir()?.join(".alien"),
@@ -178,10 +180,43 @@ async fn ensure_server_running_internal(
     }
 
     if deployment_name.is_some() {
-        start_owned_embedded_dev_manager(port).await.map(Some)
+        start_owned_embedded_dev_manager(port, state_lock)
+            .await
+            .map(Some)
     } else {
-        start_embedded_dev_manager(port).await.map(|_| None)
+        start_embedded_dev_manager_with_lock(port, state_lock)
+            .await
+            .map(|_| None)
     }
+}
+
+/// Hold an OS lock for the entire manager lifetime, before opening its database.
+/// The lock file stays in place: unlinking it would let another process lock a new inode.
+fn acquire_dev_state_lock(state_dir: &Path) -> Result<File> {
+    std::fs::create_dir_all(state_dir)
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to create the local manager state directory".to_string(),
+        })?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state_dir.join("dev-server.lock"))
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to open the local manager ownership lock".to_string(),
+        })?;
+    file.try_lock().map_err(|error| {
+        AlienError::new(ErrorData::ServerStartFailed {
+            reason: format!(
+                "Cannot own local manager state '{}': {error}. Stop the manager using this directory before restarting; simultaneous sessions require separate project directories and different ports.",
+                state_dir.display()
+            ),
+        })
+    })?;
+    Ok(file)
 }
 
 /// The full dev session owns this stopped manager's database. Refresh its CLI
@@ -321,7 +356,10 @@ impl EmbeddedDevManager {
     }
 }
 
-async fn start_owned_embedded_dev_manager(port: u16) -> Result<EmbeddedDevManager> {
+async fn start_owned_embedded_dev_manager(
+    port: u16,
+    state_lock: File,
+) -> Result<EmbeddedDevManager> {
     let (server, addr) = build_embedded_dev_manager(port).await?;
     alien_local::start_docker_bridge_proxy(addr)
         .await
@@ -330,6 +368,7 @@ async fn start_owned_embedded_dev_manager(port: u16) -> Result<EmbeddedDevManage
         })?;
     let (shutdown, receiver) = oneshot::channel();
     let task = tokio::spawn(async move {
+        let _state_lock = state_lock;
         server
             .start_with_shutdown(addr, async {
                 let _ = receiver.await;
@@ -346,6 +385,11 @@ async fn start_owned_embedded_dev_manager(port: u16) -> Result<EmbeddedDevManage
 }
 
 pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
+    start_embedded_dev_manager_with_lock(port, state_lock).await
+}
+
+async fn start_embedded_dev_manager_with_lock(port: u16, state_lock: File) -> Result<()> {
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;
 
@@ -356,6 +400,7 @@ pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
         })?;
 
     tokio::spawn(async move {
+        let _state_lock = state_lock;
         if let Err(e) = server.start(addr).await {
             tracing::error!("Dev server error: {}", e);
         }
@@ -1297,6 +1342,27 @@ mod tests {
             .expect("the full dev session also reuses durable state");
         assert_eq!(session, "dep_1");
         assert_eq!(created.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dev_state_ownership_is_exclusive_and_released_on_drop() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let owner = acquire_dev_state_lock(first.path()).expect("first manager owns state");
+        assert!(
+            acquire_dev_state_lock(first.path()).is_err(),
+            "another port must not share state"
+        );
+        let independent =
+            acquire_dev_state_lock(second.path()).expect("separate state is independent");
+        drop(owner);
+        let restarted =
+            acquire_dev_state_lock(first.path()).expect("stopped manager releases state");
+        assert!(
+            acquire_dev_state_lock(first.path()).is_err(),
+            "restarted manager owns the same lock inode"
+        );
+        drop((restarted, independent));
     }
 
     #[tokio::test]
