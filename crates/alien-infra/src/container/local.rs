@@ -885,7 +885,7 @@ mod tests {
 
     use futures::FutureExt;
 
-    use crate::core::{controller::ResourceController, controller_test::SingleControllerExecutor};
+    use crate::{core::controller_test::SingleControllerExecutor, ResourceController};
 
     #[tokio::test]
     #[ignore = "requires Docker and registry access"]
