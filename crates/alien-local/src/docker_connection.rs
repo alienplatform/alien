@@ -526,6 +526,13 @@ mod tests {
             .expect("container client selects context");
         crate::LocalSandboxManager::new(state.path().join("sandboxes"))
             .expect("sandbox client selects context");
+        assert_eq!(
+            crate::docker_network::bindable_docker_bridge_gateway()
+                .await
+                .expect("bridge discovery on dedicated engine"),
+            None,
+            "dedicated fixture must have no bridge"
+        );
         let docker = connect_docker().expect("selected endpoint initializes");
         docker.ping().await.expect("selected engine responds");
         let version = docker.version().await.expect("engine version");
