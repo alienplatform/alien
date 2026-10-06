@@ -950,9 +950,16 @@ mod tests {
 
             // A present, deliberately stopped container must not be recreated.
             manager.stop_container(&id).await.unwrap();
-            executor.step().await.unwrap();
-            assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
-            executor.step().await.unwrap();
+            for _ in 0..2 {
+                let error = executor
+                    .step()
+                    .await
+                    .err()
+                    .expect("a present stopped container must fail its health check");
+                assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+                assert!(error.message.contains("Container health check failed"));
+                assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
+            }
             assert!(!manager.is_running(&id).await);
             assert!(manager.container_exists(&id).await.unwrap());
 
