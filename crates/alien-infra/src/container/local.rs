@@ -898,6 +898,7 @@ mod tests {
         ));
         let id = format!("recovery-{}", std::process::id());
         let config = Container::new(id.clone())
+            .permissions("default-profile".to_string())
             .cpu(alien_core::ResourceSpec {
                 min: "0.25".to_string(),
                 desired: "0.25".to_string(),
