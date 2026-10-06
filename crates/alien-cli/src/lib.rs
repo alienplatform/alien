@@ -1404,6 +1404,23 @@ async fn run_dev_session(
             .await?,
         );
 
+        let deployment_name = if deployment_name.starts_with("dep_") {
+            local_dev_client(port)
+                .get_deployment()
+                .id(&deployment_name)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to read the migrated local deployment".to_string(),
+                    url: None,
+                })?
+                .name
+                .clone()
+        } else {
+            deployment_name.rsplit('/').next().unwrap().to_string()
+        };
+
         // Step 0: Building
         let is_tty = steps.is_enabled();
         if skip_build {

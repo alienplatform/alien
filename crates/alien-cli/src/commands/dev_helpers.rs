@@ -244,35 +244,94 @@ async fn refresh_local_deployment_environment(
             .context(ErrorData::ServerStartFailed {
                 reason: "Failed to resolve the local development group".to_string(),
             })?;
-    let Some(group) = groups.iter().find(|group| group.name == "local-dev") else {
-        return Ok(());
+    let canonical = groups.iter().find(|group| group.name == "local-dev");
+    let explicit = name.starts_with("dep_") || name.contains('/');
+    let (source_group, deployment_name) = match name.split_once('/') {
+        Some((group, name)) if !group.is_empty() && !name.is_empty() && !name.contains('/') => {
+            (Some(group), name)
+        }
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "deployment-name".to_string(),
+                message: "Use a deployment ID or <group>/<name> for an explicit local migration"
+                    .to_string(),
+            }))
+        }
+        None => (None, name),
     };
-    let filter = DeploymentFilter {
-        deployment_group_id: Some(group.id.clone()),
-        name: Some(name.to_string()),
-        platforms: Some(vec![alien_core::Platform::Local]),
-        ..Default::default()
-    };
-    let deployments =
-        store
-            .list_deployments(&subject, &filter)
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to resolve local session deployment".to_string(),
-            })?;
+    let deployments = store
+        .list_deployments(
+            &subject,
+            &DeploymentFilter {
+                name: if name.starts_with("dep_") {
+                    None
+                } else {
+                    Some(deployment_name.to_string())
+                },
+                platforms: Some(vec![alien_core::Platform::Local]),
+                ..Default::default()
+            },
+        )
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to resolve local session deployment".to_string(),
+        })?;
     let matches: Vec<_> = deployments
         .iter()
         .filter(|deployment| {
-            deployment.name == name && deployment.platform == alien_core::Platform::Local
+            if name.starts_with("dep_") {
+                deployment.id == name
+            } else if let Some(source_group) = source_group {
+                deployment.name == deployment_name
+                    && groups.iter().any(|group| {
+                        group.name == source_group && group.id == deployment.deployment_group_id
+                    })
+            } else {
+                deployment.name == name
+                    && canonical.is_some_and(|group| group.id == deployment.deployment_group_id)
+            }
         })
         .collect();
-    if matches.len() > 1 {
+    if matches.len() > 1 || (explicit && matches.is_empty()) {
         return Err(AlienError::new(ErrorData::ValidationError {
-            field: "name".to_string(),
-            message: format!("Multiple local deployments are named '{name}'"),
+            field: "deployment-name".to_string(),
+            message: format!(
+                "Expected one local deployment for '{name}'; found {}",
+                matches.len()
+            ),
+        }));
+    }
+    if !explicit && matches.is_empty() && !deployments.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-name".to_string(),
+            message: format!("A local deployment named '{name}' exists outside local-dev. Preserve its identity by selecting it explicitly: alien dev --deployment-name {}", deployments[0].id),
         }));
     }
     if let Some(deployment) = matches.first() {
+        if explicit {
+            let group_id =
+                match canonical {
+                    Some(group) => group.id.clone(),
+                    None => store
+                        .create_deployment_group(
+                            &subject,
+                            alien_manager::traits::deployment_store::CreateDeploymentGroupParams {
+                                name: "local-dev".to_string(),
+                                max_deployments: 100,
+                                setup: Default::default(),
+                            },
+                        )
+                        .await
+                        .context(ErrorData::ServerStartFailed {
+                            reason: "Failed to create the local development group".to_string(),
+                        })?
+                        .id,
+                };
+            store.reassign_local_deployment_group(&deployment.id, &group_id).await
+                .context(ErrorData::ServerStartFailed {
+                    reason: "Failed to migrate the selected local deployment; check for a conflicting name in local-dev".to_string(),
+                })?;
+        }
         let variables = crate::cli_env_vars_to_core(variables).unwrap_or_default();
         store
             .replace_environment_variables(&deployment.id, &variables)
