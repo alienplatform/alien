@@ -1391,15 +1391,18 @@ async fn run_dev_session(
         )?;
     }
 
+    let mut manager = None;
     let result = async {
         // Start local services (invisible step — fast, no user-facing progress)
-        ensure_server_running_for_dev_session(
-            port,
-            status_file.clone(),
-            user_env_vars,
-            &deployment_name,
-        )
-        .await?;
+        manager = Some(
+            ensure_server_running_for_dev_session(
+                port,
+                status_file.clone(),
+                user_env_vars,
+                &deployment_name,
+            )
+            .await?,
+        );
 
         // Step 0: Building
         let is_tty = steps.is_enabled();
@@ -1440,6 +1443,17 @@ async fn run_dev_session(
         Ok::<(), alien_error::AlienError<ErrorData>>(())
     }
     .await;
+
+    let result = match manager {
+        Some(manager) => match (result, manager.shutdown().await) {
+            (Ok(()), shutdown) => shutdown,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(shutdown_error)) => Err(error).context(ErrorData::ServerStartFailed {
+                reason: format!("Local manager shutdown also failed: {shutdown_error}"),
+            }),
+        },
+        None => result,
+    };
 
     if let Some(status_file) = &status_file {
         let status = match &result {
