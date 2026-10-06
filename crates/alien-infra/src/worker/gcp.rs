@@ -69,6 +69,46 @@ fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool
     )
 }
 
+/// The labels the create step puts on a worker's Cloud Run service.
+fn service_labels(resource_prefix: &str, resource_id: &str) -> HashMap<String, String> {
+    HashMap::from([
+        ("resource-type".to_string(), "worker".to_string()),
+        ("resource".to_string(), resource_id.to_string()),
+        ("deployment".to_string(), resource_prefix.to_string()),
+    ])
+}
+
+/// Refuses an existing Cloud Run service under the worker's name unless its labels show this
+/// deployment created it for this resource. Anything else may belong to another deployment or
+/// to someone else in the project.
+fn ensure_service_is_own(
+    existing: &Service,
+    resource_prefix: &str,
+    resource_id: &str,
+    service_name: &str,
+) -> Result<()> {
+    let empty = HashMap::new();
+    let labels = existing.labels.as_ref().unwrap_or(&empty);
+    let mut missing: Vec<String> = service_labels(resource_prefix, resource_id)
+        .into_iter()
+        .filter(|(key, value)| labels.get(key) != Some(value))
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    missing.sort();
+    Err(AlienError::new(ErrorData::ResourceNotAdoptable {
+        resource_id: resource_id.to_string(),
+        object: format!("Cloud Run service '{service_name}'"),
+        reason: format!(
+            "it already exists without the labels this deployment creates it with ({}), so this \
+             deployment did not create it. Delete or rename it, then retry.",
+            missing.join(", ")
+        ),
+    }))
+}
+
 fn error_chain_contains_resource_in_use(
     code: &str,
     message: &str,
@@ -473,20 +513,61 @@ impl GcpWorkerController {
             .await?;
 
         // Create the service
-        let operation = ctx
-            .service_provider
-            .get_gcp_cloudrun_client(gcp_config)?
+        let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+        let operation = match client
             .create_service(
                 gcp_config.region.clone(),
                 service_name.to_string(),
-                service,
+                service.clone(),
                 None,
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create Cloud Run service".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })?;
+        {
+            Ok(operation) => operation,
+            // The name is deterministic, so a service under it is usually one this step created
+            // on an earlier attempt whose progress was never saved. Adopt it only when its
+            // labels show this deployment created it for this resource, and apply the desired
+            // service to it: a new release may have restarted this create.
+            Err(error) if is_remote_resource_conflict(&error) => {
+                let existing = client
+                    .get_service(gcp_config.region.clone(), service_name.clone())
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Cloud Run service '{service_name}' already exists and could not be read to check whether this deployment created it"
+                        ),
+                        resource_id: Some(cfg.id.clone()),
+                    })?;
+                ensure_service_is_own(&existing, ctx.resource_prefix, &cfg.id, &service_name)?;
+                info!(name=%service_name, "Cloud Run service already exists and carries this deployment's labels; adopting it");
+                // As the update flow does, patch against the service as it stands.
+                let mut service = service;
+                service.name = existing.name;
+                service.etag = existing.etag;
+                client
+                    .patch_service(
+                        gcp_config.region.clone(),
+                        service_name.clone(),
+                        service,
+                        None,
+                        None,
+                        Some(false),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message:
+                            "Failed to apply the desired service to the adopted Cloud Run service"
+                                .to_string(),
+                        resource_id: Some(cfg.id.clone()),
+                    })?
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to create Cloud Run service".to_string(),
+                    resource_id: Some(cfg.id.clone()),
+                }));
+            }
+        };
 
         let operation_name = operation.name.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
@@ -4617,11 +4698,7 @@ impl GcpWorkerController {
         let is_public = !cfg.public_endpoints.is_empty();
         let service = Service::builder()
             .description(format!("Runtime worker: {}", cfg.id))
-            .labels(HashMap::from([
-                ("resource-type".to_string(), "worker".to_string()),
-                ("resource".to_string(), cfg.id.clone()),
-                ("deployment".to_string(), ctx.resource_prefix.to_string()),
-            ]))
+            .labels(service_labels(ctx.resource_prefix, &cfg.id))
             .ingress(ingress)
             .template(template)
             .traffic(traffic)
@@ -5652,7 +5729,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     };
 
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -7250,5 +7327,149 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    // ─────────────── ADOPTING A SERVICE LEFT BY A LOST CHECKPOINT ─────────────
+
+    fn service_with_labels(service_name: &str, labels: &[(&str, &str)]) -> Service {
+        let mut service = create_successful_service_response(service_name);
+        service.labels = Some(
+            labels
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        );
+        service
+    }
+
+    /// Runs a create of `basic_function()` whose Cloud Run service already exists with
+    /// `existing_labels`. Returns the executor, the run's result, and the mutating calls made.
+    async fn run_create_against_existing_service(
+        existing_labels: &'static [(&'static str, &'static str)],
+    ) -> (
+        SingleControllerExecutor,
+        crate::error::Result<()>,
+        Vec<String>,
+    ) {
+        let worker = basic_function();
+        let service_name = format!("test-{}", worker.id);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let mut mock_cloudrun = MockCloudRunApi::new();
+        let recorded = calls.clone();
+        mock_cloudrun
+            .expect_create_service()
+            .times(1)
+            .returning(move |_, service_id, _, _| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(format!("CreateService {service_id}"));
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "Cloud Run service".to_string(),
+                        resource_name: service_id,
+                        message: "Resource already exists".to_string(),
+                    },
+                ))
+            });
+        let service_name_for_get = service_name.clone();
+        mock_cloudrun
+            .expect_get_service()
+            .returning(move |_, _| Ok(service_with_labels(&service_name_for_get, existing_labels)));
+        let recorded = calls.clone();
+        mock_cloudrun.expect_patch_service().returning(
+            move |_, service_id, service, _, _, allow_missing| {
+                let mut labels: Vec<String> = service
+                    .labels
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect();
+                labels.sort();
+                recorded.lock().unwrap().push(format!(
+                    "PatchService {service_id} allow_missing={allow_missing:?} labels={}",
+                    labels.join(",")
+                ));
+                Ok(create_successful_operation_response("adopt-worker"))
+            },
+        );
+        mock_cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("adopt-worker")));
+        mock_cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        mock_cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let result = executor.run_until_terminal().await;
+        let calls = calls.lock().unwrap().clone();
+        (executor, result, calls)
+    }
+
+    /// A create whose service was made but whose progress was never saved runs again, finds
+    /// its own service under the name, applies the desired service to it and finishes.
+    #[tokio::test]
+    async fn test_create_adopts_its_own_service_after_a_lost_checkpoint() {
+        let (executor, result, calls) = run_create_against_existing_service(&[
+            ("resource-type", "worker"),
+            ("resource", "basic-func"),
+            ("deployment", "test"),
+        ])
+        .await;
+
+        result.expect("a service this deployment created is adopted");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            calls,
+            vec![
+                "CreateService test-basic-func".to_string(),
+                "PatchService test-basic-func allow_missing=Some(false) labels=deployment=test,resource-type=worker,resource=basic-func".to_string(),
+            ]
+        );
+        let outputs = executor.outputs().expect("a running worker has outputs");
+        let outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        assert_eq!(outputs.worker_name, "test-basic-func");
+    }
+
+    /// A service under the worker's name that this deployment did not create is never
+    /// changed: the create fails and says why.
+    #[rstest]
+    #[case::another_deployment(
+        &[("resource-type", "worker"), ("resource", "basic-func"), ("deployment", "other")],
+        "deployment=test"
+    )]
+    #[case::unlabeled(&[], "resource=basic-func")]
+    #[tokio::test]
+    async fn test_create_refuses_a_service_it_did_not_create(
+        #[case] existing_labels: &'static [(&'static str, &'static str)],
+        #[case] reason: &str,
+    ) {
+        let (_, result, calls) = run_create_against_existing_service(existing_labels).await;
+
+        let error = result.expect_err("a service this deployment did not create is refused");
+        assert_eq!(error.code, "RESOURCE_NOT_ADOPTABLE");
+        assert!(!error.retryable, "retrying cannot make the service ours");
+        assert!(
+            error
+                .message
+                .contains("Cloud Run service 'test-basic-func'")
+                && error.message.contains(reason),
+            "unexpected message: {}",
+            error.message
+        );
+        assert_eq!(calls, vec!["CreateService test-basic-func".to_string()]);
     }
 }

@@ -29,8 +29,8 @@ use alien_aws_clients::eventbridge::{
 };
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
-    ListEventSourceMappingsRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
-    VpcConfig,
+    LambdaApi, ListEventSourceMappingsRequest, UpdateFunctionCodeRequest,
+    UpdateFunctionConfigurationRequest, VpcConfig,
 };
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -419,31 +419,7 @@ impl AwsWorkerController {
             })?
             .to_string();
 
-        let image_uri = match &cfg.code {
-            alien_core::WorkerCode::Image { image } => image.clone(),
-            alien_core::WorkerCode::Source { .. } => {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Worker is configured with source code, but only pre-built images are supported".to_string(),
-                    resource_id: Some(cfg.id.clone()),
-                }));
-            }
-        };
-
-        // Resolve proxy URIs to native ECR URIs. Lambda can only pull from ECR.
-        // The release stores proxy URIs; native_image_host carries the ECR prefix.
-        let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-            alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
-                .unwrap_or(image_uri)
-        } else {
-            image_uri
-        };
-
-        // Lambda requires container images in the same region as the worker.
-        // If the image URI points to ECR in a different region (e.g., the management
-        // region), rewrite it to reference the local region where the replicated copy
-        // lives. ECR private image replication must be configured separately.
-        let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
-
+        let image_uri = Self::desired_image_uri(ctx, cfg, &aws_cfg.region)?;
         let code = FunctionCode::builder().image_uri(image_uri).build();
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &cfg.id);
         let mut function_tags = standard_resource_tags(ctx.resource_prefix, &cfg.id);
@@ -513,19 +489,121 @@ impl AwsWorkerController {
             .maybe_vpc_config(vpc_config)
             .build();
 
-        let response =
-            client
-                .create_function(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
+        let response = match client.create_function(request).await {
+            Ok(response) => response,
+            // The name is deterministic, so a function under it is usually one this step
+            // created on an earlier attempt whose progress was never saved. Adopt it only when
+            // its tags show this deployment created it for this resource, then bring it to the
+            // desired image and configuration: a new release may have restarted this create.
+            Err(error) if is_remote_resource_conflict(&error) => {
+                let arn = Self::own_existing_function_arn(
+                    client.as_ref(),
+                    ctx.resource_prefix,
+                    &cfg.id,
+                    &aws_worker_name,
+                )
+                .await?;
+                info!(name=%aws_worker_name, arn=%arn, "Worker function already exists and carries this deployment's tags; adopting it");
+                self.arn = Some(arn);
+                self.worker_name = Some(aws_worker_name);
+                return Ok(HandlerAction::Continue {
+                    state: CreateAdoptedApplyingCode,
+                    suggested_delay: Some(Duration::from_secs(3)),
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
                     message: "Failed to create Lambda worker".to_string(),
                     resource_id: Some(cfg.id.clone()),
-                })?;
+                }));
+            }
+        };
 
         self.arn = response.function_arn.clone();
         self.worker_name = Some(aws_worker_name.clone());
         info!(name=%aws_worker_name, arn=%self.arn.as_deref().unwrap_or("unknown"), "Worker created, waiting for active state");
 
+        Ok(HandlerAction::Continue {
+            state: CreateWaitForActive,
+            suggested_delay: Some(Duration::from_secs(3)),
+        })
+    }
+
+    #[handler(
+        state = CreateAdoptedApplyingCode,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn create_adopted_applying_code(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let arn = self.require_arn(&cfg.id)?;
+
+        // Lambda rejects an update while the function is still being created or updated.
+        if Self::function_is_changing(client.as_ref(), &arn, &cfg.id).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(3)),
+            });
+        }
+
+        let request = UpdateFunctionCodeRequest::builder()
+            .image_uri(Self::desired_image_uri(ctx, cfg, &aws_cfg.region)?)
+            .publish(false)
+            .build();
+        client.update_function_code(&arn, request).await.context(
+            ErrorData::CloudPlatformError {
+                message: "Failed to apply the desired image to the adopted Lambda worker"
+                    .to_string(),
+                resource_id: Some(cfg.id.clone()),
+            },
+        )?;
+
+        Ok(HandlerAction::Continue {
+            state: CreateAdoptedApplyingConfig,
+            suggested_delay: Some(Duration::from_secs(3)),
+        })
+    }
+
+    #[handler(
+        state = CreateAdoptedApplyingConfig,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn create_adopted_applying_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let arn = self.require_arn(&cfg.id)?;
+
+        if Self::function_is_changing(client.as_ref(), &arn, &cfg.id).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(3)),
+            });
+        }
+
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &cfg.id);
+        let request = self
+            .desired_configuration_request(ctx, cfg, &aws_worker_name)
+            .await?;
+        client
+            .update_function_configuration(&arn, request)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to apply the desired configuration to the adopted Lambda worker"
+                    .to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+
+        // The rest of the create flow runs as it would after a fresh create.
         Ok(HandlerAction::Continue {
             state: CreateWaitForActive,
             suggested_delay: Some(Duration::from_secs(3)),
@@ -1807,52 +1885,9 @@ impl AwsWorkerController {
 
         // Now that we have the URL, update the environment variables
         // with the complete self-binding information including the URL
-        let final_env_vars = self
-            .prepare_environment_variables(
-                &config.environment,
-                &config.links,
-                ctx,
-                &aws_worker_name,
-            )
+        let request = self
+            .desired_configuration_request(ctx, config, &aws_worker_name)
             .await?;
-
-        let lambda_environment = if !final_env_vars.is_empty() {
-            Some(Environment::builder().variables(final_env_vars).build())
-        } else {
-            None
-        };
-
-        // Get the ServiceAccount for this worker's permission profile
-        let service_account_id = format!("{}-sa", config.get_permissions());
-        let service_account_ref = ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-        let service_account_state = ctx
-            .require_dependency::<crate::service_account::AwsServiceAccountController>(
-                &service_account_ref,
-            )?;
-        let role_arn = service_account_state
-            .role_arn
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: config.id().to_string(),
-                    dependency_id: service_account_id.to_string(),
-                })
-            })?
-            .to_string();
-
-        // Get VPC configuration if a Network resource exists
-        let vpc_config = self.get_vpc_config(ctx)?;
-
-        let request = UpdateFunctionConfigurationRequest::builder()
-            .role(role_arn)
-            .timeout(config.timeout_seconds as i32)
-            .memory_size(config.memory_mb as i32)
-            .maybe_environment(lambda_environment)
-            .maybe_vpc_config(vpc_config)
-            .build();
 
         let arn = self.arn.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -2530,55 +2565,9 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &current_config.id);
 
-        // Get the ServiceAccount for this worker's permission profile
-        let service_account_id = format!("{}-sa", current_config.get_permissions());
-        let service_account_ref = ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-
-        // Get the ServiceAccount's role ARN
-        let service_account_state = ctx
-            .require_dependency::<crate::service_account::AwsServiceAccountController>(
-                &service_account_ref,
-            )?;
-
-        let role_arn = service_account_state
-            .role_arn
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: current_config.id().to_string(),
-                    dependency_id: service_account_id.to_string(),
-                })
-            })?
-            .to_string();
-
-        let final_env_vars = self
-            .prepare_environment_variables(
-                &current_config.environment,
-                &current_config.links,
-                ctx,
-                &aws_worker_name,
-            )
+        let request = self
+            .desired_configuration_request(ctx, current_config, &aws_worker_name)
             .await?;
-
-        let lambda_environment = if !final_env_vars.is_empty() {
-            Some(Environment::builder().variables(final_env_vars).build())
-        } else {
-            None
-        };
-
-        // Get VPC configuration if a Network resource exists
-        let vpc_config = self.get_vpc_config(ctx)?;
-
-        let request = UpdateFunctionConfigurationRequest::builder()
-            .role(role_arn)
-            .timeout(current_config.timeout_seconds as i32)
-            .memory_size(current_config.memory_mb as i32)
-            .maybe_environment(lambda_environment)
-            .maybe_vpc_config(vpc_config)
-            .build();
 
         let arn = self.arn.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -4592,6 +4581,178 @@ impl AwsWorkerController {
 
 // Separate impl block for helper methods
 impl AwsWorkerController {
+    /// The image the worker's function runs: the release's image, resolved to a registry and
+    /// region Lambda can pull from.
+    fn desired_image_uri(
+        ctx: &ResourceControllerContext<'_>,
+        cfg: &Worker,
+        region: &str,
+    ) -> Result<String> {
+        let image_uri = match &cfg.code {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            alien_core::WorkerCode::Source { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Worker is configured with source code, but only pre-built images are supported".to_string(),
+                    resource_id: Some(cfg.id.clone()),
+                }));
+            }
+        };
+
+        // Resolve proxy URIs to native ECR URIs. Lambda can only pull from ECR.
+        // The release stores proxy URIs; native_image_host carries the ECR prefix.
+        let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
+            alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
+                .unwrap_or(image_uri)
+        } else {
+            image_uri
+        };
+
+        // Lambda requires container images in the same region as the worker.
+        // If the image URI points to ECR in a different region (e.g., the management
+        // region), rewrite it to reference the local region where the replicated copy
+        // lives. ECR private image replication must be configured separately.
+        Ok(Self::rewrite_ecr_region_if_needed(&image_uri, region))
+    }
+
+    /// The configuration the worker's function should have: its service account's role,
+    /// limits, environment (with the self-binding as currently known) and VPC placement.
+    async fn desired_configuration_request(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        cfg: &Worker,
+        aws_worker_name: &str,
+    ) -> Result<UpdateFunctionConfigurationRequest> {
+        // Get the ServiceAccount for this worker's permission profile
+        let service_account_id = format!("{}-sa", cfg.get_permissions());
+        let service_account_ref = ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id.to_string(),
+        );
+        let service_account_state = ctx
+            .require_dependency::<crate::service_account::AwsServiceAccountController>(
+                &service_account_ref,
+            )?;
+        let role_arn = service_account_state
+            .role_arn
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: cfg.id().to_string(),
+                    dependency_id: service_account_id.to_string(),
+                })
+            })?
+            .to_string();
+
+        let env_vars = self
+            .prepare_environment_variables(&cfg.environment, &cfg.links, ctx, aws_worker_name)
+            .await?;
+        let environment = if !env_vars.is_empty() {
+            Some(Environment::builder().variables(env_vars).build())
+        } else {
+            None
+        };
+
+        // Get VPC configuration if a Network resource exists
+        let vpc_config = self.get_vpc_config(ctx)?;
+
+        Ok(UpdateFunctionConfigurationRequest::builder()
+            .role(role_arn)
+            .timeout(cfg.timeout_seconds as i32)
+            .memory_size(cfg.memory_mb as i32)
+            .maybe_environment(environment)
+            .maybe_vpc_config(vpc_config)
+            .build())
+    }
+
+    fn require_arn(&self, resource_id: &str) -> Result<String> {
+        self.arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: resource_id.to_string(),
+                message: "Worker ARN not set in state".to_string(),
+            })
+        })
+    }
+
+    /// Whether Lambda is still creating or updating the function. It rejects another update
+    /// until that finishes.
+    async fn function_is_changing(
+        client: &dyn LambdaApi,
+        arn: &str,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let function = client.get_function_configuration(arn, None).await.context(
+            ErrorData::CloudPlatformError {
+                message: "Failed to read the Lambda worker's state".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            },
+        )?;
+        Ok(function.state.as_deref() == Some("Pending")
+            || function.last_update_status.as_deref() == Some("InProgress"))
+    }
+
+    /// The ARN of the function already under this worker's name, when its tags show this
+    /// deployment created it for this resource. Anything else is refused: the function may
+    /// belong to another deployment or to someone else in the account.
+    ///
+    /// The deployment's Lambda permissions only cover functions tagged as its own, so a
+    /// function it may not read is not its own either.
+    async fn own_existing_function_arn(
+        client: &dyn LambdaApi,
+        resource_prefix: &str,
+        resource_id: &str,
+        function_name: &str,
+    ) -> Result<String> {
+        let object = format!("Lambda function '{function_name}'");
+        let not_adoptable = |reason: String| {
+            AlienError::new(ErrorData::ResourceNotAdoptable {
+                resource_id: resource_id.to_string(),
+                object: object.clone(),
+                reason,
+            })
+        };
+
+        let existing = match client.get_function(function_name).await {
+            Ok(existing) => existing,
+            Err(error) if is_remote_access_denied(&error) => {
+                return Err(not_adoptable(
+                    "it already exists and this deployment is not allowed to read it, so this \
+                     deployment did not create it. Delete or rename it, then retry."
+                        .to_string(),
+                ));
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "{object} already exists and could not be read to check whether this deployment created it"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+        };
+
+        let tags = existing.tags.unwrap_or_default();
+        let mut missing: Vec<String> = standard_resource_tags(resource_prefix, resource_id)
+            .into_iter()
+            .filter(|(key, value)| tags.get(key) != Some(value))
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        if !missing.is_empty() {
+            missing.sort();
+            return Err(not_adoptable(format!(
+                "it already exists without the tags this deployment creates it with ({}), so \
+                 this deployment did not create it. Delete or rename it, then retry.",
+                missing.join(", ")
+            )));
+        }
+
+        existing.configuration.function_arn.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("GetFunction for '{function_name}' returned no function ARN"),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })
+    }
+
     /// Creates the function's log group with a retention period before the
     /// function exists. Otherwise Lambda creates `/aws/lambda/<name>` on the
     /// first invocation and keeps its logs forever. A group that already
@@ -4990,12 +5151,14 @@ mod tests {
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
-    use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
+    use alien_aws_clients::lambda::{
+        AddPermissionResponse, FunctionConfiguration, GetFunctionResponse, MockLambdaApi,
+    };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus, DomainMetadata,
-        EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
+        standard_resource_tags, CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus,
+        DomainMetadata, EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
         PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
         ResourceStatus, StackResourceState, StackSettings, StackState, Worker, WorkerOutputs,
     };
@@ -6604,5 +6767,237 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    // ─────────────── ADOPTING A FUNCTION LEFT BY A LOST CHECKPOINT ─────────────
+
+    fn function_already_exists(function_name: &str) -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            resource_type: "Function".to_string(),
+            resource_name: function_name.to_string(),
+            message: format!("Function already exist: {function_name}"),
+        })
+    }
+
+    /// The tags the create step puts on a worker's function.
+    fn tags_the_create_step_sets(resource_id: &str) -> HashMap<String, String> {
+        let mut tags = standard_resource_tags("test", resource_id);
+        tags.insert("Name".to_string(), format!("test-{resource_id}"));
+        tags
+    }
+
+    /// A Lambda mock for a create whose function already exists: CreateFunction conflicts,
+    /// GetFunction answers with `existing`, and state reads report the function still
+    /// `Pending` for the first poll. Records every call that matters, in order.
+    fn lambda_mock_with_existing_function(
+        worker_name: &str,
+        existing: fn(&str) -> alien_client_core::Result<GetFunctionResponse>,
+        calls: Arc<Mutex<Vec<String>>>,
+    ) -> MockLambdaApi {
+        let mut mock_lambda = MockLambdaApi::new();
+
+        let recorded = calls.clone();
+        mock_lambda
+            .expect_create_function()
+            .times(1)
+            .returning(move |request| {
+                recorded.lock().unwrap().push("CreateFunction".to_string());
+                Err(function_already_exists(&request.function_name))
+            });
+
+        let recorded = calls.clone();
+        mock_lambda
+            .expect_get_function()
+            .times(1)
+            .returning(move |function_name| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(format!("GetFunction {function_name}"));
+                existing(function_name)
+            });
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let worker_name_for_get = worker_name.to_string();
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| {
+                let mut function = create_successful_function_response(&worker_name_for_get);
+                if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    function.state = Some("Pending".to_string());
+                    function.last_update_status = Some("InProgress".to_string());
+                }
+                Ok(function)
+            });
+
+        let recorded = calls.clone();
+        let worker_name_for_code = worker_name.to_string();
+        mock_lambda
+            .expect_update_function_code()
+            .returning(move |function, request| {
+                recorded.lock().unwrap().push(format!(
+                    "UpdateFunctionCode {function} {}",
+                    request.image_uri
+                ));
+                Ok(create_successful_function_response(&worker_name_for_code))
+            });
+
+        let worker_name_for_config = worker_name.to_string();
+        mock_lambda
+            .expect_update_function_configuration()
+            .returning(move |function, request| {
+                calls.lock().unwrap().push(format!(
+                    "UpdateFunctionConfiguration {function} timeout={:?} memory={:?} role_set={}",
+                    request.timeout,
+                    request.memory_size,
+                    request.role.is_some()
+                ));
+                Ok(create_successful_function_response(&worker_name_for_config))
+            });
+
+        mock_lambda
+    }
+
+    fn existing_function_tagged_as_ours(
+        function_name: &str,
+    ) -> alien_client_core::Result<GetFunctionResponse> {
+        let resource_id = function_name.trim_start_matches("test-");
+        Ok(GetFunctionResponse {
+            configuration: create_successful_function_response(function_name),
+            tags: Some(tags_the_create_step_sets(resource_id)),
+        })
+    }
+
+    async fn run_create_against_existing_function(
+        existing: fn(&str) -> alien_client_core::Result<GetFunctionResponse>,
+        calls: Arc<Mutex<Vec<String>>>,
+    ) -> (SingleControllerExecutor, crate::error::Result<()>) {
+        let worker = function_custom_config();
+        let worker_name = format!("test-{}", worker.id);
+        let mock_provider = setup_mock_service_provider(
+            Arc::new(lambda_mock_with_existing_function(
+                &worker_name,
+                existing,
+                calls,
+            )),
+            None,
+            None,
+        );
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let result = executor.run_until_terminal().await;
+        (executor, result)
+    }
+
+    /// A create whose function was made but whose progress was never saved runs again and
+    /// finds its own function under the name. It adopts it, brings it to the desired image
+    /// and configuration once Lambda allows updates, and finishes the create.
+    #[tokio::test]
+    async fn test_create_adopts_its_own_function_after_a_lost_checkpoint() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let (executor, result) =
+            run_create_against_existing_function(existing_function_tagged_as_ours, calls.clone())
+                .await;
+
+        result.expect("a function this deployment created is adopted");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let arn = "arn:aws:lambda:us-east-1:123456789012:function:test-custom-func";
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "CreateFunction".to_string(),
+                "GetFunction test-custom-func".to_string(),
+                format!(
+                    "UpdateFunctionCode {arn} 123456789012.dkr.ecr.us-east-1.amazonaws.com/custom:latest"
+                ),
+                format!(
+                    "UpdateFunctionConfiguration {arn} timeout=Some(120) memory=Some(512) role_set=true"
+                ),
+            ]
+        );
+        let controller = executor
+            .internal_state::<AwsWorkerController>()
+            .expect("AWS worker controller");
+        assert_eq!(controller.arn.as_deref(), Some(arn));
+        assert_eq!(controller.worker_name.as_deref(), Some("test-custom-func"));
+        let outputs = executor.outputs().expect("a running worker has outputs");
+        let outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+        assert_eq!(outputs.worker_name, "test-custom-func");
+        assert_eq!(outputs.identifier.as_deref(), Some(arn));
+    }
+
+    fn existing_function_of_another_deployment(
+        function_name: &str,
+    ) -> alien_client_core::Result<GetFunctionResponse> {
+        let resource_id = function_name.trim_start_matches("test-");
+        let mut tags = tags_the_create_step_sets(resource_id);
+        tags.insert("deployment".to_string(), "other".to_string());
+        Ok(GetFunctionResponse {
+            configuration: create_successful_function_response(function_name),
+            tags: Some(tags),
+        })
+    }
+
+    fn existing_function_without_tags(
+        function_name: &str,
+    ) -> alien_client_core::Result<GetFunctionResponse> {
+        Ok(GetFunctionResponse {
+            configuration: create_successful_function_response(function_name),
+            tags: None,
+        })
+    }
+
+    fn existing_function_it_may_not_read(
+        function_name: &str,
+    ) -> alien_client_core::Result<GetFunctionResponse> {
+        Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "Function".to_string(),
+            resource_name: function_name.to_string(),
+        }))
+    }
+
+    /// A function under the worker's name that this deployment did not create is never
+    /// adopted or changed: the create fails and says why.
+    #[rstest]
+    #[case::another_deployment(
+        existing_function_of_another_deployment as fn(&str) -> alien_client_core::Result<GetFunctionResponse>,
+        "deployment=test"
+    )]
+    #[case::untagged(existing_function_without_tags, "managed-by=runtime")]
+    #[case::unreadable(existing_function_it_may_not_read, "not allowed to read it")]
+    #[tokio::test]
+    async fn test_create_refuses_a_function_it_did_not_create(
+        #[case] existing: fn(&str) -> alien_client_core::Result<GetFunctionResponse>,
+        #[case] reason: &str,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let (_, result) = run_create_against_existing_function(existing, calls.clone()).await;
+
+        let error = result.expect_err("a function this deployment did not create is refused");
+        assert_eq!(error.code, "RESOURCE_NOT_ADOPTABLE");
+        assert!(!error.retryable, "retrying cannot make the function ours");
+        assert!(
+            error.message.contains("Lambda function 'test-custom-func'")
+                && error.message.contains(reason),
+            "unexpected message: {}",
+            error.message
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "CreateFunction".to_string(),
+                "GetFunction test-custom-func".to_string(),
+            ],
+            "nothing may be written to a function this deployment does not own"
+        );
     }
 }

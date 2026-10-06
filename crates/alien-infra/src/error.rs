@@ -402,6 +402,24 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A cloud object a create would make already exists under the resource's name, and
+    /// nothing shows this deployment created it.
+    #[error(
+        code = "RESOURCE_NOT_ADOPTABLE",
+        message = "Cannot adopt existing {object} for resource '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ResourceNotAdoptable {
+        /// Resource the object was being created for
+        resource_id: String,
+        /// The existing object, named as the cloud names it
+        object: String,
+        /// Why the object cannot be treated as this deployment's own
+        reason: String,
+    },
+
     /// Errors originating from cloud platform operations.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",
