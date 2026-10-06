@@ -387,16 +387,188 @@ mod tests {
     use std::sync::Arc;
 
     use alien_core::{
-        ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState, DeploymentStatus,
-        EnvironmentVariablesSnapshot, ExternalBindings, Platform, Resource, ResourceLifecycle,
-        ResourceStatus, StackResourceState, StackSettings, StackState, StackStatus, Storage,
+        ClientConfig, ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState,
+        DeploymentStatus, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
+        Platform, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
+        StackResourceState, StackSettings, StackState, StackStatus, Storage,
     };
-    use alien_infra::DefaultPlatformServiceProvider;
+    use alien_infra::{state_utils::StackStateExt, DefaultPlatformServiceProvider, StackExecutor};
 
     use super::{
         compute_runtime_cleanup_status, handle_delete_pending, handle_deleting,
         has_remaining_setup_resources,
     };
+
+    #[cfg(feature = "local")]
+    struct LocalStorageFixture {
+        directory: tempfile::TempDir,
+        state: StackState,
+        config: DeploymentConfig,
+        client: ClientConfig,
+        services: Arc<DefaultPlatformServiceProvider>,
+        prepared: Stack,
+    }
+
+    #[cfg(feature = "local")]
+    async fn local_storage_fixture() -> LocalStorageFixture {
+        let directory = tempfile::tempdir().expect("temporary state directory");
+        let bindings =
+            alien_local::LocalBindingsProvider::new(directory.path()).expect("local bindings");
+        let services = Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
+            bindings,
+        ));
+        let client = ClientConfig::Local {
+            state_directory: directory.path().to_string_lossy().into_owned(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let stack = Stack::new("local-storage".to_string())
+            .add(
+                Storage::new("data".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("evidence".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let initial = StackState::new(Platform::Local);
+        let prepared = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                stack,
+                &initial,
+                &config,
+                &client,
+                None,
+                None,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("prepare local storage")
+            .0;
+        let executor = StackExecutor::builder(&prepared, client.clone())
+            .deployment_config(&config)
+            .service_provider(services.clone())
+            .build()
+            .expect("storage executor");
+        let created = executor.run_until_synced(initial).await;
+        assert!(created.success, "{:?}", created.error);
+        for name in ["data", "evidence"] {
+            let bucket = directory.path().join("storage").join(name);
+            assert!(bucket.is_dir());
+            std::fs::write(bucket.join("retained.txt"), b"stored data").expect("store marker");
+        }
+        LocalStorageFixture {
+            directory,
+            state: created.final_state,
+            config,
+            client,
+            services,
+            prepared,
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "local")]
+    async fn local_manager_destroy_removes_frozen_storage_with_its_own_services() {
+        let fixture = local_storage_fixture().await;
+        let neighbor = fixture.directory.path().join("neighbor.txt");
+        std::fs::write(&neighbor, b"outside storage").expect("neighbor marker");
+        let current = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            platform: Platform::Local,
+            stack_state: Some(fixture.state),
+            runtime_metadata: Some(RuntimeMetadata {
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                prepared_stack: Some(fixture.prepared),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut state = handle_delete_pending(
+            current,
+            fixture.config.clone(),
+            fixture.client.clone(),
+            fixture.services.clone(),
+        )
+        .await
+        .expect("prepare deletion")
+        .state;
+        for _ in 0..16 {
+            if state.status == DeploymentStatus::Deleted {
+                break;
+            }
+            state = handle_deleting(
+                state,
+                fixture.config.clone(),
+                fixture.client.clone(),
+                fixture.services.clone(),
+            )
+            .await
+            .expect("local deletion step")
+            .state;
+            assert_ne!(state.status, DeploymentStatus::DeleteFailed);
+            assert_ne!(state.status, DeploymentStatus::TeardownRequired);
+        }
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .values()
+            .all(|resource| resource.status == ResourceStatus::Deleted));
+        for name in ["data", "evidence"] {
+            assert!(!fixture.directory.path().join("storage").join(name).exists());
+        }
+        assert_eq!(std::fs::read(neighbor).unwrap(), b"outside storage");
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "local")]
+    async fn missing_local_storage_services_fail_without_forgetting_stored_data() {
+        let mut fixture = local_storage_fixture().await;
+        fixture
+            .state
+            .prepare_for_destroy()
+            .expect("prepare storage teardown");
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            fixture.client,
+            &fixture.config,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+            None,
+        )
+        .expect("teardown executor");
+        let step = executor
+            .step(fixture.state)
+            .await
+            .expect("controller failure is checkpointed");
+        for name in ["data", "evidence"] {
+            let resource = &step.next_state.resources[name];
+            assert_eq!(resource.status, ResourceStatus::DeleteFailed);
+            assert!(resource.error.is_some());
+            assert_eq!(
+                std::fs::read(
+                    fixture
+                        .directory
+                        .path()
+                        .join("storage")
+                        .join(name)
+                        .join("retained.txt")
+                )
+                .unwrap(),
+                b"stored data"
+            );
+        }
+    }
 
     fn resource_state(
         resource: Resource,
