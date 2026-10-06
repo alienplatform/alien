@@ -896,7 +896,8 @@ mod tests {
             };
             let error = resolve_destroy_target(&args, &ctx, platform, None)
                 .await
-                .expect_err("mismatched target must fail before mutation");
+                .err()
+                .expect("mismatched target must fail before mutation");
             assert_eq!(error.code, "VALIDATION_ERROR");
             assert!(error.message.contains(field));
             assert!(!state.lock().unwrap().deleted);
