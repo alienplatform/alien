@@ -1149,6 +1149,7 @@ mod tests {
             Arc::new(iam),
         );
         let mut provider = MockPlatformServiceProvider::new();
+        provider.expect_runtime_setup_authority().return_const(None);
         provider
             .expect_get_aws_microvms_client()
             .returning(move |_| Ok(microvms.clone()));
@@ -1215,6 +1216,9 @@ mod tests {
             });
         let refused = Arc::new(refused);
         let mut management = MockPlatformServiceProvider::new();
+        management
+            .expect_runtime_setup_authority()
+            .return_const(None);
         management
             .expect_get_aws_microvms_client()
             .returning(move |_| Ok(refused.clone()));
