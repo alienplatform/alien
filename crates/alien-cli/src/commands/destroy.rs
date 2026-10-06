@@ -148,6 +148,7 @@ async fn resolve_destroy_target(
             .client
             .get_deployment()
             .id(&deployment_id)
+            .include(vec!["deploymentGroup".to_string()])
             .send()
             .await
             .into_sdk_error()
@@ -155,7 +156,14 @@ async fn resolve_destroy_target(
                 message: "Failed to resolve the deployment token's target".to_string(),
             })?
             .into_inner();
-        if args.name != deployment_id && args.name != deployment.name.as_str() {
+        let group_name = deployment
+            .deployment_group
+            .as_ref()
+            .map(|group| format!("{}/{}", group.name, deployment.name));
+        if args.name != deployment_id
+            && args.name != deployment.name.as_str()
+            && group_name.as_deref() != Some(args.name.as_str())
+        {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "name".to_string(),
                 message: "The supplied token belongs to a different deployment".to_string(),
@@ -194,6 +202,12 @@ async fn resolve_destroy_target(
     } else {
         resolve_untracked_name(ctx, &manager.client, &args.name, &project_id).await?
     };
+    if deployment.project_id.as_str() != project_id {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "project".to_string(),
+            message: "The deployment belongs to a different project".to_string(),
+        }));
+    }
     if deployment.platform.to_string() != platform {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -680,6 +694,7 @@ mod tests {
     #[derive(Default)]
     struct ManagerState {
         acquire_authorizations: Vec<String>,
+        delete_authorizations: Vec<String>,
         deleted: bool,
     }
 
@@ -695,6 +710,7 @@ mod tests {
             "platform": "test",
             "status": "teardown-required",
             "deploymentGroupId": "dg_test",
+            "deploymentGroup": { "id": "dg_test", "name": "group" },
             "deploymentProtocolVersion": 1,
             "projectId": "proj_test",
             "workspaceId": "ws_test",
@@ -739,10 +755,33 @@ mod tests {
                 serde_json::json!({ "id": PROJECT, "name": "example", "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z" }),
             )
         }
-        async fn deployment() -> Json<serde_json::Value> {
+        async fn deployment(State(state): State<Shared>) -> Response {
+            let state = state.lock().unwrap();
+            if state.deleted {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            let status = if state.delete_authorizations.is_empty() {
+                "running"
+            } else {
+                "teardown-required"
+            };
             Json(
-                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": "teardown-required", "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_test", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
-            )
+                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_test", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
+            ).into_response()
+        }
+        async fn request_delete(
+            State(state): State<Shared>,
+            headers: HeaderMap,
+            Json(body): Json<serde_json::Value>,
+        ) -> StatusCode {
+            assert_eq!(headers["authorization"], "Bearer user-session");
+            assert_eq!(body["action"], "cleanup");
+            state
+                .lock()
+                .unwrap()
+                .delete_authorizations
+                .push(headers["authorization"].to_str().unwrap().to_string());
+            StatusCode::NO_CONTENT
         }
         async fn token(
             headers: HeaderMap,
@@ -767,7 +806,11 @@ mod tests {
                     Json(serde_json::json!({ "managerUrl": manager_url, "projectId": PROJECT }))
                 }),
             )
-            .route("/v1/deployments/{id}", get(deployment))
+            .route(
+                "/v1/deployments/{id}",
+                get(deployment).delete(request_delete),
+            )
+            .route("/v1/sync/acquire", post(acquire))
             .route("/v1/deployments/{id}/token", post(token))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -790,7 +833,22 @@ mod tests {
         assert_eq!(target.deployment_id, ID);
         assert_eq!(target.api_key, DEPLOYMENT_TOKEN);
         assert_eq!(manager.auth_token.as_deref(), Some("user-session"));
-        assert!(state.lock().unwrap().acquire_authorizations.is_empty());
+        destroy_tracked_deployment(
+            &args,
+            Platform::Test,
+            &target,
+            manager,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .unwrap();
+        let state = state.lock().unwrap();
+        assert!(state.deleted);
+        assert_eq!(state.delete_authorizations, vec!["Bearer user-session"]);
+        assert_eq!(
+            state.acquire_authorizations,
+            vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
+        );
     }
 
     #[tokio::test]
@@ -846,7 +904,7 @@ mod tests {
         };
         let args = DestroyArgs {
             token: Some(DEPLOYMENT_TOKEN.to_string()),
-            name: "test".to_string(),
+            name: "group/test".to_string(),
             platform: Some("test".to_string()),
             force: false,
         };
@@ -885,9 +943,11 @@ mod tests {
             server_url,
             api_key: "operator".to_string(),
         };
-        for (name, platform, field) in
-            [("another", "test", "name"), ("dep_test", "aws", "platform")]
-        {
+        for (name, platform, field) in [
+            ("another", "test", "name"),
+            ("other/test", "test", "name"),
+            ("dep_test", "aws", "platform"),
+        ] {
             let args = DestroyArgs {
                 token: Some(DEPLOYMENT_TOKEN.to_string()),
                 name: name.to_string(),
