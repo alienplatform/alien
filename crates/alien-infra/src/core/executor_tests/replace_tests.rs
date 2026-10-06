@@ -254,6 +254,78 @@ async fn failed_replace_delete_is_retried_and_never_falls_back_to_create() -> Re
     Ok(())
 }
 
+/// A replace delete that failed after its first step resumes at the step that failed. It
+/// does not delete the worker again, whose not-found would end the whole delete as
+/// best-effort and skip the steps still left.
+#[tokio::test]
+async fn failed_replace_delete_resumes_at_the_failed_step() -> Result<()> {
+    let id = "replace-delete-resumes";
+    let v1 = worker(
+        id,
+        "image-v1",
+        &[
+            CREATE_WORKER_FAILURE,
+            ("SIMULATE_DELETED_WORKER_NOT_FOUND", "true"),
+            ("SIMULATE_DELETE_POLL_FAILURE_COUNT", "10"),
+        ],
+    );
+    let state =
+        failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id).await?;
+
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    let state = step_until(&executor, state, id, ResourceStatus::DeleteFailed).await?;
+    let failed = &state.resources[id];
+    let checkpoint: TestWorkerController = serde_json::from_value(
+        failed
+            .last_failed_state
+            .clone()
+            .expect("the failed delete keeps its checkpoint"),
+    )
+    .expect("checkpoint deserializes");
+    assert_eq!(checkpoint.state, TestWorkerState::DeleteWorkerPolling);
+    assert!(checkpoint.worker_delete_issued);
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(id))),
+        vec!["image-v1"]
+    );
+    assert_eq!(executor.plan(&state)?.replaces, vec![id.to_string()]);
+
+    let state = executor.step(state).await?.next_state;
+    let resumed = &state.resources[id];
+    assert_eq!(resumed.status, ResourceStatus::Deleting);
+    assert!(resumed.error.is_none());
+    assert_eq!(
+        resumed
+            .get_internal_controller_typed::<TestWorkerController>()?
+            .state,
+        TestWorkerState::DeleteWorkerPolling,
+        "the delete resumes at the step that failed"
+    );
+
+    let state = step_until(&executor, state, id, ResourceStatus::Deleted).await?;
+    let deleted = &state.resources[id];
+    assert_eq!(
+        deleted
+            .get_internal_controller_typed::<TestWorkerController>()?
+            .state,
+        TestWorkerState::Deleted,
+        "the delete finished its own steps instead of ending on a best-effort not-found"
+    );
+    assert_eq!(
+        test_worker_deletes_issued(&identifier(id)).len(),
+        1,
+        "the worker is not deleted again"
+    );
+
+    let state = run_to_synced(&executor, state).await?;
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::Running));
+    assert_eq!(image(&state, id), "image-v2");
+    Ok(())
+}
+
 /// A best-effort not-found or access-denied answer ends the delete, and the create follows.
 #[tokio::test]
 async fn replace_delete_ended_by_best_effort_error_creates_with_new_config() -> Result<()> {

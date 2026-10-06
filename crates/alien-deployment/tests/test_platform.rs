@@ -1658,7 +1658,12 @@ async fn assert_failed_retry_transition(
     state.status = failed_status;
     state.stack_state = Some(StackState::new(Platform::Test));
 
-    if failed_status == DeploymentStatus::DeleteFailed {
+    // Setup and delete retries read what setup recorded; a deployment reaches either
+    // failure only after Pending wrote runtime metadata.
+    if matches!(
+        failed_status,
+        DeploymentStatus::DeleteFailed | DeploymentStatus::InitialSetupFailed
+    ) {
         state.runtime_metadata = Some(RuntimeMetadata::default());
     }
 
@@ -2116,6 +2121,91 @@ async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreat
     // The rejected worker failed before its create recorded anything, so it had nothing to
     // delete remotely.
     assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
+}
+
+/// A setup rerun with a corrected release replaces a setup-owned resource whose create failed
+/// after recording what it made: the retry deletes it against the config it was created
+/// with, then creates it with the new one, instead of resuming the old create checkpoint.
+#[tokio::test]
+async fn setup_retry_replaces_a_failed_setup_owned_create_whose_config_changed() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let store_id = "setup-replaced-store";
+    let stack_with_store = |storage: Storage| {
+        let mut stack = create_test_stack("test-stack", "base-fn");
+        stack.resources.insert(
+            store_id.to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(storage),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    };
+
+    let failing_store = Storage::new(store_id.to_string())
+        .cors_allowed_origins(vec![
+            alien_infra::SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN.to_string()
+        ])
+        .build();
+    let state = create_initial_state(stack_with_store(failing_store.clone()));
+    let mut state = run_until_status(
+        state,
+        config.clone(),
+        &[DeploymentStatus::InitialSetupFailed],
+    )
+    .await;
+    let failed = &state.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(failed.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert!(failed.internal_state.is_some() && failed.last_failed_state.is_some());
+    assert!(alien_infra::test_storage_deletes_issued(store_id).is_empty());
+
+    // Rerun setup with the corrected release: prepare it as the setup CLIs do, then retry.
+    let fixed_store = Storage::new(store_id.to_string()).versioning(true).build();
+    let stack_v2 = stack_with_store(fixed_store.clone());
+    state.runtime_metadata = Some(
+        alien_deployment::prepare_direct_setup_update(
+            stack_v2.clone(),
+            state.stack_state.as_ref().unwrap(),
+            &config,
+            &ClientConfig::Test,
+            state.runtime_metadata.as_ref().unwrap(),
+        )
+        .await
+        .expect("setup update should prepare"),
+    );
+    state.target_release = Some(release_of("rel_v2", stack_v2));
+    request_retry(&mut state);
+    let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::InitialSetup);
+    let store = &state.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(
+        store.status,
+        alien_core::ResourceStatus::ProvisionFailed,
+        "the retry leaves the changed create to the setup executor"
+    );
+    let state = run_to_completion(state, config).await;
+    assert_eq!(
+        state.status,
+        DeploymentStatus::Running,
+        "{:?}",
+        state.stack_state.as_ref().unwrap().resources[store_id]
+    );
+
+    assert_eq!(
+        alien_infra::test_storage_deletes_issued(store_id),
+        vec![failing_store],
+        "the failed create is deleted once, against the config it used"
+    );
+    let store = &state.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(store.status, alien_core::ResourceStatus::Running);
+    assert_eq!(store.config, alien_core::Resource::new(fixed_store));
 }
 
 /// Dispatcher terminal sanity

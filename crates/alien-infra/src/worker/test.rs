@@ -75,6 +75,13 @@ pub struct TestWorkerController {
     /// Delete attempts failed so far under SIMULATE_DELETE_FAILURE_COUNT.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) delete_failures_count: u32,
+    /// Set once DeleteStart deleted the worker, so a repeated delete of it can answer the
+    /// way a provider does for an object that is already gone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) worker_delete_issued: bool,
+    /// Delete polls failed so far under SIMULATE_DELETE_POLL_FAILURE_COUNT.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) delete_poll_failures_count: u32,
 }
 
 #[controller]
@@ -555,10 +562,31 @@ impl TestWorkerController {
             }
         }
 
+        // The worker is the first of two delete steps. Deleting it again answers not-found,
+        // which the executor treats as "the whole resource is gone".
+        if self.worker_delete_issued
+            && target_func
+                .environment
+                .get("SIMULATE_DELETED_WORKER_NOT_FOUND")
+                .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: identifier.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: "Simulated delete of an already deleted worker".to_string(),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
+
         ISSUED_DELETES
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push((identifier.clone(), target_func.clone()));
+        self.worker_delete_issued = true;
         info!(
             "→ [test-delete] Start Delete polling (0/{}) `{}`",
             DELETE_POLL_COUNT, identifier
@@ -621,6 +649,24 @@ impl TestWorkerController {
                 message: "Simulated delete access denied".to_string(),
                 resource_id: Some(target_func.id.clone()),
             });
+        }
+
+        // The second delete step failing, after the worker itself was deleted.
+        if let Some(target_failures) = target_func
+            .environment
+            .get("SIMULATE_DELETE_POLL_FAILURE_COUNT")
+            .and_then(|count| count.parse::<u32>().ok())
+        {
+            if self.delete_poll_failures_count < target_failures {
+                self.delete_poll_failures_count += 1;
+                return Err(AlienError::new(ErrorData::ExecutionStepFailed {
+                    message: format!(
+                        "Simulated delete poll failure {}/{}",
+                        self.delete_poll_failures_count, target_failures
+                    ),
+                    resource_id: Some(target_func.id.clone()),
+                }));
+            }
         }
 
         self.delete_poll_count += 1;

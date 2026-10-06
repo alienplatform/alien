@@ -2,13 +2,14 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    InitialSetupAuthority, ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus,
+    InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
+    StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{
     self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
 };
-use alien_infra::{ImporterRegistry, StackExecutor, StackStateExt};
+use alien_infra::{ImporterRegistry, StackExecutor, StackResourceStateExt, StackStateExt};
 use tracing::{debug, info};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
@@ -48,35 +49,7 @@ pub async fn handle_initial_setup(
         })
     })?;
 
-    // Use the prepared stack from Pending phase (already mutated)
-    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::MissingConfiguration {
-            message: "Prepared stack not found in runtime metadata".to_string(),
-        })
-    })?;
-
-    // Inject all environment variables — plain AND secrets.
-    //
-    // Worker wrappers that consume vault pointers receive the secrets vault as
-    // a dependency from SecretsVaultMutation. Native-projected workloads do
-    // not need workload vault access. Secret values are synced below, between
-    // the step where the vault becomes Running and the step where Workers can
-    // consume it.
-    crate::helpers::inject_environment_variables(
-        &mut target_stack,
-        &config,
-        current.platform,
-        &runtime_metadata.deployer_secrets,
-    )?;
-
-    // Inject OTLP monitoring env vars if monitoring is configured
-    if let Some(monitoring) = &config.monitoring {
-        crate::helpers::inject_monitoring_environment_variables(
-            &mut target_stack,
-            monitoring,
-            current.platform,
-        )?;
-    }
+    let target_stack = setup_target_stack(&runtime_metadata, &config, current.platform)?;
 
     // Sync secrets to vault if the vault is already Running (from a previous
     // step). The executor checks dependencies against the pre-step state, so a
@@ -235,7 +208,6 @@ pub async fn handle_initial_setup(
             if !plan.creates.is_empty()
                 || !plan.updates.is_empty()
                 || !plan.deletes.is_empty()
-                || !plan.replaces.is_empty()
                 || removed_frozen.any(|(_, resource)| resource.status == ResourceStatus::Deleting)
             {
                 stack_status = StackStatus::InProgress;
@@ -485,6 +457,95 @@ fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) 
         .collect()
 }
 
+/// The stack initial setup reconciles: the prepared stack from runtime metadata, with the
+/// deployment's environment variables injected.
+fn setup_target_stack(
+    runtime_metadata: &RuntimeMetadata,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<Stack> {
+    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Prepared stack not found in runtime metadata".to_string(),
+        })
+    })?;
+
+    // Inject all environment variables — plain AND secrets.
+    //
+    // Worker wrappers that consume vault pointers receive the secrets vault as
+    // a dependency from SecretsVaultMutation. Native-projected workloads do
+    // not need workload vault access. Secret values are synced during setup, between
+    // the step where the vault becomes Running and the step where Workers can
+    // consume it.
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        config,
+        platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
+
+    // Inject OTLP monitoring env vars if monitoring is configured
+    if let Some(monitoring) = &config.monitoring {
+        crate::helpers::inject_monitoring_environment_variables(
+            &mut target_stack,
+            monitoring,
+            platform,
+        )?;
+    }
+    Ok(target_stack)
+}
+
+/// Prepares the failed setup-owned resources of `stack_state` for another setup attempt
+/// against the stack prepared in `runtime_metadata`.
+///
+/// An imported setup continues the controller states its importer registered, so every
+/// failed one resumes its saved checkpoint. A direct setup resumes a failed resource only
+/// when the setup stack still declares it with the config it failed with. One whose config
+/// changed stays failed, so the setup executor plans its update or replaces it: resuming a
+/// failed create with a new config would finish it with a mix of both. One the stack no
+/// longer declares stays failed too, and the executor deletes it. Failed deletes always
+/// resume, because the planner does not restart a delete that has failed.
+pub fn retry_failed_setup_resources(
+    stack_state: &mut StackState,
+    runtime_metadata: &RuntimeMetadata,
+    config: &DeploymentConfig,
+) -> Result<Vec<String>> {
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::ImportedHandoff {
+        return stack_state
+            .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+            .context(ErrorData::StackExecutionFailed {
+                message: "Failed to retry failed setup-owned resources".to_string(),
+            });
+    }
+
+    let target_stack = setup_target_stack(runtime_metadata, config, stack_state.platform)?;
+    let mut retried = Vec::new();
+    for (resource_id, resource_state) in &mut stack_state.resources {
+        if resource_state.lifecycle != Some(ResourceLifecycle::Frozen) {
+            continue;
+        }
+        let unchanged = target_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| {
+                entry.config == resource_state.config
+                    && entry.combined_dependencies() == resource_state.dependencies
+            });
+        if resource_state.status != ResourceStatus::DeleteFailed && !unchanged {
+            continue;
+        }
+        if resource_state
+            .retry_failed()
+            .context(ErrorData::StackExecutionFailed {
+                message: format!("Failed to retry failed setup-owned resource '{resource_id}'"),
+            })?
+        {
+            retried.push(resource_id.clone());
+        }
+    }
+    Ok(retried)
+}
+
 /// Handle InitialSetupFailed status - retry failed resources and transition back to InitialSetup
 ///
 /// This step:
@@ -495,7 +556,7 @@ fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) 
 pub async fn handle_initial_setup_failed(
     current: DeploymentState,
     _target_stack: Stack,
-    _config: DeploymentConfig,
+    config: DeploymentConfig,
     _client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
@@ -524,12 +585,12 @@ pub async fn handle_initial_setup_failed(
         })
     })?;
 
-    // Retry failed resources using alien-infra
-    let retried = stack_state
-        .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to retry failed resources".to_string(),
-        })?;
+    let runtime_metadata = current.runtime_metadata.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Runtime metadata with prepared stack required for setup retry".to_string(),
+        })
+    })?;
+    let retried = retry_failed_setup_resources(&mut stack_state, runtime_metadata, &config)?;
 
     info!("Retried {} failed resources: {:?}", retried.len(), retried);
 

@@ -1,8 +1,32 @@
 use crate::core::ResourceControllerContext;
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
+use alien_error::AlienError;
 use alien_macros::controller;
+use std::sync::Mutex;
 use tracing::info;
+
+/// A CORS origin that makes the test controller fail its create right after it recorded the
+/// bucket, the way a real create can fail after its first durable mutation. Storage has no
+/// free-form settings, so the trigger rides on a config field.
+pub const SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN: &str = "https://simulate-create-failure.test";
+
+/// Every bucket delete the test controller issued: the storage id and the config the delete
+/// handler saw.
+static ISSUED_STORAGE_DELETES: Mutex<Vec<(String, Storage)>> = Mutex::new(Vec::new());
+
+/// The configs seen by each bucket delete issued for the storage with this id, in order.
+///
+/// Process-wide, so tests that read it should give their storage unique ids.
+pub fn test_storage_deletes_issued(storage_id: &str) -> Vec<Storage> {
+    ISSUED_STORAGE_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(issued_for, _)| issued_for == storage_id)
+        .map(|(_, config)| config.clone())
+        .collect()
+}
 
 #[controller]
 pub struct TestStorageController {
@@ -63,6 +87,17 @@ impl TestStorageController {
         // Simulate bucket creation - in real implementation this would call cloud APIs
         let bucket_name = format!("{}-{}", ctx.resource_prefix, storage_config.id);
         self.bucket_name = Some(bucket_name.clone());
+
+        if storage_config
+            .cors_allowed_origins
+            .iter()
+            .any(|origin| origin == SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN)
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("Simulated failure after creating bucket `{bucket_name}`"),
+                resource_id: Some(storage_config.id.clone()),
+            }));
+        }
 
         info!(
             "✓ [test-storage-create] Storage bucket `{}` created",
@@ -166,6 +201,10 @@ impl TestStorageController {
 
         // Simulate bucket deletion
         if let Some(bucket_name) = &self.bucket_name {
+            ISSUED_STORAGE_DELETES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((storage_config.id.clone(), storage_config.clone()));
             info!(
                 "✓ [test-storage-delete] Storage bucket `{}` deleted",
                 bucket_name

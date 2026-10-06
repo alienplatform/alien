@@ -132,6 +132,19 @@ fn has_owned_tags(tag_set: Option<&TagSet>, resource_prefix: &str, resource_id: 
         })
 }
 
+/// One subnet of the managed network, as `ensure_subnet` finds or creates it.
+#[derive(bon::Builder)]
+struct SubnetSpec<'a> {
+    vpc_id: &'a str,
+    cidr: &'a str,
+    availability_zone: &'a str,
+    /// Value of the subnet's `Name` tag.
+    name: String,
+    /// `Public` or `Private`, recorded in the subnet's `Type` tag.
+    subnet_type: &'a str,
+    resource_id: &'a str,
+}
+
 fn emit_aws_network_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -880,16 +893,18 @@ impl AwsNetworkController {
             })
     }
 
-    /// Find the VPC an earlier attempt of this resource created, by its ownership tags.
+    /// Find the VPC an earlier `create_vpc` of this controller made with `cidr`: one that
+    /// carries this resource's ownership tags and that CIDR.
     ///
-    /// Returns its ID and CIDR. More than one match is an error: the tags identify one
-    /// network, so several VPCs mean leftovers that need a human to decide.
+    /// More than one match is an error: several such VPCs mean leftovers that need a human
+    /// to decide.
     async fn find_owned_vpc(
         &self,
         ctx: &ResourceControllerContext<'_>,
         resource_prefix: &str,
         resource_id: &str,
-    ) -> Result<Option<(String, String)>> {
+        cidr: &str,
+    ) -> Result<Option<String>> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
@@ -905,34 +920,33 @@ impl AwsNetworkController {
                 resource_id: Some(resource_id.to_string()),
             })?;
 
-        let vpcs: Vec<_> = response
+        let vpc_ids: Vec<String> = response
             .vpc_set
             .map(|set| set.items)
             .unwrap_or_default()
             .into_iter()
-            .filter(|vpc| has_owned_tags(vpc.tag_set.as_ref(), resource_prefix, resource_id))
-            .collect();
-
-        match vpcs.as_slice() {
-            [] => Ok(None),
-            [vpc] => {
-                let (Some(vpc_id), Some(cidr_block)) = (vpc.vpc_id.clone(), vpc.cidr_block.clone())
-                else {
-                    return Err(AlienError::new(ErrorData::CloudPlatformError {
-                        message: "Owned VPC is missing its ID or CIDR block".to_string(),
+            .filter(|vpc| {
+                vpc.cidr_block.as_deref() == Some(cidr)
+                    && has_owned_tags(vpc.tag_set.as_ref(), resource_prefix, resource_id)
+            })
+            .map(|vpc| {
+                vpc.vpc_id.ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!("Owned VPC with CIDR {cidr} has no ID"),
                         resource_id: Some(resource_id.to_string()),
-                    }));
-                };
-                Ok(Some((vpc_id, cidr_block)))
-            }
+                    })
+                })
+            })
+            .collect::<Result<_>>()?;
+
+        match vpc_ids.as_slice() {
+            [] => Ok(None),
+            [vpc_id] => Ok(Some(vpc_id.clone())),
             _ => Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!(
-                    "Found {} VPCs tagged for this network ({}); delete the extra VPCs and retry",
-                    vpcs.len(),
-                    vpcs.iter()
-                        .filter_map(|vpc| vpc.vpc_id.as_deref())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "Found {} VPCs with CIDR {cidr} tagged for this network ({}); delete the extra VPCs and retry",
+                    vpc_ids.len(),
+                    vpc_ids.join(", ")
                 ),
                 resource_id: Some(resource_id.to_string()),
             })),
@@ -981,17 +995,19 @@ impl AwsNetworkController {
     /// Return the subnet with `cidr` in this network's VPC, creating it if it does not
     /// exist. Subnet CIDRs are derived from the VPC CIDR, so a subnet with that CIDR in our
     /// VPC is the one an earlier attempt created; it must also carry our ownership tags.
-    #[allow(clippy::too_many_arguments)]
     async fn ensure_subnet(
         &self,
         ctx: &ResourceControllerContext<'_>,
-        vpc_id: &str,
-        cidr: &str,
-        availability_zone: &str,
-        name: String,
-        subnet_type: &str,
-        resource_id: &str,
+        subnet: SubnetSpec<'_>,
     ) -> Result<String> {
+        let SubnetSpec {
+            vpc_id,
+            cidr,
+            availability_zone,
+            name,
+            subnet_type,
+            resource_id,
+        } = subnet;
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
@@ -1639,20 +1655,24 @@ impl AwsNetworkController {
             });
         }
 
-        // A previous attempt may have created the VPC and lost the response. Only a VPC
-        // carrying this deployment's and this resource's ownership tags counts. This runs
-        // before the CIDR choice, which would otherwise see that VPC's range as taken.
-        if let Some((vpc_id, vpc_cidr)) = self
-            .find_owned_vpc(ctx, ctx.resource_prefix, &config.id)
-            .await?
-        {
-            info!(vpc_id = %vpc_id, cidr = %vpc_cidr, "Found the VPC created by an earlier attempt");
-            self.vpc_id = Some(vpc_id);
-            self.cidr_block = Some(vpc_cidr);
-            return Ok(HandlerAction::Continue {
-                state: ConfiguringVpcDns,
-                suggested_delay: None,
-            });
+        // The CIDR is recorded right before `create_vpc`, so a recorded CIDR without a VPC ID
+        // means an earlier attempt called `create_vpc` and may have lost the response. Only
+        // then is an existing VPC rediscovered, and only one with our ownership tags and that
+        // CIDR. A VPC tagged for this network that no attempt of this controller created
+        // (left behind by an earlier instance) is never adopted. State persisted before the
+        // CIDR was recorded ahead of the create has no CIDR here, so it creates a new VPC.
+        if let Some(attempted_cidr) = self.cidr_block.clone() {
+            if let Some(vpc_id) = self
+                .find_owned_vpc(ctx, ctx.resource_prefix, &config.id, &attempted_cidr)
+                .await?
+            {
+                info!(vpc_id = %vpc_id, cidr = %attempted_cidr, "Found the VPC created by an earlier attempt");
+                self.vpc_id = Some(vpc_id);
+                return Ok(HandlerAction::Continue {
+                    state: ConfiguringVpcDns,
+                    suggested_delay: None,
+                });
+            }
         }
 
         let vpc_cidr = match &self.cidr_block {
@@ -1928,12 +1948,14 @@ impl AwsNetworkController {
             let subnet_id = self
                 .ensure_subnet(
                     ctx,
-                    &vpc_id,
-                    cidr,
-                    az,
-                    format!("{}-public-{}", ctx.resource_prefix, i + 1),
-                    "Public",
-                    &config.id,
+                    SubnetSpec::builder()
+                        .vpc_id(&vpc_id)
+                        .cidr(cidr)
+                        .availability_zone(az)
+                        .name(format!("{}-public-{}", ctx.resource_prefix, i + 1))
+                        .subnet_type("Public")
+                        .resource_id(&config.id)
+                        .build(),
                 )
                 .await?;
             self.public_subnet_ids.push(subnet_id.clone());
@@ -1951,12 +1973,14 @@ impl AwsNetworkController {
             let subnet_id = self
                 .ensure_subnet(
                     ctx,
-                    &vpc_id,
-                    cidr,
-                    az,
-                    format!("{}-private-{}", ctx.resource_prefix, i + 1),
-                    "Private",
-                    &config.id,
+                    SubnetSpec::builder()
+                        .vpc_id(&vpc_id)
+                        .cidr(cidr)
+                        .availability_zone(az)
+                        .name(format!("{}-private-{}", ctx.resource_prefix, i + 1))
+                        .subnet_type("Private")
+                        .resource_id(&config.id)
+                        .build(),
                 )
                 .await?;
             self.private_subnet_ids.push(subnet_id.clone());
@@ -3663,10 +3687,8 @@ mod controller_state_tests {
     async fn vpc_id_survives_a_dns_failure_and_the_retry_does_not_create_another_vpc() {
         let mut ec2 = MockEc2Api::new();
         expect_two_zones(&mut ec2);
-        ec2.expect_describe_vpcs()
-            .times(1)
-            .withf(|request| is_owned_tag_lookup(request.filters.as_ref()))
-            .returning(|_| Ok(parse(json!({}))));
+        // A first attempt has created nothing, so there is nothing to rediscover.
+        ec2.expect_describe_vpcs().times(0);
         ec2.expect_create_vpc()
             .times(1)
             .withf(|request| request.cidr_block == "10.0.0.0/16")
@@ -3723,23 +3745,25 @@ mod controller_state_tests {
         let mut ec2 = MockEc2Api::new();
         expect_two_zones(&mut ec2);
         // Only the ownership-tag lookup runs: no CIDR search (it would see the owned VPC's
-        // range as taken) and no create.
+        // range as taken) and no create. A tagged VPC with another CIDR is a leftover the
+        // attempted create did not make.
         ec2.expect_describe_vpcs()
             .times(1)
             .withf(|request| is_owned_tag_lookup(request.filters.as_ref()))
             .returning(|_| {
-                Ok(parse(json!({ "vpcSet": { "item": [{
-                    "vpcId": "vpc-lost",
-                    "cidrBlock": "100.70.0.0/16",
-                    "tagSet": owned_tags_json()
-                }]}})))
+                Ok(parse(json!({ "vpcSet": { "item": [
+                    { "vpcId": "vpc-leftover", "cidrBlock": "100.71.0.0/16", "tagSet": owned_tags_json() },
+                    { "vpcId": "vpc-lost", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() }
+                ]}})))
             });
         ec2.expect_create_vpc().times(0);
 
+        // The recorded CIDR without a VPC ID: `create_vpc` was called and its response lost.
         let mut executor = executor(
             ec2,
             AwsNetworkController {
                 state: AwsNetworkState::CreatingVpc,
+                cidr_block: Some("100.70.0.0/16".to_string()),
                 ..Default::default()
             },
             None,
@@ -3760,7 +3784,7 @@ mod controller_state_tests {
         ec2.expect_describe_vpcs().times(1).returning(|_| {
             Ok(parse(json!({ "vpcSet": { "item": [
                 { "vpcId": "vpc-a", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() },
-                { "vpcId": "vpc-b", "cidrBlock": "100.71.0.0/16", "tagSet": owned_tags_json() }
+                { "vpcId": "vpc-b", "cidrBlock": "100.70.0.0/16", "tagSet": owned_tags_json() }
             ]}})))
         });
         ec2.expect_create_vpc().times(0);
@@ -3769,6 +3793,7 @@ mod controller_state_tests {
             ec2,
             AwsNetworkController {
                 state: AwsNetworkState::CreatingVpc,
+                cidr_block: Some("100.70.0.0/16".to_string()),
                 ..Default::default()
             },
             None,
@@ -3782,6 +3807,45 @@ mod controller_state_tests {
         assert!(error.to_string().contains("vpc-a, vpc-b"), "{error}");
         assert_eq!(controller(&executor).vpc_id, None);
         assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
+    }
+
+    #[tokio::test]
+    async fn first_vpc_create_does_not_adopt_a_tagged_leftover_vpc() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        // A VPC carrying this network's tags, left by an earlier instance of the resource.
+        // Only the CIDR search sees it, as a range already in use (its range is the first one
+        // this network would otherwise pick).
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .withf(|request| request.filters.is_none())
+            .returning(|_| {
+                Ok(parse(json!({ "vpcSet": { "item": [{
+                    "vpcId": "vpc-leftover",
+                    "cidrBlock": "100.71.0.0/16",
+                    "tagSet": owned_tags_json()
+                }]}})))
+            });
+        ec2.expect_create_vpc()
+            .times(1)
+            .withf(|request| request.cidr_block != "100.71.0.0/16")
+            .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-new" } }))));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        executor.step().await.expect("VPC creation should succeed");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-new"));
+        assert_ne!(state.cidr_block.as_deref(), Some("100.71.0.0/16"));
     }
 
     #[tokio::test]
@@ -4677,9 +4741,8 @@ mod controller_state_tests {
         ec2.expect_describe_addresses()
             .returning(|| Ok(parse(json!({}))));
         expect_two_zones(&mut ec2);
-        ec2.expect_describe_vpcs()
-            .times(1)
-            .returning(|_| Ok(parse(json!({}))));
+        // The CIDR is configured and nothing was attempted before, so no VPC lookup runs.
+        ec2.expect_describe_vpcs().times(0);
         ec2.expect_create_vpc()
             .times(1)
             .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } }))));

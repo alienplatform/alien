@@ -1674,8 +1674,33 @@ impl StackExecutor {
                             continue;
                         }
 
-                        // A replace starts from whichever failed controller was saved; both
-                        // hold the IDs the create recorded.
+                        // A failed delete resumes at the delete step that failed, as a manual
+                        // retry does. Restarting at the first delete step would repeat deletes
+                        // of children that are already gone, and their not-found ends the whole
+                        // delete as best-effort, leaking the children still left.
+                        let failed_mid_delete = resource_state.status
+                            == ResourceStatus::DeleteFailed
+                            && resource_state
+                                .get_last_failed_controller()
+                                .ok()
+                                .flatten()
+                                .is_some_and(|checkpoint| {
+                                    checkpoint.get_status() == ResourceStatus::Deleting
+                                });
+                        if failed_mid_delete {
+                            if let Err(e) = resource_state.retry_failed() {
+                                error!(
+                                    "Failed to resume the failed delete of '{}': {}",
+                                    resource_id, e
+                                );
+                                *resource_state = resource_state
+                                    .with_failure(ResourceStatus::DeleteFailed, e.into_generic());
+                            }
+                            continue;
+                        }
+
+                        // A replace of a failed create starts from whichever failed controller
+                        // was saved; both hold the IDs the create recorded.
                         let controller = match resource_state.get_internal_controller() {
                             Ok(None) if replacing => resource_state.get_last_failed_controller(),
                             controller => controller,
