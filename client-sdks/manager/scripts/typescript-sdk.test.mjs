@@ -153,6 +153,16 @@ test("published binding helpers preserve typed values through every existing imp
   const sdkDirectory = fileURLToPath(new URL("../typescript/", import.meta.url))
   const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
 import assert from "node:assert/strict";
+const sdk = await import("@alienplatform/manager-api");
+assert.equal(typeof sdk.AlienManager, "function");
+await import("@alienplatform/manager-api/types");
+await import("@alienplatform/manager-api/models/operations");
+const errors = await import("@alienplatform/manager-api/models/errors");
+assert.equal(typeof errors.SDKValidationError, "function");
+for (const suffix of ["", ".js"]) {
+  const health = await import("@alienplatform/manager-api/models/healthresponse" + suffix);
+  assert.equal(health.healthResponseFromJSON('{"status":"healthy"}').ok, true);
+}
 for (const name of [
   "@alienplatform/manager-api/models",
   "@alienplatform/manager-api/models/stacksettings",

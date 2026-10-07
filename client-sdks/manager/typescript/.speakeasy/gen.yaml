@@ -43,44 +43,6 @@ typescript:
       typescript: ~5.9.0
     peerDependencies: {}
   additionalPackageJSON:
-    exports:
-      ".":
-        source: "./src/index.ts"
-        types: "./esm/index.d.ts"
-        default: "./esm/index.js"
-      "./package.json": "./package.json"
-      "./types":
-        source: "./src/types/index.ts"
-        types: "./esm/types/index.d.ts"
-        default: "./esm/types/index.js"
-      "./models/errors":
-        source: "./src/models/errors/index.ts"
-        types: "./esm/models/errors/index.d.ts"
-        default: "./esm/models/errors/index.js"
-      "./models":
-        source: "./src/compat/models.ts"
-        types: "./esm/compat/models.d.ts"
-        default: "./esm/compat/models.js"
-      "./models/operations":
-        source: "./src/models/operations/index.ts"
-        types: "./esm/models/operations/index.d.ts"
-        default: "./esm/models/operations/index.js"
-      "./*.js":
-        source: "./src/*.ts"
-        types: "./esm/*.d.ts"
-        default: "./esm/*.js"
-      "./*":
-        source: "./src/*.ts"
-        types: "./esm/*.d.ts"
-        default: "./esm/*.js"
-      "./models/stacksettings":
-        source: "./src/compat/stacksettings.ts"
-        types: "./esm/compat/stacksettings.d.ts"
-        default: "./esm/compat/stacksettings.js"
-      "./models/stacksettings.js":
-        source: "./src/compat/stacksettings.ts"
-        types: "./esm/compat/stacksettings.d.ts"
-        default: "./esm/compat/stacksettings.js"
     homepage: https://alien.dev
     license: FSL-1.1-Apache-2.0
     repository:
