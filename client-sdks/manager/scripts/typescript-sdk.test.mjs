@@ -130,6 +130,10 @@ const bindings: ExternalBindings = {
 };
 const parsed = externalBindingsFromJSON(externalBindingsToJSON(bindings));
 if (parsed.ok) externalBindingsToJSON(parsed.value);
+import { type ExternalBindings as DeepBindings } from "@alienplatform/manager-api/models/stacksettings";
+import { externalBindingsToJSON as deepSerialize } from "@alienplatform/manager-api/models/stacksettings.js";
+const deepBindings: DeepBindings = bindings;
+deepSerialize(deepBindings);
 void capabilities;
 `)
     const result = spawnSync(process.execPath, [
@@ -142,4 +146,34 @@ void capabilities;
   } finally {
     fs.rmSync(directory, { recursive: true, force: true })
   }
+})
+
+
+test("published binding helpers preserve typed values through every existing import path", () => {
+  const sdkDirectory = fileURLToPath(new URL("../typescript/", import.meta.url))
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+import assert from "node:assert/strict";
+for (const name of [
+  "@alienplatform/manager-api/models",
+  "@alienplatform/manager-api/models/stacksettings",
+  "@alienplatform/manager-api/models/stacksettings.js",
+]) {
+  const { externalBindingsFromJSON, externalBindingsToJSON } = await import(name);
+  for (const credential of ["example-secret", { secretRef: { name: "storage-auth", key: "secret" } }]) {
+    const bindings = { archive: { type: "storage", service: "s3", bucketName: "archive-bucket",
+      endpoint: "https://storage.example.com", region: "us-east-1", forcePathStyle: true,
+      accessKeyId: "example-key", secretAccessKey: credential } };
+    const parsed = externalBindingsFromJSON(JSON.stringify(bindings));
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(JSON.parse(externalBindingsToJSON(parsed.value)), bindings);
+  }
+  const empty = externalBindingsFromJSON("{}");
+  assert.equal(empty.ok, true);
+  assert.equal(externalBindingsToJSON(empty.value), "{}");
+  for (const invalid of ["null", "[]", "not json", '{"archive":{"type":"storage","service":"s3"}}']) {
+    assert.equal(externalBindingsFromJSON(invalid).ok, false);
+  }
+}
+`], { cwd: sdkDirectory, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stdout + result.stderr)
 })

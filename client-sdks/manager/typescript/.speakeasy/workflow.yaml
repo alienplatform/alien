@@ -4,8 +4,6 @@ sources:
     manager-api:
         inputs:
             - location: ../openapi.json
-        overlays:
-            - location: .speakeasy/compatibility-overlay.yaml
 targets:
     manager-typescript:
         target: typescript

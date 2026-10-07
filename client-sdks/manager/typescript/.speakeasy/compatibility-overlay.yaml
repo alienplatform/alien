@@ -1,8 +1,0 @@
-overlay: 1.0.0
-info:
-    title: Manager SDK compatibility
-    version: 1.0.0
-actions:
-    - target: $.components.schemas.ExternalBindings
-      update:
-          x-speakeasy-include: true
