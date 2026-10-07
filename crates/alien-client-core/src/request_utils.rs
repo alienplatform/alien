@@ -217,8 +217,8 @@ pub async fn handle_no_response(
             .chunk()
             .await
             .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: "Failed to finish response body".to_string(),
+            .context(ErrorData::HttpResponseBodyReadFailed {
+                http_status: status.as_u16(),
             })?
             .is_some()
         {}
@@ -228,8 +228,8 @@ pub async fn handle_no_response(
         .bytes()
         .await
         .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: "Failed to finish response body".to_string(),
+        .context(ErrorData::HttpResponseBodyReadFailed {
+            http_status: status.as_u16(),
         })?;
 
     Ok(())
@@ -602,8 +602,71 @@ mod tests {
     use std::{
         io::{BufRead, BufReader, Write},
         net::TcpListener,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
         thread,
     };
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn success_body_read_failure_does_not_replay_mutation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listen");
+        let address = listener.local_addr().expect("address");
+        let requests = Arc::new(AtomicUsize::new(0));
+        let seen = requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                {
+                    let mut reader = tokio::io::BufReader::new(&mut stream);
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).await.expect("request header") > 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                }
+                let request = seen.fetch_add(1, Ordering::SeqCst);
+                let response = if request == 0 {
+                    &b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nshort"[..]
+                } else {
+                    &b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"[..]
+                };
+                stream.write_all(response).await.expect("response");
+                stream.shutdown().await.expect("close response");
+            }
+        });
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("client")
+            .post(format!("http://{address}/mutation"))
+            .with_retry()
+            .backoff(
+                ExponentialBuilder::default()
+                    .with_min_delay(Duration::from_millis(1))
+                    .with_max_delay(Duration::from_millis(1))
+                    .with_max_times(2),
+            )
+            .send_no_response()
+            .await
+            .expect_err("truncated body must fail");
+        assert_eq!(requests.load(Ordering::SeqCst), 1, "mutation was replayed");
+        assert!(!error.retryable);
+        assert_eq!(error.code, "HTTP_RESPONSE_BODY_READ_FAILED");
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::HttpResponseBodyReadFailed { http_status: 200 })
+        ));
+        server.abort();
+        assert!(server.await.expect_err("server stopped").is_cancelled());
+    }
 
     #[tokio::test]
     async fn rejects_truncated_success_response_body() {
@@ -640,7 +703,8 @@ mod tests {
         let error = handle_no_response(response, None)
             .await
             .expect_err("truncated body must fail");
-        assert_eq!(error.code, "HTTP_REQUEST_FAILED");
+        assert_eq!(error.code, "HTTP_RESPONSE_BODY_READ_FAILED");
+        assert!(!error.retryable);
         server.join().expect("server");
     }
 
