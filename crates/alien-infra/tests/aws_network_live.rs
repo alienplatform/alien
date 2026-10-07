@@ -30,8 +30,8 @@ use std::time::{Duration, Instant};
 use alien_aws_clients::ec2::*;
 use alien_client_core::{ErrorData as ClientErrorData, Result as ClientResult};
 use alien_core::{
-    AwsClientConfig, AwsCredentials, ClientConfig, Network, NetworkSettings, Platform,
-    ResourceStatus, ALIEN_STACK_TAG_KEY,
+    standard_resource_tags, AwsClientConfig, AwsCredentials, ClientConfig, Network,
+    NetworkSettings, Platform, ResourceStatus, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_infra::controller_test::SingleControllerExecutor;
@@ -1233,6 +1233,100 @@ async fn delete_reports_but_never_deletes_a_detached_interface_lambda_did_not_cr
             })
             .await;
         assert!(errors.is_empty(), "{errors:?}");
+        assert_nothing_left(&live).await;
+        live
+    })
+    .await;
+}
+
+/// The tags this controller puts on an object it creates under `token`.
+fn create_attempt_tags(prefix: &str, resource_type: &str, token: &str) -> Vec<TagSpecification> {
+    let mut tags: Vec<Tag> = standard_resource_tags(prefix, NETWORK_ID)
+        .into_iter()
+        .map(|(key, value)| Tag { key, value })
+        .collect();
+    tags.push(Tag {
+        key: "CreateAttempt".to_string(),
+        value: token.to_string(),
+    });
+    vec![TagSpecification {
+        resource_type: resource_type.to_string(),
+        tags,
+    }]
+}
+
+/// 9. A create repeated after a read missed the first object leaves two objects under one
+/// create token, with only one ID recorded. Here a second VPC and a second internet gateway
+/// are made with the controller's own tokens; delete finds both by token and removes them.
+#[tokio::test]
+#[ignore = "creates billed AWS resources; needs ALIEN_AWS_NETWORK_LIVE_TEST=1"]
+async fn delete_removes_duplicates_created_under_the_same_token() {
+    scenario("dup-token", "10.239.0.0/16", |mut live| async move {
+        let errors = live.create_until("creatingSubnets").await;
+        assert!(errors.is_empty(), "{errors:?}");
+        let controller = live.controller();
+        let vpc_token = controller["vpcCreateToken"]
+            .as_str()
+            .expect("VPC token")
+            .to_string();
+        let igw_token = controller["internetGatewayCreateToken"]
+            .as_str()
+            .expect("IGW token")
+            .to_string();
+        let cidr = controller["cidrBlock"].as_str().expect("CIDR").to_string();
+
+        let duplicate_vpc = live
+            .real
+            .create_vpc(
+                CreateVpcRequest::builder()
+                    .cidr_block(cidr)
+                    .tag_specifications(create_attempt_tags(&live.prefix, "vpc", &vpc_token))
+                    .build(),
+            )
+            .await
+            .expect("duplicate VPC")
+            .vpc
+            .and_then(|vpc| vpc.vpc_id)
+            .expect("VPC id");
+        let duplicate_igw = live
+            .real
+            .create_internet_gateway(
+                CreateInternetGatewayRequest::builder()
+                    .tag_specifications(create_attempt_tags(
+                        &live.prefix,
+                        "internet-gateway",
+                        &igw_token,
+                    ))
+                    .build(),
+            )
+            .await
+            .expect("duplicate IGW")
+            .internet_gateway
+            .and_then(|igw| igw.internet_gateway_id)
+            .expect("IGW id");
+        println!("  duplicates under the controller's tokens: {duplicate_vpc}, {duplicate_igw}");
+        let before = live.inventory().await;
+        assert_eq!(before.vpcs.len(), 2, "{before:?}");
+        assert_eq!(before.internet_gateways.len(), 2, "{before:?}");
+
+        live.delete_to_deleted().await;
+        let vpc_deletes: Vec<_> = live
+            .faulty
+            .calls("delete_vpc")
+            .into_iter()
+            .filter(|call| call.outcome == "ok")
+            .collect();
+        assert_eq!(vpc_deletes.len(), 2, "both VPCs deleted: {vpc_deletes:?}");
+        let igw_deletes: Vec<_> = live
+            .faulty
+            .calls("delete_internet_gateway")
+            .into_iter()
+            .filter(|call| call.outcome == "ok")
+            .collect();
+        assert_eq!(igw_deletes.len(), 2, "both IGWs deleted: {igw_deletes:?}");
+        let controller = live.controller();
+        assert_eq!(controller["extraVpcIds"], serde_json::json!([]));
+        assert_eq!(controller["extraInternetGatewayIds"], serde_json::json!([]));
         assert_nothing_left(&live).await;
         live
     })
