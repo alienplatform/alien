@@ -513,6 +513,13 @@ impl PluginSettingManifest {
                 "{field}: setting keys contain only ASCII letters, digits, or '_'"
             )));
         }
+        // A stack's `operations()` entry holds a plugin's settings next to its
+        // `approval` rules, so no setting may take that name.
+        if key == RESERVED_APPROVAL_KEY {
+            return Err(invalid(format!(
+                "{field}: '{RESERVED_APPROVAL_KEY}' is reserved for approval rules"
+            )));
+        }
         match (self.kind, &self.env, &self.resource_type) {
             (PluginSettingKind::String | PluginSettingKind::Secret, Some(env), None)
                 if valid_env_name(env) =>
@@ -533,6 +540,9 @@ impl PluginSettingManifest {
         }
     }
 }
+
+/// The key a stack's `operations()` entry uses for approval rules.
+const RESERVED_APPROVAL_KEY: &str = "approval";
 
 fn valid_env_name(name: &str) -> bool {
     let mut chars = name.chars();
@@ -1395,6 +1405,29 @@ mod tests {
                 "operations": [{operations}]
             }}"#
         )
+    }
+
+    /// `operations()` puts approval rules under `approval`, next to the
+    /// settings, so a setting by that name could never be given a value.
+    #[test]
+    fn a_setting_may_not_take_the_approval_key() {
+        let with_setting = |key: &str| {
+            manifest_json("").replace(
+                r#""operations": []"#,
+                &format!(
+                    r#""operations": [], "settings": {{ "{key}": {{ "description": "x", "kind": "string", "env": "PLUGIN_VALUE" }} }}"#
+                ),
+            )
+        };
+        CanonicalPluginManifest::parse_and_validate(with_setting("host").as_bytes())
+            .expect("an ordinary setting key is accepted");
+        let error =
+            CanonicalPluginManifest::parse_and_validate(with_setting("approval").as_bytes())
+                .expect_err("the approval key is reserved");
+        assert!(
+            error.to_string().contains("reserved for approval rules"),
+            "{error}"
+        );
     }
 
     #[test]

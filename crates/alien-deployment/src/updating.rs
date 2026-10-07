@@ -340,6 +340,7 @@ pub async fn handle_updating(
                 None => true,
                 Some(target) => {
                     alien_preflights::compatibility::narrowing::service_account_narrowed(
+                        &target_stack,
                         &entry.config,
                         &target.config,
                     )

@@ -1136,7 +1136,7 @@ where
     T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
 {
     let denied = |code: &str, status: Option<u16>| {
-        code == "REMOTE_ACCESS_DENIED" || matches!(status, Some(401 | 403))
+        code == "REMOTE_ACCESS_DENIED" || status == Some(403)
     };
     if denied(&error.code, error.http_status_code) {
         return true;

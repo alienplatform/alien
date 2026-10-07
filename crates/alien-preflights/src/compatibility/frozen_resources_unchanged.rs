@@ -275,7 +275,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     )
-                    && !service_account_narrowed(&old_entry.config, &new_entry.config)
+                    && !service_account_narrowed(new_stack, &old_entry.config, &new_entry.config)
                     && !unchanged_legacy_service_account_grants(
                         self.platform,
                         old_stack,
@@ -334,6 +334,33 @@ mod tests {
             .permissions(PermissionsConfig::new().with_profile("reader", profile))
             .add(account, ResourceLifecycle::Frozen)
             .build()
+    }
+
+    /// Dropping an account's last resource-scoped grant narrows it, while
+    /// dropping only the capture of grants its profile still holds is the
+    /// legacy format and still needs setup.
+    #[tokio::test]
+    async fn losing_the_last_resource_grant_is_narrowing() {
+        let with_grant = PermissionProfile::new().resource("objects", ["storage/data-read"]);
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+        let removed = check
+            .check(
+                &account_stack(with_grant.clone(), true),
+                &account_stack(PermissionProfile::new(), true),
+            )
+            .await
+            .unwrap();
+        assert!(removed.success, "{:?}", removed.errors);
+        let uncaptured = check
+            .check(
+                &account_stack(with_grant.clone(), true),
+                &account_stack(with_grant, false),
+            )
+            .await
+            .unwrap();
+        assert!(!uncaptured.success);
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@
 //! covered. The next setup trims the identities to the new stack.
 
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
-use alien_core::{Resource, ServiceAccount};
+use alien_core::{Resource, ServiceAccount, Stack};
 use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 
 /// Whether `new` grants nothing `old` does not: every scope it keeps holds a
@@ -42,27 +42,46 @@ pub fn management_narrowed(old: &ManagementPermissions, new: &ManagementPermissi
     }
 }
 
-/// Whether a frozen service account only lost permission sets.
+/// Whether a frozen service account in `new_stack` only lost permission sets.
 ///
 /// Legacy prepared stacks kept resource grants only in the permission profile,
-/// so an empty resource capture can mean "not captured" rather than "none".
-/// Only accounts that capture resource grants the same way are compared.
-pub fn service_account_narrowed(old: &Resource, new: &Resource) -> bool {
+/// so an account with no captured resource grants may simply not capture them.
+/// An empty capture counts as "none left" only when the account's profile in
+/// `new_stack` has no resource-scoped grants either.
+pub fn service_account_narrowed(new_stack: &Stack, old: &Resource, new: &Resource) -> bool {
     let (Some(old), Some(new)) = (
         old.downcast_ref::<ServiceAccount>(),
         new.downcast_ref::<ServiceAccount>(),
     ) else {
         return false;
     };
-    old.id == new.id
-        && old.resource_permission_sets.is_empty() == new.resource_permission_sets.is_empty()
-        && new
-            .stack_permission_sets
-            .iter()
-            .all(|set| old.stack_permission_sets.contains(set))
+    if old.id != new.id {
+        return false;
+    }
+    if old.resource_permission_sets.is_empty() && !new.resource_permission_sets.is_empty() {
+        return false;
+    }
+    if !old.resource_permission_sets.is_empty()
+        && new.resource_permission_sets.is_empty()
+        && profile_has_resource_grants(new_stack, &new.id)
+    {
+        return false;
+    }
+    new.stack_permission_sets
+        .iter()
+        .all(|set| old.stack_permission_sets.contains(set))
         && new.resource_permission_sets.iter().all(|(resource, sets)| {
             old.resource_permission_sets
                 .get(resource)
                 .is_some_and(|old_sets| sets.iter().all(|set| old_sets.contains(set)))
         })
+}
+
+/// Whether the profile behind service account `account_id` grants anything on
+/// a specific resource. Profile accounts are named `<profile>-sa`.
+fn profile_has_resource_grants(stack: &Stack, account_id: &str) -> bool {
+    account_id
+        .strip_suffix("-sa")
+        .and_then(|profile| stack.permissions.profiles.get(profile))
+        .is_some_and(|profile| profile.0.keys().any(|scope| scope != "*"))
 }

@@ -1,7 +1,7 @@
 //! CLI commands for access requests — a complete, non-Slack path to REQUEST
-//! time-boxed operation and/or remote-debugging access. Approval always
-//! happens on the customer's side: on Kubernetes in-cluster via `kubectl
-//! patch` on the grant custom resource, elsewhere by a workspace member other
+//! time-boxed operation and/or remote-debugging access. Someone other than
+//! the requester approves: on Kubernetes the customer, in-cluster via `kubectl
+//! patch` on the grant custom resource; elsewhere a workspace member other
 //! than the requester. There is deliberately no CLI action that approves a
 //! request.
 
@@ -36,9 +36,9 @@ remote-debugging session for kubectl, aws, gcloud, or az. Combine --operation an
 --debug-tool to request both on the same row; approving, denying, expiring, or revoking
 the request applies to both at once.
 
-Approval always happens on the customer's side: in-cluster with kubectl on Kubernetes,
-otherwise by a workspace member other than the requester. There is no command here that
-approves a request.
+Someone other than the requester approves: on Kubernetes the customer, in-cluster with
+kubectl; otherwise a workspace member other than the requester. There is no command here
+that approves a request.
 
 Revoking a request withdraws the grant immediately: operations still waiting to be
 dispatched fail, open debug sessions stop, and the request can no longer be approved.
@@ -393,7 +393,7 @@ async fn create_task(
         println!();
         println!("Review it:  alien access-requests get {}", created.id);
         println!(
-            "Approval happens on the customer's side — share the request with whoever approves \
+            "Someone other than you approves it — share the request with whoever approves \
              access, then run: alien access-requests wait {}",
             created.id
         );
