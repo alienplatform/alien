@@ -11,7 +11,7 @@ import * as z from "zod";
 export const OperationsBundleDownloadSchema = z.object({
     "env": z.optional(z.object({
     
-    }).catchall(z.string()).describe("Environment the plugin process runs with: its settings, which may hold\nsecrets. Keep in memory only; never persist or log the values.")),
+    }).catchall(z.string()).describe("Environment the plugin process runs with: its settings, which may hold\nsecrets. Store only in encrypted state, and never log the values.")),
 "plugin": z.string().describe("Plugin name this bundle provides."),
 "pluginVersion": z.string().describe("Plugin version this bundle provides."),
 "url": z.string().describe("Presigned URL to GET the bundle ZIP from. Short-lived.")
