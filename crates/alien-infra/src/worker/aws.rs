@@ -4,6 +4,11 @@ use tracing::{debug, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
 
+use crate::core::aws_tag_scoped::{
+    certificates_imported_with_token, delete_imported_certificate, delete_tag_scoped,
+    is_remote_access_denied, is_remote_not_found, with_import_token, TagScopedDelete,
+    CREATE_ATTEMPT_TAG,
+};
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
@@ -43,7 +48,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
-use std::future::Future;
 use uuid::Uuid;
 
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
@@ -92,23 +96,6 @@ fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool
     )
 }
 
-fn is_remote_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteAccessDenied { .. })
-    )
-}
-
-fn is_remote_not_found(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-    )
-}
-
-/// Tag carrying the token of the create call that made an API Gateway domain.
-const CREATE_ATTEMPT_TAG: &str = "CreateAttempt";
-
 /// Whether `tags` hold every one of `expected`.
 fn carries_tags(
     tags: Option<&HashMap<String, String>>,
@@ -119,45 +106,6 @@ fn carries_tags(
             .iter()
             .all(|(key, value)| tags.get(key) == Some(value))
     })
-}
-
-/// How a delete of an object behind a tag-conditioned grant ended.
-#[derive(Debug, PartialEq, Eq)]
-enum TagScopedDelete {
-    Deleted,
-    /// Already gone, or no longer carrying this worker's tags.
-    Gone,
-}
-
-/// Interprets a delete of an API Gateway, Lambda or ACM object.
-///
-/// This role may delete and read those objects only while they carry the stack's tags. An
-/// object that is gone has no tags, so AWS answers a delete of it (deleted out of band, or by an
-/// earlier attempt whose response was lost) with AccessDenied, not NotFound. A denied delete is checked with `probe`, a read
-/// under the same grant: when the read is denied or not found too, nothing this worker may
-/// delete is left; when it succeeds, the object is there and the denial is real.
-async fn delete_tag_scoped<D, P, F>(
-    result: std::result::Result<D, AlienError<CloudClientErrorData>>,
-    probe: F,
-) -> std::result::Result<TagScopedDelete, AlienError<CloudClientErrorData>>
-where
-    F: FnOnce() -> P,
-    P: Future<Output = std::result::Result<(), AlienError<CloudClientErrorData>>>,
-{
-    match result {
-        Ok(_) => Ok(TagScopedDelete::Deleted),
-        Err(error) if is_remote_not_found(&error) => Ok(TagScopedDelete::Gone),
-        Err(error) if is_remote_access_denied(&error) => match probe().await {
-            Ok(()) => Err(error),
-            Err(probe_error)
-                if is_remote_not_found(&probe_error) || is_remote_access_denied(&probe_error) =>
-            {
-                Ok(TagScopedDelete::Gone)
-            }
-            Err(probe_error) => Err(probe_error),
-        },
-        Err(error) => Err(error),
-    }
 }
 
 fn replace_lambda_notification_config(
@@ -442,6 +390,10 @@ pub struct AwsWorkerController {
     /// after a lost response adopts that domain and no other.
     #[serde(default)]
     pub(crate) domain_create_token: Option<String>,
+    /// Token tagged on the certificate this worker imports into ACM, recorded before the import
+    /// so a retry after a lost response, and the delete, find that certificate and no other.
+    #[serde(default)]
+    pub(crate) certificate_import_token: Option<String>,
     /// Endpoint metadata for DNS controller
     pub(crate) load_balancer: Option<LoadBalancerState>,
     /// Timestamp when certificate was imported (for renewal detection)
@@ -840,6 +792,13 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         self.ensure_domain_info(ctx, &worker_config.id)?;
+        if self.certificate_arn.is_some() {
+            // A recorded certificate is not imported again.
+            return Ok(HandlerAction::Continue {
+                state: Self::gateway_entry_state(&worker_config),
+                suggested_delay: None,
+            });
+        }
         let resource = ctx
             .deployment_config
             .domain_metadata
@@ -868,28 +827,59 @@ impl AwsWorkerController {
 
         let (leaf, chain) = split_certificate_chain(certificate_chain);
 
+        // The token is saved by a step of its own, before the step that imports. The executor
+        // saves state only between steps, so a token made in the importing step would be lost
+        // if the process stopped after ACM accepted the import, and the retry would import a
+        // second certificate.
+        let Some(token) = self.certificate_import_token.clone() else {
+            self.certificate_import_token = Some(Uuid::new_v4().to_string());
+            return Ok(HandlerAction::Continue {
+                state: ImportingCertificate,
+                suggested_delay: None,
+            });
+        };
+
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
-            .into_iter()
-            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
-            .collect();
-        let response = acm_client
-            .import_certificate(
-                alien_aws_clients::acm::ImportCertificateRequest::builder()
-                    .certificate(leaf)
-                    .private_key(private_key.clone())
-                    .maybe_certificate_chain(chain)
-                    .tags(tags)
-                    .build(),
-            )
+        // Every ImportCertificate without an ARN makes a new certificate, so an earlier import
+        // under this token whose response was lost is looked up first.
+        let earlier_import = certificates_imported_with_token(acm_client.as_ref(), &token)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to import certificate to ACM".to_string(),
+                message: "Failed to look up certificates imported by an earlier attempt"
+                    .to_string(),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            })?
+            .and_then(|found| found.into_iter().next());
+        let certificate_arn = match earlier_import {
+            Some(certificate_arn) => {
+                info!(worker=%worker_config.id, certificate_arn=%certificate_arn, "Adopting the certificate an earlier import made");
+                certificate_arn
+            }
+            None => {
+                let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
+                    .into_iter()
+                    .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+                    .collect();
+                acm_client
+                    .import_certificate(
+                        alien_aws_clients::acm::ImportCertificateRequest::builder()
+                            .certificate(leaf)
+                            .private_key(private_key.clone())
+                            .maybe_certificate_chain(chain)
+                            .tags(with_import_token(tags, &token))
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to import certificate to ACM".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?
+                    .certificate_arn
+            }
+        };
 
-        self.certificate_arn = Some(response.certificate_arn.clone());
+        self.certificate_arn = Some(certificate_arn);
 
         // Store issued_at timestamp for renewal detection
         self.certificate_issued_at = resource.issued_at.clone();
@@ -2606,11 +2596,8 @@ impl AwsWorkerController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
-            .into_iter()
-            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
-            .collect();
 
+        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
         acm_client
             .reimport_certificate(
                 alien_aws_clients::acm::ReimportCertificateRequest::builder()
@@ -2618,7 +2605,6 @@ impl AwsWorkerController {
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
-                    .tags(tags)
                     .build(),
             )
             .await
@@ -3011,6 +2997,13 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         match self.importing_certificate(ctx).await? {
+            HandlerAction::Continue {
+                state: ImportingCertificate,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateImportingInitialCertificate,
+                suggested_delay,
+            }),
             HandlerAction::Continue {
                 state: CreatingApiGateway,
                 suggested_delay,
@@ -4684,28 +4677,47 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         // Custom-domain certificates belong to the customer and may be shared.
-        if let (Some(certificate_arn), false) =
-            (self.certificate_arn.as_ref(), self.uses_custom_domain)
-        {
-            let aws_cfg = ctx.get_aws_config()?;
-            let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-            let outcome = delete_tag_scoped(
-                acm_client.delete_certificate(certificate_arn).await,
-                || async {
-                    acm_client
-                        .describe_certificate(certificate_arn)
-                        .await
-                        .map(|_| ())
-                },
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to delete ACM certificate".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
-            info!(worker=%worker_config.id, outcome=?outcome, "ACM certificate removed");
+        let mut certificate_arns: Vec<String> = self
+            .certificate_arn
+            .iter()
+            .filter(|_| !self.uses_custom_domain)
+            .cloned()
+            .collect();
+        if certificate_arns.is_empty() && self.certificate_import_token.is_none() {
+            self.certificate_arn = None;
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        // An import whose response was lost left a certificate that only its token finds.
+        if let Some(token) = self.certificate_import_token.as_deref() {
+            let found = certificates_imported_with_token(acm_client.as_ref(), token)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to look up the certificates this worker imported".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+            for certificate_arn in found.into_iter().flatten() {
+                if !certificate_arns.contains(&certificate_arn) {
+                    certificate_arns.push(certificate_arn);
+                }
+            }
+        }
+        for certificate_arn in &certificate_arns {
+            let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete ACM certificate '{certificate_arn}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+            info!(worker=%worker_config.id, certificate_arn=%certificate_arn, outcome=?outcome, "ACM certificate removed");
         }
         self.certificate_arn = None;
+        self.certificate_import_token = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -5167,6 +5179,7 @@ impl AwsWorkerController {
             domain_name: None,
             domain_confirmed: false,
             domain_create_token: None,
+            certificate_import_token: None,
             load_balancer: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
@@ -5191,7 +5204,9 @@ mod tests {
         Arc, Mutex,
     };
 
-    use alien_aws_clients::acm::{ImportCertificateResponse, MockAcmApi};
+    use alien_aws_clients::acm::{
+        CertificateSummary, ImportCertificateResponse, ListCertificatesResponse, MockAcmApi, Tag,
+    };
     use alien_aws_clients::apigateway::MockApiGatewayApi;
     use alien_aws_clients::apigatewayv2::{
         Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
@@ -5270,6 +5285,9 @@ mod tests {
 
     fn create_acm_mock_for_creation() -> Arc<MockAcmApi> {
         let mut mock_acm = MockAcmApi::new();
+        mock_acm
+            .expect_list_certificates()
+            .returning(|_| Ok(ListCertificatesResponse::default()));
         mock_acm.expect_import_certificate().returning(|_| {
             Ok(ImportCertificateResponse {
                 certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
@@ -5281,6 +5299,9 @@ mod tests {
 
     fn create_acm_mock_for_creation_and_deletion() -> Arc<MockAcmApi> {
         let mut mock_acm = MockAcmApi::new();
+        mock_acm
+            .expect_list_certificates()
+            .returning(|_| Ok(ListCertificatesResponse::default()));
         mock_acm.expect_import_certificate().returning(|_| {
             Ok(ImportCertificateResponse {
                 certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
@@ -6251,6 +6272,9 @@ mod tests {
 
         // Validate ACM certificate import
         let mut mock_acm = MockAcmApi::new();
+        mock_acm
+            .expect_list_certificates()
+            .returning(|_| Ok(ListCertificatesResponse::default()));
         mock_acm
             .expect_import_certificate()
             .times(1)
@@ -7669,5 +7693,521 @@ mod tests {
         let state = executor.internal_state::<AwsWorkerController>().unwrap();
         assert!(!state.domain_confirmed);
         assert!(state.load_balancer.is_none());
+    }
+
+    // ─────────────── CERTIFICATE IMPORT TOKEN ────────────────
+
+    /// ACM as the tests below see it: the imported certificates, by ARN, with their tags.
+    type CertificateWorld = Arc<Mutex<Vec<(String, Vec<Tag>)>>>;
+
+    fn imported_certificate_arn(n: usize) -> String {
+        format!("arn:aws:acm:us-east-1:123456789012:certificate/imported-{n}")
+    }
+
+    /// The ACM calls a test made, in order.
+    #[derive(Clone, Default)]
+    struct AcmCalls {
+        imports: Arc<Mutex<Vec<Vec<Tag>>>>,
+        deletes: Calls,
+    }
+
+    /// An ACM client over `world`. ImportCertificate stores a new certificate; while
+    /// `lose_responses` is above zero, an import ACM accepted answers 503 instead, as a lost
+    /// response does. With `list_denied`, ListCertificates is denied, as for a role installed
+    /// before it was granted.
+    fn certificate_world_acm(
+        world: CertificateWorld,
+        calls: AcmCalls,
+        lose_responses: usize,
+        list_denied: bool,
+    ) -> MockAcmApi {
+        let mut acm = MockAcmApi::new();
+        let stored = world.clone();
+        let imports = calls.imports.clone();
+        let mut lose_responses = lose_responses;
+        acm.expect_import_certificate().returning(move |request| {
+            let tags = request.tags.clone().unwrap_or_default();
+            imports.lock().unwrap().push(tags.clone());
+            let mut certificates = stored.lock().unwrap();
+            let arn = imported_certificate_arn(certificates.len() + 1);
+            certificates.push((arn.clone(), tags));
+            if lose_responses > 0 {
+                lose_responses -= 1;
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteServiceUnavailable {
+                        message: "connection reset".to_string(),
+                    },
+                ));
+            }
+            Ok(ImportCertificateResponse {
+                certificate_arn: arn,
+            })
+        });
+        let listed = world.clone();
+        acm.expect_list_certificates().returning(move |request| {
+            if list_denied {
+                return Err(access_denied());
+            }
+            assert_eq!(
+                request
+                    .includes
+                    .and_then(|includes| includes.key_types)
+                    .map(|types| types.len()),
+                Some(7),
+                "every key type is listed"
+            );
+            Ok(ListCertificatesResponse {
+                certificate_summary_list: listed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(arn, _)| CertificateSummary {
+                        certificate_arn: Some(arn.clone()),
+                        domain_name: Some(DOMAIN.to_string()),
+                        status: Some("ISSUED".to_string()),
+                        certificate_type: Some("IMPORTED".to_string()),
+                        key_algorithm: Some("EC-prime256v1".to_string()),
+                        in_use: Some(false),
+                        imported_at: None,
+                    })
+                    .collect(),
+                next_token: None,
+            })
+        });
+        let tagged = world.clone();
+        acm.expect_list_tags_for_certificate()
+            .returning(move |arn| {
+                tagged
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(stored, _)| stored == arn)
+                    .map(|(_, tags)| tags.clone())
+                    .ok_or_else(|| not_found("Certificate"))
+            });
+        let removed = world.clone();
+        let deletes = calls.deletes.clone();
+        acm.expect_delete_certificate().returning(move |arn| {
+            record(&deletes, arn);
+            let mut certificates = removed.lock().unwrap();
+            let before = certificates.len();
+            certificates.retain(|(stored, _)| stored != arn);
+            if certificates.len() == before {
+                return Err(not_found("Certificate"));
+            }
+            Ok(())
+        });
+        acm.expect_describe_certificate()
+            .returning(|_| Err(not_found("Certificate")));
+        acm
+    }
+
+    /// The worker at `ImportingCertificate`: the function exists and the domain metadata says
+    /// the platform-issued certificate is ready.
+    fn at_importing_certificate() -> AwsWorkerController {
+        AwsWorkerController {
+            state: AwsWorkerState::ImportingCertificate,
+            arn: Some(
+                "arn:aws:lambda:us-east-1:123456789012:function:test-public-func".to_string(),
+            ),
+            url: Some(format!("https://{DOMAIN}")),
+            worker_name: Some("test-public-func".to_string()),
+            fqdn: Some(DOMAIN.to_string()),
+            certificate_id: Some("test-cert-id".to_string()),
+            domain_name: Some(DOMAIN.to_string()),
+            ..Default::default()
+        }
+    }
+
+    async fn certificate_executor(
+        controller: AwsWorkerController,
+        acm: MockAcmApi,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(
+                Arc::new(MockLambdaApi::new()),
+                Some(Arc::new(acm)),
+                None,
+            ))
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn import_token(tags: &[Tag]) -> Option<&str> {
+        tags.iter()
+            .find(|tag| tag.key == "CreateAttempt")
+            .map(|tag| tag.value.as_str())
+    }
+
+    /// The token is saved by a step of its own, before the step that imports, and the import
+    /// carries it next to the worker's ownership tags.
+    #[tokio::test]
+    async fn certificate_import_token_is_saved_before_the_import_step() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(saved.state, AwsWorkerState::ImportingCertificate);
+        let token = saved.certificate_import_token.clone().expect("token saved");
+        assert!(
+            calls.imports.lock().unwrap().is_empty(),
+            "no import in the token step"
+        );
+
+        executor.step().await.expect("imports the certificate");
+        let imports = calls.imports.lock().unwrap();
+        assert_eq!(imports.len(), 1);
+        assert_eq!(import_token(&imports[0]), Some(token.as_str()));
+        for (key, value) in standard_resource_tags("test", "public-func") {
+            assert!(
+                imports[0].contains(&Tag {
+                    key: key.clone(),
+                    value
+                }),
+                "ownership tag {key} is on the import"
+            );
+        }
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiGateway);
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+        assert_eq!(
+            state.certificate_issued_at.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
+    }
+
+    /// ACM imports the certificate but the process stops before the import step is saved. The
+    /// controller restarts from the checkpoint saved before that step, which holds the token,
+    /// and adopts the certificate instead of importing a second one.
+    #[tokio::test]
+    async fn certificate_imported_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+        executor.step().await.expect("records the token");
+        let checkpoint = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        executor.step().await.expect("ACM accepts the import");
+        drop(executor);
+
+        let mut restarted = certificate_executor(
+            checkpoint,
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+        restarted
+            .step()
+            .await
+            .expect("the retry adopts its own certificate");
+        let state = restarted.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiGateway);
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+        assert_eq!(calls.imports.lock().unwrap().len(), 1, "no second import");
+        assert_eq!(world.lock().unwrap().len(), 1);
+    }
+
+    /// The import reaches ACM but its response is lost; the retry adopts the certificate.
+    #[tokio::test]
+    async fn lost_certificate_import_response_is_adopted_by_its_token() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 1, false),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        let failed = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(failed.certificate_arn, None);
+        assert!(failed.certificate_import_token.is_some());
+        executor
+            .step()
+            .await
+            .expect("the retry adopts its own certificate");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiGateway);
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+        assert_eq!(calls.imports.lock().unwrap().len(), 1);
+    }
+
+    /// A leftover certificate with this worker's ownership tags but another import's token is
+    /// not adopted.
+    #[tokio::test]
+    async fn certificate_from_another_import_is_not_adopted() {
+        let mut leftover: Vec<Tag> = standard_resource_tags("test", "public-func")
+            .into_iter()
+            .map(|(key, value)| Tag { key, value })
+            .collect();
+        leftover.push(Tag {
+            key: "CreateAttempt".to_string(),
+            value: "another-import".to_string(),
+        });
+        let world: CertificateWorld =
+            Arc::new(Mutex::new(vec![(imported_certificate_arn(1), leftover)]));
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect("imports its own certificate");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(2).as_str())
+        );
+        assert_eq!(calls.imports.lock().unwrap().len(), 1);
+    }
+
+    /// The import response is lost, then the worker is torn down: the delete finds the
+    /// certificate by its token and deletes it, after the function.
+    #[tokio::test]
+    async fn teardown_after_a_lost_certificate_import_deletes_the_certificate() {
+        let world = CertificateWorld::default();
+        let acm_calls = AcmCalls::default();
+        let calls = Calls::default();
+        let mut lambda = MockLambdaApi::new();
+        let recorded = calls.clone();
+        lambda
+            .expect_delete_function()
+            .withf(|name, _| name == "test-public-func")
+            .times(1)
+            .returning(move |_, _| {
+                record(&recorded, "DeleteFunction");
+                Ok(())
+            });
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Err(not_found("Function")));
+        let mut apigw = MockApiGatewayV2Api::new();
+        apigw
+            .expect_get_domain_name()
+            .returning(|_| Err(access_denied()));
+        apigw.expect_delete_domain_name().times(0);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(at_importing_certificate())
+            .platform(Platform::Aws)
+            .service_provider(provider(
+                lambda,
+                certificate_world_acm(world.clone(), acm_calls.clone(), 1, false),
+                apigw,
+            ))
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        assert_eq!(world.lock().unwrap().len(), 1, "ACM holds the certificate");
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(*calls.lock().unwrap(), ["DeleteFunction"]);
+        assert_eq!(
+            *acm_calls.deletes.lock().unwrap(),
+            [imported_certificate_arn(1)]
+        );
+        assert!(world.lock().unwrap().is_empty(), "no certificate is left");
+    }
+
+    /// The delete removes the recorded certificate and any other import under the same token
+    /// (a second import after a lookup that missed the first), once each.
+    #[tokio::test]
+    async fn delete_removes_every_certificate_imported_under_the_token() {
+        let tags = |token: &str| {
+            vec![Tag {
+                key: "CreateAttempt".to_string(),
+                value: token.to_string(),
+            }]
+        };
+        let world: CertificateWorld = Arc::new(Mutex::new(vec![
+            (imported_certificate_arn(1), tags("token-1")),
+            (imported_certificate_arn(2), tags("token-1")),
+            (imported_certificate_arn(3), tags("another-worker")),
+        ]));
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            AwsWorkerController {
+                state: AwsWorkerState::DeletingCertificate,
+                certificate_arn: Some(imported_certificate_arn(2)),
+                certificate_import_token: Some("token-1".to_string()),
+                ..Default::default()
+            },
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+
+        executor.step().await.expect("deletes the certificates");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::Deleted);
+        assert_eq!(state.certificate_arn, None);
+        assert_eq!(state.certificate_import_token, None);
+        assert_eq!(
+            *calls.deletes.lock().unwrap(),
+            [imported_certificate_arn(2), imported_certificate_arn(1)]
+        );
+        assert_eq!(
+            world
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(arn, _)| arn.clone())
+                .collect::<Vec<_>>(),
+            [imported_certificate_arn(3)]
+        );
+    }
+
+    /// A role installed before ListCertificates was granted: the import goes ahead (tagged with
+    /// the token, so a later delete can find it once setup grants the list), and the delete
+    /// still removes the recorded certificate.
+    #[tokio::test]
+    async fn denied_certificate_list_still_imports_and_deletes_the_recorded_certificate() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, true),
+        )
+        .await;
+        executor.step().await.expect("records the token");
+        executor
+            .step()
+            .await
+            .expect("imports although the lookup is denied");
+        let mut controller = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            controller.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+
+        controller.state = AwsWorkerState::DeletingCertificate;
+        let mut deleting = certificate_executor(
+            controller,
+            certificate_world_acm(world.clone(), calls.clone(), 0, true),
+        )
+        .await;
+        deleting
+            .step()
+            .await
+            .expect("deletes the recorded certificate");
+        assert_eq!(
+            deleting
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::Deleted
+        );
+        assert!(world.lock().unwrap().is_empty());
+    }
+
+    /// A checkpoint saved by the previous version at `ImportingCertificate` has no token: the
+    /// controller records one before importing.
+    #[tokio::test]
+    async fn import_checkpoint_from_the_previous_version_records_a_token_first() {
+        let mut value = serialize_controller(&at_importing_certificate()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("certificateImportToken")
+            .expect("the field is serialized");
+        let restored = crate::core::deserialize_controller(value).unwrap();
+        let restored = restored
+            .as_any()
+            .downcast_ref::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        assert_eq!(restored.certificate_import_token, None);
+
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            restored,
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+        executor.step().await.expect("records the token");
+        assert!(calls.imports.lock().unwrap().is_empty());
+        executor.step().await.expect("imports the certificate");
+        assert_eq!(calls.imports.lock().unwrap().len(), 1);
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::CreatingApiGateway
+        );
+    }
+
+    /// A renewed certificate is reimported into the same ARN without tags: ACM rejects tags on
+    /// a reimport.
+    #[tokio::test]
+    async fn renewed_certificate_is_reimported_without_tags() {
+        let mut acm = MockAcmApi::new();
+        acm.expect_reimport_certificate()
+            .withf(|request| {
+                request.certificate_arn == imported_certificate_arn(1) && request.tags.is_none()
+            })
+            .times(1)
+            .returning(|request| {
+                Ok(ImportCertificateResponse {
+                    certificate_arn: request.certificate_arn,
+                })
+            });
+        let mut executor = certificate_executor(
+            AwsWorkerController {
+                state: AwsWorkerState::UpdateImportingCertificate,
+                certificate_arn: Some(imported_certificate_arn(1)),
+                certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+                ..Default::default()
+            },
+            acm,
+        )
+        .await;
+        executor
+            .step()
+            .await
+            .expect("reimports the renewed certificate");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::UpdateCodeStart);
+        assert_eq!(
+            state.certificate_issued_at.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
     }
 }
