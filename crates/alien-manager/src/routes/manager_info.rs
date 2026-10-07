@@ -5,15 +5,15 @@
 //! from how they connected.
 
 use axum::{
+    Json, Router,
     extract::State,
     http::HeaderMap,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::Serialize;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -46,7 +46,7 @@ pub struct ManagerCapabilities {
     pub charts: bool,
     /// AWS setup can hand off retained node identities to runtime reconciliation.
     #[serde(default)]
-    #[cfg_attr(feature = "openapi", schema(default = false))]
+    #[cfg_attr(feature = "openapi", schema(example = false))]
     pub aws_setup_node_identity: bool,
 }
 

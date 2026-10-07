@@ -66,7 +66,7 @@ test("manager SDK sends the observed application with a sync request", () => {
 })
 
 
-test("manager SDK defaults absent setup support to false and preserves explicit support", () => {
+test("manager SDK preserves optional setup support and its conservative fallback", () => {
   for (const support of [undefined, false, true]) {
     const capabilities = { tunnels: true, charts: false }
     if (support !== undefined) capabilities.awsSetupNodeIdentity = support
@@ -78,7 +78,8 @@ test("manager SDK defaults absent setup support to false and preserves explicit 
     }))
     assert.equal(parsed.ok, true)
     if (parsed.ok) {
-      assert.equal(parsed.value.capabilities.awsSetupNodeIdentity, support ?? false)
+      assert.equal(parsed.value.capabilities.awsSetupNodeIdentity, support)
+      assert.equal(parsed.value.capabilities.awsSetupNodeIdentity ?? false, support ?? false)
       assert.equal(parsed.value.capabilities.tunnels, true)
       assert.equal(parsed.value.capabilities.charts, false)
     }

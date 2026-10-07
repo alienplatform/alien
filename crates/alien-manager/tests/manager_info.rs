@@ -101,7 +101,10 @@ async fn authenticated_manager_advertises_node_identity_support_only_when_opted_
                 .await
                 .unwrap()
                 .into_inner();
-            assert_eq!(info.capabilities.aws_setup_node_identity, opt_in);
+            assert_eq!(
+                info.capabilities.aws_setup_node_identity.unwrap_or(false),
+                opt_in
+            );
             assert_eq!(info.url, url);
             assert!(!info.capabilities.charts);
             assert!(!info.capabilities.tunnels);
@@ -139,9 +142,10 @@ async fn generated_client_defaults_old_manager_capability_to_false_and_preserves
             .unwrap()
             .into_inner();
         assert_eq!(
-            info.capabilities.aws_setup_node_identity,
+            info.capabilities.aws_setup_node_identity.unwrap_or(false),
             value.unwrap_or(false)
         );
+        assert_eq!(info.capabilities.aws_setup_node_identity, value);
         assert!(info.capabilities.tunnels);
         assert!(!info.capabilities.charts);
         assert_eq!(info.version, "0.1.0");
