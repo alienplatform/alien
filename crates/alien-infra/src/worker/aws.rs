@@ -365,6 +365,14 @@ fn worker_wants_streaming(worker: &Worker) -> bool {
 
 #[controller]
 impl AwsWorkerController {
+    // DeleteStart only routes; the API gateway step has not run yet.
+    fn nothing_deleted_yet(&self) -> bool {
+        matches!(
+            self.state,
+            AwsWorkerState::DeleteStart | AwsWorkerState::DeletingApiGateway
+        )
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
     #[flow_entry(Create)]
     #[handler(

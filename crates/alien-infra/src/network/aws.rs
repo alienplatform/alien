@@ -2115,6 +2115,14 @@ mod failure_domain_compatibility_tests {
 
 #[controller]
 impl AwsNetworkController {
+    // DeleteStart only looks up lost creates; the NAT gateway step has not run yet.
+    fn nothing_deleted_yet(&self) -> bool {
+        matches!(
+            self.state,
+            AwsNetworkState::DeleteStart | AwsNetworkState::DeletingNatGateway
+        )
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
 
     #[flow_entry(Create)]

@@ -142,7 +142,10 @@ async fn failed_create_with_saved_ids_is_deleted_then_created_with_new_config() 
         "image-v1",
         "the delete keeps the created config"
     );
-    assert!(deleting.last_failed_state.is_none());
+    assert!(
+        deleting.last_failed_state.is_some(),
+        "the failed create checkpoint is kept until a delete step removes something"
+    );
     assert!(deleting.error.is_none());
     assert_eq!(
         deleting
@@ -413,6 +416,12 @@ async fn replace_delete_denied_access_fails_and_does_not_create() -> Result<()> 
         source = inner.source.as_deref();
     }
     assert_eq!(codes[0], "REPLACE_DELETE_DENIED", "{codes:?}");
+    assert!(
+        error.message.contains("may already be deleted")
+            && !error.message.contains("revert the configuration"),
+        "a denial after the worker was deleted cannot offer a revert: {}",
+        error.message
+    );
     assert!(
         codes.iter().any(|code| code == "REMOTE_ACCESS_DENIED"),
         "{codes:?}"
@@ -830,8 +839,9 @@ async fn failed_daemon_and_compute_cluster_creates_are_created_again_not_replace
     Ok(())
 }
 
-/// A failed create whose replace delete was denied at its first step, before anything was
-/// deleted. Returns the state after the denial, with the deletes still denied.
+/// A failed create whose replace delete was denied at its second step (the one that deletes the
+/// worker), after a first step that deleted nothing. Returns the state after the denial, with
+/// the deletes still denied.
 async fn replace_denied_before_anything_was_deleted(id: &str) -> Result<StackState> {
     let v1 = worker(id, "image-v1", &[CREATE_WORKER_FAILURE]);
     let mut state =
@@ -866,7 +876,9 @@ async fn replace_denied_before_anything_was_deleted(id: &str) -> Result<StackSta
     let error = failed.error.as_ref().expect("the denial is recorded");
     assert_eq!(error.code, "REPLACE_DELETE_DENIED");
     assert!(
-        error.message.contains(&identifier(id)) && error.message.contains("Grant the permission"),
+        error.message.contains(&identifier(id))
+            && error.message.contains("Nothing was deleted")
+            && error.message.contains("revert the configuration"),
         "{}",
         error.message
     );

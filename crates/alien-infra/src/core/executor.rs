@@ -2350,6 +2350,19 @@ impl StackExecutor {
             // A resource still in the desired stack is being deleted to be replaced.
             let replacing = self.resources.contains_key(&resource_id);
             let mut replace_delete_was_denied = false;
+            // The failed create checkpoint a replace keeps while its delete has removed nothing
+            // (a checkpoint that is not itself mid-delete).
+            let failed_create_checkpoint = if replacing
+                && current_resource_state.status == ResourceStatus::Deleting
+            {
+                current_resource_state
+                    .get_last_failed_controller()
+                    .ok()
+                    .flatten()
+                    .filter(|checkpoint| checkpoint.get_status() != ResourceStatus::Deleting)
+            } else {
+                None
+            };
 
             // Handle the step result
             let (
@@ -2383,10 +2396,15 @@ impl StackExecutor {
                         // restored if no delete step succeeded yet; either way the replace waits
                         // for an explicit retry.
                         replace_delete_was_denied = true;
+                        let next = if failed_create_checkpoint.is_some() {
+                            "Nothing was deleted and the failed create is kept: grant the permission and retry, or revert the configuration to resume the failed create"
+                        } else {
+                            "Part of it may already be deleted, so the failed create cannot be resumed: grant the permission and retry to finish the replace, or remove the resource from the stack to delete what is left"
+                        };
                         let denial = err.clone().context(ErrorData::ReplaceDeleteDenied {
                             resource_id: resource_id.clone(),
                             message: format!(
-                                "deleting what its failed create made was denied ({}). Grant the permission and retry, or revert the configuration to resume the failed create",
+                                "deleting what its failed create made was denied ({}). {next}",
                                 error_chain_text(&err)
                             ),
                         });
@@ -2546,41 +2564,29 @@ impl StackExecutor {
                 state.error = next_error;
             });
 
-            if current_resource_state.status == ResourceStatus::Deleting && replacing {
-                // The failed create checkpoint kept by the replace (a checkpoint that is not
-                // itself mid-delete) is valid only while nothing was deleted.
-                let failed_create = current_resource_state
-                    .get_last_failed_controller()
-                    .ok()
-                    .flatten()
-                    .filter(|checkpoint| checkpoint.get_status() != ResourceStatus::Deleting);
-                match failed_create {
-                    Some(checkpoint) if replace_delete_was_denied => {
-                        // Denied before any delete step succeeded: abort the replace and put
-                        // the failed create back, so reverting the config resumes it.
-                        let mut restored = checkpoint.box_clone();
-                        restored.transition_to_failure();
-                        next_state.status = restored.get_status();
-                        next_state.outputs = restored.get_outputs();
-                        next_state
-                            .set_internal_controller(Some(restored))
-                            .context(ErrorData::ResourceStateSerializationFailed {
-                                resource_id: resource_id.clone(),
-                                message: "Failed to restore the failed create".to_string(),
-                            })?;
-                        next_state
-                            .set_last_failed_controller(Some(checkpoint))
-                            .context(ErrorData::ResourceStateSerializationFailed {
-                                resource_id: resource_id.clone(),
-                                message: "Failed to restore the failed create checkpoint"
-                                    .to_string(),
-                            })?;
-                    }
-                    Some(_) if next_state.error.is_none() => {
-                        // A delete step succeeded; the create can no longer be resumed.
-                        next_state.last_failed_state = None;
-                    }
-                    _ => {}
+            if let Some(checkpoint) = failed_create_checkpoint {
+                if replace_delete_was_denied {
+                    // Denied while nothing was deleted: abort the replace and put the failed
+                    // create back, so reverting the config resumes it.
+                    let mut restored = checkpoint.box_clone();
+                    restored.transition_to_failure();
+                    next_state.status = restored.get_status();
+                    next_state.outputs = restored.get_outputs();
+                    next_state
+                        .set_internal_controller(Some(restored))
+                        .context(ErrorData::ResourceStateSerializationFailed {
+                            resource_id: resource_id.clone(),
+                            message: "Failed to restore the failed create".to_string(),
+                        })?;
+                    next_state
+                        .set_last_failed_controller(Some(checkpoint))
+                        .context(ErrorData::ResourceStateSerializationFailed {
+                            resource_id: resource_id.clone(),
+                            message: "Failed to restore the failed create checkpoint".to_string(),
+                        })?;
+                } else if next_state.error.is_none() && !updated_controller.nothing_deleted_yet() {
+                    // This step may have deleted something; the create can no longer resume.
+                    next_state.last_failed_state = None;
                 }
             }
 

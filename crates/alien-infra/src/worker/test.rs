@@ -34,8 +34,9 @@ pub fn test_worker_deletes_issued(identifier: &str) -> Vec<Worker> {
 /// would, and how many deletes it denied for each.
 static DENIED_DELETES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
 
-/// Makes every delete of the worker with this identifier fail with access denied at its first
-/// step, before anything is deleted, until [`allow_test_worker_deletes`].
+/// Makes every delete of the worker with this identifier fail with access denied at the step
+/// that deletes it (the second delete step), before anything is deleted, until
+/// [`allow_test_worker_deletes`].
 pub fn deny_test_worker_deletes(identifier: &str) {
     let mut denied = DENIED_DELETES
         .lock()
@@ -163,6 +164,13 @@ pub struct TestWorkerController {
 
 #[controller]
 impl TestWorkerController {
+    fn nothing_deleted_yet(&self) -> bool {
+        matches!(
+            self.state,
+            TestWorkerState::DeleteStart | TestWorkerState::DeleteWorker
+        )
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
     #[flow_entry(Create)]
     #[handler(
@@ -607,13 +615,33 @@ impl TestWorkerController {
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
+    // The first delete step deletes nothing, like real controllers whose first step only looks
+    // things up; the worker is deleted in DeleteWorker.
     #[flow_entry(Delete)]
     #[handler(
         state = DeleteStart,
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting,
     )]
-    async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn delete_start(
+        &mut self,
+        _ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        Ok(HandlerAction::Continue {
+            state: DeleteWorker,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeleteWorker,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn delete_worker(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         // If no identifier exists, the resource was never created, go directly to deleted
         let Some(identifier) = self.identifier.clone() else {
             info!("Resource failed before creation, marking as Deleted.");
