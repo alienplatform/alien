@@ -2821,6 +2821,10 @@ pub struct Address {
     pub allocation_id: Option<String>,
     pub public_ip: Option<String>,
     pub domain: Option<String>,
+    /// Set while the address is associated with an instance or a network interface, such as
+    /// a NAT gateway's.
+    pub association_id: Option<String>,
+    pub network_interface_id: Option<String>,
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
@@ -4534,7 +4538,7 @@ mod volume_operation_tests {
         let response: DescribeAddressesResponse = quick_xml::de::from_str(
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
-                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><publicIpv4Pool>amazon</publicIpv4Pool></item>
+                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><associationId>eipassoc-1</associationId><networkInterfaceId>eni-1</networkInterfaceId><publicIpv4Pool>amazon</publicIpv4Pool></item>
                     <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
@@ -4560,6 +4564,17 @@ mod volume_operation_tests {
             addresses.items[2].public_ipv4_pool.as_deref(),
             Some("ipv4pool-ec2-1234567890abcdef0")
         );
+        // An address held by a NAT gateway carries its association and network interface.
+        assert_eq!(
+            addresses.items[0].association_id.as_deref(),
+            Some("eipassoc-1")
+        );
+        assert_eq!(
+            addresses.items[0].network_interface_id.as_deref(),
+            Some("eni-1")
+        );
+        assert_eq!(addresses.items[1].association_id, None);
+        assert_eq!(addresses.items[1].network_interface_id, None);
     }
 }
 

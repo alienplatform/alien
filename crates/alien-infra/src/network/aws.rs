@@ -77,6 +77,13 @@ fn is_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
+fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteAccessDenied { .. })
+    )
+}
+
 /// `Gateway.NotAttached`: the internet gateway is already detached from the VPC.
 fn is_gateway_not_attached(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -628,6 +635,8 @@ mod tests {
                         allocation_id: Some("eipalloc-amazon".to_string()),
                         public_ip: None,
                         domain: Some("vpc".to_string()),
+                        association_id: None,
+                        network_interface_id: None,
                         public_ipv4_pool: Some("amazon".to_string()),
                         tag_set: None,
                     },
@@ -635,6 +644,8 @@ mod tests {
                         allocation_id: Some("eipalloc-amazon-legacy".to_string()),
                         public_ip: None,
                         domain: Some("vpc".to_string()),
+                        association_id: None,
+                        network_interface_id: None,
                         public_ipv4_pool: None,
                         tag_set: None,
                     },
@@ -642,6 +653,8 @@ mod tests {
                         allocation_id: Some("eipalloc-byoip".to_string()),
                         public_ip: None,
                         domain: Some("vpc".to_string()),
+                        association_id: None,
+                        network_interface_id: None,
                         public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
                         tag_set: None,
                     },
@@ -660,6 +673,8 @@ mod tests {
                     allocation_id: Some("eipalloc-unknown".to_string()),
                     public_ip: None,
                     domain: None,
+                    association_id: None,
+                    network_interface_id: None,
                     public_ipv4_pool: None,
                     tag_set: None,
                 }],
@@ -680,6 +695,8 @@ mod tests {
                             allocation_id: Some("eipalloc-amazon-1".to_string()),
                             public_ip: None,
                             domain: Some("vpc".to_string()),
+                            association_id: None,
+                            network_interface_id: None,
                             public_ipv4_pool: Some("amazon".to_string()),
                             tag_set: None,
                         },
@@ -687,6 +704,8 @@ mod tests {
                             allocation_id: Some("eipalloc-byoip".to_string()),
                             public_ip: None,
                             domain: Some("vpc".to_string()),
+                            association_id: None,
+                            network_interface_id: None,
                             public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
                             tag_set: None,
                         },
@@ -1190,6 +1209,34 @@ impl AwsNetworkController {
             .filter_map(|address| address.allocation_id)
             .collect::<Vec<_>>())
         .and_then(|ids| single_create_attempt_match(ids, "Elastic IP", token, resource_id))
+    }
+
+    /// Whether the Elastic IP with this allocation ID is still associated with a network
+    /// interface. An address that no longer exists is not associated.
+    async fn elastic_ip_associated(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        allocation_id: &str,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let addresses = client
+            .describe_addresses()
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to describe Elastic IP '{allocation_id}'"),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .addresses_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+
+        Ok(addresses.iter().any(|address| {
+            address.allocation_id.as_deref() == Some(allocation_id)
+                && (address.association_id.is_some() || address.network_interface_id.is_some())
+        }))
     }
 
     /// Find the NAT gateway tagged with this create-attempt token that is not yet deleted.
@@ -3596,6 +3643,26 @@ impl AwsNetworkController {
                     suggested_delay: Some(Duration::from_secs(15)),
                 });
             }
+            // EC2 answers `AuthFailure` (access denied), not `InvalidIPAddress.InUse`, while a
+            // NAT gateway still holds the address. Access denied ends a delete as best-effort,
+            // which would skip every later step, so it counts as a permission error only once
+            // the address is no longer associated.
+            Err(error) if is_access_denied(&error) => {
+                if self
+                    .elastic_ip_associated(ctx, &allocation_id, &config.id)
+                    .await?
+                {
+                    debug!(allocation_id = %allocation_id, "Elastic IP still associated");
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(ELASTIC_IP_RELEASE_MAX_POLLS),
+                        suggested_delay: Some(Duration::from_secs(15)),
+                    });
+                }
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Access denied releasing Elastic IP '{allocation_id}'"),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to release Elastic IP '{allocation_id}'"),
@@ -5588,6 +5655,115 @@ mod controller_state_tests {
         assert_eq!(state.nat_gateway_id, None);
         assert_eq!(state.eip_allocation_id, None);
         assert_eq!(state.vpc_id, None);
+    }
+
+    fn auth_failure(id: &str) -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "EC2 Resource".to_string(),
+            resource_name: id.to_string(),
+        })
+    }
+
+    fn addresses(associated: bool) -> DescribeAddressesResponse {
+        let mut address = json!({ "allocationId": "eipalloc-1", "domain": "vpc" });
+        if associated {
+            address["associationId"] = json!("eipassoc-1");
+            address["networkInterfaceId"] = json!("eni-nat");
+        }
+        parse(json!({ "addressesSet": { "item": [address] } }))
+    }
+
+    /// EC2 answers AuthFailure while a NAT gateway still holds the address. That must stay a
+    /// wait: as access denied it would end the whole delete and leave the rest of the network.
+    #[tokio::test]
+    async fn auth_failure_on_an_associated_elastic_ip_keeps_its_id_and_polls() {
+        let mut ec2 = MockEc2Api::new();
+        let releases = Arc::new(AtomicUsize::new(0));
+        let count = releases.clone();
+        ec2.expect_release_address().returning(move |id| {
+            assert_eq!(id, "eipalloc-1");
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(auth_failure(id))
+            } else {
+                Ok(())
+            }
+        });
+        ec2.expect_describe_addresses()
+            .times(1)
+            .returning(|| Ok(addresses(true)));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::ReleasingElasticIp,
+                vpc_id: Some("vpc-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let result = executor
+            .step()
+            .await
+            .expect("an associated address is a wait, not a failure");
+        assert_eq!(result.suggested_delay, Some(Duration::from_secs(15)));
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::ReleasingElasticIp
+        );
+        assert_eq!(
+            controller(&executor).eip_allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
+
+        executor.step().await.expect("release succeeds");
+        assert_eq!(releases.load(Ordering::SeqCst), 2);
+        assert_eq!(controller(&executor).eip_allocation_id, None);
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingSecurityGroup
+        );
+    }
+
+    /// Access denied on an address that is not associated is a real permission error and is
+    /// returned, so the executor's best-effort delete rule applies to it.
+    #[tokio::test]
+    async fn auth_failure_on_an_unassociated_elastic_ip_is_returned() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_release_address()
+            .times(1)
+            .returning(|id| Err(auth_failure(id)));
+        ec2.expect_describe_addresses()
+            .times(1)
+            .returning(|| Ok(addresses(false)));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::ReleasingElasticIp,
+                vpc_id: Some("vpc-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("access denied is returned");
+        let source = error
+            .source
+            .as_deref()
+            .expect("the EC2 error is the source");
+        assert_eq!(source.code, "REMOTE_ACCESS_DENIED");
+        assert_eq!(
+            controller(&executor).eip_allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
     }
 
     #[tokio::test]
