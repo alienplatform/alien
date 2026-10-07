@@ -2324,6 +2324,33 @@
           }
         }
       },
+      "AcrArtifactRegistryBinding": {
+        "type": "object",
+        "description": "Azure Container Registry binding configuration",
+        "required": [
+          "registryName",
+          "resourceGroupName"
+        ],
+        "properties": {
+          "registryName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Registry name (e.g., \"myregistry\") - endpoint is derived from this"
+          },
+          "repositoryPrefix": {
+            "nullable": true,
+            "description": "Repository prefix for this registry (used for proxy routing)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "resourceGroupName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Resource group name where the registry is located"
+          }
+        }
+      },
       "AgentSyncRequest": {
         "allOf": [
           {
@@ -2754,6 +2781,103 @@
           }
         }
       },
+      "ArtifactRegistryBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EcrArtifactRegistryBinding",
+                "description": "AWS ECR (Elastic Container Registry)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "ecr"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS ECR (Elastic Container Registry)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AcrArtifactRegistryBinding",
+                "description": "Azure Container Registry"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "acr"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Container Registry"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GarArtifactRegistryBinding",
+                "description": "Google Artifact Registry"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "gar"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Google Artifact Registry"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalArtifactRegistryBinding",
+                "description": "Local container registry"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local container registry"
+          }
+        ],
+        "description": "Service-type based artifact registry binding that supports multiple registry providers"
+      },
       "ArtifactRegistryHeartbeatData": {
         "oneOf": [
           {
@@ -2873,6 +2997,35 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "AuroraPostgresBinding": {
+        "type": "object",
+        "description": "AWS Aurora Serverless v2 binding.",
+        "required": [
+          "clusterEndpoint",
+          "port",
+          "database",
+          "username",
+          "passwordSecretArn"
+        ],
+        "properties": {
+          "clusterEndpoint": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "database": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "passwordSecretArn": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Secrets Manager ARN of the connection password; resolved at load time."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
           }
         }
       },
@@ -6076,6 +6229,152 @@
         },
         "additionalProperties": true
       },
+      "BindingValue_Option_String": {
+        "oneOf": [
+          {
+            "nullable": true,
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BindingValue_String": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BindingValue_Vec_String": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BindingValue_u16": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BindingValue_u8": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BlobStorageBinding": {
+        "type": "object",
+        "description": "Azure Blob Storage binding configuration",
+        "required": [
+          "accountName",
+          "containerName"
+        ],
+        "properties": {
+          "accountName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the storage account"
+          },
+          "containerName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the container"
+          }
+        }
+      },
       "BodySpec": {
         "oneOf": [
           {
@@ -6463,6 +6762,40 @@
           }
         ],
         "description": "Configuration for different cloud platform clients"
+      },
+      "CloudSqlPostgresBinding": {
+        "type": "object",
+        "description": "GCP Cloud SQL binding.",
+        "required": [
+          "host",
+          "port",
+          "database",
+          "username",
+          "serverCaCertificates",
+          "passwordSecretName"
+        ],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "passwordSecretName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Secret Manager secret name of the connection password; resolved at load time."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "serverCaCertificates": {
+            "$ref": "#/components/schemas/BindingValue_Vec_String",
+            "description": "Per-instance Cloud SQL server CA certificates, including every root accepted\nduring a CA rotation."
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
       },
       "CommandPayloadResponse": {
         "type": "object",
@@ -7089,6 +7422,43 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ComputePoolSelection"
             }
+          }
+        }
+      },
+      "ContainerAppsEnvironmentBinding": {
+        "type": "object",
+        "description": "Binding configuration for a pre-existing Azure Container Apps Environment.\n\nUsed when deploying to an existing environment instead of having Alien provision one.\nThis is useful for shared environments (e.g., test infrastructure) or enterprise\nsetups where environments are managed by a separate team.",
+        "required": [
+          "environmentName",
+          "resourceId",
+          "resourceGroupName",
+          "defaultDomain"
+        ],
+        "properties": {
+          "defaultDomain": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The default domain for applications in this environment."
+          },
+          "environmentName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the Container Apps Environment in Azure."
+          },
+          "resourceGroupName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The Azure resource group that contains the environment.\nStored explicitly so consumers don't need to parse the ARM resource ID path."
+          },
+          "resourceId": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The full Azure resource ID of the environment."
+          },
+          "staticIp": {
+            "nullable": true,
+            "description": "The static IP address of the environment (if applicable).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
           }
         }
       },
@@ -7966,6 +8336,64 @@
           "stopped"
         ]
       },
+      "DynamodbKvBinding": {
+        "type": "object",
+        "description": "AWS DynamoDB KV binding configuration",
+        "required": [
+          "tableName",
+          "region"
+        ],
+        "properties": {
+          "endpointUrl": {
+            "nullable": true,
+            "description": "Optional endpoint URL for local testing or custom endpoints",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "region": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The AWS region where the table is located"
+          },
+          "tableName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The DynamoDB table name"
+          }
+        }
+      },
+      "EcrArtifactRegistryBinding": {
+        "type": "object",
+        "description": "AWS ECR (Elastic Container Registry) binding configuration",
+        "required": [
+          "repositoryPrefix"
+        ],
+        "properties": {
+          "pullRoleArn": {
+            "nullable": true,
+            "description": "ARN of the IAM role for pull permissions (optional — omit for single-account)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "pushRoleArn": {
+            "nullable": true,
+            "description": "ARN of the IAM role for push+pull permissions (optional — omit for single-account)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "repositoryPrefix": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Repository prefix for this registry (used to construct ECR repository names)"
+          }
+        }
+      },
       "EndpointAccess": {
         "type": "string",
         "description": "Reachability of the deployment's public endpoints, fixed at setup.",
@@ -8121,6 +8549,24 @@
           "tcp"
         ]
       },
+      "ExternalAiBinding": {
+        "type": "object",
+        "description": "External AI provider binding configuration (BYO-key).\n\nThe operator-supplied secret rides inside the binding via\n`BindingValue<String>`, so it is a literal on cloud platforms and gains\nKubernetes SecretRef resolution for free (`extract_binding_secrets` walks\nthe binding JSON for `secretRef`).",
+        "required": [
+          "provider",
+          "apiKey"
+        ],
+        "properties": {
+          "apiKey": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The provider API key. Resolved to plaintext in the worker environment\n(literal on cloud, Kubernetes Secret on K8s) so the SDK reads it directly."
+          },
+          "provider": {
+            "type": "string",
+            "description": "The external AI provider name (e.g., \"openai\", \"anthropic\")"
+          }
+        }
+      },
       "ExternalAiHeartbeatData": {
         "type": "object",
         "required": [
@@ -8145,6 +8591,243 @@
           }
         }
       },
+      "ExternalBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StorageBinding",
+                "description": "External storage binding (S3-compatible, GCS, Blob Storage)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "storage"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External storage binding (S3-compatible, GCS, Blob Storage)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QueueBinding",
+                "description": "External queue binding (Kafka, SQS, etc.)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "queue"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External queue binding (Kafka, SQS, etc.)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KvBinding",
+                "description": "External KV binding (Redis, etc.)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "kv"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External KV binding (Redis, etc.)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRegistryBinding",
+                "description": "External artifact registry binding (OCI registry)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "artifact_registry"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External artifact registry binding (OCI registry)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VaultBinding",
+                "description": "External vault binding (HashiCorp Vault, etc.)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "vault"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External vault binding (HashiCorp Vault, etc.)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ContainerAppsEnvironmentBinding",
+                "description": "External Azure Container Apps Environment binding (pre-existing environment)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "container_apps_environment"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External Azure Container Apps Environment binding (pre-existing environment)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PostgresBinding",
+                "description": "External Postgres binding (operator-provided / BYO database)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "postgres"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External Postgres binding (operator-provided / BYO database)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAiBinding",
+                "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "ai"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+          }
+        ],
+        "description": "Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor."
+      },
+      "ExternalBindings": {
+        "type": "object",
+        "description": "Map from resource ID to external binding.\n\nValidated at runtime: binding type must match resource type.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ExternalBinding"
+        }
+      },
+      "ExternalPostgresBinding": {
+        "type": "object",
+        "description": "Operator-provided / BYO database binding.",
+        "required": [
+          "host",
+          "port",
+          "database",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "password": {
+            "type": "string",
+            "description": "Connection password as a concrete value, never an unresolved `SecretRef`: the platform\nmaterializes the Kubernetes secret into the pod env. The cloud variants carry a secret\nlocator instead."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "sslMode": {
+            "$ref": "#/components/schemas/ExternalPostgresSslMode",
+            "description": "Explicit TLS policy. Missing legacy configuration defaults to verified TLS."
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "ExternalPostgresSslMode": {
+        "type": "string",
+        "description": "TLS policy for an operator-provided / BYO Postgres database.\n\nUnlike libpq's ambiguous `prefer` mode, both choices map exactly to the\nconnection settings exposed by every supported SDK.",
+        "enum": [
+          "verify-full",
+          "disable"
+        ]
+      },
       "FailureDomainSelection": {
         "type": "object",
         "description": "Failure-domain policy selected for a compute pool.",
@@ -8164,6 +8847,89 @@
             "format": "int32",
             "description": "Number of distinct failure domains across which new stateful replicas may be spread.",
             "minimum": 0
+          }
+        }
+      },
+      "FirestoreKvBinding": {
+        "type": "object",
+        "description": "GCP Firestore KV binding configuration",
+        "required": [
+          "projectId",
+          "databaseId",
+          "collectionName"
+        ],
+        "properties": {
+          "collectionName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The collection name for KV storage"
+          },
+          "databaseId": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The Firestore database ID (default \"(default)\")"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The GCP project ID"
+          }
+        }
+      },
+      "FlexibleServerPostgresBinding": {
+        "type": "object",
+        "description": "Azure Flexible Server binding.",
+        "required": [
+          "host",
+          "port",
+          "database",
+          "username",
+          "passwordSecretUri"
+        ],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "passwordSecretUri": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Key Vault secret URI of the connection password; resolved at load time."
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
+      "GarArtifactRegistryBinding": {
+        "type": "object",
+        "description": "Google Artifact Registry binding configuration",
+        "required": [
+          "repositoryName"
+        ],
+        "properties": {
+          "pullServiceAccountEmail": {
+            "nullable": true,
+            "description": "Optional service account email for pull permissions (omit for single-project)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "pushServiceAccountEmail": {
+            "nullable": true,
+            "description": "Optional service account email for push+pull permissions (omit for single-project)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "repositoryName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Repository name in the Artifact Registry (e.g., \"alien-test\").\nUsed as the default when cross-account access methods are called\nwithout a specific repo name."
           }
         }
       },
@@ -9458,6 +10224,19 @@
           }
         }
       },
+      "GcsStorageBinding": {
+        "type": "object",
+        "description": "Google Cloud Storage binding configuration",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the GCS bucket"
+          }
+        }
+      },
       "GetSecretResponse": {
         "type": "object",
         "description": "Response body for getting a secret.",
@@ -9861,6 +10640,19 @@
           "message": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "KeyVaultBinding": {
+        "type": "object",
+        "description": "Azure Key Vault binding configuration",
+        "required": [
+          "vaultName"
+        ],
+        "properties": {
+          "vaultName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The Key Vault name"
           }
         }
       },
@@ -11149,6 +11941,24 @@
           }
         }
       },
+      "KubernetesSecretVaultBinding": {
+        "type": "object",
+        "description": "Kubernetes Secrets vault binding configuration",
+        "required": [
+          "namespace",
+          "vaultPrefix"
+        ],
+        "properties": {
+          "namespace": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The Kubernetes namespace where secrets are stored"
+          },
+          "vaultPrefix": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The vault prefix for secret names (e.g., \"acme-monitoring-secrets\")"
+          }
+        }
+      },
       "KubernetesSecretVaultHeartbeatData": {
         "type": "object",
         "required": [
@@ -11380,6 +12190,126 @@
             "nullable": true
           }
         }
+      },
+      "KvBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DynamodbKvBinding",
+                "description": "AWS DynamoDB binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "dynamodb"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS DynamoDB binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirestoreKvBinding",
+                "description": "GCP Firestore binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "firestore"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Firestore binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TableStorageKvBinding",
+                "description": "Azure Table Storage binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "tablestorage"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Table Storage binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RedisKvBinding",
+                "description": "Redis binding (for Kubernetes/local)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "redis"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Redis binding (for Kubernetes/local)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalKvBinding",
+                "description": "Local development KV (for testing)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-kv"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local development KV (for testing)"
+          }
+        ],
+        "description": "Represents a KV binding for key-value storage across platforms"
       },
       "KvHeartbeatData": {
         "oneOf": [
@@ -11681,6 +12611,24 @@
           }
         }
       },
+      "LocalArtifactRegistryBinding": {
+        "type": "object",
+        "description": "Local container registry binding configuration.\n\nThe local registry runs on localhost only and does not require authentication.\nSecurity boundary is the OS process isolation on the customer's machine.\nExternal image access is secured by the manager's registry proxy (deployment tokens).",
+        "required": [
+          "registryUrl",
+          "dataDir"
+        ],
+        "properties": {
+          "dataDir": {
+            "$ref": "#/components/schemas/BindingValue_Option_String",
+            "description": "Optional base directory for registry data"
+          },
+          "registryUrl": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The registry URL endpoint (e.g., \"localhost:5000\")"
+          }
+        }
+      },
       "LocalArtifactRegistryHeartbeatData": {
         "type": "object",
         "required": [
@@ -11904,6 +12852,28 @@
           }
         }
       },
+      "LocalKvBinding": {
+        "type": "object",
+        "description": "Local development KV binding configuration",
+        "required": [
+          "dataDir"
+        ],
+        "properties": {
+          "dataDir": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The base data directory for local storage"
+          },
+          "keyPrefix": {
+            "nullable": true,
+            "description": "Optional key prefix for namespacing",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          }
+        }
+      },
       "LocalKvHeartbeatData": {
         "type": "object",
         "required": [
@@ -11944,6 +12914,34 @@
           "delete"
         ]
       },
+      "LocalPostgresBinding": {
+        "type": "object",
+        "description": "Local embedded Postgres binding.",
+        "required": [
+          "host",
+          "port",
+          "database",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "host": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          },
+          "password": {
+            "type": "string"
+          },
+          "port": {
+            "$ref": "#/components/schemas/BindingValue_u16"
+          },
+          "username": {
+            "$ref": "#/components/schemas/BindingValue_String"
+          }
+        }
+      },
       "LocalPostgresHeartbeatData": {
         "type": "object",
         "required": [
@@ -11970,6 +12968,19 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "LocalQueueBinding": {
+        "type": "object",
+        "description": "Local queue parameters",
+        "required": [
+          "queuePath"
+        ],
+        "properties": {
+          "queuePath": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Path to the queue's data directory; the `localqueue.v1` SQLite database\n(`localqueue.sqlite`) lives inside it"
           }
         }
       },
@@ -12160,6 +13171,19 @@
           }
         }
       },
+      "LocalStorageBinding": {
+        "type": "object",
+        "description": "Local filesystem storage binding configuration",
+        "required": [
+          "storagePath"
+        ],
+        "properties": {
+          "storagePath": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The storage directory path (file:// URL or absolute path)"
+          }
+        }
+      },
       "LocalStorageHeartbeatData": {
         "type": "object",
         "required": [
@@ -12189,6 +13213,24 @@
           },
           "status": {
             "$ref": "#/components/schemas/StorageHeartbeatStatus"
+          }
+        }
+      },
+      "LocalVaultBinding": {
+        "type": "object",
+        "description": "Local development vault binding (for testing/development)",
+        "required": [
+          "vaultName",
+          "dataDir"
+        ],
+        "properties": {
+          "dataDir": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Directory where vault secrets are stored"
+          },
+          "vaultName": {
+            "type": "string",
+            "description": "The vault name for local storage"
           }
         }
       },
@@ -12813,6 +13855,11 @@
           "charts"
         ],
         "properties": {
+          "awsSetupNodeIdentity": {
+            "type": "boolean",
+            "description": "AWS setup can hand off retained node identities to runtime reconciliation.",
+            "default": false
+          },
           "charts": {
             "type": "boolean",
             "description": "Helm charts at `oci://<registryHost>/charts/<stack>`."
@@ -13580,6 +14627,19 @@
           "configured"
         ]
       },
+      "ParameterStoreVaultBinding": {
+        "type": "object",
+        "description": "AWS SSM Parameter Store vault binding configuration",
+        "required": [
+          "vaultPrefix"
+        ],
+        "properties": {
+          "vaultPrefix": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The vault prefix for parameter names (e.g., \"my-stack-my-vault\")"
+          }
+        }
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -13592,6 +14652,126 @@
           "local",
           "test"
         ]
+      },
+      "PostgresBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuroraPostgresBinding",
+                "description": "AWS Aurora Serverless v2 (cluster endpoint + secret ARN)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "aurora"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Aurora Serverless v2 (cluster endpoint + secret ARN)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CloudSqlPostgresBinding",
+                "description": "GCP Cloud SQL (host + secret name)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "cloud-sql"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Cloud SQL (host + secret name)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FlexibleServerPostgresBinding",
+                "description": "Azure Database for PostgreSQL — Flexible Server (host + secret URI)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "flexible-server"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Database for PostgreSQL — Flexible Server (host + secret URI)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalPostgresBinding",
+                "description": "Operator-provided / BYO database (Kubernetes, on-prem, or cloud override)."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "external"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Operator-provided / BYO database (Kubernetes, on-prem, or cloud override)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalPostgresBinding",
+                "description": "Local embedded Postgres process."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-postgres"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local embedded Postgres process."
+          }
+        ],
+        "description": "Connection details for a Postgres database, one variant per backend."
       },
       "PostgresHeartbeatData": {
         "oneOf": [
@@ -13877,6 +15057,24 @@
           "failed"
         ]
       },
+      "PubSubQueueBinding": {
+        "type": "object",
+        "description": "GCP Pub/Sub parameters",
+        "required": [
+          "topic",
+          "subscription"
+        ],
+        "properties": {
+          "subscription": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Full subscription name: projects/{project}/subscriptions/{subscription}"
+          },
+          "topic": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Full topic name: projects/{project}/topics/{topic}"
+          }
+        }
+      },
       "PublicEndpointOutput": {
         "type": "object",
         "description": "Runtime-resolved public endpoint metadata.",
@@ -13961,6 +15159,103 @@
           }
         ],
         "description": "DNS target mode for public endpoints."
+      },
+      "QueueBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SqsQueueBinding",
+                "description": "AWS SQS binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "sqs"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS SQS binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PubSubQueueBinding",
+                "description": "GCP Pub/Sub binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "pubsub"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Pub/Sub binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ServiceBusQueueBinding",
+                "description": "Azure Service Bus binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "servicebus"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Service Bus binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalQueueBinding",
+                "description": "Local development queue binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-queue"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local development queue binding"
+          }
+        ],
+        "description": "Binding parameters for Queue at runtime or in templates."
       },
       "QueueHeartbeatData": {
         "oneOf": [
@@ -14238,6 +15533,37 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "RedisKvBinding": {
+        "type": "object",
+        "description": "Redis KV binding configuration",
+        "required": [
+          "connectionUrl"
+        ],
+        "properties": {
+          "connectionUrl": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Redis connection URL (e.g., \"redis://localhost:6379\" or \"rediss://...\")"
+          },
+          "database": {
+            "nullable": true,
+            "description": "Optional database number (0-15 for standard Redis)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_u8"
+              }
+            ]
+          },
+          "keyPrefix": {
+            "nullable": true,
+            "description": "Optional key prefix for namespacing",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
           }
         }
       },
@@ -16151,6 +17477,60 @@
           }
         }
       },
+      "S3StorageBinding": {
+        "type": "object",
+        "description": "S3 storage binding configuration.\n\nTargets AWS S3 by default. Setting `endpoint` targets any S3-compatible\nstore instead (MinIO, Ceph RGW, NetApp StorageGRID, Cloudflare R2, ...),\nwhich is how Kubernetes deployments outside a cloud account attach the\ncustomer's existing object storage.",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "accessKeyId": {
+            "nullable": true,
+            "description": "Static access key ID. Unset means the ambient AWS credential chain.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "bucketName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the S3 bucket"
+          },
+          "endpoint": {
+            "nullable": true,
+            "description": "Endpoint of an S3-compatible store, e.g. `https://minio.internal:9000`.\nUnset means AWS S3.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "forcePathStyle": {
+            "type": "boolean",
+            "description": "Use path-style URLs (`endpoint/bucket/key`) instead of virtual-hosted\nones (`bucket.endpoint/key`). Defaults to `true` when `endpoint` is\nset, since most S3-compatible stores require it.",
+            "nullable": true
+          },
+          "region": {
+            "nullable": true,
+            "description": "Region to sign requests for. Defaults to the ambient AWS region, or\n`us-east-1` for S3-compatible endpoints.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          },
+          "secretAccessKey": {
+            "nullable": true,
+            "description": "Static secret access key; required when `accessKeyId` is set.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BindingValue_String"
+              }
+            ]
+          }
+        }
+      },
       "SandboxHeartbeatData": {
         "oneOf": [
           {
@@ -16314,6 +17694,35 @@
             "nullable": true
           },
           "type": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretManagerVaultBinding": {
+        "type": "object",
+        "description": "GCP Secret Manager vault binding configuration",
+        "required": [
+          "vaultPrefix"
+        ],
+        "properties": {
+          "vaultPrefix": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The vault prefix for secret names (e.g., \"my-stack-my-vault\")"
+          }
+        }
+      },
+      "SecretReference": {
+        "type": "object",
+        "description": "Reference to a Kubernetes Secret",
+        "required": [
+          "name",
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -16520,6 +17929,24 @@
           }
         }
       },
+      "ServiceBusQueueBinding": {
+        "type": "object",
+        "description": "Azure Service Bus parameters",
+        "required": [
+          "namespace",
+          "queueName"
+        ],
+        "properties": {
+          "namespace": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Namespace name"
+          },
+          "queueName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Queue name"
+          }
+        }
+      },
       "SetDeploymentChannelRequest": {
         "type": "object",
         "description": "Body of `PUT /v1/deployments/{id}/channel`.",
@@ -16561,6 +17988,19 @@
           "caller",
           "anonymous"
         ]
+      },
+      "SqsQueueBinding": {
+        "type": "object",
+        "description": "AWS SQS queue parameters",
+        "required": [
+          "queueUrl"
+        ],
+        "properties": {
+          "queueUrl": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Full SQS queue URL"
+          }
+        }
       },
       "StackByPlatform": {
         "type": "object",
@@ -16834,9 +18274,13 @@
             "description": "Who can reach public endpoints. Private access requires AWS managed containers.\nThis choice cannot change after setup; create a new deployment to change it."
           },
           "externalBindings": {
-            "type": "object",
+            "nullable": true,
             "description": "External bindings for pre-existing infrastructure.\nAllows using existing resources (MinIO, Redis, shared Container Apps\nEnvironment, etc.) instead of having Alien provision them.\nRequired for Kubernetes platform, optional for cloud platforms.",
-            "nullable": true
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalBindings"
+              }
+            ]
           },
           "heartbeats": {
             "$ref": "#/components/schemas/HeartbeatsMode",
@@ -16949,6 +18393,103 @@
             "nullable": true
           }
         }
+      },
+      "StorageBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/S3StorageBinding",
+                "description": "AWS S3"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "s3"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS S3"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BlobStorageBinding",
+                "description": "Azure Blob Storage"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "blob"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Blob Storage"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcsStorageBinding",
+                "description": "Google Cloud Storage"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "gcs"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Google Cloud Storage"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalStorageBinding",
+                "description": "Local filesystem storage"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-storage"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local filesystem storage"
+          }
+        ],
+        "description": "Service-type based storage binding that supports multiple storage providers"
       },
       "StorageHeartbeatData": {
         "oneOf": [
@@ -17121,6 +18662,29 @@
           }
         ],
         "description": "Request to submit a command response (from deployment)"
+      },
+      "TableStorageKvBinding": {
+        "type": "object",
+        "description": "Azure Table Storage KV binding configuration",
+        "required": [
+          "resourceGroupName",
+          "accountName",
+          "tableName"
+        ],
+        "properties": {
+          "accountName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The storage account name"
+          },
+          "resourceGroupName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The Azure resource group name"
+          },
+          "tableName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The table name"
+          }
+        }
       },
       "TargetDynamicContainer": {
         "type": "object",
@@ -17333,6 +18897,126 @@
         }
       },
       "Value": {},
+      "VaultBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ParameterStoreVaultBinding",
+                "description": "AWS SSM Parameter Store binding (SecureString)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "parameter-store"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS SSM Parameter Store binding (SecureString)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SecretManagerVaultBinding",
+                "description": "GCP Secret Manager binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "secret-manager"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Secret Manager binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KeyVaultBinding",
+                "description": "Azure Key Vault binding"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "key-vault"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Key Vault binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesSecretVaultBinding",
+                "description": "Kubernetes Secrets binding (native K8s secret storage)"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "kubernetes-secret"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Kubernetes Secrets binding (native K8s secret storage)"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalVaultBinding",
+                "description": "Local development vault"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-vault"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local development vault"
+          }
+        ],
+        "description": "Represents a vault binding for secure secret management"
+      },
       "VaultHeartbeatData": {
         "oneOf": [
           {

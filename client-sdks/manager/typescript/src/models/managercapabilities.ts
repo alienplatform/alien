@@ -9,6 +9,10 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type ManagerCapabilities = {
   /**
+   * AWS setup can hand off retained node identities to runtime reconciliation.
+   */
+  awsSetupNodeIdentity: boolean;
+  /**
    * Helm charts at `oci://<registryHost>/charts/<stack>`.
    */
   charts: boolean;
@@ -23,6 +27,7 @@ export const ManagerCapabilities$inboundSchema: z.ZodType<
   ManagerCapabilities,
   unknown
 > = z.object({
+  awsSetupNodeIdentity: z.boolean().default(false),
   charts: z.boolean(),
   tunnels: z.boolean(),
 });

@@ -991,6 +991,7 @@ dependencies = [
  "alien-helm",
  "alien-infra",
  "alien-local",
+ "alien-manager-api",
  "alien-permissions",
  "alien-preflights",
  "alien-tunnel",
