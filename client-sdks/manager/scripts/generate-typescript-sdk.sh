@@ -37,4 +37,4 @@ done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 node "$repo_root/client-sdks/manager/scripts/prepare-compatibility-exports.mjs"
 
 NODE_OPTIONS=--max-old-space-size=12288 pnpm -C "$sdk_dir" build
-node --test "$repo_root/client-sdks/manager/scripts/typescript-sdk.test.mjs"
+node --test "$repo_root/client-sdks/manager/scripts/typescript-sdk.test.mjs" "$repo_root/client-sdks/manager/scripts/binding-schema.test.mjs"

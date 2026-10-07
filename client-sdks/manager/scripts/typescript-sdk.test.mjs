@@ -169,7 +169,7 @@ for (const name of [
   "@alienplatform/manager-api/models/stacksettings.js",
 ]) {
   const { externalBindingsFromJSON, externalBindingsToJSON } = await import(name);
-  for (const credential of ["example-secret", { secretRef: { name: "storage-auth", key: "secret" } }]) {
+  for (const credential of ["example-secret", { secretRef: { name: "storage-auth", key: "secret" } }, { "Fn::GetAtt": ["Storage", "SigningKey"] }]) {
     const bindings = { archive: { type: "storage", service: "s3", bucketName: "archive-bucket",
       endpoint: "https://storage.example.com", region: "us-east-1", forcePathStyle: true,
       accessKeyId: "example-key", secretAccessKey: credential } };

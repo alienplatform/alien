@@ -13,6 +13,14 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+#[cfg(feature = "openapi")]
+use utoipa::{
+    PartialSchema, ToSchema,
+    openapi::{
+        Ref, RefOr,
+        schema::{AnyOfBuilder, ObjectBuilder, Schema, Type},
+    },
+};
 
 mod ai;
 mod artifact_registry;
@@ -76,7 +84,6 @@ pub use worker::{
 /// Represents a value that can be either a concrete value, a template expression,
 /// or a reference to a Kubernetes Secret
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum BindingValue<T> {
@@ -88,6 +95,41 @@ pub enum BindingValue<T> {
     /// A template expression (used by IaC template generators)
     #[cfg_attr(feature = "jsonschema", schemars(skip))]
     Expression(JsonValue),
+}
+
+// Utoipa's generic schema composition supplies the concrete value schema and
+// preserves the existing named generic components. Expression accepts any JSON,
+// so these untagged alternatives overlap and must use anyOf rather than oneOf.
+#[cfg(feature = "openapi")]
+impl<T: ToSchema> utoipa::__dev::ComposeSchema for BindingValue<T> {
+    fn compose(generics: Vec<RefOr<Schema>>) -> RefOr<Schema> {
+        AnyOfBuilder::new()
+            .item(generics.into_iter().next().unwrap_or_else(T::schema))
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::Object)
+                    .description(Some("A Kubernetes Secret reference (must come before Expression)"))
+                    .required("secretRef")
+                    .property("secretRef", Ref::from_schema_name("SecretReference")),
+            )
+            .item(
+                Ref::from_schema_name("Value")
+                    .description(Some("A template expression (used by IaC template generators)")),
+            )
+            .description(Some("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl<T: ToSchema> ToSchema for BindingValue<T> {
+    fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+        schemas.push(("SecretReference".to_string(), SecretReference::schema()));
+        schemas.push(("Value".to_string(), JsonValue::schema()));
+        SecretReference::schemas(schemas);
+        JsonValue::schemas(schemas);
+        T::schemas(schemas);
+    }
 }
 
 /// Reference to a Kubernetes Secret
@@ -117,12 +159,20 @@ impl<T> BindingValue<T> {
             BindingValue::Value(val) => Ok(val),
             BindingValue::Expression(_) => Err(AlienError::new(ErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
-                reason: format!("Template expressions not supported in runtime bindings for field '{}'", field_name),
+                reason: format!(
+                    "Template expressions not supported in runtime bindings for field '{}'",
+                    field_name
+                ),
             })),
-            BindingValue::SecretRef { .. } => Err(AlienError::new(ErrorData::BindingConfigInvalid {
-                binding_name: binding_name.to_string(),
-                reason: format!("SecretRef not resolved for field '{}' - this should have been resolved by the controller", field_name),
-            }))
+            BindingValue::SecretRef { .. } => {
+                Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    binding_name: binding_name.to_string(),
+                    reason: format!(
+                        "SecretRef not resolved for field '{}' - this should have been resolved by the controller",
+                        field_name
+                    ),
+                }))
+            }
         }
     }
 }
@@ -224,6 +274,14 @@ mod tests {
     use crate::bindings::{ArtifactRegistryBinding, BuildBinding, StorageBinding};
     use serde_json::json;
     use std::collections::HashMap;
+    #[cfg(feature = "openapi")]
+    use utoipa::{
+        PartialSchema, ToSchema,
+        openapi::{
+            Ref, RefOr,
+            schema::{AnyOfBuilder, ObjectBuilder, Schema, Type},
+        },
+    };
 
     #[test]
     fn test_serialize_storage_binding_as_env_var() {
@@ -338,10 +396,12 @@ mod tests {
 
         let result = secret_ref.into_value("test", "password");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("SecretRef not resolved"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("SecretRef not resolved")
+        );
     }
 
     #[test]

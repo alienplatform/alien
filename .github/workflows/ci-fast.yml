@@ -541,7 +541,7 @@ jobs:
       - name: Manager SDK compatibility tests
         run: |
           pnpm -C client-sdks/manager/typescript build
-          node --test client-sdks/manager/scripts/typescript-sdk.test.mjs
+          node --test client-sdks/manager/scripts/typescript-sdk.test.mjs client-sdks/manager/scripts/binding-schema.test.mjs
 
       - name: Rust and TypeScript command integration
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
