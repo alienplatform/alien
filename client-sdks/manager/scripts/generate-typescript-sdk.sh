@@ -20,6 +20,8 @@ fi
 
 # `--skip-versioning` exists only on `speakeasy run`, which reads the target from
 # .speakeasy/workflow.yaml (source: ../openapi.json).
+# The configured Zod v4 floor keeps required JSON-expression fields required.
+# npm and JSR consumers both resolve this range from the generated package.json.
 (
   cd "$sdk_dir"
   "$speakeasy_bin" run \

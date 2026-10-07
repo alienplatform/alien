@@ -48,7 +48,10 @@ fn generated_manager_sdk_preserves_core_external_binding_coordinates_and_credent
                 port: BindingValue::value(5432),
                 database: "application".into(),
                 username: "reader".into(),
-                server_ca_certificates: BindingValue::value(vec!["first-root".into(), "second-root".into()]),
+                server_ca_certificates: BindingValue::value(vec![
+                    "first-root".into(),
+                    "second-root".into(),
+                ]),
                 password_secret_name: "database-password".into(),
             })),
         );

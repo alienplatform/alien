@@ -38,7 +38,6 @@ typescript:
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies:
-      # Earlier Zod v4 versions accept missing required fields backed by z.any().
       zod: ^4.6.5
     devDependencies:
       globals: ^17.0.0
