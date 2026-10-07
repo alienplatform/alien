@@ -84,11 +84,13 @@
           }
         }
       },
-      // Delete removes detached network interfaces that services (Lambda) leave in this
-      // network's subnets; they block deleting the security group, subnets and VPC and never
-      // go away on their own. They carry no Alien tags, so no tag condition can scope this.
-      // EC2 refuses to delete an attached interface, and the controller deletes only detached
-      // interfaces in its own subnets and security group.
+      // Delete removes detached network interfaces Lambda leaves in this network's subnets;
+      // they block deleting the security group, subnets and VPC and never go away on their own.
+      // It cannot be scoped further: Lambda's interfaces carry no Alien tags, so no tag condition
+      // matches them, and ec2:Vpc / ec2:Subnet conditions would need the VPC ID, which a created
+      // network only gets at runtime. EC2 refuses to delete an attached interface, and the
+      // controller deletes only interfaces that are available, AWS-managed and of type `lambda`,
+      // in its own security group and subnets.
       {
         "grant": {
           "actions": ["ec2:DeleteNetworkInterface"]

@@ -349,9 +349,10 @@ fn documented_detached_network_interface_cleanup(
     resource: &str,
 ) -> bool {
     // Lambda leaves detached network interfaces in the managed network's subnets, and they block
-    // deleting it. They carry no Alien tags, so no tag condition can scope the delete; EC2
-    // refuses to delete an attached interface, and the network controller deletes only
-    // detached interfaces in its own subnets and security group.
+    // deleting it. They carry no Alien tags, so no tag condition can scope the delete, and the
+    // VPC ID a condition would need is only known at runtime. EC2 refuses to delete an attached
+    // interface, and the network controller deletes only available, AWS-managed `lambda`
+    // interfaces in its own subnets and security group.
     permission_set_id == "network/provision"
         && actions == ["ec2:DeleteNetworkInterface"]
         && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"

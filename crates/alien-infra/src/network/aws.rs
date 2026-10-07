@@ -1265,16 +1265,19 @@ impl AwsNetworkController {
         .and_then(|ids| single_create_attempt_match(ids, "Elastic IP", token, resource_id))
     }
 
-    /// Deletes the detached network interfaces `filter` matches and describes those that still
-    /// hold the object a delete step is waiting on.
+    /// Describes the network interfaces `filter` matches that still hold the object a delete
+    /// step is waiting on. With `delete_lambda_orphans`, first deletes the ones Lambda left
+    /// behind.
     ///
-    /// An `available` interface is attached to nothing and sits in this network, which is
-    /// being deleted, so nothing can use it again; Lambda leaves such interfaces behind when
-    /// its cleanup does not run. Interfaces in use are left alone and reported.
+    /// Only an interface that is `available` (attached to nothing), managed by AWS and of type
+    /// `lambda` is deleted: Lambda leaves those when its own cleanup does not run, they never go
+    /// away, and nothing can use them again once the function is gone. Every other interface,
+    /// detached or not, is left alone and reported.
     async fn release_detached_network_interfaces(
         &self,
         ctx: &ResourceControllerContext<'_>,
         filter: Filter,
+        delete_lambda_orphans: bool,
         resource_id: &str,
     ) -> Result<DeleteBlockers> {
         let aws_cfg = ctx.get_aws_config()?;
@@ -1316,20 +1319,23 @@ impl AwsNetworkController {
                 continue;
             };
             let detail = describe_network_interface(&interface);
-            if interface.status.as_deref() != Some("available") {
+            let lambda_orphan = interface.status.as_deref() == Some("available")
+                && interface.requester_managed == Some(true)
+                && interface.interface_type.as_deref() == Some("lambda");
+            if !delete_lambda_orphans || !lambda_orphan {
                 blockers.items.push(detail);
                 continue;
             }
             match client.delete_network_interface(&interface_id).await {
                 Ok(()) => {
-                    info!(network_interface_id = %interface_id, description = ?interface.description, "Deleted a detached network interface left in the network");
+                    info!(network_interface_id = %interface_id, description = ?interface.description, "Deleted a detached Lambda network interface left in the network");
                 }
                 Err(error) if is_not_found(&error) => {}
                 Err(error) if is_conflict(&error) => blockers.items.push(detail),
                 Err(error) if is_access_denied(&error) => {
                     blockers.missing_permission = true;
                     blockers.items.push(format!(
-                        "{detail}; it is detached but this role cannot delete it (ec2:DeleteNetworkInterface is not granted): rerun setup to grant it, or delete it"
+                        "{detail}; Lambda left it detached but this role cannot delete it (ec2:DeleteNetworkInterface is not granted): rerun setup to grant it, or delete it"
                     ));
                 }
                 Err(error) => {
@@ -4056,7 +4062,8 @@ impl AwsNetworkController {
                 info!(sg_id = %sg_id, "Security group already deleted");
             }
             // Network interfaces of dependents (Lambda, ECS, EC2) can stay in the group for
-            // a long time after those dependents are deleted; detached ones are removed here.
+            // a long time after those dependents are deleted; Lambda's detached ones are
+            // removed here.
             Err(error) if is_conflict(&error) => {
                 debug!(sg_id = %sg_id, "Security group still in use");
                 let blockers = self
@@ -4066,6 +4073,7 @@ impl AwsNetworkController {
                             name: "group-id".to_string(),
                             values: vec![sg_id.clone()],
                         },
+                        true,
                         &config.id,
                     )
                     .await?;
@@ -4176,6 +4184,7 @@ impl AwsNetworkController {
                         name: "subnet-id".to_string(),
                         values: in_use.clone(),
                     },
+                    true,
                     &config.id,
                 )
                 .await?;
@@ -4451,6 +4460,9 @@ impl AwsNetworkController {
                             name: "vpc-id".to_string(),
                             values: vec![vpc_id.clone()],
                         },
+                        // Only reported here: the security group and subnet steps already
+                        // removed the Lambda interfaces in this network's own objects.
+                        false,
                         &config.id,
                     )
                     .await?;
@@ -6411,8 +6423,14 @@ mod controller_state_tests {
         ec2.expect_delete_vpc()
             .times(DEPENDENCY_DRAIN_MAX_POLLS as usize)
             .returning(|_| Err(in_use()));
-        ec2.expect_describe_network_interfaces()
-            .returning(|_| Ok(interfaces(json!([busy_lambda_interface()]))));
+        // A detached Lambda interface listed at the VPC level is reported, not deleted: only
+        // the security group and subnet steps delete, scoped to this network's own objects.
+        ec2.expect_describe_network_interfaces().returning(|_| {
+            Ok(interfaces(json!([
+                busy_lambda_interface(),
+                orphaned_lambda_interface()
+            ])))
+        });
         ec2.expect_describe_security_groups().returning(|_| {
             Ok(parse(json!({ "securityGroupInfo": { "item": [
                 { "groupId": "sg-default", "groupName": "default" },
@@ -6553,6 +6571,52 @@ mod controller_state_tests {
         assert_eq!(state.state, AwsNetworkState::DeletingSubnets);
         assert_eq!(state.security_group_id, None);
         assert_eq!(state.wait_for_delete_dependencies_iterations, 0);
+    }
+
+    /// A detached interface that Lambda did not create (a customer's, another service's) is
+    /// never deleted; the step waits and, at its bound, names it.
+    #[tokio::test]
+    async fn a_detached_interface_lambda_did_not_create_is_reported_not_deleted() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_security_group()
+            .times(NETWORK_INTERFACE_DRAIN_MAX_POLLS as usize)
+            .returning(|_| Err(in_use()));
+        ec2.expect_describe_network_interfaces().returning(|_| {
+            Ok(interfaces(json!([{
+                "networkInterfaceId": "eni-manual",
+                "status": "available",
+                "interfaceType": "interface",
+                "description": "created by hand",
+                "requesterManaged": false
+            }])))
+        });
+        ec2.expect_delete_network_interface().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSecurityGroup,
+                vpc_id: Some("vpc-1".to_string()),
+                security_group_id: Some("sg-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        for _ in 1..NETWORK_INTERFACE_DRAIN_MAX_POLLS {
+            executor.step().await.expect("still waiting");
+        }
+        let error = executor.step().await.expect_err("bounded");
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED");
+        assert!(
+            error.message.contains("eni-manual") && error.message.contains("available"),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            controller(&executor).security_group_id.as_deref(),
+            Some("sg-1")
+        );
     }
 
     /// A role set up before it could delete network interfaces cannot remove a detached one, so

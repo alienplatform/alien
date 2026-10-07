@@ -1141,24 +1141,27 @@ async fn delete_finds_a_nat_gateway_whose_create_response_was_lost() {
     .await;
 }
 
-/// 8. A detached network interface left in a subnet (as Lambda leaves its interfaces when its
-/// cleanup does not run) blocks the subnet delete. The delete removes it and finishes.
+/// 8. A detached network interface that Lambda did not create (made here with
+/// CreateNetworkInterface, so not AWS-managed) blocks the subnet delete. The delete never
+/// deletes it and, at its poll bound, fails naming it; once it is gone the retried delete ends.
+/// (A requester-managed Lambda interface cannot be made by hand; deleting those is covered by
+/// the mock tests.)
 #[tokio::test]
 #[ignore = "creates billed AWS resources; needs ALIEN_AWS_NETWORK_LIVE_TEST=1"]
-async fn delete_removes_a_detached_network_interface_left_in_a_subnet() {
-    scenario("orphan-eni", "10.238.0.0/16", |mut live| async move {
+async fn delete_reports_but_never_deletes_a_detached_interface_lambda_did_not_create() {
+    scenario("foreign-eni", "10.238.0.0/16", |mut live| async move {
         let errors = live.create_until("allocatingElasticIp").await;
         assert!(errors.is_empty(), "{errors:?}");
         let subnet = live.controller()["privateSubnetIds"][0]
             .as_str()
             .expect("a private subnet")
             .to_string();
-        let orphan = live
+        let foreign = live
             .real
             .create_network_interface(
                 CreateNetworkInterfaceRequest::builder()
                     .subnet_id(subnet.clone())
-                    .description("orphaned interface for the live network test".to_string())
+                    .description("detached interface for the live network test".to_string())
                     .tag_specifications(vec![TagSpecification {
                         resource_type: "network-interface".to_string(),
                         tags: vec![Tag {
@@ -1173,20 +1176,63 @@ async fn delete_removes_a_detached_network_interface_left_in_a_subnet() {
             .network_interface
             .and_then(|interface| interface.network_interface_id)
             .expect("interface id");
-        println!("  created detached interface {orphan} in {subnet}");
+        println!("  created detached interface {foreign} in {subnet}");
 
-        live.delete_to_deleted().await;
-        let deletes = live.faulty.calls("delete_network_interface");
-        assert_eq!(deletes.len(), 1, "{deletes:?}");
-        assert_eq!(deletes[0].outcome, "ok");
-        let subnet_deletes = live.faulty.calls("delete_subnet");
+        // Delete until the subnet step has polled once on the interface.
+        live.executor.delete().expect("delete transition");
+        live.drive(
+            "delete until the subnet waits",
+            Duration::from_millis(200),
+            |live| {
+                live.controller()["state"] == "deletingSubnets"
+                    && live.controller()["waitForDeleteDependenciesIterations"]
+                        .as_u64()
+                        .is_some_and(|polls| polls >= 1)
+            },
+        )
+        .await
+        .expect("the subnet step waits");
+
+        // Resume that checkpoint two polls before its bound instead of waiting it out.
+        let mut near_bound = live.controller();
+        near_bound["waitForDeleteDependenciesIterations"] = serde_json::json!(88);
+        let near_bound: AwsNetworkController =
+            serde_json::from_value(near_bound).expect("controller");
+        let mut live = rebuild(live, near_bound).await;
+        let error = live
+            .drive("delete at the bound", Duration::from_millis(200), |live| {
+                live.executor.status() == ResourceStatus::Deleted
+            })
+            .await
+            .expect_err("the subnet delete gives up");
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED", "{error}");
         assert!(
-            subnet_deletes
-                .iter()
-                .any(|call| call.outcome.contains("dependencies")
-                    || call.outcome.contains("DependencyViolation")),
-            "the interface held its subnet: {subnet_deletes:?}"
+            error.message.contains(&foreign),
+            "names the interface: {error}"
         );
+        println!("  delete blocked: {}", error.message);
+        assert!(
+            live.faulty.calls("delete_network_interface").is_empty(),
+            "an interface Lambda did not create is never deleted"
+        );
+
+        live.real
+            .delete_network_interface(&foreign)
+            .await
+            .expect("delete the interface");
+        let mut retried = live
+            .executor
+            .internal_state::<AwsNetworkController>()
+            .expect("network controller")
+            .clone();
+        retried.reset_stay_count();
+        let mut live = rebuild(live, retried).await;
+        let errors = live
+            .drive_retrying("retried delete", Duration::from_secs(15), |live| {
+                live.executor.status() == ResourceStatus::Deleted
+            })
+            .await;
+        assert!(errors.is_empty(), "{errors:?}");
         assert_nothing_left(&live).await;
         live
     })
