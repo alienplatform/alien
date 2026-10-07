@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/permissions",
-  "version": "3.3.29",
+  "version": "3.3.30",
   "type": "module",
   "description": "Offline operation permission compilation using alien-permissions",
   "license": "FSL-1.1-Apache-2.0",
