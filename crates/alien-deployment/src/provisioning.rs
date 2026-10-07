@@ -2,8 +2,7 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, Stack, StackState,
-    StackStatus,
+    ComputeClusterOutputs, Platform, ResourceLifecycle, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
@@ -163,6 +162,8 @@ pub async fn handle_provisioning(
             message: "Failed to create stack executor for live resources".to_string(),
         })?;
 
+    let reconciled_ids = executor.tracked_resource_ids();
+
     // Execute one step
     let step_result =
         executor
@@ -172,27 +173,19 @@ pub async fn handle_provisioning(
                 message: "Failed to execute deployment step for live resources".to_string(),
             })?;
 
-    // Keep deletion records, but a resource removed from the desired stack and
-    // already Deleted has finished its work. Desired Deleted resources still
-    // need recreation; unfinished or failed removals still block completion.
-    let statuses = step_result
-        .next_state
-        .resources
-        .iter()
-        .filter_map(|(id, resource)| {
-            (target_stack.resources.contains_key(id) || resource.status != ResourceStatus::Deleted)
-                .then_some(resource.status)
-        })
-        .collect::<Vec<_>>();
-    let stack_status = if statuses.is_empty() {
-        StackStatus::Running
-    } else {
-        StackState::compute_stack_status_from_resources(&statuses).context(
-            ErrorData::StackExecutionFailed {
-                message: "Failed to compute provisioning status".to_string(),
-            },
-        )?
-    };
+    // Use the same target-aware completion policy as updates: deleted records stay
+    // durable, while desired drift and deferred deletions remain outstanding work.
+    let pending_deletions = executor
+        .pending_deletions(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding provisioning deletions".to_string(),
+        })?;
+    let stack_status = crate::updating::compute_update_status(
+        &step_result.next_state,
+        &target_stack,
+        &reconciled_ids,
+        &pending_deletions,
+    )?;
 
     // Check if all live resources are deployed
     let waiting_for_machines =
@@ -384,8 +377,8 @@ pub async fn handle_provisioning_failed(
 mod tests {
     use super::*;
     use alien_core::{
-        ClientConfig, EnvironmentVariablesSnapshot, ExternalBindings, ReleaseInfo, RuntimeMetadata,
-        StackSettings, Storage,
+        ClientConfig, EnvironmentVariablesSnapshot, ExternalBindings, ReleaseInfo, ResourceRef,
+        ResourceStatus, RuntimeMetadata, StackSettings, Storage,
     };
     use alien_infra::{DefaultPlatformServiceProvider, StackResourceStateExt};
     use std::sync::Arc;
@@ -497,6 +490,45 @@ mod tests {
             state.current_release.unwrap().release_id.as_deref(),
             Some("target-release")
         );
+        assert!(state.target_release.is_none());
+    }
+
+    #[tokio::test]
+    async fn provisioning_waits_for_a_removed_dependency_to_finish_deleting() {
+        let mut previous = stack(&["consumer", "old-dependency"]);
+        previous.resources.get_mut("consumer").unwrap().dependencies =
+            vec![ResourceRef::new("storage", "old-dependency")];
+        let target = stack(&["consumer"]);
+        let mut state = provisioning(installed(&previous).await, target);
+        state = step(state).await;
+        assert_eq!(state.status, DeploymentStatus::Provisioning);
+        assert!(state.current_release.is_none());
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["old-dependency"].status,
+            ResourceStatus::Running,
+            "deletion must wait while the consumer still holds its dependency"
+        );
+        let mut saw_running_with_pending_deletion = false;
+        for _ in 0..12 {
+            state = step(state).await;
+            let resources = &state.stack_state.as_ref().unwrap().resources;
+            if resources["consumer"].status == ResourceStatus::Running
+                && resources["old-dependency"].status == ResourceStatus::Running
+            {
+                saw_running_with_pending_deletion = true;
+                assert_eq!(state.status, DeploymentStatus::Provisioning);
+                assert!(state.current_release.is_none());
+            }
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+        }
+        assert!(saw_running_with_pending_deletion);
+        assert_eq!(state.status, DeploymentStatus::Running);
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(resources["old-dependency"].status, ResourceStatus::Deleted);
+        assert!(resources["consumer"].dependencies.is_empty());
+        assert!(state.current_release.is_some());
         assert!(state.target_release.is_none());
     }
 

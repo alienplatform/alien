@@ -21,7 +21,7 @@ fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &Stack
         })
 }
 
-fn compute_update_status(
+pub(crate) fn compute_update_status(
     stack_state: &StackState,
     target_stack: &Stack,
     reconciled: &HashSet<&str>,
