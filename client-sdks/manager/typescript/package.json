@@ -2,15 +2,6 @@
   "name": "@alienplatform/manager-api",
   "version": "3.3.29",
   "author": "Alien Software, Inc. <hi@alien.dev>",
-  "homepage": "https://alien.dev",
-  "license": "FSL-1.1-Apache-2.0",
-  "repository": {
-    "directory": "client-sdks/manager/typescript",
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git"
-  },
-  "type": "module",
-  "main": "./esm/index.js",
   "exports": {
     ".": {
       "source": "./src/index.ts",
@@ -49,6 +40,15 @@
       "default": "./esm/*.js"
     }
   },
+  "homepage": "https://alien.dev",
+  "license": "FSL-1.1-Apache-2.0",
+  "repository": {
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "client-sdks/manager/typescript",
+    "type": "git"
+  },
+  "type": "module",
+  "main": "./esm/index.js",
   "sideEffects": false,
   "repository": {
     "type": "git",

@@ -1,18 +1,18 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: 68b5ad39c6899183529bc86b8b63fffc
+  docChecksum: 618f6e5370ca3672b664c190b3093587
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
   releaseVersion: 3.3.29
-  configChecksum: 8575f1dd457ce9f07bbab6e6fa6da843
+  configChecksum: 4242b16619aac196d376cf3fa1d2a04a
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: 3ec576a8-b032-4659-998f-e8313c08ba1c
-  pristine_commit_hash: f5cc60bd440c9b03c0083f9028468603e0e8b8d3
-  pristine_tree_hash: e16581970f6a2eed9821672b6c51a4905717d8c5
+  generation_id: 903f132d-0bc5-4577-932a-63840a6c2bd1
+  pristine_commit_hash: cbd9c3e5263550d83a72feff09edbb6d11949098
+  pristine_tree_hash: debc1f4230b16fb48efe199932e594e5d94d1f60
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -27,7 +27,6 @@ features:
     globalSecurityCallbacks: 0.1.0
     globalSecurityFlattening: 0.1.0
     globalServerURLs: 2.83.0
-    includes: 2.81.1
     methodArguments: 0.1.2
     nullables: 0.1.1
     responseFormat: 0.2.3
@@ -2521,8 +2520,8 @@ trackedFiles:
     pristine_git_object: bacf1b92e83e395cf7211ea30b1e97fa5406c40f
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:35a1078d08a1fa33d84e807cef31b63a68d0c0f5
-    pristine_git_object: b002fc03e0f925129cc10986ae76f7f3784307b5
+    last_write_checksum: sha1:f8db8cbb6aff7c0fc58a1a972471ba9421bcb886
+    pristine_git_object: 766c03e48e953a1b7bfbeca63be9dff2c78ccc27
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
