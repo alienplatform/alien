@@ -69,4 +69,17 @@ fn generated_manager_sdk_preserves_core_external_binding_coordinates_and_credent
             serde_json::from_value(serde_json::to_value(sdk).unwrap()).unwrap();
         assert_eq!(restored, bindings);
     }
+
+    let missing_bucket = json!({
+        "archive": {
+            "type": "storage",
+            "service": "s3",
+            "endpoint": "https://storage.example.com"
+        }
+    });
+    assert!(serde_json::from_value::<ExternalBindings>(missing_bucket.clone()).is_err());
+    assert!(
+        serde_json::from_value::<alien_manager_api::types::ExternalBindings>(missing_bucket)
+            .is_err()
+    );
 }
