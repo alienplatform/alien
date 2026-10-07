@@ -187,3 +187,36 @@ for (const name of [
 `], { cwd: sdkDirectory, encoding: "utf8" })
   assert.equal(result.status, 0, result.stdout + result.stderr)
 })
+
+
+test("JSR models route preserves legacy binding imports and old capability literals", () => {
+  const sdkDirectory = fileURLToPath(new URL("../typescript/", import.meta.url))
+  const manifest = JSON.parse(fs.readFileSync(path.join(sdkDirectory, "jsr.json"), "utf8"))
+  const directory = fs.mkdtempSync(path.join(sdkDirectory, ".jsr-consumer-"))
+  try {
+    const consumer = path.join(directory, "consumer.ts")
+    fs.writeFileSync(consumer, `
+import { type ExternalBindings, type ManagerCapabilities, externalBindingsFromJSON, externalBindingsToJSON } from "@alienplatform/manager-api/models";
+const capabilities: ManagerCapabilities = { charts: false, tunnels: true };
+const bindings: ExternalBindings = { archive: { type: "storage", service: "s3", bucketName: "archive-bucket" } };
+const parsed = externalBindingsFromJSON(externalBindingsToJSON(bindings));
+if (parsed.ok) externalBindingsToJSON(parsed.value);
+void capabilities;
+`)
+    const config = path.join(directory, "tsconfig.json")
+    fs.writeFileSync(config, JSON.stringify({
+      compilerOptions: {
+        strict: true, skipLibCheck: true, noEmit: true,
+        module: "NodeNext", moduleResolution: "NodeNext", target: "ES2022",
+        paths: { "@alienplatform/manager-api/models": [path.resolve(sdkDirectory, manifest.exports["./models"])] },
+      },
+      files: [consumer],
+    }))
+    const result = spawnSync(process.execPath, [
+      path.join(sdkDirectory, "node_modules/typescript/bin/tsc"), "--project", config,
+    ], { encoding: "utf8" })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
