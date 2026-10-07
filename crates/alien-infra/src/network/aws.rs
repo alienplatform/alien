@@ -219,12 +219,22 @@ fn adopt_create_attempt_matches(
 // be lost if the process stopped after AWS accepted the call, and the retry would tag a second
 // object with a new token, leaving the first one untraceable.
 
-/// Lookups of a recorded create token that found nothing before the create is repeated. EC2
-/// reads are eventually consistent: an object a lost create made can be missing from a read
-/// for a few seconds, and a repeated create under the same token makes a second object.
-const CREATE_LOOKUP_MAX_POLLS: u32 = 4;
-/// Delay between those lookups.
-const CREATE_LOOKUP_DELAY: Duration = Duration::from_secs(5);
+/// Lookups of a recorded create token that found nothing before the create is made. EC2 reads
+/// are eventually consistent: an object made by a create whose response was lost, or whose
+/// step was never saved, can be missing from a read for a few seconds, and a repeated create
+/// under the same token makes a second object (an Elastic IP is billed and counts against a
+/// small quota). Saved state cannot tell a first create from one AWS already accepted, so every
+/// create waits these out.
+const CREATE_LOOKUP_MAX_POLLS: u32 = 3;
+/// Delay before the first of those lookups, doubled for each next one (1 s, 2 s, 4 s). Objects
+/// an accepted create made showed up in reads within 1 to 3 seconds in live runs, so this keeps
+/// a normal create about 7 seconds slower per object instead of 20.
+const CREATE_LOOKUP_FIRST_DELAY: Duration = Duration::from_secs(1);
+
+/// The delay before lookup number `lookup` (1-based) of a create token.
+fn create_lookup_delay(lookup: u32) -> Duration {
+    CREATE_LOOKUP_FIRST_DELAY * 2u32.pow(lookup.saturating_sub(1))
+}
 /// Create calls for one object before the create gives up. The lookups between failed creates
 /// succeed, which resets the executor's retry count, so without this bound a create that keeps
 /// failing would repeat forever.
@@ -942,8 +952,8 @@ enum SubnetProgress {
     Created(String),
     /// A new create attempt was recorded; the create runs in the next step.
     AttemptRecorded,
-    /// The recorded attempt found nothing yet; look again before creating.
-    LookAgain,
+    /// The recorded attempt found nothing yet; look again after this wait before creating.
+    LookAgain(AwsNetworkHandlerAction),
 }
 
 /// A `create_subnet` call that may have created a subnet whose ID is not recorded yet.
@@ -1667,26 +1677,11 @@ impl AwsNetworkController {
         }
     }
 
-    fn subnet_look_again() -> AwsNetworkHandlerAction {
-        AwsNetworkHandlerAction::Stay {
-            max_times: None,
-            suggested_delay: Some(CREATE_LOOKUP_DELAY),
-        }
-    }
-
-    /// Before repeating a create whose token found nothing, looks again a few times: the object
-    /// a lost create made may not be visible yet. Returns the wait, or `None` once the lookups
-    /// are used up and the create may be repeated.
-    ///
-    /// With no create call counted in saved state, the token was recorded by its own step and
-    /// this is the first create (or a manual retry, which resets the count): one lookup is
-    /// enough. Only a crash between AWS accepting a create and the step being saved reaches
-    /// here with an object that may not be visible yet; a create repeated then carries the
-    /// same token, so later lookups find both objects.
+    /// Before creating under a token that found nothing, looks again a few times with short
+    /// backoff: an object a create already made may not be visible yet. This holds for the
+    /// first create too, since a crash after AWS accepted it leaves the same saved state.
+    /// Returns the wait, or `None` once the lookups are used up and the create may be made.
     fn wait_before_repeating_a_create(&mut self) -> Option<AwsNetworkHandlerAction> {
-        if self.wait_for_repeated_create_iterations == 0 {
-            return None;
-        }
         if self.wait_for_create_lookup_iterations < CREATE_LOOKUP_MAX_POLLS {
             self.wait_for_create_lookup_iterations += 1;
             debug!(
@@ -1695,7 +1690,7 @@ impl AwsNetworkController {
             );
             return Some(AwsNetworkHandlerAction::Stay {
                 max_times: None,
-                suggested_delay: Some(CREATE_LOOKUP_DELAY),
+                suggested_delay: Some(create_lookup_delay(self.wait_for_create_lookup_iterations)),
             });
         }
         self.wait_for_create_lookup_iterations = 0;
@@ -1894,8 +1889,8 @@ impl AwsNetworkController {
                 self.wait_for_repeated_create_iterations = 0;
                 return Ok(SubnetProgress::Created(subnet_id));
             }
-            if self.wait_before_repeating_a_create().is_some() {
-                return Ok(SubnetProgress::LookAgain);
+            if let Some(wait) = self.wait_before_repeating_a_create() {
+                return Ok(SubnetProgress::LookAgain(wait));
             }
         }
 
@@ -3081,7 +3076,7 @@ impl AwsNetworkController {
             {
                 SubnetProgress::Created(subnet_id) => subnet_id,
                 SubnetProgress::AttemptRecorded => return Ok(Self::subnet_attempt_recorded()),
-                SubnetProgress::LookAgain => return Ok(Self::subnet_look_again()),
+                SubnetProgress::LookAgain(wait) => return Ok(wait),
             };
             self.public_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
@@ -3111,7 +3106,7 @@ impl AwsNetworkController {
             {
                 SubnetProgress::Created(subnet_id) => subnet_id,
                 SubnetProgress::AttemptRecorded => return Ok(Self::subnet_attempt_recorded()),
-                SubnetProgress::LookAgain => return Ok(Self::subnet_look_again()),
+                SubnetProgress::LookAgain(wait) => return Ok(wait),
             };
             self.private_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
@@ -5139,9 +5134,9 @@ mod controller_state_tests {
     /// Steps through the lookups a create makes before repeating a create whose recorded
     /// token found nothing.
     async fn wait_out_create_lookups(executor: &mut SingleControllerExecutor) {
-        for _ in 0..CREATE_LOOKUP_MAX_POLLS {
+        for lookup in 1..=CREATE_LOOKUP_MAX_POLLS {
             let result = executor.step().await.expect("looks again before creating");
-            assert_eq!(result.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+            assert_eq!(result.suggested_delay, Some(create_lookup_delay(lookup)));
         }
     }
 
@@ -5195,9 +5190,9 @@ mod controller_state_tests {
     async fn vpc_id_survives_a_dns_failure_and_the_retry_does_not_create_another_vpc() {
         let mut ec2 = MockEc2Api::new();
         expect_two_zones(&mut ec2);
-        // A first attempt has created nothing: the lookup of its new token finds nothing.
+        // A first attempt has created nothing: the lookups of its new token find nothing.
         ec2.expect_describe_vpcs()
-            .times(1)
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
             .withf(|request| filters_token(request.filters.as_ref()).is_some())
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
@@ -5226,6 +5221,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("VPC creation should succeed");
         assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
         assert_eq!(
@@ -5344,9 +5340,9 @@ mod controller_state_tests {
                     "tagSet": owned_tags_json()
                 }]}})))
             });
-        // The lookup of this create's own token finds nothing.
+        // The lookups of this create's own token find nothing.
         ec2.expect_describe_vpcs()
-            .times(1)
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
             .withf(|request| filters_token(request.filters.as_ref()).is_some())
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
@@ -5365,6 +5361,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("VPC creation should succeed");
         let state = controller(&executor);
         assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
@@ -5413,6 +5410,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect_err("first create fails");
         wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("retry succeeds");
@@ -5473,7 +5471,7 @@ mod controller_state_tests {
         .await;
 
         let wait = executor.step().await.expect("the miss waits");
-        assert_eq!(wait.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+        assert_eq!(wait.suggested_delay, Some(create_lookup_delay(1)));
         assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
         assert_eq!(
             controller(&executor).vpc_create_token.as_deref(),
@@ -5553,9 +5551,9 @@ mod controller_state_tests {
     #[tokio::test]
     async fn internet_gateway_is_recorded_before_attach_and_a_failed_attach_only_retries_attach() {
         let mut ec2 = MockEc2Api::new();
-        // The lookup of the new token finds nothing.
+        // The lookups of the new token find nothing.
         ec2.expect_describe_internet_gateways()
-            .times(1)
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_internet_gateway()
             .times(1)
@@ -5585,6 +5583,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("create succeeds");
         assert_eq!(
             controller(&executor).internet_gateway_id.as_deref(),
@@ -5786,15 +5785,17 @@ mod controller_state_tests {
     async fn subnet_from_another_create_attempt_is_not_adopted() {
         let mut ec2 = MockEc2Api::new();
         // Same VPC, CIDR and ownership tags, but another controller's token. Looked up before
-        // the create (the token finding nothing) and again after its conflict.
-        ec2.expect_describe_subnets().times(2).returning(|_| {
-            Ok(parse(json!({ "subnetSet": { "item": [{
-                "subnetId": "subnet-other",
-                "vpcId": "vpc-1",
-                "cidrBlock": "10.0.0.0/20",
-                "tagSet": attempt_tags_json("attempt-0")
-            }]}})))
-        });
+        // the create (a few times, the token finding nothing) and again after its conflict.
+        ec2.expect_describe_subnets()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 2)
+            .returning(|_| {
+                Ok(parse(json!({ "subnetSet": { "item": [{
+                    "subnetId": "subnet-other",
+                    "vpcId": "vpc-1",
+                    "cidrBlock": "10.0.0.0/20",
+                    "tagSet": attempt_tags_json("attempt-0")
+                }]}})))
+            });
         let new_token = Arc::new(Mutex::new(None));
         let seen = new_token.clone();
         ec2.expect_create_subnet()
@@ -5818,6 +5819,7 @@ mod controller_state_tests {
         )
         .await;
 
+        wait_out_create_lookups(&mut executor).await;
         executor
             .step()
             .await
@@ -5875,7 +5877,7 @@ mod controller_state_tests {
         .await;
 
         let wait = executor.step().await.expect("the miss waits");
-        assert_eq!(wait.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+        assert_eq!(wait.suggested_delay, Some(create_lookup_delay(1)));
         step_while_in(&mut executor, AwsNetworkState::CreatingSubnets)
             .await
             .expect("the next read finds our subnet");
@@ -5902,6 +5904,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect("records the create attempt");
+        wait_out_create_lookups(&mut executor).await;
         let error = executor.step().await.expect_err("missing subnet ID");
         assert!(error.to_string().contains("no subnet ID"), "{error}");
         assert!(controller(&executor).public_subnet_ids.is_empty());
@@ -5927,9 +5930,9 @@ mod controller_state_tests {
     #[tokio::test]
     async fn nat_create_retry_reuses_the_elastic_ip_and_client_token() {
         let mut ec2 = MockEc2Api::new();
-        // The lookup of the address's new token finds nothing.
+        // The lookups of the address's new token find nothing.
         ec2.expect_describe_addresses()
-            .times(1)
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
             .returning(|| Ok(parse(json!({}))));
         ec2.expect_allocate_address()
             .times(1)
@@ -5956,6 +5959,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect("records the address token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("allocation succeeds");
         assert_eq!(
             controller(&executor).eip_allocation_id.as_deref(),
@@ -7490,7 +7494,7 @@ mod controller_state_tests {
         assert_eq!(creates.load(Ordering::SeqCst), MAX_CREATE_CALLS as usize);
         assert_eq!(controller(&failing).vpc_id, None);
 
-        // A manual retry resets the count, so the create is tried again after one lookup.
+        // A manual retry resets the count, so the create is tried again after the lookups.
         let mut retried = controller(&failing).clone();
         retried.reset_stay_count();
         assert_eq!(retried.wait_for_repeated_create_iterations, 0);
@@ -7502,6 +7506,7 @@ mod controller_state_tests {
             .times(1)
             .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } }))));
         let mut retry = executor(ec2, retried, None).await;
+        wait_out_create_lookups(&mut retry).await;
         retry.step().await.expect("the retried create succeeds");
         assert_eq!(controller(&retry).vpc_id.as_deref(), Some("vpc-1"));
         assert_eq!(controller(&retry).wait_for_repeated_create_iterations, 0);
@@ -7714,7 +7719,7 @@ mod controller_state_tests {
         }));
         let mut ec2 = MockEc2Api::new();
         ec2.expect_describe_addresses()
-            .times(1)
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
             .returning(|| Ok(parse(json!({}))));
         ec2.expect_allocate_address()
             .times(1)
@@ -7731,6 +7736,7 @@ mod controller_state_tests {
             AwsNetworkState::AllocatingElasticIp
         );
         executor.step().await.expect("record the address token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("allocate");
         executor.step().await.expect("record the NAT gateway token");
         executor.step().await.expect("create NAT");
@@ -7783,13 +7789,14 @@ mod controller_state_tests {
         ec2.expect_describe_addresses()
             .returning(|| Ok(parse(json!({}))));
         expect_two_zones(&mut ec2);
-        // Each create looks its saved token up once before calling AWS and finds nothing;
-        // delete looks the VPC and gateway tokens up once more for duplicates.
+        // Each create looks its saved token up before calling AWS, with short backoff, and finds
+        // nothing; delete looks the VPC and gateway tokens up once more for duplicates.
+        let create_lookups = CREATE_LOOKUP_MAX_POLLS as usize + 1;
         ec2.expect_describe_vpcs()
-            .times(2)
+            .times(create_lookups + 1)
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_describe_internet_gateways()
-            .times(2)
+            .times(create_lookups + 1)
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
             .times(1)
@@ -7807,9 +7814,9 @@ mod controller_state_tests {
         ec2.expect_attach_internet_gateway()
             .times(1)
             .returning(|_| Ok(()));
-        // Each subnet is looked up once under its saved attempt before its create.
+        // Each subnet is looked up under its saved attempt before its create.
         ec2.expect_describe_subnets()
-            .times(4)
+            .times(4 * create_lookups)
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_subnet().times(4).returning(|request| {
             Ok(parse(
@@ -7961,7 +7968,7 @@ mod controller_state_tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_polling_delays(
             &executor.take_suggested_delays(),
-            Duration::from_secs(15),
+            CREATE_LOOKUP_FIRST_DELAY,
             "create",
         );
         let ready = controller(&executor).clone();
@@ -8078,6 +8085,7 @@ mod controller_state_tests {
         let checkpoint =
             step_to_token_checkpoint(&mut first, &created, AwsNetworkState::CreatingVpc).await;
         assert_eq!(checkpoint.cidr_block.as_deref(), Some("10.0.0.0/16"));
+        wait_out_create_lookups(&mut first).await;
         first.step().await.expect("AWS creates the VPC");
         assert_eq!(controller(&first).vpc_id.as_deref(), Some("vpc-1"));
         drop(first);
@@ -8137,6 +8145,7 @@ mod controller_state_tests {
             .subnet_create_attempt
             .clone()
             .expect("the first subnet's attempt is saved");
+        wait_out_create_lookups(&mut first).await;
         first.step().await.expect("AWS creates the first subnet");
         assert_eq!(controller(&first).public_subnet_ids, ["subnet-1"]);
         drop(first);
@@ -8194,6 +8203,7 @@ mod controller_state_tests {
             AwsNetworkState::CreatingInternetGateway,
         )
         .await;
+        wait_out_create_lookups(&mut first).await;
         first.step().await.expect("AWS creates the gateway");
         drop(first);
 
@@ -8246,6 +8256,7 @@ mod controller_state_tests {
         let checkpoint =
             step_to_token_checkpoint(&mut first, &created, AwsNetworkState::AllocatingElasticIp)
                 .await;
+        wait_out_create_lookups(&mut first).await;
         first.step().await.expect("AWS allocates the address");
         drop(first);
 
@@ -8312,5 +8323,71 @@ mod controller_state_tests {
         assert_eq!(state.nat_gateway_id.as_deref(), Some("nat-1"));
         assert_eq!(state.state, AwsNetworkState::WaitingForNatGateway);
         assert_eq!(created.lock().unwrap().len(), 1, "no second gateway");
+    }
+    /// After the restart the first read still misses the address AWS allocated before the
+    /// crash. The create waits with short backoff instead of allocating a second address
+    /// (billed, and limited by a small quota), and the next read finds it.
+    #[tokio::test]
+    async fn elastic_ip_missed_by_the_first_read_after_a_crash_is_not_allocated_again() {
+        let created = Created::default();
+        let hidden_reads = Arc::new(AtomicUsize::new(0));
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            let world = created.clone();
+            let hidden = hidden_reads.clone();
+            ec2.expect_describe_addresses().returning(move || {
+                if hidden
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+                {
+                    return Ok(parse(json!({})));
+                }
+                let items: Vec<_> = world
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(id, token, _)| {
+                        json!({ "allocationId": id, "tagSet": attempt_tags_json(token) })
+                    })
+                    .collect();
+                Ok(parse(json!({ "addressesSet": { "item": items } })))
+            });
+            let world = created.clone();
+            ec2.expect_allocate_address().returning(move |request| {
+                let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("tagged with its token");
+                let mut world = world.lock().unwrap();
+                let id = format!("eipalloc-{}", world.len() + 1);
+                world.push((id.clone(), token, String::new()));
+                Ok(parse(json!({ "allocationId": id })))
+            });
+            ec2
+        };
+
+        let mut first = executor(
+            ec2(),
+            after_route_tables(AwsNetworkState::AllocatingElasticIp),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let checkpoint =
+            step_to_token_checkpoint(&mut first, &created, AwsNetworkState::AllocatingElasticIp)
+                .await;
+        wait_out_create_lookups(&mut first).await;
+        first.step().await.expect("AWS allocates the address");
+        drop(first);
+
+        hidden_reads.store(1, Ordering::SeqCst);
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        let wait = restarted.step().await.expect("the miss waits");
+        assert_eq!(wait.suggested_delay, Some(create_lookup_delay(1)));
+        restarted
+            .step()
+            .await
+            .expect("the next read finds the address");
+        let state = controller(&restarted);
+        assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-1"));
+        assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
+        assert_eq!(created.lock().unwrap().len(), 1, "no second address");
     }
 }
