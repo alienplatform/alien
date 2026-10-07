@@ -43,6 +43,10 @@ pub fn management_narrowed(old: &ManagementPermissions, new: &ManagementPermissi
 }
 
 /// Whether a frozen service account only lost permission sets.
+///
+/// Legacy prepared stacks kept resource grants only in the permission profile,
+/// so an empty resource capture can mean "not captured" rather than "none".
+/// Only accounts that capture resource grants the same way are compared.
 pub fn service_account_narrowed(old: &Resource, new: &Resource) -> bool {
     let (Some(old), Some(new)) = (
         old.downcast_ref::<ServiceAccount>(),
@@ -51,6 +55,7 @@ pub fn service_account_narrowed(old: &Resource, new: &Resource) -> bool {
         return false;
     };
     old.id == new.id
+        && old.resource_permission_sets.is_empty() == new.resource_permission_sets.is_empty()
         && new
             .stack_permission_sets
             .iter()

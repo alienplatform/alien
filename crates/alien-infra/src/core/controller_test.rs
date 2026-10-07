@@ -731,6 +731,7 @@ impl SingleControllerExecutor {
 /// Builder for SingleControllerExecutor
 pub struct SingleControllerExecutorBuilder {
     resource: Option<Resource>,
+    previous_resource: Option<Resource>,
     controller: Option<Box<dyn ResourceController>>,
     platform: Option<Platform>,
     stack_settings: StackSettings,
@@ -758,6 +759,7 @@ impl SingleControllerExecutorBuilder {
     fn new() -> Self {
         Self {
             resource: None,
+            previous_resource: None,
             controller: None,
             platform: None,
             stack_settings: StackSettings::default(),
@@ -885,6 +887,12 @@ impl SingleControllerExecutorBuilder {
     }
 
     /// Sets the controller to test.
+    /// Restores the previous config when resuming a persisted update handler.
+    pub fn previous_resource<R: ResourceDefinition>(mut self, resource: R) -> Self {
+        self.previous_resource = Some(Resource::new(resource));
+        self
+    }
+
     pub fn controller(mut self, controller: impl ResourceController + 'static) -> Self {
         self.controller = Some(Box::new(controller));
         self
@@ -1199,6 +1207,7 @@ impl SingleControllerExecutorBuilder {
             .resource_type(resource.resource_type().to_string())
             .status(status)
             .config(resource.clone())
+            .maybe_previous_config(self.previous_resource)
             .maybe_internal_state(internal_state)
             .maybe_outputs(outputs)
             .lifecycle(self.resource_lifecycle)

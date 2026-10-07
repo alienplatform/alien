@@ -451,7 +451,7 @@ pub async fn acquire_setup_delete_deployment(
     ];
 
     for attempt in 1..=MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS {
-        let resp = client
+        let response = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
                 acquire_mode: Some("setup-teardown".to_string()),
@@ -465,10 +465,33 @@ pub async fn acquire_setup_delete_deployment(
             })
             .send()
             .await
-            .into_sdk_error()
-            .context(alien_error::GenericError {
-                message: "Failed to acquire setup teardown sync lock".to_string(),
-            })?;
+            .into_sdk_error();
+        let resp = match response {
+            Ok(response) => response,
+            Err(error) => {
+                // A runtime with setup authority can finish and remove the record
+                // between the delete request and this acquire request.
+                if is_missing_deployment_response(&error) {
+                    let lookup = client
+                        .get_deployment()
+                        .id(deployment_id)
+                        .send()
+                        .await
+                        .into_sdk_error();
+                    if let Err(lookup_error) = lookup {
+                        if is_missing_deployment_response(&lookup_error) {
+                            return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
+                        }
+                        return Err(lookup_error.context(alien_error::GenericError {
+                            message: "Failed to confirm completed deployment deletion".to_string(),
+                        }));
+                    }
+                }
+                return Err(error.context(alien_error::GenericError {
+                    message: "Failed to acquire setup teardown sync lock".to_string(),
+                }));
+            }
+        };
 
         if let Some(acquired) = resp.into_inner().deployments.into_iter().next() {
             return Ok(SetupDeleteAcquireOutcome::Acquired {
@@ -671,6 +694,63 @@ mod tests {
     };
     use chrono::TimeZone;
     use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn setup_delete_acquire_confirms_a_concurrently_removed_record() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(404).body("removed deployment");
+            })
+            .await;
+        let lookup = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(404).body("removed deployment");
+            })
+            .await;
+        let result = acquire_setup_delete_deployment(
+            &ManagerClient::new(&server.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .expect("confirmed removed record is completed deletion");
+        assert!(matches!(result, SetupDeleteAcquireOutcome::AlreadyDeleted));
+        acquire.assert_async().await;
+        lookup.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn setup_delete_acquire_does_not_hide_a_failed_completion_lookup() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(404).body("missing");
+            })
+            .await;
+        let lookup = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(500).body("backend unavailable");
+            })
+            .await;
+        let error = acquire_setup_delete_deployment(
+            &ManagerClient::new(&server.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .err()
+        .expect("lookup failure must not report deleted");
+        assert_eq!(error.http_status_code, Some(500));
+        acquire.assert_async().await;
+        lookup.assert_async().await;
+    }
 
     #[test]
     fn only_not_found_means_deleted_cleanup_is_already_complete() {

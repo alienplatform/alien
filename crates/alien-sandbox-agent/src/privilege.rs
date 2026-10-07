@@ -46,17 +46,9 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
         if identity.uid == 0 || identity.gid == 0 {
             return Err(io::Error::from_raw_os_error(libc::EPERM));
         }
-        // Clear ambient and inherited capabilities even if the supervisor received ALL.
-        if libc::prctl(
-            libc::PR_CAP_AMBIENT,
-            libc::PR_CAP_AMBIENT_CLEAR_ALL,
-            0,
-            0,
-            0,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        // Clear ambient capabilities; where the kernel rejects that, the capset after setuid
+        // zeroes inheritable, which empties the ambient set too.
+        clear_ambient_capabilities()?;
         if libc::geteuid() == 0 {
             for capability in 0..64 {
                 let present = libc::prctl(libc::PR_CAPBSET_READ, capability, 0, 0, 0);
@@ -137,6 +129,33 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
     Ok(())
 }
 
+/// Empties the ambient capability set. EINVAL is tolerated because every caller follows with a
+/// capset that zeroes the inheritable set, and that capset empties the ambient set whether or not
+/// this call did; a caller that does not must not use this. A kernel without ambient support
+/// (Linux < 4.3, or the gVisor that GCP Agent Platform runs) answers every `PR_CAP_AMBIENT` with
+/// EINVAL.
+#[cfg(target_os = "linux")]
+fn clear_ambient_capabilities() -> io::Result<()> {
+    let cleared = unsafe {
+        libc::prctl(
+            libc::PR_CAP_AMBIENT,
+            libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    } == 0;
+    if cleared {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EINVAL) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
 /// Shrinks AWS's ALL capability grant before the supervisor starts image code or serves exec.
 /// Retains only network administration, identity dropping, and access to command-owned files.
 #[cfg(target_os = "linux")]
@@ -172,16 +191,7 @@ pub fn restrict_supervisor() -> io::Result<()> {
                 return Err(io::Error::last_os_error());
             }
         }
-        if libc::prctl(
-            libc::PR_CAP_AMBIENT,
-            libc::PR_CAP_AMBIENT_CLEAR_ALL,
-            0,
-            0,
-            0,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        clear_ambient_capabilities()?;
         let header = Header {
             version: 0x20080522,
             pid: 0,
@@ -265,9 +275,7 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn child_identity_and_ipv6_filter_are_irreversible() {
-        // Only async-signal-safe syscalls in the child: no allocator or test framework after fork.
+    fn unprivileged_identity() -> ExecIdentity {
         unsafe {
             let uid = if libc::geteuid() == 0 {
                 60000
@@ -279,6 +287,15 @@ mod tests {
             } else {
                 libc::getegid()
             };
+            ExecIdentity { uid, gid }
+        }
+    }
+
+    #[test]
+    fn child_identity_and_ipv6_filter_are_irreversible() {
+        // Only async-signal-safe syscalls in the child: no allocator or test framework after fork.
+        unsafe {
+            let ExecIdentity { uid, gid } = unprivileged_identity();
             let pid = libc::fork();
             assert!(pid >= 0, "fork must succeed");
             if pid == 0 {
@@ -316,6 +333,74 @@ mod tests {
             assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
             assert!(libc::WIFEXITED(status), "child was killed: {status}");
             assert_eq!(libc::WEXITSTATUS(status), 0, "identity/filter check failed");
+        }
+    }
+
+    #[test]
+    fn drop_succeeds_where_the_kernel_has_no_ambient_capabilities() {
+        #[cfg(target_arch = "x86_64")]
+        const ARCH: u32 = 0xc000003e;
+        #[cfg(target_arch = "aarch64")]
+        const ARCH: u32 = 0xc00000b7;
+        let stmt = |code, k| libc::sock_filter {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        };
+        let jump = |k, jt, jf| libc::sock_filter {
+            code: 0x15,
+            jt,
+            jf,
+            k,
+        };
+        // Every PR_CAP_AMBIENT prctl fails with EINVAL, as on a kernel without ambient
+        // capabilities; everything else is allowed.
+        let mut filter = [
+            stmt(0x20, 4),
+            jump(ARCH, 0, 5),
+            stmt(0x20, 0),
+            jump(libc::SYS_prctl as u32, 0, 3),
+            stmt(0x20, 16),
+            jump(libc::PR_CAP_AMBIENT as u32, 0, 1),
+            stmt(0x06, 0x00050000 | libc::EINVAL as u32),
+            stmt(0x06, 0x7fff0000),
+        ];
+        let program = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_mut_ptr(),
+        };
+        unsafe {
+            let identity = unprivileged_identity();
+            let pid = libc::fork();
+            assert!(pid >= 0, "fork must succeed");
+            if pid == 0 {
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                    || libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) != 0
+                {
+                    libc::_exit(10);
+                }
+                if libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_IS_SET, 0, 0, 0) != -1
+                    || *libc::__errno_location() != libc::EINVAL
+                {
+                    libc::_exit(11);
+                }
+                if drop_to(identity).is_err() {
+                    libc::_exit(1);
+                }
+                if libc::geteuid() != identity.uid || libc::getegid() != identity.gid {
+                    libc::_exit(2);
+                }
+                libc::_exit(0);
+            }
+            let mut status = 0;
+            assert_eq!(libc::waitpid(pid, &mut status, 0), pid);
+            assert!(libc::WIFEXITED(status), "child was killed: {status}");
+            assert_eq!(
+                libc::WEXITSTATUS(status),
+                0,
+                "the drop must succeed without ambient capabilities"
+            );
         }
     }
 }

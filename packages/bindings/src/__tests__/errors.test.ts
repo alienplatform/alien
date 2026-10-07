@@ -48,6 +48,34 @@ describe("unwrapNapiError", () => {
     expect(err.context).toEqual({ binding_name: "files", operation: "get" })
   })
 
+  it("keeps the error that caused it, which is where a sandbox refusal names who refused", () => {
+    const err = unwrapNapiError(
+      napiError({
+        code: "SANDBOX_COMMAND_FAILED",
+        message: "Sandbox command failed (dataPlaneRefused): sandbox.create was refused",
+        retryable: false,
+        internal: false,
+        source: {
+          code: "HTTP_RESPONSE_ERROR",
+          message: "Azure CreateSandbox failed: HTTP 403",
+          retryable: false,
+          internal: false,
+          source: {
+            code: "GENERIC_ERROR",
+            message: "innermost",
+            retryable: false,
+            internal: false,
+          },
+        },
+      }),
+    )
+
+    expect(err.cause).toBe(err.source)
+    expect(err.source?.code).toBe("HTTP_RESPONSE_ERROR")
+    expect(err.source?.message).toBe("Azure CreateSandbox failed: HTTP 403")
+    expect(err.hasErrorCode("GENERIC_ERROR")).toBe(true)
+  })
+
   it("wraps a non-JSON message as a generic BINDINGS_ERROR, preserving the message", () => {
     const err = unwrapNapiError(new Error("Failed to load native binding"))
 

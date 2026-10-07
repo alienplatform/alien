@@ -6,7 +6,7 @@
  * `"GenericFailure"` and carries no information. The addon instead serializes a
  * structured envelope into the JS `err.message`:
  *
- *   { code, message, context?, retryable, internal, httpStatusCode?, hint? }
+ *   { code, message, context?, retryable, internal, httpStatusCode?, hint?, source? }
  *
  * where `context` keys are snake_case (e.g. `binding_name`, `env_var`).
  * `unwrapNapiError` recovers that envelope with a single `JSON.parse` — never by
@@ -119,6 +119,8 @@ interface NapiErrorEnvelope {
   internal?: boolean
   httpStatusCode?: number
   hint?: string | null
+  /** The error that caused this one, with its own chain. */
+  source?: NapiErrorEnvelope
 }
 
 /**
@@ -152,8 +154,8 @@ function parseEnvelope(rawMessage: string): NapiErrorEnvelope | undefined {
  * - A message carrying the addon envelope is decoded: `BINDING_NOT_CONFIGURED`
  *   becomes {@link BindingNotConfiguredError} (with `binding` / `envVar` mapped
  *   from the envelope's snake_case context); every other envelope code becomes a
- *   generic `AlienError` that preserves the `code`, `message`, `context`, and
- *   `retryable`, `internal`, `httpStatusCode`, and `hint` metadata.
+ *   generic `AlienError` that preserves the `code`, `message`, `context`, the
+ *   `retryable`, `internal`, `httpStatusCode`, and `hint` metadata, and the `source` chain.
  * - A non-envelope message (napi-internal error) is wrapped as a generic
  *   `BINDINGS_ERROR`, preserving the original message.
  */
@@ -196,6 +198,7 @@ export function unwrapNapiError(err: unknown): AlienError {
     httpStatusCode: envelope.httpStatusCode,
     hint: envelope.hint,
     context,
+    source: envelope.source,
   })
 }
 

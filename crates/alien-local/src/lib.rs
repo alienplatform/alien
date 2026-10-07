@@ -54,7 +54,9 @@
 mod artifact_registry_manager;
 mod container_manager;
 mod daemon_supervisor;
+mod docker_connection;
 mod docker_network;
+pub use docker_connection::connect_docker;
 mod error;
 mod kv_manager;
 mod local_bindings_provider;

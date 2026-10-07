@@ -371,6 +371,7 @@ pub struct LocalRuntimeStatus {
 #[derive(Debug)]
 pub struct LocalContainerManager {
     docker: Docker,
+    docker_host: String,
     state_dir: PathBuf,
     /// Tracked containers (container_id → metadata)
     containers: Arc<RwLock<HashMap<String, ContainerMetadata>>>,
@@ -453,11 +454,7 @@ impl LocalContainerManager {
     /// # Arguments
     /// * `state_dir` - Base directory for container metadata
     pub fn new(state_dir: PathBuf) -> Result<Self> {
-        let docker = Docker::connect_with_local_defaults()
-            .into_alien_error()
-            .context(ErrorData::DockerConnectionFailed {
-                reason: "Failed to connect to Docker daemon. Is Docker running?".to_string(),
-            })?;
+        let (docker, docker_host) = crate::docker_connection::connect_docker_with_host()?;
 
         let containers = Self::load_metadata_from_disk(&state_dir)?
             .into_iter()
@@ -466,6 +463,7 @@ impl LocalContainerManager {
 
         Ok(Self {
             docker,
+            docker_host,
             state_dir,
             containers: Arc::new(RwLock::new(containers)),
             image_load_locks: tokio::sync::Mutex::new(HashMap::new()),
@@ -683,7 +681,7 @@ impl LocalContainerManager {
 
         // Use `docker load` instead of `import_image` to preserve CMD/ENTRYPOINT
         // docker import is for filesystem tarballs, docker load is for OCI image tarballs
-        let output = tokio::process::Command::new("docker")
+        let output = crate::docker_connection::docker_command(&self.docker_host)
             .args(&["load", "-i", &tarball_path.to_string_lossy()])
             .output()
             .await
