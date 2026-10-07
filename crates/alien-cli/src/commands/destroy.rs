@@ -1115,6 +1115,11 @@ mod tests {
                 ID
             });
             record["name"] = serde_json::json!("example");
+            record["status"] = serde_json::json!(if state.delete_authorizations.is_empty() {
+                "running"
+            } else {
+                "teardown-required"
+            });
             record["projectId"] = serde_json::json!("prj_standalone000000000000000000");
             record["workspaceId"] = serde_json::json!("ws_standalone00000000000000");
             record["platform"] = serde_json::json!(if state.wrong_manager_platform {
