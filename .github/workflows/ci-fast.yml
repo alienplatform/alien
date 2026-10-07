@@ -303,7 +303,8 @@ jobs:
             # Cloud client and bindings crates: their `tests/` targets only — the unit
             # tests under `src/` still run here. cloud-tests.yml runs these targets
             # with real cloud credentials.
-            'and not (package(alien-aws-clients) and kind(test))'
+            # This target uses only signed HTTP requests to a local mock server.
+            'and not (package(alien-aws-clients) and kind(test) and not binary_id(alien-aws-clients::aws_ec2_launch_template_tests))'
             'and not (package(alien-gcp-clients) and kind(test))'
             'and not (package(alien-azure-clients) and kind(test))'
             'and not (package(alien-bindings) and kind(test))'
