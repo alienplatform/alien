@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use alien_manager::{
+    AlienManager,
     config::ManagerConfig,
     standalone_config::ManagerTomlConfig,
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
     traits::{CreateTokenParams, TokenStore, TokenType},
-    AlienManager,
 };
 use httpmock::prelude::*;
-use reqwest::{header, StatusCode};
+use reqwest::{StatusCode, header};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -70,10 +70,7 @@ async fn authenticated_manager_advertises_node_identity_support_only_when_opted_
             .build()
             .await
             .unwrap();
-        let (shutdown, receiver) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(manager.start_with_listener_and_shutdown(listener, async {
-            let _ = receiver.await;
-        }));
+        let task = tokio::spawn(manager.start_with_listener(listener));
         let unauthenticated = reqwest::Client::new()
             .get(format!("{url}/v1/manager"))
             .send()
@@ -85,12 +82,8 @@ async fn authenticated_manager_advertises_node_identity_support_only_when_opted_
         assert_eq!(info.url, url);
         assert!(!info.capabilities.charts);
         assert!(!info.capabilities.tunnels);
-        shutdown.send(()).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
     }
 }
 
