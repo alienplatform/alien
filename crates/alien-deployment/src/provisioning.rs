@@ -497,7 +497,7 @@ mod tests {
     async fn provisioning_waits_for_a_removed_dependency_to_finish_deleting() {
         let mut previous = stack(&["consumer", "old-dependency"]);
         previous.resources.get_mut("consumer").unwrap().dependencies =
-            vec![ResourceRef::new("storage", "old-dependency")];
+            vec![ResourceRef::new("storage".into(), "old-dependency")];
         let target = stack(&["consumer"]);
         let mut state = provisioning(installed(&previous).await, target);
         state = step(state).await;
