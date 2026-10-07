@@ -257,7 +257,8 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Clone, Copy)]
 enum Attempts {
     Retried,
-    Once,
+    /// Only a throttled request is sent again.
+    ThrottlingOnly,
 }
 
 #[derive(Debug, Clone)]
@@ -308,16 +309,16 @@ impl Ec2Client {
             .await
     }
 
-    /// Sends a create that has no idempotency token in a single attempt. Retrying it after a
-    /// lost response (a timeout or a reset connection after EC2 acted on the call) would make a
-    /// second object; the caller finds the first one by its tags instead.
+    /// Sends a create that has no idempotency token, retrying it only when EC2 throttled it.
+    /// Retrying after a lost response (a timeout, a reset connection or a 5xx after EC2 acted on
+    /// the call) would make a second object; the caller finds the first one by its tags instead.
     async fn send_create_once<T: DeserializeOwned + Send + 'static>(
         &self,
         form_data: HashMap<String, String>,
         operation: &str,
         resource: &str,
     ) -> Result<T> {
-        self.send_form_with(Attempts::Once, form_data, operation, resource)
+        self.send_form_with(Attempts::ThrottlingOnly, form_data, operation, resource)
             .await
     }
 
@@ -347,9 +348,12 @@ impl Ec2Client {
             Attempts::Retried => {
                 crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
             }
-            Attempts::Once => {
-                crate::aws::aws_request_utils::sign_send_xml_once(builder, &self.sign_config())
-                    .await
+            Attempts::ThrottlingOnly => {
+                crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
+                    builder,
+                    &self.sign_config(),
+                )
+                .await
             }
         };
 
@@ -1473,7 +1477,9 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_create_once(form_data, "CreateSecurityGroup", &request.group_name)
+        // A group name is unique in its VPC, so a resend after a lost response fails as a
+        // duplicate and the caller finds its group by name.
+        self.send_form(form_data, "CreateSecurityGroup", &request.group_name)
             .await
     }
 
@@ -4641,6 +4647,64 @@ mod tests {
 
         assert_eq!(create.hits_async().await, 1);
         assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+    }
+
+    /// A throttled request was rejected before EC2 acted on it, so even a create without an
+    /// idempotency token is sent again.
+    #[tokio::test]
+    async fn a_throttled_create_subnet_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").body_contains("Action=CreateSubnet");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>RequestLimitExceeded</Code><Message>Request limit exceeded.</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .create_subnet(
+                CreateSubnetRequest::builder()
+                    .vpc_id("vpc-1".to_string())
+                    .cidr_block("10.1.0.0/20".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create stays throttled");
+
+        assert_eq!(create.hits_async().await, 4, "one send and three retries");
+        assert_eq!(error.code, "RATE_LIMIT_EXCEEDED");
+    }
+
+    /// A security group name is unique in its VPC: a resend after a lost response fails as a
+    /// duplicate instead of making a second group, so the create keeps its retries.
+    #[tokio::test]
+    async fn a_failed_create_security_group_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .body_contains("Action=CreateSecurityGroup");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        client(&server)
+            .create_security_group(
+                CreateSecurityGroupRequest::builder()
+                    .group_name("stack-sg".to_string())
+                    .description("test".to_string())
+                    .vpc_id("vpc-1".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create keeps failing");
+
+        assert_eq!(create.hits_async().await, 4);
     }
 
     /// Body returned by AWS for `--location-type availability-zone` filtered to t4g.micro in
