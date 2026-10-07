@@ -213,12 +213,28 @@ fn adopt_create_attempt_matches(
     adopted
 }
 
-/// Lookups of a recorded create token that found nothing before the create is repeated. EC2
-/// reads are eventually consistent: an object a lost create made can be missing from a read
-/// for a few seconds, and a repeated create under the same token makes a second object.
-const CREATE_LOOKUP_MAX_POLLS: u32 = 4;
-/// Delay between those lookups.
-const CREATE_LOOKUP_DELAY: Duration = Duration::from_secs(5);
+// CREATE_TOKEN_STEP: every create-attempt token is generated and saved by a step that makes no
+// AWS call, and the next step looks the token up and then creates. The executor saves
+// controller state only between steps: a token generated in the step that calls create would
+// be lost if the process stopped after AWS accepted the call, and the retry would tag a second
+// object with a new token, leaving the first one untraceable.
+
+/// Lookups of a recorded create token that found nothing before the create is made. EC2 reads
+/// are eventually consistent: an object made by a create whose response was lost, or whose
+/// step was never saved, can be missing from a read for a few seconds, and a repeated create
+/// under the same token makes a second object (an Elastic IP is billed and counts against a
+/// small quota). Saved state cannot tell a first create from one AWS already accepted, so every
+/// create waits these out.
+const CREATE_LOOKUP_MAX_POLLS: u32 = 3;
+/// Delay before the first of those lookups, doubled for each next one (1 s, 2 s, 4 s). Objects
+/// an accepted create made showed up in reads within 1 to 3 seconds in live runs, so this keeps
+/// a normal create about 7 seconds slower per object instead of 20.
+const CREATE_LOOKUP_FIRST_DELAY: Duration = Duration::from_secs(1);
+
+/// The delay before lookup number `lookup` (1-based) of a create token.
+fn create_lookup_delay(lookup: u32) -> Duration {
+    CREATE_LOOKUP_FIRST_DELAY * 2u32.pow(lookup.saturating_sub(1))
+}
 /// Create calls for one object before the create gives up. The lookups between failed creates
 /// succeed, which resets the executor's retry count, so without this bound a create that keeps
 /// failing would repeat forever.
@@ -928,6 +944,16 @@ pub struct AwsNetworkController {
     /// step moves on, and by a manual retry.
     #[serde(default)]
     pub(crate) wait_for_delete_dependencies_iterations: u32,
+}
+
+/// Where creating one subnet got to.
+enum SubnetProgress {
+    /// The subnet exists; its ID is to be recorded.
+    Created(String),
+    /// A new create attempt was recorded; the create runs in the next step.
+    AttemptRecorded,
+    /// The recorded attempt found nothing yet; look again after this wait before creating.
+    LookAgain(AwsNetworkHandlerAction),
 }
 
 /// A `create_subnet` call that may have created a subnet whose ID is not recorded yet.
@@ -1644,9 +1670,17 @@ impl AwsNetworkController {
         Ok(())
     }
 
-    /// Before repeating a create whose token found nothing, looks again a few times: the object
-    /// a lost create made may not be visible yet. Returns the wait, or `None` once the lookups
-    /// are used up and the create may be repeated.
+    fn subnet_attempt_recorded() -> AwsNetworkHandlerAction {
+        AwsNetworkHandlerAction::Continue {
+            state: AwsNetworkState::CreatingSubnets,
+            suggested_delay: None,
+        }
+    }
+
+    /// Before creating under a token that found nothing, looks again a few times with short
+    /// backoff: an object a create already made may not be visible yet. This holds for the
+    /// first create too, since a crash after AWS accepted it leaves the same saved state.
+    /// Returns the wait, or `None` once the lookups are used up and the create may be made.
     fn wait_before_repeating_a_create(&mut self) -> Option<AwsNetworkHandlerAction> {
         if self.wait_for_create_lookup_iterations < CREATE_LOOKUP_MAX_POLLS {
             self.wait_for_create_lookup_iterations += 1;
@@ -1656,7 +1690,7 @@ impl AwsNetworkController {
             );
             return Some(AwsNetworkHandlerAction::Stay {
                 max_times: None,
-                suggested_delay: Some(CREATE_LOOKUP_DELAY),
+                suggested_delay: Some(create_lookup_delay(self.wait_for_create_lookup_iterations)),
             });
         }
         self.wait_for_create_lookup_iterations = 0;
@@ -1822,13 +1856,11 @@ impl AwsNetworkController {
     /// Return the subnet with `cidr` in this network's VPC, creating it if it does not
     /// exist. Subnet CIDRs are derived from the VPC CIDR, so a subnet with that CIDR in our
     /// VPC is the one an earlier attempt created; it must also carry our ownership tags.
-    /// `None` means a recorded attempt found nothing yet and the caller should look again
-    /// before creating.
     async fn ensure_subnet(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
         subnet: SubnetSpec<'_>,
-    ) -> Result<Option<String>> {
+    ) -> Result<SubnetProgress> {
         let SubnetSpec {
             vpc_id,
             cidr,
@@ -1855,24 +1887,27 @@ impl AwsNetworkController {
                 self.subnet_create_attempt = None;
                 self.wait_for_create_lookup_iterations = 0;
                 self.wait_for_repeated_create_iterations = 0;
-                return Ok(Some(subnet_id));
+                return Ok(SubnetProgress::Created(subnet_id));
             }
-            if self.wait_before_repeating_a_create().is_some() {
-                return Ok(None);
+            if let Some(wait) = self.wait_before_repeating_a_create() {
+                return Ok(SubnetProgress::LookAgain(wait));
             }
         }
 
         // Subnets are created one at a time and an attempt is cleared only once its ID is
-        // recorded, so an attempt for this CIDR is this subnet's: its token is reused.
+        // recorded, so an attempt for this CIDR is this subnet's: its token is reused. A new
+        // attempt is saved by a step of its own first; see `CREATE_TOKEN_STEP`.
         let attempt = match self.subnet_create_attempt.clone() {
             Some(attempt) if attempt.cidr == cidr => attempt,
-            _ => SubnetCreateAttempt {
-                token: new_create_attempt_token(),
-                cidr: cidr.to_string(),
-                subnet_type: subnet_type.to_string(),
-            },
+            _ => {
+                self.subnet_create_attempt = Some(SubnetCreateAttempt {
+                    token: new_create_attempt_token(),
+                    cidr: cidr.to_string(),
+                    subnet_type: subnet_type.to_string(),
+                });
+                return Ok(SubnetProgress::AttemptRecorded);
+            }
         };
-        self.subnet_create_attempt = Some(attempt.clone());
         let token = attempt.token.clone();
 
         self.count_create_call(&format!("subnet {cidr}"), resource_id)?;
@@ -1907,7 +1942,7 @@ impl AwsNetworkController {
                     info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet an earlier attempt created");
                     self.subnet_create_attempt = None;
                     self.wait_for_repeated_create_iterations = 0;
-                    return Ok(Some(subnet_id));
+                    return Ok(SubnetProgress::Created(subnet_id));
                 }
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!("Subnet {cidr} conflicts with an existing subnet"),
@@ -1934,7 +1969,7 @@ impl AwsNetworkController {
         // The caller records the ID before its next call.
         self.subnet_create_attempt = None;
         self.wait_for_repeated_create_iterations = 0;
-        Ok(Some(subnet_id))
+        Ok(SubnetProgress::Created(subnet_id))
     }
 
     /// Record the objects that create calls made but whose responses were lost, and any
@@ -2714,10 +2749,15 @@ impl AwsNetworkController {
             }
         };
 
-        let token = self
-            .vpc_create_token
-            .get_or_insert_with(new_create_attempt_token)
-            .clone();
+        // The executor saves state only between steps, so the token is saved by a step of its
+        // own before the step that calls create; see `CREATE_TOKEN_STEP`.
+        let Some(token) = self.vpc_create_token.clone() else {
+            self.vpc_create_token = Some(new_create_attempt_token());
+            return Ok(HandlerAction::Continue {
+                state: CreatingVpc,
+                suggested_delay: None,
+            });
+        };
         info!(cidr = %vpc_cidr, "Creating VPC");
 
         self.count_create_call("VPC", &config.id)?;
@@ -2858,10 +2898,14 @@ impl AwsNetworkController {
             }
         }
 
-        let token = self
-            .internet_gateway_create_token
-            .get_or_insert_with(new_create_attempt_token)
-            .clone();
+        // Saved by a step of its own before the create; see `CREATE_TOKEN_STEP`.
+        let Some(token) = self.internet_gateway_create_token.clone() else {
+            self.internet_gateway_create_token = Some(new_create_attempt_token());
+            return Ok(HandlerAction::Continue {
+                state: CreatingInternetGateway,
+                suggested_delay: None,
+            });
+        };
         info!("Creating Internet Gateway");
 
         self.count_create_call("Internet Gateway", &config.id)?;
@@ -3016,7 +3060,7 @@ impl AwsNetworkController {
             if i < self.public_subnet_ids.len() {
                 continue;
             }
-            let Some(subnet_id) = self
+            let subnet_id = match self
                 .ensure_subnet(
                     ctx,
                     SubnetSpec::builder()
@@ -3029,11 +3073,10 @@ impl AwsNetworkController {
                         .build(),
                 )
                 .await?
-            else {
-                return Ok(HandlerAction::Stay {
-                    max_times: None,
-                    suggested_delay: Some(CREATE_LOOKUP_DELAY),
-                });
+            {
+                SubnetProgress::Created(subnet_id) => subnet_id,
+                SubnetProgress::AttemptRecorded => return Ok(Self::subnet_attempt_recorded()),
+                SubnetProgress::LookAgain(wait) => return Ok(wait),
             };
             self.public_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
@@ -3047,7 +3090,7 @@ impl AwsNetworkController {
             if i < self.private_subnet_ids.len() {
                 continue;
             }
-            let Some(subnet_id) = self
+            let subnet_id = match self
                 .ensure_subnet(
                     ctx,
                     SubnetSpec::builder()
@@ -3060,11 +3103,10 @@ impl AwsNetworkController {
                         .build(),
                 )
                 .await?
-            else {
-                return Ok(HandlerAction::Stay {
-                    max_times: None,
-                    suggested_delay: Some(CREATE_LOOKUP_DELAY),
-                });
+            {
+                SubnetProgress::Created(subnet_id) => subnet_id,
+                SubnetProgress::AttemptRecorded => return Ok(Self::subnet_attempt_recorded()),
+                SubnetProgress::LookAgain(wait) => return Ok(wait),
             };
             self.private_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
@@ -3391,10 +3433,14 @@ impl AwsNetworkController {
             }
         }
 
-        let token = self
-            .eip_create_token
-            .get_or_insert_with(new_create_attempt_token)
-            .clone();
+        // Saved by a step of its own before the allocation; see `CREATE_TOKEN_STEP`.
+        let Some(token) = self.eip_create_token.clone() else {
+            self.eip_create_token = Some(new_create_attempt_token());
+            return Ok(HandlerAction::Continue {
+                state: AllocatingElasticIp,
+                suggested_delay: None,
+            });
+        };
         info!("Allocating Elastic IP for NAT Gateway");
 
         self.count_create_call("Elastic IP", &config.id)?;
@@ -3469,16 +3515,19 @@ impl AwsNetworkController {
             })
         })?;
 
-        info!(allocation_id = %allocation_id, "Creating NAT Gateway");
-
         // An Elastic IP backs at most one NAT gateway, so a client token derived from it is
         // unique to this gateway. When a retry repeats the call after a lost response, AWS
-        // returns the gateway the first call created, so the attempt token (which lets delete
-        // find a gateway whose ID was never recorded) stays the same across retries too.
-        let attempt_token = self
-            .nat_gateway_create_token
-            .get_or_insert_with(new_create_attempt_token)
-            .clone();
+        // returns the gateway the first call created. That needs identical parameters, so the
+        // attempt token tagged on it (which lets delete find a gateway whose ID was never
+        // recorded) is saved by a step of its own first; see `CREATE_TOKEN_STEP`.
+        let Some(attempt_token) = self.nat_gateway_create_token.clone() else {
+            self.nat_gateway_create_token = Some(new_create_attempt_token());
+            return Ok(HandlerAction::Continue {
+                state: CreatingNatGateway,
+                suggested_delay: None,
+            });
+        };
+        info!(allocation_id = %allocation_id, "Creating NAT Gateway");
         let nat_response = client
             .create_nat_gateway(
                 CreateNatGatewayRequest::builder()
@@ -5085,10 +5134,25 @@ mod controller_state_tests {
     /// Steps through the lookups a create makes before repeating a create whose recorded
     /// token found nothing.
     async fn wait_out_create_lookups(executor: &mut SingleControllerExecutor) {
-        for _ in 0..CREATE_LOOKUP_MAX_POLLS {
+        for lookup in 1..=CREATE_LOOKUP_MAX_POLLS {
             let result = executor.step().await.expect("looks again before creating");
-            assert_eq!(result.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+            assert_eq!(result.suggested_delay, Some(create_lookup_delay(lookup)));
         }
+    }
+
+    /// Steps until the controller leaves `state`, or until a step fails. Subnets take a step
+    /// to record each create attempt and another to create, so this walks all of them.
+    async fn step_while_in(
+        executor: &mut SingleControllerExecutor,
+        state: AwsNetworkState,
+    ) -> Result<()> {
+        for _ in 0..40 {
+            if controller(executor).state != state {
+                return Ok(());
+            }
+            executor.step().await?;
+        }
+        panic!("still in {state:?} after 40 steps");
     }
 
     fn controller(executor: &SingleControllerExecutor) -> &AwsNetworkController {
@@ -5126,8 +5190,11 @@ mod controller_state_tests {
     async fn vpc_id_survives_a_dns_failure_and_the_retry_does_not_create_another_vpc() {
         let mut ec2 = MockEc2Api::new();
         expect_two_zones(&mut ec2);
-        // A first attempt has created nothing, so there is nothing to rediscover.
-        ec2.expect_describe_vpcs().times(0);
+        // A first attempt has created nothing: the lookups of its new token find nothing.
+        ec2.expect_describe_vpcs()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
+            .withf(|request| filters_token(request.filters.as_ref()).is_some())
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
             .times(1)
             .withf(|request| request.cidr_block == "10.0.0.0/16")
@@ -5153,6 +5220,8 @@ mod controller_state_tests {
         )
         .await;
 
+        executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("VPC creation should succeed");
         assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
         assert_eq!(
@@ -5271,6 +5340,11 @@ mod controller_state_tests {
                     "tagSet": owned_tags_json()
                 }]}})))
             });
+        // The lookups of this create's own token find nothing.
+        ec2.expect_describe_vpcs()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
+            .withf(|request| filters_token(request.filters.as_ref()).is_some())
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
             .times(1)
             .withf(|request| request.cidr_block != "100.71.0.0/16")
@@ -5286,6 +5360,8 @@ mod controller_state_tests {
         )
         .await;
 
+        executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("VPC creation should succeed");
         let state = controller(&executor);
         assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
@@ -5333,6 +5409,8 @@ mod controller_state_tests {
         )
         .await;
 
+        executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect_err("first create fails");
         wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("retry succeeds");
@@ -5385,6 +5463,7 @@ mod controller_state_tests {
                 state: AwsNetworkState::CreatingVpc,
                 cidr_block: Some("100.70.0.0/16".to_string()),
                 vpc_create_token: Some("attempt-1".to_string()),
+                wait_for_repeated_create_iterations: 1,
                 ..Default::default()
             },
             None,
@@ -5392,7 +5471,7 @@ mod controller_state_tests {
         .await;
 
         let wait = executor.step().await.expect("the miss waits");
-        assert_eq!(wait.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+        assert_eq!(wait.suggested_delay, Some(create_lookup_delay(1)));
         assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
         assert_eq!(
             controller(&executor).vpc_create_token.as_deref(),
@@ -5439,6 +5518,7 @@ mod controller_state_tests {
                 state: AwsNetworkState::CreatingVpc,
                 cidr_block: Some("100.70.0.0/16".to_string()),
                 vpc_create_token: Some("attempt-1".to_string()),
+                wait_for_repeated_create_iterations: 1,
                 ..Default::default()
             },
             None,
@@ -5471,6 +5551,10 @@ mod controller_state_tests {
     #[tokio::test]
     async fn internet_gateway_is_recorded_before_attach_and_a_failed_attach_only_retries_attach() {
         let mut ec2 = MockEc2Api::new();
+        // The lookups of the new token find nothing.
+        ec2.expect_describe_internet_gateways()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_internet_gateway()
             .times(1)
             .returning(|_| {
@@ -5498,6 +5582,8 @@ mod controller_state_tests {
         )
         .await;
 
+        executor.step().await.expect("records the create token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("create succeeds");
         assert_eq!(
             controller(&executor).internet_gateway_id.as_deref(),
@@ -5594,7 +5680,9 @@ mod controller_state_tests {
         )
         .await;
 
-        executor.step().await.expect_err("private-2 fails");
+        step_while_in(&mut executor, AwsNetworkState::CreatingSubnets)
+            .await
+            .expect_err("private-2 fails");
         assert_eq!(
             controller(&executor).public_subnet_ids,
             ["subnet-0", "subnet-16"]
@@ -5602,7 +5690,9 @@ mod controller_state_tests {
         assert_eq!(controller(&executor).private_subnet_ids, ["subnet-128"]);
 
         wait_out_create_lookups(&mut executor).await;
-        executor.step().await.expect("retry succeeds");
+        step_while_in(&mut executor, AwsNetworkState::CreatingSubnets)
+            .await
+            .expect("retry succeeds");
         let state = controller(&executor);
         assert_eq!(state.state, AwsNetworkState::CreatingRouteTables);
         assert_eq!(state.public_subnet_ids, ["subnet-0", "subnet-16"]);
@@ -5645,7 +5735,13 @@ mod controller_state_tests {
     #[tokio::test]
     async fn subnet_created_by_a_lost_response_is_recorded_not_recreated() {
         let mut ec2 = MockEc2Api::new();
-        // Only the subnet with a recorded attempt is looked up, by its exact token.
+        // The subnet with the recorded attempt is looked up by its exact token. The others are
+        // looked up under their own new tokens and do not exist yet.
+        ec2.expect_describe_subnets()
+            .withf(|request| {
+                filters_token(request.filters.as_ref()).as_deref() != Some("attempt-1")
+            })
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_describe_subnets().times(1).returning(|request| {
             let filters = request.filters.expect("lookup by VPC, CIDR and token");
             assert!(filters
@@ -5676,7 +5772,9 @@ mod controller_state_tests {
         )
         .await;
 
-        executor.step().await.expect("subnets should be ensured");
+        step_while_in(&mut executor, AwsNetworkState::CreatingSubnets)
+            .await
+            .expect("subnets should be ensured");
         let state = controller(&executor);
         assert_eq!(state.public_subnet_ids, ["subnet-lost", "subnet-16"]);
         assert_eq!(state.private_subnet_ids, ["subnet-128", "subnet-144"]);
@@ -5741,12 +5839,12 @@ mod controller_state_tests {
         let mut ec2 = MockEc2Api::new();
         let lookups = Arc::new(AtomicUsize::new(0));
         let count = lookups.clone();
-        // The first lookup misses the subnet the lost create made; the next one finds it.
+        // The first lookup misses the subnet the lost create made; the next one finds it. The
+        // other subnets are looked up under their own new tokens and do not exist yet.
         ec2.expect_describe_subnets().returning(move |request| {
-            assert_eq!(
-                filters_token(request.filters.as_ref()).as_deref(),
-                Some("attempt-1")
-            );
+            if filters_token(request.filters.as_ref()).as_deref() != Some("attempt-1") {
+                return Ok(parse(json!({})));
+            }
             if count.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Ok(parse(json!({})));
             }
@@ -5769,15 +5867,18 @@ mod controller_state_tests {
 
         let mut executor = executor(
             ec2,
-            with_subnet_attempt(after_vpc(AwsNetworkState::CreatingSubnets)),
+            AwsNetworkController {
+                // The lost call was counted in the state saved when it failed.
+                wait_for_repeated_create_iterations: 1,
+                ..with_subnet_attempt(after_vpc(AwsNetworkState::CreatingSubnets))
+            },
             Some("10.0.0.0/16"),
         )
         .await;
 
         let wait = executor.step().await.expect("the miss waits");
-        assert_eq!(wait.suggested_delay, Some(CREATE_LOOKUP_DELAY));
-        executor
-            .step()
+        assert_eq!(wait.suggested_delay, Some(create_lookup_delay(1)));
+        step_while_in(&mut executor, AwsNetworkState::CreatingSubnets)
             .await
             .expect("the next read finds our subnet");
         let state = controller(&executor);
@@ -5802,6 +5903,8 @@ mod controller_state_tests {
         )
         .await;
 
+        executor.step().await.expect("records the create attempt");
+        wait_out_create_lookups(&mut executor).await;
         let error = executor.step().await.expect_err("missing subnet ID");
         assert!(error.to_string().contains("no subnet ID"), "{error}");
         assert!(controller(&executor).public_subnet_ids.is_empty());
@@ -5827,6 +5930,10 @@ mod controller_state_tests {
     #[tokio::test]
     async fn nat_create_retry_reuses_the_elastic_ip_and_client_token() {
         let mut ec2 = MockEc2Api::new();
+        // The lookups of the address's new token find nothing.
+        ec2.expect_describe_addresses()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
+            .returning(|| Ok(parse(json!({}))));
         ec2.expect_allocate_address()
             .times(1)
             .returning(|_| Ok(parse(json!({ "allocationId": "eipalloc-1" }))));
@@ -5851,11 +5958,17 @@ mod controller_state_tests {
         )
         .await;
 
+        executor.step().await.expect("records the address token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("allocation succeeds");
         assert_eq!(
             controller(&executor).eip_allocation_id.as_deref(),
             Some("eipalloc-1")
         );
+        executor
+            .step()
+            .await
+            .expect("records the NAT gateway token");
         executor.step().await.expect_err("first NAT create fails");
         assert_eq!(
             controller(&executor).eip_allocation_id.as_deref(),
@@ -5935,6 +6048,10 @@ mod controller_state_tests {
         assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-1"));
 
         // The retry resumes at the create: a new gateway, same Elastic IP, new client token.
+        executor
+            .step()
+            .await
+            .expect("records the new gateway's token");
         executor.step().await.expect("a new NAT gateway is created");
         let state = controller(&executor);
         assert_eq!(state.state, AwsNetworkState::WaitingForNatGateway);
@@ -6203,6 +6320,8 @@ mod controller_state_tests {
             ec2,
             AwsNetworkController {
                 internet_gateway_create_token: Some("attempt-0-of-mine".to_string()),
+                // The lost call was counted in the state saved when it failed.
+                wait_for_repeated_create_iterations: 1,
                 ..after_vpc(AwsNetworkState::CreatingInternetGateway)
             },
             Some("10.0.0.0/16"),
@@ -7211,6 +7330,8 @@ mod controller_state_tests {
                 state: AwsNetworkState::CreatingVpc,
                 cidr_block: Some("100.70.0.0/16".to_string()),
                 vpc_create_token: Some("attempt-1".to_string()),
+                // The lost call was counted in the state saved when it failed.
+                wait_for_repeated_create_iterations: 1,
                 ..Default::default()
             },
             None,
@@ -7373,7 +7494,7 @@ mod controller_state_tests {
         assert_eq!(creates.load(Ordering::SeqCst), MAX_CREATE_CALLS as usize);
         assert_eq!(controller(&failing).vpc_id, None);
 
-        // A manual retry resets the count, so the create is tried again.
+        // A manual retry resets the count, so the create is tried again after the lookups.
         let mut retried = controller(&failing).clone();
         retried.reset_stay_count();
         assert_eq!(retried.wait_for_repeated_create_iterations, 0);
@@ -7597,6 +7718,9 @@ mod controller_state_tests {
             "publicSubnetIds": ["subnet-pub-a"]
         }));
         let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
+            .returning(|| Ok(parse(json!({}))));
         ec2.expect_allocate_address()
             .times(1)
             .returning(|_| Ok(parse(json!({ "allocationId": "eipalloc-1" }))));
@@ -7611,7 +7735,10 @@ mod controller_state_tests {
             controller(&executor).state,
             AwsNetworkState::AllocatingElasticIp
         );
+        executor.step().await.expect("record the address token");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("allocate");
+        executor.step().await.expect("record the NAT gateway token");
         executor.step().await.expect("create NAT");
         assert_eq!(
             controller(&executor).nat_gateway_id.as_deref(),
@@ -7662,13 +7789,14 @@ mod controller_state_tests {
         ec2.expect_describe_addresses()
             .returning(|| Ok(parse(json!({}))));
         expect_two_zones(&mut ec2);
-        // The CIDR is configured and nothing was attempted before, so create looks nothing up;
-        // delete looks the VPC token up once for duplicates and finds none.
+        // Each create looks its saved token up before calling AWS, with short backoff, and finds
+        // nothing; delete looks the VPC and gateway tokens up once more for duplicates.
+        let create_lookups = CREATE_LOOKUP_MAX_POLLS as usize + 1;
         ec2.expect_describe_vpcs()
-            .times(1)
+            .times(create_lookups + 1)
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_describe_internet_gateways()
-            .times(1)
+            .times(create_lookups + 1)
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
             .times(1)
@@ -7686,8 +7814,10 @@ mod controller_state_tests {
         ec2.expect_attach_internet_gateway()
             .times(1)
             .returning(|_| Ok(()));
-        // No create attempt is outstanding, so no subnet is looked up before its create.
-        ec2.expect_describe_subnets().times(0);
+        // Each subnet is looked up under its saved attempt before its create.
+        ec2.expect_describe_subnets()
+            .times(4 * create_lookups)
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_subnet().times(4).returning(|request| {
             Ok(parse(
                 json!({ "subnet": { "subnetId": subnet_id_for(&request.cidr_block) } }),
@@ -7838,7 +7968,7 @@ mod controller_state_tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_polling_delays(
             &executor.take_suggested_delays(),
-            Duration::from_secs(15),
+            CREATE_LOOKUP_FIRST_DELAY,
             "create",
         );
         let ready = controller(&executor).clone();
@@ -7881,5 +8011,383 @@ mod controller_state_tests {
         let state = controller(&executor);
         assert_eq!(state.vpc_id, None);
         assert!(state.route_table_association_ids.is_empty());
+    }
+    // ─────────────── CRASH AFTER AWS ACCEPTED A CREATE ───────────────
+    //
+    // Each test steps until the create token is saved, keeps that checkpoint, lets the next
+    // step's create reach AWS (the mock world keeps the object), then drops the executor as a
+    // process that stopped before saving would. A new executor resumes from the kept
+    // checkpoint and must adopt the object by the saved token instead of creating another.
+
+    /// Objects the mock EC2 created: (id, create-attempt token, CIDR).
+    type Created = Arc<Mutex<Vec<(String, String, String)>>>;
+
+    fn created_with_token(created: &Created, token: Option<&str>) -> Vec<(String, String, String)> {
+        created
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, recorded, _)| Some(recorded.as_str()) == token)
+            .cloned()
+            .collect()
+    }
+
+    /// Steps once and returns the controller the step saved, asserting it only recorded a token.
+    async fn step_to_token_checkpoint(
+        executor: &mut SingleControllerExecutor,
+        created: &Created,
+        state: AwsNetworkState,
+    ) -> AwsNetworkController {
+        executor.step().await.expect("records the create token");
+        let checkpoint = controller(executor).clone();
+        assert_eq!(checkpoint.state, state);
+        assert!(
+            created.lock().unwrap().is_empty(),
+            "the token step creates nothing"
+        );
+        checkpoint
+    }
+
+    #[tokio::test]
+    async fn vpc_created_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let created = Created::default();
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            expect_two_zones(&mut ec2);
+            let world = created.clone();
+            ec2.expect_describe_vpcs().returning(move |request| {
+                let items: Vec<_> =
+                    created_with_token(&world, filters_token(request.filters.as_ref()).as_deref())
+                        .into_iter()
+                        .map(|(id, token, cidr)| {
+                            json!({ "vpcId": id, "cidrBlock": cidr, "tagSet": attempt_tags_json(&token) })
+                        })
+                        .collect();
+                Ok(parse(json!({ "vpcSet": { "item": items } })))
+            });
+            let world = created.clone();
+            ec2.expect_create_vpc().returning(move |request| {
+                let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("tagged with its token");
+                let mut world = world.lock().unwrap();
+                let id = format!("vpc-{}", world.len() + 1);
+                world.push((id.clone(), token, request.cidr_block.clone()));
+                Ok(parse(json!({ "vpc": { "vpcId": id } })))
+            });
+            ec2
+        };
+        let start = AwsNetworkController {
+            state: AwsNetworkState::CreatingVpc,
+            ..Default::default()
+        };
+
+        let mut first = executor(ec2(), start, Some("10.0.0.0/16")).await;
+        let checkpoint =
+            step_to_token_checkpoint(&mut first, &created, AwsNetworkState::CreatingVpc).await;
+        assert_eq!(checkpoint.cidr_block.as_deref(), Some("10.0.0.0/16"));
+        wait_out_create_lookups(&mut first).await;
+        first.step().await.expect("AWS creates the VPC");
+        assert_eq!(controller(&first).vpc_id.as_deref(), Some("vpc-1"));
+        drop(first);
+
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        restarted.step().await.expect("the retry adopts the VPC");
+        let state = controller(&restarted);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-1"));
+        assert!(state.extra_vpc_ids.is_empty());
+        assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
+        assert_eq!(created.lock().unwrap().len(), 1, "no second VPC");
+    }
+
+    #[tokio::test]
+    async fn subnet_created_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let created = Created::default();
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            let world = created.clone();
+            ec2.expect_describe_subnets().returning(move |request| {
+                let cidr = request
+                    .filters
+                    .as_ref()
+                    .and_then(|filters| filters.iter().find(|f| f.name == "cidr-block"))
+                    .map(|f| f.values[0].clone());
+                let items: Vec<_> =
+                    created_with_token(&world, filters_token(request.filters.as_ref()).as_deref())
+                        .into_iter()
+                        .filter(|(_, _, subnet_cidr)| Some(subnet_cidr) == cidr.as_ref())
+                        .map(|(id, token, subnet_cidr)| {
+                            json!({ "subnetId": id, "vpcId": "vpc-1", "cidrBlock": subnet_cidr, "tagSet": attempt_tags_json(&token) })
+                        })
+                        .collect();
+                Ok(parse(json!({ "subnetSet": { "item": items } })))
+            });
+            let world = created.clone();
+            ec2.expect_create_subnet().returning(move |request| {
+                let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("tagged with its token");
+                let mut world = world.lock().unwrap();
+                let id = format!("subnet-{}", world.len() + 1);
+                world.push((id.clone(), token, request.cidr_block.clone()));
+                Ok(parse(json!({ "subnet": { "subnetId": id } })))
+            });
+            ec2
+        };
+
+        let mut first = executor(
+            ec2(),
+            after_vpc(AwsNetworkState::CreatingSubnets),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let checkpoint =
+            step_to_token_checkpoint(&mut first, &created, AwsNetworkState::CreatingSubnets).await;
+        let attempt = checkpoint
+            .subnet_create_attempt
+            .clone()
+            .expect("the first subnet's attempt is saved");
+        wait_out_create_lookups(&mut first).await;
+        first.step().await.expect("AWS creates the first subnet");
+        assert_eq!(controller(&first).public_subnet_ids, ["subnet-1"]);
+        drop(first);
+
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        restarted.step().await.expect("the retry adopts the subnet");
+        let state = controller(&restarted);
+        assert_eq!(state.public_subnet_ids, ["subnet-1"]);
+        let subnets = created.lock().unwrap();
+        assert_eq!(subnets.len(), 1, "no second subnet for {}", attempt.cidr);
+        assert_eq!(subnets[0].1, attempt.token);
+    }
+
+    #[tokio::test]
+    async fn internet_gateway_created_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let created = Created::default();
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            let world = created.clone();
+            ec2.expect_describe_internet_gateways()
+                .returning(move |request| {
+                    let items: Vec<_> =
+                    created_with_token(&world, filters_token(request.filters.as_ref()).as_deref())
+                        .into_iter()
+                        .map(|(id, token, _)| {
+                            json!({ "internetGatewayId": id, "tagSet": attempt_tags_json(&token) })
+                        })
+                        .collect();
+                    Ok(parse(json!({ "internetGatewaySet": { "item": items } })))
+                });
+            let world = created.clone();
+            ec2.expect_create_internet_gateway()
+                .returning(move |request| {
+                    let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                        .expect("tagged with its token");
+                    let mut world = world.lock().unwrap();
+                    let id = format!("igw-{}", world.len() + 1);
+                    world.push((id.clone(), token, String::new()));
+                    Ok(parse(
+                        json!({ "internetGateway": { "internetGatewayId": id } }),
+                    ))
+                });
+            ec2
+        };
+
+        let mut first = executor(
+            ec2(),
+            after_vpc(AwsNetworkState::CreatingInternetGateway),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let checkpoint = step_to_token_checkpoint(
+            &mut first,
+            &created,
+            AwsNetworkState::CreatingInternetGateway,
+        )
+        .await;
+        wait_out_create_lookups(&mut first).await;
+        first.step().await.expect("AWS creates the gateway");
+        drop(first);
+
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        restarted
+            .step()
+            .await
+            .expect("the retry adopts the gateway");
+        let state = controller(&restarted);
+        assert_eq!(state.internet_gateway_id.as_deref(), Some("igw-1"));
+        assert_eq!(state.state, AwsNetworkState::AttachingInternetGateway);
+        assert_eq!(created.lock().unwrap().len(), 1, "no second gateway");
+    }
+
+    #[tokio::test]
+    async fn elastic_ip_allocated_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let created = Created::default();
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            let world = created.clone();
+            ec2.expect_describe_addresses().returning(move || {
+                let items: Vec<_> = world
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(id, token, _)| {
+                        json!({ "allocationId": id, "tagSet": attempt_tags_json(token) })
+                    })
+                    .collect();
+                Ok(parse(json!({ "addressesSet": { "item": items } })))
+            });
+            let world = created.clone();
+            ec2.expect_allocate_address().returning(move |request| {
+                let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("tagged with its token");
+                let mut world = world.lock().unwrap();
+                let id = format!("eipalloc-{}", world.len() + 1);
+                world.push((id.clone(), token, String::new()));
+                Ok(parse(json!({ "allocationId": id })))
+            });
+            ec2
+        };
+
+        let mut first = executor(
+            ec2(),
+            after_route_tables(AwsNetworkState::AllocatingElasticIp),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let checkpoint =
+            step_to_token_checkpoint(&mut first, &created, AwsNetworkState::AllocatingElasticIp)
+                .await;
+        wait_out_create_lookups(&mut first).await;
+        first.step().await.expect("AWS allocates the address");
+        drop(first);
+
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        restarted
+            .step()
+            .await
+            .expect("the retry adopts the address");
+        let state = controller(&restarted);
+        assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-1"));
+        assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
+        assert_eq!(created.lock().unwrap().len(), 1, "no second address");
+    }
+
+    /// The NAT gateway create is idempotent by client token only when every parameter,
+    /// tags included, matches; the saved attempt token keeps them equal after a restart.
+    #[tokio::test]
+    async fn nat_gateway_created_before_a_crash_is_returned_again_from_the_previous_checkpoint() {
+        let created = Created::default();
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            let world = created.clone();
+            ec2.expect_create_nat_gateway().returning(move |request| {
+                let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("tagged with its token");
+                let client_token = request.client_token.clone().expect("client token");
+                let mut world = world.lock().unwrap();
+                if let Some((id, existing, _)) = world
+                    .iter()
+                    .find(|(_, _, recorded)| *recorded == client_token)
+                {
+                    if *existing != token {
+                        return Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                            message: "IdempotentParameterMismatch".to_string(),
+                            field_name: None,
+                        }));
+                    }
+                    return Ok(parse(json!({ "natGateway": { "natGatewayId": id } })));
+                }
+                let id = format!("nat-{}", world.len() + 1);
+                world.push((id.clone(), token, client_token));
+                Ok(parse(json!({ "natGateway": { "natGatewayId": id } })))
+            });
+            ec2
+        };
+        let start = AwsNetworkController {
+            eip_allocation_id: Some("eipalloc-1".to_string()),
+            ..after_route_tables(AwsNetworkState::CreatingNatGateway)
+        };
+
+        let mut first = executor(ec2(), start, Some("10.0.0.0/16")).await;
+        let checkpoint =
+            step_to_token_checkpoint(&mut first, &created, AwsNetworkState::CreatingNatGateway)
+                .await;
+        first.step().await.expect("AWS creates the NAT gateway");
+        drop(first);
+
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        restarted
+            .step()
+            .await
+            .expect("the retry gets the same gateway back");
+        let state = controller(&restarted);
+        assert_eq!(state.nat_gateway_id.as_deref(), Some("nat-1"));
+        assert_eq!(state.state, AwsNetworkState::WaitingForNatGateway);
+        assert_eq!(created.lock().unwrap().len(), 1, "no second gateway");
+    }
+    /// After the restart the first read still misses the address AWS allocated before the
+    /// crash. The create waits with short backoff instead of allocating a second address
+    /// (billed, and limited by a small quota), and the next read finds it.
+    #[tokio::test]
+    async fn elastic_ip_missed_by_the_first_read_after_a_crash_is_not_allocated_again() {
+        let created = Created::default();
+        let hidden_reads = Arc::new(AtomicUsize::new(0));
+        let ec2 = || {
+            let mut ec2 = MockEc2Api::new();
+            let world = created.clone();
+            let hidden = hidden_reads.clone();
+            ec2.expect_describe_addresses().returning(move || {
+                if hidden
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok()
+                {
+                    return Ok(parse(json!({})));
+                }
+                let items: Vec<_> = world
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(id, token, _)| {
+                        json!({ "allocationId": id, "tagSet": attempt_tags_json(token) })
+                    })
+                    .collect();
+                Ok(parse(json!({ "addressesSet": { "item": items } })))
+            });
+            let world = created.clone();
+            ec2.expect_allocate_address().returning(move |request| {
+                let token = tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG)
+                    .expect("tagged with its token");
+                let mut world = world.lock().unwrap();
+                let id = format!("eipalloc-{}", world.len() + 1);
+                world.push((id.clone(), token, String::new()));
+                Ok(parse(json!({ "allocationId": id })))
+            });
+            ec2
+        };
+
+        let mut first = executor(
+            ec2(),
+            after_route_tables(AwsNetworkState::AllocatingElasticIp),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let checkpoint =
+            step_to_token_checkpoint(&mut first, &created, AwsNetworkState::AllocatingElasticIp)
+                .await;
+        wait_out_create_lookups(&mut first).await;
+        first.step().await.expect("AWS allocates the address");
+        drop(first);
+
+        hidden_reads.store(1, Ordering::SeqCst);
+        let mut restarted = executor(ec2(), checkpoint, Some("10.0.0.0/16")).await;
+        let wait = restarted.step().await.expect("the miss waits");
+        assert_eq!(wait.suggested_delay, Some(create_lookup_delay(1)));
+        restarted
+            .step()
+            .await
+            .expect("the next read finds the address");
+        let state = controller(&restarted);
+        assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-1"));
+        assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
+        assert_eq!(created.lock().unwrap().len(), 1, "no second address");
     }
 }
