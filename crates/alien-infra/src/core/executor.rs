@@ -1639,7 +1639,7 @@ impl StackExecutor {
                 let Some(desired) = self.resources.get(resource_id) else {
                     continue;
                 };
-                if resource_state.config != desired.resource
+                if !crate::core::retry_config_unchanged(&resource_state.config, &desired.resource)
                     || resource_state.dependencies != desired.dependencies
                     || self.external_binding_drifted(resource_id, resource_state)?
                 {
@@ -2321,7 +2321,9 @@ impl StackExecutor {
             // or update started with, never a desired config that changed under it. The record
             // then says what the cloud holds, a delete runs against what was created, and a
             // change that arrived mid-flow differs from the record, so the planner updates the
-            // resource once the flow finishes.
+            // resource once the flow finishes. `desired_stack` stays the latest stack, so a
+            // helper that reads this resource's own entry there can see the newer config until
+            // that update runs.
             let context_resource = current_resource_state.config.clone();
 
             let controller_platform =
