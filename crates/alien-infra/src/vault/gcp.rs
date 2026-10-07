@@ -737,31 +737,88 @@ mod permission_update_tests {
 
     #[tokio::test]
     async fn empty_management_grants_do_not_require_a_project_number() {
-        for state in [GcpVaultState::CreateStart, GcpVaultState::UpdateStart] {
-            let controller = GcpVaultController {
-                state,
-                project_id: Some("mock-project".to_string()),
-                location: Some("us-central1".to_string()),
-                vault_prefix: Some("test-secrets".to_string()),
-                ..Default::default()
-            };
-            let mut executor = crate::core::controller_test::SingleControllerExecutor::builder()
-                .resource(Vault::new("secrets".to_string()).build())
-                .controller(controller)
-                .platform(Platform::Gcp)
-                .resource_lifecycle(ResourceLifecycle::Frozen)
-                .client_config(ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
-                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
-                .with_dependency(
-                    RemoteStackManagement::new("manager".to_string()).build(),
-                    GcpRemoteStackManagementController::mock_ready("manager"),
+        for operation in [GcpVaultState::CreateStart, GcpVaultState::UpdateStart] {
+            let vault = Vault::new("secrets".to_string()).build();
+            let manager = RemoteStackManagement::new("manager".to_string()).build();
+            let stack = Stack::new("test".to_string())
+                .add_with_dependencies(
+                    vault.clone(),
+                    ResourceLifecycle::Frozen,
+                    vec![ResourceRef::new(
+                        RemoteStackManagement::RESOURCE_TYPE,
+                        "manager",
+                    )],
                 )
-                .build()
-                .await
+                .add(manager.clone(), ResourceLifecycle::Frozen)
+                .build();
+            // Test the empty Auto profile before any setup preflight adds grants.
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(true)
+                .build();
+            let executor = StackExecutor::builder(
+                &stack,
+                ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
+            )
+            .deployment_config(&config)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .step_running_resources(false)
+            .build()
+            .unwrap();
+            let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
+            let mut vault_state = StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(vault),
+                Some(ResourceLifecycle::Frozen),
+                vec![ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    "manager",
+                )],
+            );
+            vault_state.status = if operation == GcpVaultState::CreateStart {
+                ResourceStatus::Provisioning
+            } else {
+                ResourceStatus::Updating
+            };
+            vault_state
+                .set_internal_controller(Some(Box::new(GcpVaultController {
+                    state: operation,
+                    project_id: Some("mock-project".to_string()),
+                    location: Some("us-central1".to_string()),
+                    vault_prefix: Some("test-secrets".to_string()),
+                    ..Default::default()
+                })))
                 .unwrap();
-            executor.run_until_terminal().await.unwrap();
-            assert_eq!(executor.status(), ResourceStatus::Running);
-            assert!(!executor.needs_update().unwrap());
+            state.resources.insert("secrets".to_string(), vault_state);
+            let controller = GcpRemoteStackManagementController::mock_ready("manager");
+            let mut manager_state = StackResourceState::new_pending(
+                RemoteStackManagement::RESOURCE_TYPE.to_string(),
+                Resource::new(manager),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            manager_state.status = ResourceStatus::Running;
+            manager_state.outputs = controller.get_outputs();
+            manager_state
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+            state.resources.insert("manager".to_string(), manager_state);
+            let state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+            assert!(
+                !executor
+                    .plan(&state)
+                    .unwrap()
+                    .updates
+                    .contains_key("secrets")
+            );
         }
     }
 
