@@ -112,8 +112,9 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
     /// create already holds: user data (a create can adopt an existing bucket, table or
     /// database with the same name, and a key decrypts data stored elsewhere) or live capacity
     /// (replicas a timed-out create already started, instances that already launched). Such a
-    /// resource is created again in place instead; its create finds the existing resource by
-    /// its deterministic name.
+    /// resource is created again in place instead. That create may adopt the existing resource
+    /// by name, or fail on the name until the conflict is resolved by hand, but it never deletes
+    /// what is there.
     fn replace_after_failed_create_is_safe(&self) -> bool {
         true
     }

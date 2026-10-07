@@ -1214,9 +1214,11 @@ impl StackExecutor {
                                     // Deleting it could destroy what the failed create already
                                     // holds: data in a resource it adopted (an existing bucket,
                                     // table or database with the same name) or live capacity
-                                    // (started replicas, launched instances). These creates find
-                                    // their resource again by its deterministic name, so creating
-                                    // again in place is safe.
+                                    // (started replicas, launched instances). Create it again in
+                                    // place, as before replaces existed. Not every create can
+                                    // pick its resource up again (some fail on the existing name
+                                    // until it is resolved by hand, a key create makes a new
+                                    // key), but none of them destroys what is there.
                                     info!(
                                         "Restarting CREATE for '{}' after a config change during ProvisionFailed; it is not safe to delete",
                                         resource_id
