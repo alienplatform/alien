@@ -327,6 +327,23 @@ impl GcpVaultController {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
+        if management_refs.is_empty() && gcp_config.project_number.is_none() {
+            let revision = super::permissions_revision(ctx)?;
+            if self
+                .permissions_revision
+                .as_deref()
+                .is_none_or(|previous| previous == revision)
+            {
+                // A new or unchanged empty profile has no namespace IAM work.
+                return Ok(());
+            }
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "GCP project number is required to remove previous vault grants"
+                    .to_string(),
+                resource_id: Some(vault_id.to_string()),
+            }));
+        }
+
         let mut permission_context = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
@@ -703,6 +720,36 @@ mod permission_update_tests {
                 .updates
                 .contains_key("secrets")
         );
+    }
+
+    #[tokio::test]
+    async fn empty_management_grants_do_not_require_a_project_number() {
+        for state in [GcpVaultState::CreateStart, GcpVaultState::UpdateStart] {
+            let controller = GcpVaultController {
+                state,
+                project_id: Some("mock-project".to_string()),
+                location: Some("us-central1".to_string()),
+                vault_prefix: Some("test-secrets".to_string()),
+                ..Default::default()
+            };
+            let mut executor = crate::core::controller_test::SingleControllerExecutor::builder()
+                .resource(Vault::new("secrets".to_string()).build())
+                .controller(controller)
+                .platform(Platform::Gcp)
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .client_config(ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .with_dependency(
+                    RemoteStackManagement::new("manager".to_string()).build(),
+                    GcpRemoteStackManagementController::mock_ready("manager"),
+                )
+                .build()
+                .await
+                .unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert!(!executor.needs_update().unwrap());
+        }
     }
 
     #[tokio::test]
