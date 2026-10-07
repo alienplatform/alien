@@ -744,6 +744,11 @@ impl ResourceDefinition for Container {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the persistent volumes of a stateful container.
+        !(self.stateful && self.persistent_storage.is_some())
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut deps = self.links.clone();
         // Add dependency on the container cluster if explicitly specified.

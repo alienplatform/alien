@@ -245,12 +245,20 @@ pub trait RequestBuilderExt {
 pub struct RetriableRequestBuilder {
     inner: reqwest::RequestBuilder,
     backoff: ExponentialBuilder,
+    retry_if: fn(&AlienError<ErrorData>) -> bool,
 }
 
 impl RetriableRequestBuilder {
     /// Overrides the default back-off settings.
     pub fn backoff(mut self, backoff: ExponentialBuilder) -> Self {
         self.backoff = backoff;
+        self
+    }
+
+    /// Retries only the errors `retry_if` accepts, instead of every retryable one. For a request
+    /// that must not be sent twice once the service may have acted on it.
+    pub fn retry_only_when(mut self, retry_if: fn(&AlienError<ErrorData>) -> bool) -> Self {
+        self.retry_if = retry_if;
         self
     }
 
@@ -270,6 +278,7 @@ impl RetriableRequestBuilder {
     /// Execute the request, applying retries, and parse the body as JSON.
     pub async fn send_json<T: DeserializeOwned + Send + 'static>(self) -> Result<T> {
         let backoff = self.backoff;
+        let retry_if = self.retry_if;
         let builder = self.inner;
 
         let retryable = move || {
@@ -305,15 +314,13 @@ impl RetriableRequestBuilder {
             }
         };
 
-        retryable
-            .retry(backoff)
-            .when(Self::is_retryable_error)
-            .await
+        retryable.retry(backoff).when(retry_if).await
     }
 
     /// Execute the request, applying retries, and parse the body as XML.
     pub async fn send_xml<T: DeserializeOwned + Send + 'static>(self) -> Result<T> {
         let backoff = self.backoff;
+        let retry_if = self.retry_if;
         let builder = self.inner;
 
         let retryable = move || {
@@ -349,15 +356,13 @@ impl RetriableRequestBuilder {
             }
         };
 
-        retryable
-            .retry(backoff)
-            .when(Self::is_retryable_error)
-            .await
+        retryable.retry(backoff).when(retry_if).await
     }
 
     /// Execute the request, applying retries, without parsing the response body.
     pub async fn send_no_response(self) -> Result<()> {
         let backoff = self.backoff;
+        let retry_if = self.retry_if;
         let builder = self.inner;
 
         let retryable = move || {
@@ -393,15 +398,13 @@ impl RetriableRequestBuilder {
             }
         };
 
-        retryable
-            .retry(backoff)
-            .when(Self::is_retryable_error)
-            .await
+        retryable.retry(backoff).when(retry_if).await
     }
 
     /// Execute the request, applying retries, and return the raw response
     pub async fn send_raw(self) -> Result<reqwest::Response> {
         let backoff = self.backoff;
+        let retry_if = self.retry_if;
         let builder = self.inner;
 
         let retryable = move || {
@@ -435,10 +438,7 @@ impl RetriableRequestBuilder {
             }
         };
 
-        retryable
-            .retry(backoff)
-            .when(Self::is_retryable_error)
-            .await
+        retryable.retry(backoff).when(retry_if).await
     }
 }
 
@@ -449,6 +449,7 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
         RetriableRequestBuilder {
             inner: self,
             backoff: RetriableRequestBuilder::default_backoff(),
+            retry_if: RetriableRequestBuilder::is_retryable_error,
         }
     }
 

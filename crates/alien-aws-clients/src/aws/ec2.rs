@@ -144,6 +144,11 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeNetworkInterfacesRequest,
     ) -> Result<DescribeNetworkInterfacesResponse>;
+    async fn create_network_interface(
+        &self,
+        request: CreateNetworkInterfaceRequest,
+    ) -> Result<CreateNetworkInterfaceResponse>;
+    async fn delete_network_interface(&self, network_interface_id: &str) -> Result<()>;
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -254,6 +259,13 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 // EC2 Client
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy)]
+enum Attempts {
+    Retried,
+    /// Only a throttled request is sent again.
+    ThrottlingOnly,
+}
+
 #[derive(Debug, Clone)]
 pub struct Ec2Client {
     client: Client,
@@ -298,6 +310,30 @@ impl Ec2Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.send_form_with(Attempts::Retried, form_data, operation, resource)
+            .await
+    }
+
+    /// Sends a create that has no idempotency token, retrying it only when EC2 throttled it.
+    /// Retrying after a lost response (a timeout, a reset connection or a 5xx after EC2 acted on
+    /// the call) would make a second object; the caller finds the first one by its tags instead.
+    async fn send_create_once<T: DeserializeOwned + Send + 'static>(
+        &self,
+        form_data: HashMap<String, String>,
+        operation: &str,
+        resource: &str,
+    ) -> Result<T> {
+        self.send_form_with(Attempts::ThrottlingOnly, form_data, operation, resource)
+            .await
+    }
+
+    async fn send_form_with<T: DeserializeOwned + Send + 'static>(
+        &self,
+        attempts: Attempts,
+        form_data: HashMap<String, String>,
+        operation: &str,
+        resource: &str,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
@@ -313,8 +349,18 @@ impl Ec2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = match attempts {
+            Attempts::Retried => {
+                crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+            }
+            Attempts::ThrottlingOnly => {
+                crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
+                    builder,
+                    &self.sign_config(),
+                )
+                .await
+            }
+        };
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -557,9 +603,36 @@ impl Ec2Client {
                 resource_type: "EC2 Resource".into(),
                 resource_name: resource.into(),
             },
+            "InvalidNetworkInterfaceID.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "NetworkInterface".into(),
+                resource_name: resource.into(),
+            },
+            "InvalidNetworkInterface.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "NetworkInterface".into(),
+                resource_name: resource.into(),
+            },
             "Gateway.NotAttached" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "InternetGateway".into(),
+                resource_name: resource.into(),
+            },
+            // An internet gateway that is already attached to a VPC.
+            "Resource.AlreadyAssociated" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
+            // A subnet whose CIDR overlaps an existing subnet in the VPC.
+            "InvalidSubnet.Conflict" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Subnet".into(),
+                resource_name: resource.into(),
+            },
+            // An Elastic IP still associated with a NAT gateway or network interface.
+            "InvalidIPAddress.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "ElasticIP".into(),
                 resource_name: resource.into(),
             },
             "RouteAlreadyExists" => ErrorData::RemoteResourceConflict {
@@ -860,7 +933,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateVpc", &request.cidr_block)
+        self.send_create_once(form_data, "CreateVpc", &request.cidr_block)
             .await
     }
 
@@ -952,7 +1025,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateSubnet", &request.cidr_block)
+        self.send_create_once(form_data, "CreateSubnet", &request.cidr_block)
             .await
     }
 
@@ -982,7 +1055,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateInternetGateway", "InternetGateway")
+        self.send_create_once(form_data, "CreateInternetGateway", "InternetGateway")
             .await
     }
 
@@ -1094,6 +1167,10 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
+        }
+
         self.send_form(form_data, "CreateNatGateway", &request.subnet_id)
             .await
     }
@@ -1158,7 +1235,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "AllocateAddress", "ElasticIP")
+        self.send_create_once(form_data, "AllocateAddress", "ElasticIP")
             .await
     }
 
@@ -1227,7 +1304,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateRouteTable", &request.vpc_id)
+        self.send_create_once(form_data, "CreateRouteTable", &request.vpc_id)
             .await
     }
 
@@ -1399,6 +1476,46 @@ impl Ec2Api for Ec2Client {
             .await
     }
 
+    async fn create_network_interface(
+        &self,
+        request: CreateNetworkInterfaceRequest,
+    ) -> Result<CreateNetworkInterfaceResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateNetworkInterface".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("SubnetId".to_string(), request.subnet_id.clone());
+
+        if let Some(description) = &request.description {
+            form_data.insert("Description".to_string(), description.clone());
+        }
+
+        if let Some(groups) = &request.groups {
+            for (i, group) in groups.iter().enumerate() {
+                form_data.insert(format!("SecurityGroupId.{}", i + 1), group.clone());
+            }
+        }
+
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        self.send_create_once(form_data, "CreateNetworkInterface", &request.subnet_id)
+            .await
+    }
+
+    async fn delete_network_interface(&self, network_interface_id: &str) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteNetworkInterface".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert(
+            "NetworkInterfaceId".to_string(),
+            network_interface_id.to_string(),
+        );
+
+        self.send_form_no_body(form_data, "DeleteNetworkInterface", network_interface_id)
+            .await
+    }
+
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -1414,6 +1531,8 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
+        // A group name is unique in its VPC, so a resend after a lost response fails as a
+        // duplicate and the caller finds its group by name.
         self.send_form(form_data, "CreateSecurityGroup", &request.group_name)
             .await
     }
@@ -2634,6 +2753,10 @@ pub struct CreateNatGatewayRequest {
     pub private_ip_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_specifications: Option<Vec<TagSpecification>>,
+    /// Idempotency token (up to 64 ASCII characters). Repeating a request with the same
+    /// token returns the NAT gateway the first request created instead of a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 /// Response from creating a NAT gateway.
@@ -2653,6 +2776,10 @@ pub struct NatGateway {
     pub vpc_id: Option<String>,
     pub state: Option<String>,
     pub connectivity_type: Option<String>,
+    /// Set when the gateway is `failed`, e.g. `Gateway.NotAttached`.
+    pub failure_code: Option<String>,
+    /// Set when the gateway is `failed`; explains why AWS could not create it.
+    pub failure_message: Option<String>,
     #[serde(rename = "natGatewayAddressSet")]
     pub nat_gateway_address_set: Option<NatGatewayAddressSet>,
     #[serde(rename = "tagSet")]
@@ -2754,9 +2881,15 @@ pub struct Address {
     pub allocation_id: Option<String>,
     pub public_ip: Option<String>,
     pub domain: Option<String>,
+    /// Set while the address is associated with an instance or a network interface, such as
+    /// a NAT gateway's.
+    pub association_id: Option<String>,
+    pub network_interface_id: Option<String>,
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
+    #[serde(rename = "tagSet")]
+    pub tag_set: Option<TagSet>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2985,15 +3118,41 @@ pub struct NetworkInterfaceSet {
     pub items: Vec<NetworkInterface>,
 }
 
+/// Request to create a network interface.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateNetworkInterfaceRequest {
+    pub subnet_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Security group IDs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
+}
+
+/// Response from creating a network interface.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateNetworkInterfaceResponse {
+    pub network_interface: Option<NetworkInterface>,
+}
+
 /// Represents an EC2 network interface.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInterface {
     pub network_interface_id: Option<String>,
+    /// `available` (attached to nothing), `in-use`, `attaching`, `detaching`.
     pub status: Option<String>,
     pub description: Option<String>,
     pub subnet_id: Option<String>,
     pub vpc_id: Option<String>,
+    /// The kind of interface, such as `interface`, `lambda` or `nat_gateway`.
+    pub interface_type: Option<String>,
+    /// The AWS service or account that created the interface, when it is service-managed.
+    pub requester_id: Option<String>,
+    pub requester_managed: Option<bool>,
     #[serde(rename = "groupSet")]
     pub group_set: Option<GroupIdentifierSet>,
 }
@@ -4084,6 +4243,93 @@ mod error_mapping_tests {
             Some(ErrorData::RemoteResourceConflict { .. })
         ));
     }
+
+    // Callers wait on these instead of failing: the address or gateway is still
+    // held by another resource.
+    #[test]
+    fn in_use_and_already_associated_codes_map_to_conflict() {
+        assert!(matches!(
+            mapped("InvalidIPAddress.InUse"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("Resource.AlreadyAssociated"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidSubnet.Conflict"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidNetworkInterface.InUse"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidNetworkInterfaceID.NotFound"),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+    }
+
+    /// A detached Lambda interface as DescribeNetworkInterfaces returns it.
+    #[test]
+    fn network_interface_reads_its_requester_and_type() {
+        let body = r#"<DescribeNetworkInterfacesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+            <requestId>r</requestId>
+            <networkInterfaceSet>
+                <item>
+                    <networkInterfaceId>eni-1</networkInterfaceId>
+                    <subnetId>subnet-1</subnetId>
+                    <vpcId>vpc-1</vpcId>
+                    <description>AWS Lambda VPC ENI-fn-abc</description>
+                    <requesterId>123456789012:fn</requesterId>
+                    <requesterManaged>true</requesterManaged>
+                    <status>available</status>
+                    <interfaceType>lambda</interfaceType>
+                    <groupSet><item><groupId>sg-1</groupId><groupName>stack-sg</groupName></item></groupSet>
+                </item>
+            </networkInterfaceSet>
+        </DescribeNetworkInterfacesResponse>"#;
+
+        let response: DescribeNetworkInterfacesResponse =
+            quick_xml::de::from_str(body).expect("network interface response should parse");
+        let interface = &response.network_interface_set.expect("set").items[0];
+        assert_eq!(interface.status.as_deref(), Some("available"));
+        assert_eq!(interface.interface_type.as_deref(), Some("lambda"));
+        assert_eq!(interface.requester_id.as_deref(), Some("123456789012:fn"));
+        assert_eq!(interface.requester_managed, Some(true));
+        assert_eq!(
+            interface.description.as_deref(),
+            Some("AWS Lambda VPC ENI-fn-abc")
+        );
+    }
+
+    #[test]
+    fn failed_nat_gateway_carries_the_aws_failure_reason() {
+        let body = r#"<DescribeNatGatewaysResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+            <requestId>r</requestId>
+            <natGatewaySet>
+                <item>
+                    <natGatewayId>nat-1</natGatewayId>
+                    <state>failed</state>
+                    <failureCode>InsufficientFreeAddressesInSubnet</failureCode>
+                    <failureMessage>Subnet has insufficient free addresses</failureMessage>
+                </item>
+            </natGatewaySet>
+        </DescribeNatGatewaysResponse>"#;
+
+        let response: DescribeNatGatewaysResponse =
+            quick_xml::de::from_str(body).expect("NAT gateway response should parse");
+        let nat = &response.nat_gateway_set.expect("set").items[0];
+        assert_eq!(nat.state.as_deref(), Some("failed"));
+        assert_eq!(
+            nat.failure_code.as_deref(),
+            Some("InsufficientFreeAddressesInSubnet")
+        );
+        assert_eq!(
+            nat.failure_message.as_deref(),
+            Some("Subnet has insufficient free addresses")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4419,7 +4665,7 @@ mod volume_operation_tests {
         let response: DescribeAddressesResponse = quick_xml::de::from_str(
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
-                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><publicIpv4Pool>amazon</publicIpv4Pool></item>
+                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><associationId>eipassoc-1</associationId><networkInterfaceId>eni-1</networkInterfaceId><publicIpv4Pool>amazon</publicIpv4Pool></item>
                     <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
@@ -4445,6 +4691,17 @@ mod volume_operation_tests {
             addresses.items[2].public_ipv4_pool.as_deref(),
             Some("ipv4pool-ec2-1234567890abcdef0")
         );
+        // An address held by a NAT gateway carries its association and network interface.
+        assert_eq!(
+            addresses.items[0].association_id.as_deref(),
+            Some("eipassoc-1")
+        );
+        assert_eq!(
+            addresses.items[0].network_interface_id.as_deref(),
+            Some("eni-1")
+        );
+        assert_eq!(addresses.items[1].association_id, None);
+        assert_eq!(addresses.items[1].network_interface_id, None);
     }
 }
 
@@ -4463,6 +4720,113 @@ impl GetConsoleOutputResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ServiceOverrides;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::prelude::*;
+
+    fn client(server: &MockServer) -> Ec2Client {
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(ServiceOverrides {
+                endpoints: HashMap::from([("ec2".to_string(), server.base_url())]),
+            }),
+        };
+        Ec2Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    /// A create EC2 cannot make idempotent is sent once. EC2 may already have made the VPC
+    /// when it answers 5xx (or the response is lost); a second send would make another one.
+    #[tokio::test]
+    async fn a_failed_create_vpc_is_not_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").body_contains("Action=CreateVpc");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .create_vpc(
+                CreateVpcRequest::builder()
+                    .cidr_block("10.1.0.0/16".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create fails");
+
+        assert_eq!(create.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+    }
+
+    /// A throttled request was rejected before EC2 acted on it, so even a create without an
+    /// idempotency token is sent again.
+    #[tokio::test]
+    async fn a_throttled_create_subnet_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").body_contains("Action=CreateSubnet");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>RequestLimitExceeded</Code><Message>Request limit exceeded.</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .create_subnet(
+                CreateSubnetRequest::builder()
+                    .vpc_id("vpc-1".to_string())
+                    .cidr_block("10.1.0.0/20".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create stays throttled");
+
+        assert_eq!(create.hits_async().await, 4, "one send and three retries");
+        assert_eq!(error.code, "RATE_LIMIT_EXCEEDED");
+    }
+
+    /// A security group name is unique in its VPC: a resend after a lost response fails as a
+    /// duplicate instead of making a second group, so the create keeps its retries.
+    #[tokio::test]
+    async fn a_failed_create_security_group_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .body_contains("Action=CreateSecurityGroup");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        client(&server)
+            .create_security_group(
+                CreateSecurityGroupRequest::builder()
+                    .group_name("stack-sg".to_string())
+                    .description("test".to_string())
+                    .vpc_id("vpc-1".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create keeps failing");
+
+        assert_eq!(create.hits_async().await, 4);
+    }
 
     /// Body returned by AWS for `--location-type availability-zone` filtered to t4g.micro in
     /// us-east-1a and us-east-1e (us-east-1e does not offer the type, so it is absent).

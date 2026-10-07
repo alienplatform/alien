@@ -644,11 +644,17 @@ pub async fn handle_update_failed(
 
     info!("Re-running preflights before retrying the update");
 
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for retry".to_string(),
         })
     })?;
+
+    // A replace whose delete was denied waits for this explicit retry.
+    let retried_replaces = alien_infra::allow_denied_replaces_to_retry(&mut stack_state);
+    if !retried_replaces.is_empty() {
+        info!(resources = ?retried_replaces, "Retrying replaces whose delete was denied");
+    }
 
     // Do not restore failed controller checkpoints before preflights have built
     // the exact desired stack. A corrective release may change the resource

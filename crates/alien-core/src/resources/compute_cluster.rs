@@ -343,6 +343,12 @@ impl ResourceDefinition for ComputeCluster {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // A create that failed waiting for instances may already run some; deleting it terminates
+        // them, and in a capacity-starved zone the capacity may not come back.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         // ComputeCluster has no static dependencies.
         // Network dependency is platform-specific:

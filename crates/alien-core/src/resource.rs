@@ -105,6 +105,20 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
     /// Validates if an update from the current configuration to a new configuration is allowed
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()>;
 
+    /// Whether the executor may delete this resource and create it again when its create
+    /// failed and its config changed since.
+    ///
+    /// That replace is unsafe when deleting the half-created resource can destroy something the
+    /// create already holds: user data (a create can adopt an existing bucket, table or
+    /// database with the same name, and a key decrypts data stored elsewhere) or live capacity
+    /// (replicas a timed-out create already started, instances that already launched). Such a
+    /// resource is created again in place instead. That create may adopt the existing resource
+    /// by name, or fail on the name until the conflict is resolved by hand, but it never deletes
+    /// what is there.
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        true
+    }
+
     /// Provides access to the underlying concrete type for downcasting
     fn as_any(&self) -> &dyn Any;
 
@@ -356,6 +370,12 @@ impl Resource {
     /// Validates if an update from the current configuration to a new configuration is allowed
     pub fn validate_update(&self, new_config: &Resource) -> Result<()> {
         self.inner.validate_update(new_config.inner.as_ref())
+    }
+
+    /// Whether a failed create may be deleted and created again. See
+    /// [`ResourceDefinition::replace_after_failed_create_is_safe`].
+    pub fn replace_after_failed_create_is_safe(&self) -> bool {
+        self.inner.replace_after_failed_create_is_safe()
     }
 
     /// Provides access to the underlying ResourceDefinition trait object

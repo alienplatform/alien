@@ -7,12 +7,13 @@ use alien_core::{
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo,
-    Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    ResourceLifecycle, ResourceStatus, RuntimeMetadata, SecretDelivery, Stack, StackResourceState,
+    StackState, TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
+use alien_infra::StackResourceStateExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -30,6 +31,200 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v3\0";
+
+/// The stack the executor reconciles once the deployment is prepared: the prepared stack from
+/// runtime metadata, with the deployment's environment variables and monitoring injected.
+pub(crate) fn injected_target_stack(
+    runtime_metadata: &RuntimeMetadata,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<Stack> {
+    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Prepared stack not found in runtime metadata".to_string(),
+        })
+    })?;
+
+    // Inject all environment variables — plain AND secrets.
+    //
+    // Worker wrappers that consume vault pointers receive the secrets vault as
+    // a dependency from SecretsVaultMutation. Native-projected workloads do
+    // not need workload vault access.
+    inject_environment_variables(
+        &mut target_stack,
+        config,
+        platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
+
+    if let Some(monitoring) = &config.monitoring {
+        inject_monitoring_environment_variables(&mut target_stack, monitoring, platform)?;
+    }
+    Ok(target_stack)
+}
+
+/// A failed resource a retry did not resume, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnresumedFailure {
+    pub(crate) resource_id: String,
+    pub(crate) setup_owned: bool,
+    /// The stack no longer declares it (otherwise its config or dependencies changed).
+    pub(crate) removed: bool,
+}
+
+impl UnresumedFailure {
+    fn describe(&self) -> String {
+        let need = if self.removed {
+            "it is no longer in the stack; deploy an update to delete it"
+        } else if self.setup_owned {
+            "its configuration changed since it failed and it is setup-owned; rerun setup"
+        } else {
+            "its configuration changed since it failed; deploy an update"
+        };
+        format!("'{}' ({need})", self.resource_id)
+    }
+}
+
+/// The error for failures a retry cannot resume, or `None` when there are none.
+pub(crate) fn retry_cannot_resume(unresumed: &[UnresumedFailure]) -> Option<AlienError<ErrorData>> {
+    if unresumed.is_empty() {
+        return None;
+    }
+    Some(AlienError::new(ErrorData::RetryCannotResume {
+        resources: unresumed
+            .iter()
+            .map(UnresumedFailure::describe)
+            .collect::<Vec<_>>()
+            .join(", "),
+    }))
+}
+
+/// What a retry resumed and what it left for the planner, an update or setup.
+#[derive(Debug, Default)]
+pub(crate) struct RetryOutcome {
+    pub(crate) retried: Vec<String>,
+    pub(crate) unresumed: Vec<UnresumedFailure>,
+}
+
+/// Resumes the saved checkpoint of each failed resource that `eligible` accepts and that
+/// `target_stack` still declares with the config and dependencies it failed with, exactly as
+/// it stopped.
+///
+/// A resource whose config changed is not resumed, so the executor plans its update or
+/// replaces it: resuming a failed create with a new config would finish it with a mix of both.
+/// One the stack no longer declares is not resumed either, and the executor deletes it. Failed
+/// deletes always resume, because the planner does not restart a delete that has failed, and
+/// failed refreshes always resume, because a refresh only reads.
+pub(crate) fn resume_unchanged_failed_resources(
+    stack_state: &mut StackState,
+    target_stack: &Stack,
+    eligible: impl Fn(&StackResourceState) -> bool,
+) -> Result<RetryOutcome> {
+    let mut outcome = RetryOutcome::default();
+    for (resource_id, resource_state) in &mut stack_state.resources {
+        let failed = matches!(
+            resource_state.status,
+            ResourceStatus::ProvisionFailed
+                | ResourceStatus::UpdateFailed
+                | ResourceStatus::DeleteFailed
+                | ResourceStatus::RefreshFailed
+        );
+        if !failed || !eligible(resource_state) {
+            continue;
+        }
+        let declared = target_stack.resources.get(resource_id);
+        let unchanged = declared.is_some_and(|entry| {
+            without_deployer_secret_metadata(&entry.config)
+                == without_deployer_secret_metadata(&resource_state.config)
+                && entry.combined_dependencies() == resource_state.dependencies
+        });
+        let always_resumes = matches!(
+            resource_state.status,
+            ResourceStatus::DeleteFailed | ResourceStatus::RefreshFailed
+        );
+        if !unchanged && !always_resumes {
+            outcome.unresumed.push(UnresumedFailure {
+                resource_id: resource_id.clone(),
+                setup_owned: resource_state.lifecycle == Some(ResourceLifecycle::Frozen),
+                removed: declared.is_none(),
+            });
+            continue;
+        }
+        if resource_state
+            .retry_failed()
+            .context(ErrorData::StackExecutionFailed {
+                message: format!("Failed to retry failed resource '{resource_id}'"),
+            })?
+        {
+            outcome.retried.push(resource_id.clone());
+        }
+    }
+    Ok(outcome)
+}
+
+/// `resource` without the deployer-secret metadata injected into workload environments.
+///
+/// That metadata follows the secret store (a slot filled, a value rewritten under a new
+/// version) and is refreshed while the deployment runs, independent of any release. A failure
+/// whose config differs only there is still the same create or update, and resuming it reads
+/// the current metadata, so the retry comparison ignores it.
+fn without_deployer_secret_metadata(resource: &alien_core::Resource) -> alien_core::Resource {
+    fn strip(environment: &mut HashMap<String, String>) {
+        environment.remove(ENV_ALIEN_DEPLOYER_SECRETS);
+        if let Some(secrets) = environment.get_mut(ENV_ALIEN_SECRETS) {
+            if let Ok(mut config) = serde_json::from_str::<AlienSecretsConfig>(secrets) {
+                config.deployer_secrets.clear();
+                if let Ok(stripped) = serde_json::to_string(&config) {
+                    *secrets = stripped;
+                }
+            }
+        }
+    }
+    let mut resource = resource.clone();
+    if let Some(worker) = resource.downcast_mut::<Worker>() {
+        strip(&mut worker.environment);
+    } else if let Some(container) = resource.downcast_mut::<alien_core::Container>() {
+        strip(&mut container.environment);
+    } else if let Some(daemon) = resource.downcast_mut::<alien_core::Daemon>() {
+        strip(&mut daemon.environment);
+    }
+    resource
+}
+
+/// Prepares the failed resources of `stack_state` for a retry of provisioning or of a running
+/// deployment, against the stack prepared in `runtime_metadata`.
+///
+/// Every failure whose config is unchanged resumes its saved checkpoint, setup-owned or not,
+/// as do failed deletes and refreshes. The others are returned in `unresumed` for the caller
+/// to hand to the planner or report.
+pub(crate) fn retry_failed_runtime_resources(
+    stack_state: &mut StackState,
+    runtime_metadata: Option<&RuntimeMetadata>,
+    config: &DeploymentConfig,
+) -> Result<RetryOutcome> {
+    let has_failures = stack_state.resources.values().any(|resource| {
+        matches!(
+            resource.status,
+            ResourceStatus::ProvisionFailed
+                | ResourceStatus::UpdateFailed
+                | ResourceStatus::DeleteFailed
+                | ResourceStatus::RefreshFailed
+        )
+    });
+    if !has_failures {
+        return Ok(RetryOutcome::default());
+    }
+    let runtime_metadata = runtime_metadata.ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Runtime metadata with prepared stack required to retry failed resources"
+                .to_string(),
+        })
+    })?;
+    let target_stack = injected_target_stack(runtime_metadata, config, stack_state.platform)?;
+    // A replace whose delete was denied waits for this explicit retry.
+    alien_infra::allow_denied_replaces_to_retry(stack_state);
+    resume_unchanged_failed_resources(stack_state, &target_stack, |_| true)
+}
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(
@@ -1257,6 +1452,108 @@ mod tests {
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
+
+    /// A worker as the executor recorded it: its config injected with deployer secrets whose
+    /// store version is `version`, failed mid-update.
+    fn failed_worker_with_deployer_secret(
+        image: &str,
+        version: &str,
+    ) -> (Resource, StackResourceState) {
+        let mut worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: image.to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let secret = DeployerSecretEnv {
+            name: "API_KEY".to_string(),
+            vault_key: "api-key".to_string(),
+            secret_name: "stack-api-key".to_string(),
+            vault_name: None,
+            label: "API key".to_string(),
+            required: true,
+            version: Some(version.to_string()),
+        };
+        inject_into_environment(
+            "api",
+            ComputeKind::Worker,
+            &mut worker.environment,
+            &make_snapshot(&[("PLAIN_VAR", "plain")], &[]),
+            Platform::Aws,
+            &[secret],
+        )
+        .expect("inject");
+        let resource = Resource::new(worker);
+        let mut state = StackResourceState::new_pending(
+            Worker::RESOURCE_TYPE.to_string(),
+            resource.clone(),
+            Some(ResourceLifecycle::Live),
+            vec![],
+        );
+        state.status = ResourceStatus::UpdateFailed;
+        let checkpoint: Box<dyn alien_infra::ResourceController> = Box::new(
+            serde_json::from_value::<alien_infra::TestWorkerController>(serde_json::json!({
+                "state": "updateCodePolling",
+                "identifier": "test:worker:api"
+            }))
+            .expect("checkpoint"),
+        );
+        state
+            .set_internal_controller(Some(checkpoint.clone()))
+            .expect("controller");
+        state
+            .set_last_failed_controller(Some(checkpoint))
+            .expect("checkpoint");
+        (resource, state)
+    }
+
+    fn stack_with(resource: Resource) -> Stack {
+        let mut stack = Stack::new("retry".to_string()).build();
+        stack.resources.insert(
+            resource.id().to_string(),
+            ResourceEntry {
+                config: resource,
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    /// Deployer-secret metadata is refreshed from the secret store while a deployment runs. A
+    /// failure whose config differs only there (a rewritten secret under a new version) is the
+    /// same update and resumes; one with a real change does not.
+    #[test]
+    fn retry_ignores_deployer_secret_metadata_when_comparing_configs() {
+        let (_, recorded) = failed_worker_with_deployer_secret("api:v1", "1");
+
+        let (same, _) = failed_worker_with_deployer_secret("api:v1", "1");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded.clone());
+        let outcome = resume_unchanged_failed_resources(&mut state, &stack_with(same), |_| true)
+            .expect("retry");
+        assert_eq!(outcome.retried, ["api"], "same metadata resumes");
+
+        let (rewritten, _) = failed_worker_with_deployer_secret("api:v1", "2");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded.clone());
+        let outcome =
+            resume_unchanged_failed_resources(&mut state, &stack_with(rewritten), |_| true)
+                .expect("retry");
+        assert_eq!(outcome.retried, ["api"], "a new secret version resumes");
+        assert!(outcome.unresumed.is_empty());
+        assert_eq!(state.resources["api"].status, ResourceStatus::Updating);
+
+        let (changed, _) = failed_worker_with_deployer_secret("api:v2", "1");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded);
+        let outcome = resume_unchanged_failed_resources(&mut state, &stack_with(changed), |_| true)
+            .expect("retry");
+        assert!(outcome.retried.is_empty());
+        assert_eq!(outcome.unresumed.len(), 1, "a new image is a real change");
+    }
 
     fn make_snapshot(
         plain: &[(&str, &str)],

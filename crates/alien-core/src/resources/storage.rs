@@ -115,6 +115,11 @@ impl ResourceDefinition for Storage {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the objects in the bucket.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         self.encryption_key.iter().cloned().collect()
     }

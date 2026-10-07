@@ -1115,6 +1115,12 @@ impl ResourceDefinition for Sandbox {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // A create adopts an existing image with the same name, and deleting it deletes that image,
+        // which this deployment may never have built.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

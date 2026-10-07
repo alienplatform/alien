@@ -20,6 +20,7 @@ mod dependency_tests;
 mod lifecycle_tests;
 mod parallel_tests;
 mod plan_tests;
+mod replace_tests;
 mod update_tests;
 
 // Advanced tests

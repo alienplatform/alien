@@ -18,8 +18,8 @@ use alien_core::{
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EndpointAccess,
     EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
     KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
-    PublicEndpointUrls, ReleaseInfo, ResourceLifecycle, Stack, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    PublicEndpointUrls, ReleaseInfo, Stack, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -34,7 +34,7 @@ use alien_deployment::{
     },
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_infra::{ClientConfigExt, StackStateExt};
+use alien_infra::ClientConfigExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -5363,29 +5363,27 @@ async fn push_initial_setup_targeted(
                     message: "A running deployment has no prepared setup metadata".to_string(),
                 })
             })?;
-            state.runtime_metadata = Some(
-                alien_deployment::prepare_direct_setup_update(
-                    target_stack,
-                    stack_state,
-                    &config,
-                    &client_config,
-                    existing_metadata,
-                )
-                .await
-                .context(ErrorData::DeploymentFailed {
-                    operation: "prepare direct setup update".to_string(),
-                })?,
-            );
+            let runtime_metadata = alien_deployment::prepare_direct_setup_update(
+                target_stack,
+                stack_state,
+                &config,
+                &client_config,
+                existing_metadata,
+            )
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "prepare direct setup update".to_string(),
+            })?;
             let stack_state = state.stack_state.as_mut().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "A setup update requires stack state".to_string(),
                 })
             })?;
-            stack_state
-                .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+            alien_deployment::retry_failed_setup_resources(stack_state, &runtime_metadata, &config)
                 .context(ErrorData::DeploymentFailed {
                     operation: "retry failed setup-owned resources".to_string(),
                 })?;
+            state.runtime_metadata = Some(runtime_metadata);
             state.status = DeploymentStatus::InitialSetup;
         }
 

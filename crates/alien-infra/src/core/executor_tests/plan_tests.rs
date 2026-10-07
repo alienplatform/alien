@@ -197,6 +197,10 @@ async fn test_plan_provision_failed_with_config_change() -> Result<()> {
         "ProvisionFailed resource with a recoverable checkpoint should be updated"
     );
     assert!(!plan.creates.contains(&"func1".to_string()));
+    assert!(
+        plan.replaces.is_empty(),
+        "an in-place repair deletes nothing"
+    );
 
     let result = executor.step(state).await?;
     let repaired = result.next_state.resources.get("func1").unwrap();
