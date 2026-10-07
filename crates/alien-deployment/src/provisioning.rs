@@ -2,7 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, Platform, ResourceLifecycle, Stack, StackState, StackStatus,
+    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, Stack, StackState,
+    StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
@@ -171,14 +172,27 @@ pub async fn handle_provisioning(
                 message: "Failed to execute deployment step for live resources".to_string(),
             })?;
 
-    // Compute the stack status from the resulting state
-    let stack_status =
-        step_result
-            .next_state
-            .compute_stack_status()
-            .context(ErrorData::StackExecutionFailed {
-                message: "Failed to compute stack status".to_string(),
-            })?;
+    // Keep deletion records, but a resource removed from the desired stack and
+    // already Deleted has finished its work. Desired Deleted resources still
+    // need recreation; unfinished or failed removals still block completion.
+    let statuses = step_result
+        .next_state
+        .resources
+        .iter()
+        .filter_map(|(id, resource)| {
+            (target_stack.resources.contains_key(id) || resource.status != ResourceStatus::Deleted)
+                .then_some(resource.status)
+        })
+        .collect::<Vec<_>>();
+    let stack_status = if statuses.is_empty() {
+        StackStatus::Running
+    } else {
+        StackState::compute_stack_status_from_resources(&statuses).context(
+            ErrorData::StackExecutionFailed {
+                message: "Failed to compute provisioning status".to_string(),
+            },
+        )?
+    };
 
     // Check if all live resources are deployed
     let waiting_for_machines =
@@ -364,4 +378,182 @@ pub async fn handle_provisioning_failed(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        ClientConfig, EnvironmentVariablesSnapshot, ExternalBindings, ReleaseInfo, RuntimeMetadata,
+        StackSettings, Storage,
+    };
+    use alien_infra::{DefaultPlatformServiceProvider, StackResourceStateExt};
+    use std::sync::Arc;
+
+    fn config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    fn stack(ids: &[&str]) -> Stack {
+        let mut stack = Stack::new("provisioning-test".to_string()).build();
+        for id in ids {
+            let entry = Stack::new("entry".to_string())
+                .add(
+                    Storage::new((*id).to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+                .resources
+                .shift_remove(*id)
+                .unwrap();
+            stack.resources.insert((*id).to_string(), entry);
+        }
+        stack
+    }
+
+    async fn installed(stack: &Stack) -> StackState {
+        let executor = StackExecutor::builder(stack, ClientConfig::Test)
+            .deployment_config(&config())
+            .build()
+            .unwrap();
+        let result = executor
+            .run_until_synced(StackState::new(Platform::Test))
+            .await;
+        assert!(result.success, "{:?}", result.error);
+        result.final_state
+    }
+
+    fn provisioning(state: StackState, target: Stack) -> DeploymentState {
+        DeploymentState {
+            status: DeploymentStatus::Provisioning,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: Some(ReleaseInfo {
+                release_id: Some("target-release".to_string()),
+                version: None,
+                description: None,
+                stack: target.clone(),
+            }),
+            stack_state: Some(state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(target),
+                ..Default::default()
+            }),
+        }
+    }
+
+    async fn step(state: DeploymentState) -> DeploymentState {
+        handle_provisioning(
+            state,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .unwrap()
+        .state
+    }
+
+    #[tokio::test]
+    async fn provisioning_finishes_after_removed_live_resource_is_deleted() {
+        let installed_stack = stack(&["retained", "removed"]);
+        let mut state = provisioning(installed(&installed_stack).await, stack(&["retained"]));
+        let mut saw_deleting = false;
+        for _ in 0..8 {
+            state = step(state).await;
+            let removed = &state.stack_state.as_ref().unwrap().resources["removed"];
+            if removed.status == ResourceStatus::Deleting {
+                saw_deleting = true;
+                assert_eq!(state.status, DeploymentStatus::Provisioning);
+                assert!(state.current_release.is_none());
+                assert!(state.target_release.is_some());
+            }
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+        }
+        assert!(
+            saw_deleting,
+            "the real controller must execute its delete flow"
+        );
+        assert_eq!(state.status, DeploymentStatus::Running);
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(resources["retained"].status, ResourceStatus::Running);
+        assert_eq!(resources["removed"].status, ResourceStatus::Deleted);
+        assert_eq!(
+            state.current_release.unwrap().release_id.as_deref(),
+            Some("target-release")
+        );
+        assert!(state.target_release.is_none());
+    }
+
+    #[tokio::test]
+    async fn provisioning_recreates_a_desired_deleted_resource_before_promoting_release() {
+        let target = stack(&["recreated"]);
+        let executor = StackExecutor::builder(&stack(&[]), ClientConfig::Test)
+            .deployment_config(&config())
+            .build()
+            .unwrap();
+        let mut deleted = installed(&target).await;
+        for _ in 0..8 {
+            deleted = executor.step(deleted).await.unwrap().next_state;
+            if deleted.resources["recreated"].status == ResourceStatus::Deleted {
+                break;
+            }
+        }
+        assert_eq!(
+            deleted.resources["recreated"].status,
+            ResourceStatus::Deleted
+        );
+        let mut state = step(provisioning(deleted, target)).await;
+        assert_eq!(state.status, DeploymentStatus::Provisioning);
+        assert!(state.current_release.is_none());
+        for _ in 0..8 {
+            state = step(state).await;
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(
+            state.stack_state.unwrap().resources["recreated"].status,
+            ResourceStatus::Running
+        );
+        assert!(state.current_release.is_some());
+        assert!(state.target_release.is_none());
+    }
+
+    #[tokio::test]
+    async fn provisioning_preserves_removed_resource_delete_failure() {
+        let installed_stack = stack(&["retained", "failed-removal"]);
+        let mut checkpoint = installed(&installed_stack).await;
+        let removed = checkpoint.resources.get_mut("failed-removal").unwrap();
+        let mut controller = removed.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_delete_start().unwrap();
+        controller.transition_to_failure();
+        removed.status = controller.get_status();
+        removed.set_internal_controller(Some(controller)).unwrap();
+        assert_eq!(removed.status, ResourceStatus::DeleteFailed);
+
+        let state = step(provisioning(checkpoint, stack(&["retained"]))).await;
+        assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+        assert_eq!(
+            state.stack_state.unwrap().resources["failed-removal"].status,
+            ResourceStatus::DeleteFailed
+        );
+        assert!(state.current_release.is_none());
+        assert!(state.target_release.is_some());
+    }
 }
