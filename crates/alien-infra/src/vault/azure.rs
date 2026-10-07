@@ -27,6 +27,10 @@ use chrono::Utc;
 /// This controller manages the full lifecycle of the Key Vault resource.
 #[controller]
 pub struct AzureVaultController {
+    /// Revision of the vault grants successfully applied by this controller.
+    #[serde(default)]
+    pub(crate) permissions_revision: Option<String>,
+
     /// The name of the Azure Key Vault
     pub(crate) vault_name: Option<String>,
     /// The resource group name where the vault is created
@@ -89,6 +93,7 @@ impl AzureVaultController {
             resource_group_name: Some("test-rg".to_string()),
             vault_uri: Some(format!("https://test-{vault_id}.vault.azure.net")),
             vault_client: None,
+            permissions_revision: None,
             _internal_stay_count: None,
         }
     }
@@ -163,6 +168,7 @@ impl AzureVaultController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.apply_permissions(ctx).await?;
+        self.permissions_revision = Some(super::permissions_revision(ctx)?);
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -186,6 +192,7 @@ impl AzureVaultController {
         );
 
         self.apply_permissions(ctx).await?;
+        self.permissions_revision = Some(super::permissions_revision(ctx)?);
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -303,6 +310,21 @@ impl AzureVaultController {
         status = ResourceStatus::RefreshFailed
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let frozen = ctx
+            .desired_stack
+            .resources
+            .get(ctx.desired_config.id())
+            .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen);
+        if frozen && ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Ok(false);
+        }
+        Ok(
+            self.permissions_revision.as_deref()
+                != Some(super::permissions_revision(ctx)?.as_str()),
+        )
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(vault_name), Some(resource_group_name), Some(_vault_uri)) =
@@ -667,6 +689,80 @@ mod permission_update_tests {
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(policies.lock().unwrap().len(), 1);
         // Repeating setup does not schedule another update after convergence.
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_only_update_reconciles_and_then_converges() {
+        let (executor, mut state, writes) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        let resource = state.resources.get_mut("secrets").unwrap();
+        resource.dependencies = vec![ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            "consumer-sa",
+        )];
+        let mut controller = resource
+            .get_internal_controller_typed::<AzureVaultController>()
+            .unwrap();
+        controller.permissions_revision = Some("previous-grants".to_string());
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        assert!(
+            executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(writes.lock().unwrap().len(), 1);
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn previous_checkpoint_without_revision_reconciles_once() {
+        let (executor, mut state, writes) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        assert!(
+            state
+                .resources
+                .get_mut("secrets")
+                .unwrap()
+                .internal_state
+                .as_mut()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("permissionsRevision")
+                .is_some()
+        );
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(writes.lock().unwrap().len(), 1);
         assert!(
             !executor
                 .plan(&state)

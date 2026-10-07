@@ -26,6 +26,10 @@ use chrono::Utc;
 /// The vault represents a namespace prefix for secrets in GCP Secret Manager.
 #[controller]
 pub struct GcpVaultController {
+    /// Revision of the vault grants successfully applied by this controller.
+    #[serde(default)]
+    pub(crate) permissions_revision: Option<String>,
+
     /// GCP project ID for the vault
     pub(crate) project_id: Option<String>,
     /// The GCP region/location for this vault
@@ -58,6 +62,9 @@ impl GcpVaultController {
 
         self.apply_management_permissions(ctx, &config.id, &vault_prefix)
             .await?;
+        if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
+            self.permissions_revision = Some(super::permissions_revision(ctx)?);
+        }
 
         // The Secret Manager API should be enabled via infra requirements
         // Here we set up the vault reference
@@ -102,6 +109,9 @@ impl GcpVaultController {
         })?;
         self.apply_management_permissions(ctx, &config.id, vault_prefix)
             .await?;
+        if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
+            self.permissions_revision = Some(super::permissions_revision(ctx)?);
+        }
 
         // No infrastructure to update - Secret Manager exists implicitly
         Ok(HandlerAction::Continue {
@@ -203,6 +213,18 @@ impl GcpVaultController {
         status = ResourceStatus::RefreshFailed
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            || !ResourcePermissionsHelper::resource_is_setup_owned(ctx, ctx.desired_config.id())?
+        {
+            return Ok(false);
+        }
+        Ok(
+            self.permissions_revision.as_deref()
+                != Some(super::permissions_revision(ctx)?.as_str()),
+        )
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(project_id), Some(location)) = (&self.project_id, &self.location) {
@@ -653,6 +675,80 @@ mod permission_update_tests {
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(policies.lock().unwrap().len(), 1);
         // Repeating setup does not schedule another update after convergence.
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_only_update_reconciles_and_then_converges() {
+        let (executor, mut state, writes) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        let resource = state.resources.get_mut("secrets").unwrap();
+        resource.dependencies = vec![ResourceRef::new(
+            RemoteStackManagement::RESOURCE_TYPE,
+            "manager",
+        )];
+        let mut controller = resource
+            .get_internal_controller_typed::<GcpVaultController>()
+            .unwrap();
+        controller.permissions_revision = Some("previous-grants".to_string());
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        assert!(
+            executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(writes.lock().unwrap().len(), 1);
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn previous_checkpoint_without_revision_reconciles_once() {
+        let (executor, mut state, writes) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        assert!(
+            state
+                .resources
+                .get_mut("secrets")
+                .unwrap()
+                .internal_state
+                .as_mut()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("permissionsRevision")
+                .is_some()
+        );
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(writes.lock().unwrap().len(), 1);
         assert!(
             !executor
                 .plan(&state)
