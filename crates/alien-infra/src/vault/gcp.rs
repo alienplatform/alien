@@ -560,9 +560,10 @@ mod permission_update_tests {
             .build();
         let mut client = GcpClientConfig::mock();
         client.project_number = Some("123456789012".to_string());
+        let provider: Arc<dyn crate::core::PlatformServiceProvider> = Arc::new(provider);
         let executor = StackExecutor::builder(&stack, ClientConfig::Gcp(Box::new(client)))
             .deployment_config(&config)
-            .service_provider(Arc::new(provider))
+            .service_provider(provider.clone())
             .initial_setup_authority(authority)
             .step_running_resources(false)
             .build()
@@ -589,7 +590,28 @@ mod permission_update_tests {
         state.resources.insert("secrets".to_string(), vault_state);
         // Management is ready, but the vault has not recorded its new
         // dependency or applied its explicit secret-read grant.
-        let controller = GcpRemoteStackManagementController::mock_ready("manager");
+        let mut controller = GcpRemoteStackManagementController::mock_ready("manager");
+        // Setup has already converged the management identity. This update is
+        // specifically the vault's new dependency, not a stale identity revision.
+        let registry = Arc::new(crate::core::ResourceRegistry::default());
+        let desired_config = Resource::new(account.clone());
+        controller.management_permissions_revision =
+            crate::remote_stack_management::management_permissions_revision(
+                &ResourceControllerContext {
+                    desired_config: &desired_config,
+                    platform: Platform::Gcp,
+                    client_config: ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
+                    state: &state,
+                    resource_prefix: "test",
+                    registry: &registry,
+                    desired_stack: &stack,
+                    service_provider: &provider,
+                    deployment_config: &config,
+                    initial_setup_authority: authority,
+                    heartbeat_collector: crate::core::HeartbeatCollector::default(),
+                },
+            )
+            .unwrap();
         let mut account_state = StackResourceState::new_pending(
             RemoteStackManagement::RESOURCE_TYPE.to_string(),
             Resource::new(account),
@@ -602,6 +624,13 @@ mod permission_update_tests {
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
         state.resources.insert("manager".to_string(), account_state);
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("manager")
+        );
         (executor, state, policies)
     }
 
