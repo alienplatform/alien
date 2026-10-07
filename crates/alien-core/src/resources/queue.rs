@@ -73,9 +73,9 @@ impl ResourceDefinition for Queue {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
-        // Messages not yet consumed.
-        true
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys messages not yet consumed.
+        false
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {

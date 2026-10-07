@@ -277,6 +277,12 @@ impl ResourceDefinition for Daemon {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // A create that timed out may already run replicas; deleting it stops them all, while
+        // creating it again updates the daemon in place.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut dependencies = self.links.clone();
         if let Some(cluster) = &self.cluster {

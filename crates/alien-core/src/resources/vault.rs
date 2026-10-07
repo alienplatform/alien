@@ -78,9 +78,9 @@ impl ResourceDefinition for Vault {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
-        // Stored secrets.
-        true
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the stored secrets.
+        false
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {

@@ -1151,14 +1151,18 @@ impl StackExecutor {
                                         resource_id
                                     );
                                     plan_result.setup_required.push(resource_id.clone());
-                                } else if current_resource_state.config.delete_destroys_data() {
-                                    // A create can adopt a resource that already holds data (an
-                                    // existing bucket, table or database with the same name), so
-                                    // deleting it to replace it could destroy that data. These
-                                    // creates find their resource again by its deterministic
-                                    // name, so creating again in place is safe.
+                                } else if !current_resource_state
+                                    .config
+                                    .replace_after_failed_create_is_safe()
+                                {
+                                    // Deleting it could destroy what the failed create already
+                                    // holds: data in a resource it adopted (an existing bucket,
+                                    // table or database with the same name) or live capacity
+                                    // (started replicas, launched instances). These creates find
+                                    // their resource again by its deterministic name, so creating
+                                    // again in place is safe.
                                     info!(
-                                        "Restarting CREATE for data-holding resource '{}' after a config change during ProvisionFailed; not deleting it",
+                                        "Restarting CREATE for '{}' after a config change during ProvisionFailed; it is not safe to delete",
                                         resource_id
                                     );
                                     plan_result.creates.push(resource_id.clone());
@@ -1180,12 +1184,14 @@ impl StackExecutor {
                             }
                             ResourceStatus::DeleteFailed => {
                                 // A replace whose delete failed: finish the delete, then the
-                                // create follows. Never create over what is left. Data-holding
-                                // resources are never replaced, so this delete is not ours to
-                                // finish.
+                                // create follows. Never create over what is left. Resources that
+                                // are not safe to replace never start one, so this delete is not
+                                // ours to finish.
                                 if (current_resource_state.has_internal_state()
                                     || current_resource_state.has_last_failed_state())
-                                    && !current_resource_state.config.delete_destroys_data()
+                                    && current_resource_state
+                                        .config
+                                        .replace_after_failed_create_is_safe()
                                     && !self.replacement_requires_setup(
                                         desired_config,
                                         current_resource_state,

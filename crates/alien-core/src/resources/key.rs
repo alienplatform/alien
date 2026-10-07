@@ -66,9 +66,9 @@ impl ResourceDefinition for Key {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
+    fn replace_after_failed_create_is_safe(&self) -> bool {
         // Data encrypted with the key cannot be decrypted once it is gone.
-        true
+        false
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {

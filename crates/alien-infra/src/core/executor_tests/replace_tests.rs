@@ -2,8 +2,8 @@
 //!
 //! A config change on such a resource must delete those cloud resources, against the config
 //! they were created with, before creating it again. A fresh create would drop the saved IDs
-//! and leak everything the failed create made. Resources whose delete destroys user data are
-//! the exception: they are created again in place and never deleted to be replaced.
+//! and leak everything the failed create made. Resources that are not safe to delete that way
+//! (user data, live replicas or instances) are the exception: they are created again in place.
 
 use std::collections::HashMap;
 
@@ -663,5 +663,100 @@ async fn delete_failed_storage_with_a_changed_config_is_not_replaced() -> Result
         Some(ResourceStatus::DeleteFailed)
     );
     assert!(test_storage_deletes_issued(store_id).is_empty());
+    Ok(())
+}
+
+fn capacity_group(max_size: u32) -> alien_core::CapacityGroup {
+    alien_core::CapacityGroup {
+        group_id: "general".to_string(),
+        instance_type: None,
+        profile: None,
+        min_size: 1,
+        max_size,
+        scale_policy: None,
+        nested_virtualization: None,
+    }
+}
+
+/// A failed create recorded with its controller state, as the executor leaves it.
+fn failed_create(
+    config: Resource,
+    controller: Box<dyn crate::core::ResourceController>,
+) -> Result<StackResourceState> {
+    let mut failed = StackResourceState::new_pending(
+        config.resource_type().to_string(),
+        config,
+        Some(ResourceLifecycle::Live),
+        vec![],
+    );
+    failed.status = ResourceStatus::ProvisionFailed;
+    failed.set_internal_controller(Some(controller.clone()))?;
+    failed.set_last_failed_controller(Some(controller))?;
+    Ok(failed)
+}
+
+/// Daemons and compute clusters are created again in place instead of replaced: a create
+/// that failed late may already run replicas or instances, which a delete would stop.
+#[tokio::test]
+async fn failed_daemon_and_compute_cluster_creates_are_created_again_not_replaced() -> Result<()> {
+    let daemon = |image: &str| {
+        alien_core::Daemon::new("agent".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: image.to_string(),
+            })
+            .permissions("execution".to_string())
+            .build()
+    };
+    let cluster = |max_size: u32| {
+        alien_core::ComputeCluster::new("compute".to_string())
+            .capacity_group(capacity_group(max_size))
+            .build()
+    };
+
+    let mut state = StackState::new(alien_core::Platform::Kubernetes);
+    state.resources.insert(
+        "agent".to_string(),
+        failed_create(
+            Resource::new(daemon("agent:v1")),
+            Box::new(crate::daemon::KubernetesDaemonController {
+                state: crate::daemon::KubernetesDaemonState::CreateFailed,
+                ..Default::default()
+            }),
+        )?,
+    );
+    state.resources.insert(
+        "compute".to_string(),
+        failed_create(
+            Resource::new(cluster(2)),
+            Box::new(crate::compute_cluster::KubernetesComputeClusterController {
+                state: crate::compute_cluster::KubernetesComputeClusterState::ProvisionFailed,
+                ..Default::default()
+            }),
+        )?,
+    );
+
+    let stack = Stack::new("replace-test".to_owned())
+        .add(daemon("agent:v2"), ResourceLifecycle::Live)
+        .add(cluster(3), ResourceLifecycle::Live)
+        .build();
+    let executor = StackExecutor::builder(
+        &stack,
+        ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::InCluster {
+            namespace: Some("application".to_string()),
+            additional_headers: None,
+        })),
+    )
+    .deployment_config(&default_deployment_config())
+    .build()?;
+    let plan = executor.plan(&state)?;
+    let mut creates = plan.creates.clone();
+    creates.sort();
+    assert_eq!(
+        creates,
+        vec!["agent".to_string(), "compute".to_string()],
+        "{plan:?}"
+    );
+    assert!(plan.replaces.is_empty(), "{plan:?}");
+    assert!(plan.deletes.is_empty(), "{plan:?}");
     Ok(())
 }

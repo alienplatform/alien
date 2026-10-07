@@ -79,9 +79,9 @@ impl ResourceDefinition for AzureStorageAccount {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
-        // Blobs, tables and queues in the account.
-        true
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the blobs, tables and queues in the account.
+        false
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {

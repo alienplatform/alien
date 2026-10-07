@@ -744,9 +744,9 @@ impl ResourceDefinition for Container {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
-        // Persistent volumes of a stateful container.
-        self.stateful && self.persistent_storage.is_some()
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the persistent volumes of a stateful container.
+        !(self.stateful && self.persistent_storage.is_some())
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {

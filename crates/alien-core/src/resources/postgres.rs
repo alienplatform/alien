@@ -125,9 +125,9 @@ impl ResourceDefinition for Postgres {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
-        // Database contents.
-        true
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the database contents.
+        false
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {

@@ -115,9 +115,9 @@ impl ResourceDefinition for Storage {
         &self.id
     }
 
-    fn delete_destroys_data(&self) -> bool {
-        // Objects in the bucket.
-        true
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the objects in the bucket.
+        false
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
