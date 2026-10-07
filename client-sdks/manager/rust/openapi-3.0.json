@@ -6230,7 +6230,7 @@
         "additionalProperties": true
       },
       "BindingValue_Option_String": {
-        "oneOf": [
+        "anyOf": [
           {
             "nullable": true,
             "type": "string"
@@ -6255,7 +6255,7 @@
         "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
       },
       "BindingValue_String": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "string"
           },
@@ -6279,7 +6279,7 @@
         "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
       },
       "BindingValue_Vec_String": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "array",
             "items": {
@@ -6306,7 +6306,7 @@
         "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
       },
       "BindingValue_u16": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "integer",
             "format": "int32",
@@ -6332,7 +6332,7 @@
         "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
       },
       "BindingValue_u8": {
-        "oneOf": [
+        "anyOf": [
           {
             "type": "integer",
             "format": "int32",
