@@ -13,8 +13,8 @@ use alien_core::{
         ManagementPermissions, PermissionProfile, PermissionSetReference, PermissionsConfig,
     },
     AwsManagementConfig, ComputeSettings, Container, ContainerCode, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, PersistentStorage, Platform,
-    ResourceLifecycle, ResourceSpec, Stack, StackSettings, StackState, VolumeBackups,
+    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, PersistentStorage, Platform, VolumeBackups,
+    ResourceLifecycle, ResourceSpec, Stack, StackSettings, StackState,
 };
 use alien_preflights::runner::PreflightRunner;
 

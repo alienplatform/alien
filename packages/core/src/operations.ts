@@ -20,7 +20,7 @@ export { OperationsConfigSchema } from "./generated/index.js"
 /** A plugin setting: a literal, a stack input, or stack resources such as buckets. */
 export type OperationSettingInput = string | StackInputRef | Resource | readonly Resource[]
 
-/** Approval rules by operation pattern: an operation name, `*`, or a prefix ending in `*`. */
+/** Approval rules: an operation name, or `*` for all of them. Operations no rule matches need approval. */
 export type OperationApprovalInput = Record<string, OperationApproval>
 
 /** One plugin's settings, plus its approval rules under `approval`. */

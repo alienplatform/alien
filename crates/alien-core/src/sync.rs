@@ -161,7 +161,7 @@ pub struct OperationsBundleDownload {
     /// Presigned URL to GET the bundle ZIP from. Short-lived.
     pub url: String,
     /// Environment the plugin process runs with: its settings, which may hold
-    /// secrets. Keep in memory only; never persist or log the values.
+    /// secrets. Store only in encrypted state, and never log the values.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 }

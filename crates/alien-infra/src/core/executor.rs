@@ -293,16 +293,14 @@ mod controller_platform_tests {
     }
 }
 
-/// Whether a failed delete step means the resource is gone or out of reach of these
-/// credentials, so retrying cannot help.
-///
-/// Such an error ends the whole resource as `Deleted` and the delete steps after it never
-/// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
-/// access-denied answer it expects as success and continue, instead of returning it.
 /// Whether a failed delete may count as done. A resource that is already gone
 /// always may. One the executor can no longer reach only may during teardown,
 /// where the customer may have removed access before the deployment: during an
 /// update, access denied means the resource is still there and would leak.
+///
+/// Such an error ends the whole resource as `Deleted` and the delete steps after it never
+/// run. A handler that has more cleanup ahead of it must therefore treat a not-found
+/// answer it expects as success and continue, instead of returning it.
 fn is_best_effort_delete_error(err: &AlienError<ErrorData>, teardown: bool) -> bool {
     is_best_effort_delete_code(&err.code, err.http_status_code, teardown)
         || err
@@ -328,6 +326,51 @@ fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>, teardow
     let inaccessible =
         matches!(http_status_code, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED";
     missing || (teardown && inaccessible)
+}
+
+#[cfg(test)]
+mod best_effort_delete_tests {
+    use super::*;
+
+    fn wrapping(code: &str, http_status_code: Option<u16>) -> AlienError<ErrorData> {
+        let mut source = AlienError::new(GenericError {
+            message: "provider response".to_string(),
+        });
+        source.code = code.to_string();
+        source.http_status_code = http_status_code;
+        let mut error = AlienError::new(ErrorData::InfrastructureError {
+            message: "Failed to delete".to_string(),
+            operation: None,
+            resource_id: None,
+        });
+        error.source = Some(Box::new(source));
+        error
+    }
+
+    /// An update that cannot reach a resource must not mark it deleted: the
+    /// resource is still there. Teardown may, since the customer may already
+    /// have removed access. A resource that is gone counts as deleted either way.
+    #[test]
+    fn access_denied_counts_as_deleted_only_during_teardown() {
+        for denied in [
+            wrapping("REMOTE_ACCESS_DENIED", None),
+            wrapping("HTTP_RESPONSE_ERROR", Some(403)),
+        ] {
+            assert!(!is_best_effort_delete_error(&denied, false));
+            assert!(is_best_effort_delete_error(&denied, true));
+        }
+        for missing in [
+            wrapping("REMOTE_RESOURCE_NOT_FOUND", None),
+            wrapping("HTTP_RESPONSE_ERROR", Some(404)),
+        ] {
+            assert!(is_best_effort_delete_error(&missing, false));
+            assert!(is_best_effort_delete_error(&missing, true));
+        }
+        assert!(!is_best_effort_delete_error(
+            &wrapping("HTTP_RESPONSE_ERROR", Some(500)),
+            true
+        ));
+    }
 }
 
 fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
