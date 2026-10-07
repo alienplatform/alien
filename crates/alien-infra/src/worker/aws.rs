@@ -4686,7 +4686,7 @@ impl AwsWorkerController {
         if certificate_arns.is_empty() && self.certificate_import_token.is_none() {
             self.certificate_arn = None;
             return Ok(HandlerAction::Continue {
-                state: Deleted,
+                state: DeletingLogGroup,
                 suggested_delay: None,
             });
         }
@@ -4718,6 +4718,48 @@ impl AwsWorkerController {
         }
         self.certificate_arn = None;
         self.certificate_import_token = None;
+
+        Ok(HandlerAction::Continue {
+            state: DeletingLogGroup,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeletingLogGroup,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_log_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        // The group `ensure_log_group` creates, or Lambda creates on first invoke, under the
+        // function's own name.
+        let log_group_name = format!("/aws/lambda/{aws_worker_name}");
+        let aws_cfg = ctx.get_aws_config()?;
+        let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
+        match logs.delete_log_group(&log_group_name).await {
+            Ok(()) => info!(log_group = %log_group_name, "Deleted worker log group"),
+            Err(error) if is_remote_not_found(&error) => {
+                info!(log_group = %log_group_name, "Worker log group already deleted")
+            }
+            // A role installed before logs:DeleteLogGroup was granted. The function and
+            // everything else are gone; returning the denial would only end the delete the
+            // same way, so it is reported and the delete finishes.
+            Err(error) if is_remote_access_denied(&error) => warn!(
+                log_group = %log_group_name,
+                "Not allowed to delete the worker log group; it is left behind. Re-run setup to grant logs:DeleteLogGroup."
+            ),
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete log group '{log_group_name}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                }))
+            }
+        }
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -5615,6 +5657,7 @@ mod tests {
         mock_logs
             .expect_put_retention_policy()
             .returning(|_| Ok(()));
+        mock_logs.expect_delete_log_group().returning(|_| Ok(()));
         Arc::new(mock_logs)
     }
 
@@ -6024,6 +6067,7 @@ mod tests {
         mock_lambda: MockLambdaApi,
         mock_ec2: MockEc2Api,
         mock_acm: MockAcmApi,
+        #[builder(default = MockCloudWatchLogsApi::new())] mock_logs: MockCloudWatchLogsApi,
         #[builder(default)] uses_custom_domain: bool,
     ) -> ResourceStatus {
         let worker = function_public_ingress();
@@ -6049,6 +6093,7 @@ mod tests {
         let mock_lambda = Arc::new(mock_lambda);
         let mock_ec2 = Arc::new(mock_ec2);
         let mock_acm = Arc::new(mock_acm);
+        let mock_logs = Arc::new(mock_logs);
         let mut mock_provider = MockPlatformServiceProvider::new();
         mock_provider
             .expect_get_aws_lambda_client()
@@ -6059,6 +6104,9 @@ mod tests {
         mock_provider
             .expect_get_aws_acm_client()
             .returning(move |_| Ok(mock_acm.clone()));
+        mock_provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(mock_logs.clone()));
 
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
@@ -6154,10 +6202,22 @@ mod tests {
                 Ok(())
             });
 
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        let recorded = calls.clone();
+        mock_logs
+            .expect_delete_log_group()
+            .withf(|name| name == "/aws/lambda/test-public-func")
+            .times(1)
+            .returning(move |_| {
+                recorded.lock().unwrap().push("DeleteLogGroup");
+                Ok(())
+            });
+
         let status = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(mock_ec2)
             .mock_acm(mock_acm)
+            .mock_logs(mock_logs)
             .uses_custom_domain(uses_custom_domain)
             .call()
             .await;
@@ -6166,6 +6226,7 @@ mod tests {
         if !uses_custom_domain {
             expected_calls.push("DeleteCertificate");
         }
+        expected_calls.push("DeleteLogGroup");
         assert_eq!(*calls.lock().unwrap(), expected_calls);
         assert_eq!(status, ResourceStatus::Deleted);
     }
@@ -7065,6 +7126,10 @@ mod tests {
         provider
             .expect_get_aws_apigatewayv2_client()
             .returning(move |_| Ok(apigw.clone()));
+        let logs = create_logs_mock_accepting_log_groups();
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
         Arc::new(provider)
     }
 
@@ -8072,7 +8137,7 @@ mod tests {
 
         executor.step().await.expect("deletes the certificates");
         let state = executor.internal_state::<AwsWorkerController>().unwrap();
-        assert_eq!(state.state, AwsWorkerState::Deleted);
+        assert_eq!(state.state, AwsWorkerState::DeletingLogGroup);
         assert_eq!(state.certificate_arn, None);
         assert_eq!(state.certificate_import_token, None);
         assert_eq!(
@@ -8131,7 +8196,7 @@ mod tests {
                 .internal_state::<AwsWorkerController>()
                 .unwrap()
                 .state,
-            AwsWorkerState::Deleted
+            AwsWorkerState::DeletingLogGroup
         );
         assert!(world.lock().unwrap().is_empty());
     }
@@ -8209,5 +8274,89 @@ mod tests {
             state.certificate_issued_at.as_deref(),
             Some("2024-01-01T00:00:00Z")
         );
+    }
+
+    // ─────────────── LOG GROUP ────────────────
+
+    /// The delete step for the function's log group, against `logs`.
+    async fn log_group_executor(logs: MockCloudWatchLogsApi) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::DeletingCertificate,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider_with_logs(
+                Arc::new(MockLambdaApi::new()),
+                None,
+                None,
+                Arc::new(logs),
+            ))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// Teardown ends by deleting the log group `ensure_log_group` created, by its exact name.
+    #[tokio::test]
+    async fn teardown_deletes_the_function_log_group() {
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_delete_log_group()
+            .withf(|name| name == "/aws/lambda/test-public-func")
+            .times(1)
+            .returning(|_| Ok(()));
+        let mut executor = log_group_executor(logs).await;
+
+        executor
+            .step()
+            .await
+            .expect("the certificate step continues");
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::DeletingLogGroup
+        );
+        executor.run_until_terminal().await.expect("teardown runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// A log group that is already gone, or that the role may not delete, does not stop the
+    /// delete; any other error is returned and the step is retried.
+    #[rstest]
+    #[case::gone(not_found("LogGroup"), true)]
+    #[case::denied(access_denied(), true)]
+    #[case::unavailable(
+        AlienError::new(CloudClientErrorData::RemoteServiceUnavailable {
+            message: "unavailable".to_string(),
+        }),
+        false
+    )]
+    #[tokio::test]
+    async fn log_group_delete_outcomes(
+        #[case] error: AlienError<CloudClientErrorData>,
+        #[case] finishes: bool,
+    ) {
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_delete_log_group()
+            .times(1)
+            .returning(move |_| Err(error.clone()));
+        let mut executor = log_group_executor(logs).await;
+        executor
+            .step()
+            .await
+            .expect("the certificate step continues");
+
+        let result = executor.step().await;
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        if finishes {
+            result.expect("the delete finishes");
+            assert_eq!(state.state, AwsWorkerState::Deleted);
+        } else {
+            result.expect_err("the error is returned");
+            assert_eq!(state.state, AwsWorkerState::DeletingLogGroup);
+        }
     }
 }
