@@ -162,6 +162,10 @@ pub async fn handle_provisioning(
             message: "Failed to create stack executor for live resources".to_string(),
         })?;
 
+    // Captured before stepping: completion is judged over exactly what this executor
+    // reconciles.
+    let reconciled_ids = executor.tracked_resource_ids();
+
     // Execute one step
     let step_result =
         executor
@@ -172,13 +176,25 @@ pub async fn handle_provisioning(
             })?;
 
     // Compute the stack status from the resulting state
-    let stack_status =
+    let mut stack_status =
         step_result
             .next_state
             .compute_stack_status()
             .context(ErrorData::StackExecutionFailed {
                 message: "Failed to compute stack status".to_string(),
             })?;
+
+    // A create finishes with the config it started with. If the desired config changed while
+    // it ran, the resource is Running on the old one and the next step plans its update.
+    if stack_status == StackStatus::Running
+        && !crate::updating::stack_has_converged(
+            &step_result.next_state,
+            &target_stack,
+            &reconciled_ids,
+        )
+    {
+        stack_status = StackStatus::InProgress;
+    }
 
     // Check if all live resources are deployed
     let waiting_for_machines =

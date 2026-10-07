@@ -2123,6 +2123,88 @@ async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreat
     assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
 }
 
+/// An injected environment variable changes after the worker's create deployed its code.
+/// Provisioning does not report the deployment Running on the old config: the create finishes,
+/// the worker is updated to the new config, and only then is the release promoted.
+#[tokio::test]
+async fn config_change_during_provisioning_is_applied_before_the_deployment_is_running() {
+    let _vault = test_vault_env().await;
+    let worker_id = "mid-provisioning-change-fn";
+    let worker_identifier = "test:worker:mid-provisioning-change-fn";
+    let mut stack = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    let with_variable = |value: &str, hash: &str| {
+        let mut config = create_test_config(hash, false);
+        config
+            .environment_variables
+            .variables
+            .push(EnvironmentVariable {
+                name: "MID_PROVISIONING_VALUE".to_string(),
+                value: value.to_string(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: Some(vec![worker_id.to_string()]),
+            });
+        config
+    };
+    let deployed_values = || {
+        alien_infra::test_worker_configs_deployed(worker_identifier)
+            .iter()
+            .map(|config| config.environment.get("MID_PROVISIONING_VALUE").cloned())
+            .collect::<Vec<_>>()
+    };
+
+    // Step with the first value until the worker's create has deployed it.
+    let first = with_variable("first", "hash_first");
+    let mut state = create_initial_state(stack);
+    for _ in 0..MAX_STEPS {
+        if !deployed_values().is_empty() {
+            break;
+        }
+        state = alien_deployment::step(state, first.clone(), ClientConfig::Test, None)
+            .await
+            .expect("step should succeed")
+            .state;
+    }
+    assert_eq!(deployed_values(), vec![Some("first".to_string())]);
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources[worker_id].status,
+        alien_core::ResourceStatus::Provisioning
+    );
+
+    let second = with_variable("second", "hash_second");
+    let state = run_to_completion(state, second).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployed_values(),
+        vec![Some("first".to_string()), Some("second".to_string())],
+        "the worker is updated to the value that arrived mid-create"
+    );
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    assert_eq!(
+        worker
+            .config
+            .downcast_ref::<Worker>()
+            .expect("worker config")
+            .environment
+            .get("MID_PROVISIONING_VALUE")
+            .map(String::as_str),
+        Some("second")
+    );
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+}
+
 /// A runtime retry does not resume a failed create whose config changed since it failed: that
 /// would finish the create with a mix of both configs and never delete what the failed one
 /// made. The retry leaves it failed, and the executor deletes it against the config it was
