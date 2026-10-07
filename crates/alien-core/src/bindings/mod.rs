@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use utoipa::{
     PartialSchema, ToSchema,
     openapi::{
-        Ref, RefBuilder, RefOr,
-        schema::{AnyOfBuilder, ObjectBuilder, Schema, Type},
+        Ref, RefOr,
+        schema::{AnyOfBuilder, ObjectBuilder, RefBuilder, Schema, Type},
     },
 };
 
