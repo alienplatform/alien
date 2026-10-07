@@ -307,29 +307,45 @@ mod controller_platform_tests {
 /// Such an error ends the whole resource as `Deleted` and the delete steps after it never
 /// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
 /// access-denied answer it expects as success and continue, instead of returning it.
-fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code)
+///
+/// Access denied counts only when `access_denied_ends_delete`. A replace passes false: the
+/// resource is still desired and is created right after its delete, so treating a denied
+/// delete as done would create a second one next to the first.
+fn is_best_effort_delete_error(
+    err: &AlienError<ErrorData>,
+    access_denied_ends_delete: bool,
+) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
         || err
             .source
             .as_deref()
-            .is_some_and(is_best_effort_delete_source)
+            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
 }
 
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
     err.code == DEPENDENCY_NOT_READY_CODE
 }
 
-fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code)
+fn is_best_effort_delete_source(
+    err: &AlienError<GenericError>,
+    access_denied_ends_delete: bool,
+) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
         || err
             .source
             .as_deref()
-            .is_some_and(is_best_effort_delete_source)
+            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
 }
 
-fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>) -> bool {
-    matches!(http_status_code, Some(401 | 403 | 404))
-        || matches!(code, "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_DENIED")
+fn is_best_effort_delete_code(
+    code: &str,
+    http_status_code: Option<u16>,
+    access_denied_ends_delete: bool,
+) -> bool {
+    let not_found = http_status_code == Some(404) || code == "REMOTE_RESOURCE_NOT_FOUND";
+    let access_denied =
+        matches!(http_status_code, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED";
+    not_found || (access_denied_ends_delete && access_denied)
 }
 
 fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
@@ -2280,8 +2296,10 @@ impl StackExecutor {
                 Err(err) => {
                     warn!("Step failed for '{}': {}", resource_id, err);
 
+                    // A resource still in the desired stack is being deleted to be replaced.
+                    let replacing = self.resources.contains_key(&resource_id);
                     if current_resource_state.status == ResourceStatus::Deleting
-                        && is_best_effort_delete_error(&err)
+                        && is_best_effort_delete_error(&err, !replacing)
                     {
                         info!(
                             resource_id = %resource_id,

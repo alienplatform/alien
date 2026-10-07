@@ -331,40 +331,100 @@ async fn failed_replace_delete_resumes_at_the_failed_step() -> Result<()> {
     Ok(())
 }
 
-/// A best-effort not-found or access-denied answer ends the delete, and the create follows.
+/// A not-found answer ends the delete as best-effort, and the create follows.
 #[tokio::test]
-async fn replace_delete_ended_by_best_effort_error_creates_with_new_config() -> Result<()> {
-    for (id, flag) in [
-        ("replace-delete-not-found", "SIMULATE_DELETE_NOT_FOUND"),
-        ("replace-delete-denied", "SIMULATE_DELETE_ACCESS_DENIED"),
-    ] {
-        let v1 = worker(id, "image-v1", &[CREATE_WORKER_FAILURE, (flag, "true")]);
-        let state =
-            failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id)
-                .await?;
+async fn replace_delete_ended_by_not_found_creates_with_new_config() -> Result<()> {
+    let id = "replace-delete-not-found";
+    let v1 = worker(
+        id,
+        "image-v1",
+        &[CREATE_WORKER_FAILURE, ("SIMULATE_DELETE_NOT_FOUND", "true")],
+    );
+    let state =
+        failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id).await?;
 
-        let executor = new_executor(&single_worker_stack(
-            worker(id, "image-v2", &[]),
-            ResourceLifecycle::Live,
-        ))?;
-        let state = step_until(&executor, state, id, ResourceStatus::Deleted).await?;
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    let state = step_until(&executor, state, id, ResourceStatus::Deleted).await?;
+    assert!(
+        !state.resources[id].has_internal_state(),
+        "a best-effort delete drops the controller"
+    );
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(id))),
+        vec!["image-v1"]
+    );
+
+    let state = run_to_synced(&executor, state).await?;
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::Running));
+    assert_eq!(image(&state, id), "image-v2");
+    Ok(())
+}
+
+/// Access denied does not end a replace delete. The resource is still desired, so taking the
+/// denial as "deleted" would create a second one next to the first. The delete fails with the
+/// error and keeps the IDs; nothing is created. (A delete of a resource the stack no longer
+/// declares still treats access denied as best-effort.)
+#[tokio::test]
+async fn replace_delete_denied_access_fails_and_does_not_create() -> Result<()> {
+    let id = "replace-delete-denied";
+    let v1 = worker(
+        id,
+        "image-v1",
+        &[
+            CREATE_WORKER_FAILURE,
+            ("SIMULATE_DELETE_ACCESS_DENIED", "true"),
+        ],
+    );
+    let mut state =
+        failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id).await?;
+
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    for _ in 0..40 {
+        if get_status(&state, id) == Some(ResourceStatus::DeleteFailed) {
+            break;
+        }
+        state = executor.step(state).await?.next_state;
         assert!(
-            !state.resources[id].has_internal_state(),
-            "a best-effort delete drops the controller"
+            matches!(
+                get_status(&state, id),
+                Some(ResourceStatus::Deleting | ResourceStatus::DeleteFailed)
+            ),
+            "a denied replace delete must not reach {:?}",
+            get_status(&state, id)
         );
-        assert_eq!(
-            images(&test_worker_deletes_issued(&identifier(id))),
-            vec!["image-v1"]
-        );
-
-        let state = run_to_synced(&executor, state).await?;
-        assert_eq!(
-            get_status(&state, id),
-            Some(ResourceStatus::Running),
-            "{flag}"
-        );
-        assert_eq!(image(&state, id), "image-v2", "{flag}");
     }
+
+    let failed = &state.resources[id];
+    assert_eq!(failed.status, ResourceStatus::DeleteFailed);
+    let error = failed.error.as_ref().expect("the denial is recorded");
+    let mut codes = vec![error.code.clone()];
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        codes.push(inner.code.clone());
+        source = inner.source.as_deref();
+    }
+    assert!(
+        codes.iter().any(|code| code == "REMOTE_ACCESS_DENIED"),
+        "{codes:?}"
+    );
+    assert_eq!(image(&state, id), "image-v1");
+    assert_eq!(
+        failed
+            .get_internal_controller_typed::<TestWorkerController>()?
+            .identifier,
+        Some(identifier(id)),
+        "the IDs stay for the next delete attempt"
+    );
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(id))),
+        vec!["image-v1"]
+    );
     Ok(())
 }
 
