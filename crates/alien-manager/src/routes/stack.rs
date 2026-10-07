@@ -46,7 +46,7 @@ use alien_core::{
     StackSettings, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_preflights::{compatibility::PermissionProfilesUnchangedCheck, StackCompatibilityCheck};
+use alien_preflights::compatibility::PermissionProfilesUnchangedCheck;
 
 use super::{auth, AppState};
 use crate::auth::{Scope, Subject};
@@ -1254,8 +1254,7 @@ async fn refuse_management_permission_changes(
     let installed = prepare_import_stack(source_stack.clone(), req, installed_settings).await?;
     let requested = prepare_import_stack(source_stack.clone(), req, &req.stack_settings).await?;
     let result = PermissionProfilesUnchangedCheck
-        .check(&installed, &requested)
-        .await
+        .check_exact(&installed, &requested)
         .context(ErrorData::InternalError {
             message: "Failed to compare management permissions for the requested setup settings"
                 .to_string(),

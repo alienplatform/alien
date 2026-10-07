@@ -259,7 +259,7 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
     }
 
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
-        check_permission_profiles(old_stack, new_stack, false)
+        check_permission_profiles(old_stack, new_stack, false, true)
     }
 
     async fn check_with_config(
@@ -272,7 +272,17 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
             old_stack,
             new_stack,
             config.stack_settings.heartbeats.is_enabled(),
+            true,
         )
+    }
+}
+
+impl PermissionProfilesUnchangedCheck {
+    /// Compares without the narrowing allowance: any change, including one
+    /// that only removes grants, fails. For callers deciding what setup
+    /// installs rather than whether an update may run with it.
+    pub fn check_exact(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+        check_permission_profiles(old_stack, new_stack, false, false)
     }
 }
 
@@ -280,6 +290,7 @@ fn check_permission_profiles(
     old_stack: &Stack,
     new_stack: &Stack,
     allow_email_heartbeat_migration: bool,
+    allow_narrowing: bool,
 ) -> Result<CheckResult> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -295,10 +306,17 @@ fn check_permission_profiles(
     // covered.
     for (profile_name, _) in old_profiles {
         if !new_profiles.contains_key(profile_name) {
-            warnings.push(format!(
-                "Permission profile '{}' was removed; the next setup removes its identity",
-                profile_name
-            ));
+            if allow_narrowing {
+                warnings.push(format!(
+                    "Permission profile '{}' was removed; the next setup removes its identity",
+                    profile_name
+                ));
+            } else {
+                errors.push(format!(
+                    "Permission profile '{}' was removed from the stack",
+                    profile_name
+                ));
+            }
         }
     }
 
@@ -307,7 +325,7 @@ fn check_permission_profiles(
         if let Some(old_profile) = old_profiles.get(profile_name) {
             // Profile exists in both - check if it was modified
             if profiles_differ_outside_gates(old_profile, new_profile, &gated)
-                && !profile_narrowed(old_profile, new_profile)
+                && !(allow_narrowing && profile_narrowed(old_profile, new_profile))
             {
                 errors.push(format!(
                     "Permission profile '{}' was modified",
@@ -331,7 +349,8 @@ fn check_permission_profiles(
         new_stack.management(),
         &gated,
         allow_email_heartbeat_migration,
-    ) && !management_narrowed(old_stack.management(), new_stack.management())
+    ) && !(allow_narrowing
+        && management_narrowed(old_stack.management(), new_stack.management()))
     {
         errors.push("Management permissions configuration was modified".to_string());
     }
@@ -851,17 +870,18 @@ mod tests {
         let old_stack = stack_with_management(&["storage/heartbeat"]);
         let new_stack = stack_with_management(&["email/heartbeat", "storage/heartbeat"]);
 
-        let migration =
-            check_permission_profiles(&old_stack, &new_stack, true).expect("check should run");
+        let migration = check_permission_profiles(&old_stack, &new_stack, true, true)
+            .expect("check should run");
         assert!(migration.success, "{:?}", migration.errors);
 
         // Dropping the grant only narrows, which never needs setup.
-        let removal =
-            check_permission_profiles(&new_stack, &old_stack, true).expect("check should run");
+        let removal = check_permission_profiles(&new_stack, &old_stack, true, true)
+            .expect("check should run");
         assert!(removal.success, "{:?}", removal.errors);
 
         let explicit_grant_with_heartbeats_disabled =
-            check_permission_profiles(&old_stack, &new_stack, false).expect("check should run");
+            check_permission_profiles(&old_stack, &new_stack, false, true)
+                .expect("check should run");
         assert!(!explicit_grant_with_heartbeats_disabled.success);
     }
 
