@@ -144,6 +144,11 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeNetworkInterfacesRequest,
     ) -> Result<DescribeNetworkInterfacesResponse>;
+    async fn create_network_interface(
+        &self,
+        request: CreateNetworkInterfaceRequest,
+    ) -> Result<CreateNetworkInterfaceResponse>;
+    async fn delete_network_interface(&self, network_interface_id: &str) -> Result<()>;
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -596,6 +601,15 @@ impl Ec2Client {
             "DependencyViolation" | "ResourceInUse" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
+            "InvalidNetworkInterfaceID.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "NetworkInterface".into(),
+                resource_name: resource.into(),
+            },
+            "InvalidNetworkInterface.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "NetworkInterface".into(),
                 resource_name: resource.into(),
             },
             "Gateway.NotAttached" => ErrorData::RemoteResourceConflict {
@@ -1459,6 +1473,46 @@ impl Ec2Api for Ec2Client {
         }
 
         self.send_form(form_data, "DescribeNetworkInterfaces", "NetworkInterface")
+            .await
+    }
+
+    async fn create_network_interface(
+        &self,
+        request: CreateNetworkInterfaceRequest,
+    ) -> Result<CreateNetworkInterfaceResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateNetworkInterface".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("SubnetId".to_string(), request.subnet_id.clone());
+
+        if let Some(description) = &request.description {
+            form_data.insert("Description".to_string(), description.clone());
+        }
+
+        if let Some(groups) = &request.groups {
+            for (i, group) in groups.iter().enumerate() {
+                form_data.insert(format!("SecurityGroupId.{}", i + 1), group.clone());
+            }
+        }
+
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        self.send_create_once(form_data, "CreateNetworkInterface", &request.subnet_id)
+            .await
+    }
+
+    async fn delete_network_interface(&self, network_interface_id: &str) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteNetworkInterface".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert(
+            "NetworkInterfaceId".to_string(),
+            network_interface_id.to_string(),
+        );
+
+        self.send_form_no_body(form_data, "DeleteNetworkInterface", network_interface_id)
             .await
     }
 
@@ -3064,15 +3118,41 @@ pub struct NetworkInterfaceSet {
     pub items: Vec<NetworkInterface>,
 }
 
+/// Request to create a network interface.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateNetworkInterfaceRequest {
+    pub subnet_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Security group IDs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
+}
+
+/// Response from creating a network interface.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateNetworkInterfaceResponse {
+    pub network_interface: Option<NetworkInterface>,
+}
+
 /// Represents an EC2 network interface.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInterface {
     pub network_interface_id: Option<String>,
+    /// `available` (attached to nothing), `in-use`, `attaching`, `detaching`.
     pub status: Option<String>,
     pub description: Option<String>,
     pub subnet_id: Option<String>,
     pub vpc_id: Option<String>,
+    /// The kind of interface, such as `interface`, `lambda` or `nat_gateway`.
+    pub interface_type: Option<String>,
+    /// The AWS service or account that created the interface, when it is service-managed.
+    pub requester_id: Option<String>,
+    pub requester_managed: Option<bool>,
     #[serde(rename = "groupSet")]
     pub group_set: Option<GroupIdentifierSet>,
 }
@@ -4180,6 +4260,47 @@ mod error_mapping_tests {
             mapped("InvalidSubnet.Conflict"),
             Some(ErrorData::RemoteResourceConflict { .. })
         ));
+        assert!(matches!(
+            mapped("InvalidNetworkInterface.InUse"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidNetworkInterfaceID.NotFound"),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+    }
+
+    /// A detached Lambda interface as DescribeNetworkInterfaces returns it.
+    #[test]
+    fn network_interface_reads_its_requester_and_type() {
+        let body = r#"<DescribeNetworkInterfacesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+            <requestId>r</requestId>
+            <networkInterfaceSet>
+                <item>
+                    <networkInterfaceId>eni-1</networkInterfaceId>
+                    <subnetId>subnet-1</subnetId>
+                    <vpcId>vpc-1</vpcId>
+                    <description>AWS Lambda VPC ENI-fn-abc</description>
+                    <requesterId>123456789012:fn</requesterId>
+                    <requesterManaged>true</requesterManaged>
+                    <status>available</status>
+                    <interfaceType>lambda</interfaceType>
+                    <groupSet><item><groupId>sg-1</groupId><groupName>stack-sg</groupName></item></groupSet>
+                </item>
+            </networkInterfaceSet>
+        </DescribeNetworkInterfacesResponse>"#;
+
+        let response: DescribeNetworkInterfacesResponse =
+            quick_xml::de::from_str(body).expect("network interface response should parse");
+        let interface = &response.network_interface_set.expect("set").items[0];
+        assert_eq!(interface.status.as_deref(), Some("available"));
+        assert_eq!(interface.interface_type.as_deref(), Some("lambda"));
+        assert_eq!(interface.requester_id.as_deref(), Some("123456789012:fn"));
+        assert_eq!(interface.requester_managed, Some(true));
+        assert_eq!(
+            interface.description.as_deref(),
+            Some("AWS Lambda VPC ENI-fn-abc")
+        );
     }
 
     #[test]

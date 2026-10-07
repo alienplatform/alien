@@ -37,7 +37,7 @@ use alien_error::AlienError;
 use alien_infra::controller_test::SingleControllerExecutor;
 use alien_infra::{
     AwsNetworkController, DefaultPlatformServiceProvider, MockPlatformServiceProvider,
-    PlatformServiceProvider,
+    PlatformServiceProvider, ResourceController,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -228,6 +228,8 @@ faulty_ec2_api! {
     disassociate_route_table(association_id: &str) -> ();
     describe_security_groups(request: DescribeSecurityGroupsRequest) -> DescribeSecurityGroupsResponse;
     describe_network_interfaces(request: DescribeNetworkInterfacesRequest) -> DescribeNetworkInterfacesResponse;
+    create_network_interface(request: CreateNetworkInterfaceRequest) -> CreateNetworkInterfaceResponse;
+    delete_network_interface(network_interface_id: &str) -> ();
     create_security_group(request: CreateSecurityGroupRequest) -> CreateSecurityGroupResponse;
     delete_security_group(group_id: &str) -> ();
     authorize_security_group_ingress(request: AuthorizeSecurityGroupIngressRequest) -> ();
@@ -491,6 +493,7 @@ struct Inventory {
     elastic_ips: Vec<String>,
     route_tables: Vec<String>,
     security_groups: Vec<String>,
+    network_interfaces: Vec<String>,
 }
 
 impl Inventory {
@@ -502,6 +505,7 @@ impl Inventory {
             && self.elastic_ips.is_empty()
             && self.route_tables.is_empty()
             && self.security_groups.is_empty()
+            && self.network_interfaces.is_empty()
     }
 }
 
@@ -554,6 +558,14 @@ async fn inventory(ec2: &dyn Ec2Api, prefix: &str) -> Inventory {
         .await
         .expect("describe NAT gateways");
     let addresses = ec2.describe_addresses().await.expect("describe addresses");
+    let interfaces = ec2
+        .describe_network_interfaces(
+            DescribeNetworkInterfacesRequest::builder()
+                .filters(prefix_filter(prefix))
+                .build(),
+        )
+        .await
+        .expect("describe network interfaces");
     let route_tables = ec2
         .describe_route_tables(
             DescribeRouteTablesRequest::builder()
@@ -623,6 +635,13 @@ async fn inventory(ec2: &dyn Ec2Api, prefix: &str) -> Inventory {
             .into_iter()
             .filter_map(|group| group.group_id)
             .collect(),
+        network_interfaces: interfaces
+            .network_interface_set
+            .map(|set| set.items)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|interface| interface.network_interface_id)
+            .collect(),
     }
 }
 
@@ -656,6 +675,14 @@ async fn sweep(ec2: &dyn Ec2Api, prefix: &str) -> Inventory {
         for eip in &left.elastic_ips {
             if let Err(error) = ec2.release_address(eip).await {
                 println!("  sweep: release {eip}: {}", describe_error(&error));
+            }
+        }
+        for interface in &left.network_interfaces {
+            if let Err(error) = ec2.delete_network_interface(interface).await {
+                println!(
+                    "  sweep: delete ENI {interface}: {}",
+                    describe_error(&error)
+                );
             }
         }
         for group in &left.security_groups {
@@ -1033,7 +1060,9 @@ async fn delete_with_a_dependency_in_use_keeps_the_vpc_id_until_it_can_delete() 
             )
             .await
             .expect_err("the VPC delete gives up while the stray group exists");
-        assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT", "{error}");
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED", "{error}");
+        assert!(error.message.contains(&stray), "names the blocker: {error}");
+        println!("  delete blocked: {}", error.message);
         let controller = live.controller();
         assert_eq!(controller["state"], "deletingVpc");
         assert_eq!(controller["vpcId"].as_str(), Some(vpc_id.as_str()));
@@ -1055,12 +1084,12 @@ async fn delete_with_a_dependency_in_use_keeps_the_vpc_id_until_it_can_delete() 
             .delete_security_group(&stray)
             .await
             .expect("delete stray group");
-        let mut state = live.controller();
-        state
-            .as_object_mut()
-            .unwrap()
-            .retain(|key, _| !key.to_lowercase().contains("staycount"));
-        let retried: AwsNetworkController = serde_json::from_value(state).expect("controller");
+        let mut retried = live
+            .executor
+            .internal_state::<AwsNetworkController>()
+            .expect("network controller")
+            .clone();
+        retried.reset_stay_count();
         let mut live = rebuild(live, retried).await;
         let errors = live
             .drive_retrying("retried delete", Duration::from_secs(15), |live| {
@@ -1105,6 +1134,58 @@ async fn delete_finds_a_nat_gateway_whose_create_response_was_lost() {
         assert!(
             live.faulty.calls("delete_nat_gateway").len() == 1,
             "the recovered NAT gateway is deleted"
+        );
+        assert_nothing_left(&live).await;
+        live
+    })
+    .await;
+}
+
+/// 8. A detached network interface left in a subnet (as Lambda leaves its interfaces when its
+/// cleanup does not run) blocks the subnet delete. The delete removes it and finishes.
+#[tokio::test]
+#[ignore = "creates billed AWS resources; needs ALIEN_AWS_NETWORK_LIVE_TEST=1"]
+async fn delete_removes_a_detached_network_interface_left_in_a_subnet() {
+    scenario("orphan-eni", "10.238.0.0/16", |mut live| async move {
+        let errors = live.create_until("allocatingElasticIp").await;
+        assert!(errors.is_empty(), "{errors:?}");
+        let subnet = live.controller()["privateSubnetIds"][0]
+            .as_str()
+            .expect("a private subnet")
+            .to_string();
+        let orphan = live
+            .real
+            .create_network_interface(
+                CreateNetworkInterfaceRequest::builder()
+                    .subnet_id(subnet.clone())
+                    .description("orphaned interface for the live network test".to_string())
+                    .tag_specifications(vec![TagSpecification {
+                        resource_type: "network-interface".to_string(),
+                        tags: vec![Tag {
+                            key: ALIEN_STACK_TAG_KEY.to_string(),
+                            value: live.prefix.clone(),
+                        }],
+                    }])
+                    .build(),
+            )
+            .await
+            .expect("detached network interface")
+            .network_interface
+            .and_then(|interface| interface.network_interface_id)
+            .expect("interface id");
+        println!("  created detached interface {orphan} in {subnet}");
+
+        live.delete_to_deleted().await;
+        let deletes = live.faulty.calls("delete_network_interface");
+        assert_eq!(deletes.len(), 1, "{deletes:?}");
+        assert_eq!(deletes[0].outcome, "ok");
+        let subnet_deletes = live.faulty.calls("delete_subnet");
+        assert!(
+            subnet_deletes
+                .iter()
+                .any(|call| call.outcome.contains("dependencies")
+                    || call.outcome.contains("DependencyViolation")),
+            "the interface held its subnet: {subnet_deletes:?}"
         );
         assert_nothing_left(&live).await;
         live

@@ -27,10 +27,11 @@ use alien_aws_clients::ec2::{
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
     DescribeAddressesResponse, DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest,
-    DescribeNatGatewaysRequest, DescribeRouteTablesRequest, DescribeSecurityGroupsRequest,
-    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
-    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, NatGateway, RouteTable,
-    RouteTableAssociation, SecurityGroup, Subnet, Tag, TagSet, TagSpecification,
+    DescribeNatGatewaysRequest, DescribeNetworkInterfacesRequest, DescribeRouteTablesRequest,
+    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
+    DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
+    ModifyVpcAttributeRequest, NatGateway, NetworkInterface, RouteTable, RouteTableAssociation,
+    SecurityGroup, Subnet, Tag, TagSet, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::aws::AwsFailureDomainSubnets;
@@ -203,6 +204,33 @@ fn has_owned_tags(tag_set: Option<&TagSet>, resource_prefix: &str, resource_id: 
             tags.iter()
                 .any(|tag| &tag.key == key && &tag.value == value)
         })
+}
+
+/// What keeps a network object from being deleted.
+#[derive(Debug, Default)]
+struct DeleteBlockers {
+    items: Vec<String>,
+    /// A blocker the runtime role cannot remove or even list; waiting cannot help.
+    missing_permission: bool,
+}
+
+fn describe_network_interface(interface: &NetworkInterface) -> String {
+    let mut detail = format!(
+        "network interface {} ({}",
+        interface.network_interface_id.as_deref().unwrap_or("?"),
+        interface.status.as_deref().unwrap_or("unknown status")
+    );
+    if let Some(kind) = &interface.interface_type {
+        detail.push_str(&format!(", type {kind}"));
+    }
+    if let Some(description) = interface.description.as_deref().filter(|d| !d.is_empty()) {
+        detail.push_str(&format!(", '{description}'"));
+    }
+    if let Some(requester) = &interface.requester_id {
+        detail.push_str(&format!(", requested by {requester}"));
+    }
+    detail.push(')');
+    detail
 }
 
 /// One subnet of the managed network, as `ensure_subnet` finds or creates it.
@@ -820,6 +848,10 @@ pub struct AwsNetworkController {
     /// Token of the latest `allocate_address` call, recorded before the call.
     #[serde(default)]
     pub(crate) eip_create_token: Option<String>,
+    /// Polls of the current delete step while AWS reports its object in use. Reset when the
+    /// step moves on, and by a manual retry.
+    #[serde(default)]
+    pub(crate) wait_for_delete_dependencies_iterations: u32,
 }
 
 /// A `create_subnet` call that may have created a subnet whose ID is not recorded yet.
@@ -1209,6 +1241,158 @@ impl AwsNetworkController {
             .filter_map(|address| address.allocation_id)
             .collect::<Vec<_>>())
         .and_then(|ids| single_create_attempt_match(ids, "Elastic IP", token, resource_id))
+    }
+
+    /// Deletes the detached network interfaces `filter` matches and describes those that still
+    /// hold the object a delete step is waiting on.
+    ///
+    /// An `available` interface is attached to nothing and sits in this network, which is
+    /// being deleted, so nothing can use it again; Lambda leaves such interfaces behind when
+    /// its cleanup does not run. Interfaces in use are left alone and reported.
+    async fn release_detached_network_interfaces(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        filter: Filter,
+        resource_id: &str,
+    ) -> Result<DeleteBlockers> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let mut blockers = DeleteBlockers::default();
+
+        let interfaces = match client
+            .describe_network_interfaces(
+                DescribeNetworkInterfacesRequest::builder()
+                    .filters(vec![filter])
+                    .build(),
+            )
+            .await
+        {
+            Ok(response) => response
+                .network_interface_set
+                .map(|set| set.items)
+                .unwrap_or_default(),
+            // Access denied must not leave this handler: it would end the whole delete. The
+            // interfaces may still drain on their own, so the step keeps waiting.
+            Err(error) if is_access_denied(&error) => {
+                blockers.items.push(
+                    "network interfaces that could not be listed (ec2:DescribeNetworkInterfaces is not granted)"
+                        .to_string(),
+                );
+                return Ok(blockers);
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to list the network interfaces holding a network object"
+                        .to_string(),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        };
+
+        for interface in interfaces {
+            let Some(interface_id) = interface.network_interface_id.clone() else {
+                continue;
+            };
+            let detail = describe_network_interface(&interface);
+            if interface.status.as_deref() != Some("available") {
+                blockers.items.push(detail);
+                continue;
+            }
+            match client.delete_network_interface(&interface_id).await {
+                Ok(()) => {
+                    info!(network_interface_id = %interface_id, description = ?interface.description, "Deleted a detached network interface left in the network");
+                }
+                Err(error) if is_not_found(&error) => {}
+                Err(error) if is_conflict(&error) => blockers.items.push(detail),
+                Err(error) if is_access_denied(&error) => {
+                    blockers.missing_permission = true;
+                    blockers.items.push(format!(
+                        "{detail}; it is detached but this role cannot delete it (ec2:DeleteNetworkInterface is not granted): rerun setup to grant it, or delete it"
+                    ));
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete detached network interface '{interface_id}'"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            }
+        }
+        Ok(blockers)
+    }
+
+    /// The security groups other than the default one that keep `vpc_id` from being deleted.
+    async fn vpc_security_group_blockers(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        resource_id: &str,
+    ) -> Result<Vec<String>> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let groups = match client
+            .describe_security_groups(
+                DescribeSecurityGroupsRequest::builder()
+                    .filters(vec![Filter {
+                        name: "vpc-id".to_string(),
+                        values: vec![vpc_id.to_string()],
+                    }])
+                    .build(),
+            )
+            .await
+        {
+            Ok(response) => response
+                .security_group_info
+                .map(|set| set.items)
+                .unwrap_or_default(),
+            Err(error) if is_access_denied(&error) => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to list the security groups of VPC '{vpc_id}'"),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        };
+        Ok(groups
+            .into_iter()
+            .filter(|group| group.group_name.as_deref() != Some("default"))
+            .map(|group| {
+                format!(
+                    "security group {} ('{}')",
+                    group.group_id.unwrap_or_default(),
+                    group.group_name.unwrap_or_default()
+                )
+            })
+            .collect())
+    }
+
+    /// Counts one more poll of a delete step whose object is still in use. Fails with what
+    /// holds it once `max_polls` is reached, or at once when only a missing permission keeps
+    /// the step from making progress.
+    fn wait_for_delete_dependencies(
+        &mut self,
+        resource_id: &str,
+        object: String,
+        blockers: DeleteBlockers,
+        max_polls: u32,
+    ) -> Result<()> {
+        self.wait_for_delete_dependencies_iterations += 1;
+        if blockers.missing_permission || self.wait_for_delete_dependencies_iterations >= max_polls
+        {
+            let listed = if blockers.items.is_empty() {
+                "dependencies AWS does not list here (for example VPC endpoints or other services' interfaces)".to_string()
+            } else {
+                blockers.items.join("; ")
+            };
+            return Err(AlienError::new(ErrorData::ResourceDeleteBlocked {
+                resource_id: resource_id.to_string(),
+                object,
+                blockers: listed,
+            }));
+        }
+        Ok(())
     }
 
     /// Whether the Elastic IP with this allocation ID is still associated with a network
@@ -3708,11 +3892,27 @@ impl AwsNetworkController {
                 info!(sg_id = %sg_id, "Security group already deleted");
             }
             // Network interfaces of dependents (Lambda, ECS, EC2) can stay in the group for
-            // a long time after those dependents are deleted.
+            // a long time after those dependents are deleted; detached ones are removed here.
             Err(error) if is_conflict(&error) => {
                 debug!(sg_id = %sg_id, "Security group still in use");
+                let blockers = self
+                    .release_detached_network_interfaces(
+                        ctx,
+                        Filter {
+                            name: "group-id".to_string(),
+                            values: vec![sg_id.clone()],
+                        },
+                        &config.id,
+                    )
+                    .await?;
+                self.wait_for_delete_dependencies(
+                    &config.id,
+                    format!("security group '{sg_id}'"),
+                    blockers,
+                    NETWORK_INTERFACE_DRAIN_MAX_POLLS,
+                )?;
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(NETWORK_INTERFACE_DRAIN_MAX_POLLS),
+                    max_times: None,
                     suggested_delay: Some(Duration::from_secs(30)),
                 });
             }
@@ -3725,6 +3925,7 @@ impl AwsNetworkController {
         }
 
         self.security_group_id = None;
+        self.wait_for_delete_dependencies_iterations = 0;
         Ok(HandlerAction::Continue {
             state: DeletingSubnets,
             suggested_delay: None,
@@ -3780,12 +3981,29 @@ impl AwsNetworkController {
         }
 
         if !in_use.is_empty() {
+            let blockers = self
+                .release_detached_network_interfaces(
+                    ctx,
+                    Filter {
+                        name: "subnet-id".to_string(),
+                        values: in_use.clone(),
+                    },
+                    &config.id,
+                )
+                .await?;
+            self.wait_for_delete_dependencies(
+                &config.id,
+                format!("subnets {}", in_use.join(", ")),
+                blockers,
+                NETWORK_INTERFACE_DRAIN_MAX_POLLS,
+            )?;
             return Ok(HandlerAction::Stay {
-                max_times: Some(NETWORK_INTERFACE_DRAIN_MAX_POLLS),
+                max_times: None,
                 suggested_delay: Some(Duration::from_secs(30)),
             });
         }
 
+        self.wait_for_delete_dependencies_iterations = 0;
         Ok(HandlerAction::Continue {
             state: DeletingRouteTables,
             suggested_delay: None,
@@ -3991,8 +4209,28 @@ impl AwsNetworkController {
             }
             Err(error) if is_conflict(&error) => {
                 debug!(vpc_id = %vpc_id, "VPC still has dependencies");
+                let mut blockers = self
+                    .release_detached_network_interfaces(
+                        ctx,
+                        Filter {
+                            name: "vpc-id".to_string(),
+                            values: vec![vpc_id.clone()],
+                        },
+                        &config.id,
+                    )
+                    .await?;
+                blockers.items.extend(
+                    self.vpc_security_group_blockers(ctx, &vpc_id, &config.id)
+                        .await?,
+                );
+                self.wait_for_delete_dependencies(
+                    &config.id,
+                    format!("VPC '{vpc_id}'"),
+                    blockers,
+                    DEPENDENCY_DRAIN_MAX_POLLS,
+                )?;
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                    max_times: None,
                     suggested_delay: Some(Duration::from_secs(15)),
                 });
             }
@@ -4005,6 +4243,7 @@ impl AwsNetworkController {
         }
 
         self.vpc_id = None;
+        self.wait_for_delete_dependencies_iterations = 0;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -4079,6 +4318,7 @@ impl AwsNetworkController {
             nat_gateway_create_token: None,
             internet_gateway_create_token: None,
             eip_create_token: None,
+            wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         }
     }
@@ -4122,6 +4362,7 @@ impl AwsNetworkController {
             nat_gateway_create_token: None,
             internet_gateway_create_token: None,
             eip_create_token: None,
+            wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         }
     }
@@ -4136,7 +4377,9 @@ mod controller_state_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use alien_aws_clients::ec2::{CreateNatGatewayRequest, MockEc2Api};
+    use alien_aws_clients::ec2::{
+        CreateNatGatewayRequest, DescribeNetworkInterfacesResponse, MockEc2Api,
+    };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
@@ -5836,6 +6079,14 @@ mod controller_state_tests {
                 Ok(())
             }
         });
+        ec2.expect_describe_network_interfaces()
+            .times(1)
+            .withf(|request| {
+                request.filters.as_ref().is_some_and(|filters| {
+                    filters[0].name == "subnet-id" && filters[0].values == ["subnet-b"]
+                })
+            })
+            .returning(|_| Ok(parse(json!({}))));
 
         let mut subnets_by_failure_domain = BTreeMap::new();
         subnets_by_failure_domain.insert(
@@ -5890,11 +6141,20 @@ mod controller_state_tests {
     }
 
     #[tokio::test]
-    async fn vpc_with_dependencies_polls_then_fails_with_its_id_still_recorded() {
+    async fn vpc_with_dependencies_polls_then_fails_naming_them_with_its_id_still_recorded() {
         let mut ec2 = MockEc2Api::new();
         ec2.expect_delete_vpc()
             .times(DEPENDENCY_DRAIN_MAX_POLLS as usize)
             .returning(|_| Err(in_use()));
+        ec2.expect_describe_network_interfaces()
+            .returning(|_| Ok(interfaces(json!([busy_lambda_interface()]))));
+        ec2.expect_describe_security_groups().returning(|_| {
+            Ok(parse(json!({ "securityGroupInfo": { "item": [
+                { "groupId": "sg-default", "groupName": "default" },
+                { "groupId": "sg-stray", "groupName": "someone-elses" }
+            ]}})))
+        });
+        ec2.expect_delete_network_interface().times(0);
 
         let mut executor = executor(
             ec2,
@@ -5915,13 +6175,242 @@ mod controller_state_tests {
             .step()
             .await
             .expect_err("the poll budget is bounded");
-        assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT");
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED");
         assert!(!error.retryable);
+        assert!(error.message.contains("VPC 'vpc-1'"), "{}", error.message);
+        assert!(
+            error.message.contains("eni-busy")
+                && error.message.contains("in-use")
+                && error.message.contains("AWS Lambda VPC ENI-fn")
+                && error.message.contains("requested by 123456789012:fn"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("sg-stray"), "{}", error.message);
+        assert!(!error.message.contains("sg-default"), "{}", error.message);
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
 
+        // A manual retry resets the poll count, so the delete waits again instead of failing.
         let mut failed = controller(&executor).clone();
         failed.transition_to_failure();
         assert_eq!(failed.state, AwsNetworkState::DeleteFailed);
         assert_eq!(failed.vpc_id.as_deref(), Some("vpc-1"));
+        let mut resumed = controller(&executor).clone();
+        resumed.reset_stay_count();
+        assert_eq!(resumed.wait_for_delete_dependencies_iterations, 0);
+    }
+
+    fn interfaces(items: serde_json::Value) -> DescribeNetworkInterfacesResponse {
+        parse(json!({ "networkInterfaceSet": { "item": items } }))
+    }
+
+    fn busy_lambda_interface() -> serde_json::Value {
+        json!({
+            "networkInterfaceId": "eni-busy",
+            "status": "in-use",
+            "interfaceType": "lambda",
+            "description": "AWS Lambda VPC ENI-fn",
+            "requesterId": "123456789012:fn",
+            "requesterManaged": true
+        })
+    }
+
+    fn orphaned_lambda_interface() -> serde_json::Value {
+        json!({
+            "networkInterfaceId": "eni-orphan",
+            "status": "available",
+            "interfaceType": "lambda",
+            "description": "AWS Lambda VPC ENI-gone-fn",
+            "requesterId": "123456789012:gone-fn",
+            "requesterManaged": true
+        })
+    }
+
+    /// Lambda can leave its interfaces `available` (detached) after the function is gone; they
+    /// never go away on their own. The security group step deletes them, leaves the ones in use
+    /// alone, and waits.
+    #[tokio::test]
+    async fn detached_interfaces_holding_the_security_group_are_deleted_before_waiting() {
+        let mut ec2 = MockEc2Api::new();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let count = attempts.clone();
+        ec2.expect_delete_security_group().returning(move |id| {
+            assert_eq!(id, "sg-1");
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(in_use())
+            } else {
+                Ok(())
+            }
+        });
+        ec2.expect_describe_network_interfaces()
+            .times(1)
+            .withf(|request| {
+                request.filters.as_ref().is_some_and(|filters| {
+                    filters[0].name == "group-id" && filters[0].values == ["sg-1"]
+                })
+            })
+            .returning(|_| {
+                Ok(interfaces(json!([
+                    orphaned_lambda_interface(),
+                    busy_lambda_interface()
+                ])))
+            });
+        ec2.expect_delete_network_interface()
+            .times(1)
+            .withf(|id| id == "eni-orphan")
+            .returning(|_| Ok(()));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSecurityGroup,
+                vpc_id: Some("vpc-1".to_string()),
+                security_group_id: Some("sg-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let result = executor.step().await.expect("an in-use group is a wait");
+        assert_eq!(result.suggested_delay, Some(Duration::from_secs(30)));
+        assert_eq!(
+            controller(&executor).security_group_id.as_deref(),
+            Some("sg-1")
+        );
+        assert_eq!(
+            controller(&executor).wait_for_delete_dependencies_iterations,
+            1
+        );
+
+        executor.step().await.expect("the group is deleted");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::DeletingSubnets);
+        assert_eq!(state.security_group_id, None);
+        assert_eq!(state.wait_for_delete_dependencies_iterations, 0);
+    }
+
+    /// A role set up before it could delete network interfaces cannot remove a detached one, so
+    /// waiting cannot help. The delete fails at once with the interface named and what to do,
+    /// and the error carries no access-denied cause, so it is not taken as "already deleted".
+    #[tokio::test]
+    async fn a_detached_interface_the_role_cannot_delete_fails_the_delete_at_once() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Err(in_use()));
+        ec2.expect_describe_network_interfaces()
+            .returning(|_| Ok(interfaces(json!([orphaned_lambda_interface()]))));
+        ec2.expect_delete_network_interface()
+            .times(1)
+            .returning(|id| {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "NetworkInterface".to_string(),
+                    resource_name: id.to_string(),
+                }))
+            });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSecurityGroup,
+                vpc_id: Some("vpc-1".to_string()),
+                security_group_id: Some("sg-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        let error = executor.step().await.expect_err("waiting cannot help");
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED");
+        assert!(
+            error.message.contains("eni-orphan")
+                && error.message.contains("ec2:DeleteNetworkInterface")
+                && error.message.contains("rerun setup"),
+            "{}",
+            error.message
+        );
+        assert!(error.source.is_none(), "no access-denied cause: {error:?}");
+        assert_eq!(
+            controller(&executor).security_group_id.as_deref(),
+            Some("sg-1")
+        );
+    }
+
+    /// A role that cannot list network interfaces keeps waiting, because the interfaces may
+    /// still drain on their own; the denial does not end the delete.
+    #[tokio::test]
+    async fn a_role_that_cannot_list_interfaces_keeps_waiting() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Err(in_use()));
+        ec2.expect_describe_network_interfaces()
+            .times(1)
+            .returning(|_| {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "NetworkInterface".to_string(),
+                    resource_name: "*".to_string(),
+                }))
+            });
+        ec2.expect_delete_network_interface().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSecurityGroup,
+                vpc_id: Some("vpc-1".to_string()),
+                security_group_id: Some("sg-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor.step().await.expect("still a wait");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingSecurityGroup
+        );
+        assert_eq!(
+            controller(&executor).security_group_id.as_deref(),
+            Some("sg-1")
+        );
+    }
+
+    /// A delete checkpoint saved before the poll counter existed resumes polling; the old
+    /// stay budget does not fail it at once.
+    #[tokio::test]
+    async fn persisted_deleting_vpc_mid_poll_keeps_polling() {
+        let mut value =
+            serde_json::to_value(AwsNetworkController::default()).expect("serialize default");
+        let fields = value.as_object_mut().expect("object");
+        assert!(fields
+            .remove("waitForDeleteDependenciesIterations")
+            .is_some());
+        fields.insert("state".to_string(), json!("deletingVpc"));
+        fields.insert("vpcId".to_string(), json!("vpc-1"));
+        let mut controller_state: AwsNetworkController =
+            serde_json::from_value(value).expect("an old checkpoint deserializes");
+        // Near the end of the old stay budget (40 polls).
+        controller_state._internal_stay_count = Some(39);
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_vpc()
+            .times(1)
+            .returning(|_| Err(in_use()));
+        ec2.expect_describe_network_interfaces()
+            .returning(|_| Ok(interfaces(json!([]))));
+        ec2.expect_describe_security_groups()
+            .returning(|_| Ok(parse(json!({}))));
+
+        let mut executor = executor(ec2, controller_state, Some("10.0.0.0/16")).await;
+        executor.step().await.expect("still polling");
+        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingVpc);
+        assert_eq!(
+            controller(&executor).wait_for_delete_dependencies_iterations,
+            1
+        );
     }
 
     #[tokio::test]
