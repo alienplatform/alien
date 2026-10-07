@@ -2414,10 +2414,12 @@ impl StackExecutor {
                         && is_best_effort_delete_error(&err, true)
                     {
                         // Access denied while deleting to replace. Below, the failed create is
-                        // restored if no delete step succeeded yet; either way the replace waits
-                        // for an explicit retry.
+                        // restored if nothing was deleted yet, including by this step before its
+                        // denied call; either way the replace waits for an explicit retry.
                         replace_delete_was_denied = true;
-                        let next = if failed_create_checkpoint.is_some() {
+                        let next = if failed_create_checkpoint.is_some()
+                            && updated_controller.nothing_deleted_yet()
+                        {
                             "Nothing was deleted and the failed create is kept: grant the permission and retry, or revert the configuration to resume the failed create"
                         } else {
                             "Part of it may already be deleted, so the failed create cannot be resumed: grant the permission and retry to finish the replace, or remove the resource from the stack to delete what is left"
@@ -2586,9 +2588,10 @@ impl StackExecutor {
             });
 
             if let Some(checkpoint) = failed_create_checkpoint {
-                if replace_delete_was_denied {
-                    // Denied while nothing was deleted: abort the replace and put the failed
-                    // create back, so reverting the config resumes it.
+                if replace_delete_was_denied && updated_controller.nothing_deleted_yet() {
+                    // Denied while nothing was deleted, not even by this step: abort the
+                    // replace and put the failed create back, so reverting the config resumes it.
+                    // Otherwise the failure checkpoint is this delete, recorded above.
                     let mut restored = checkpoint.box_clone();
                     restored.transition_to_failure();
                     next_state.status = restored.get_status();

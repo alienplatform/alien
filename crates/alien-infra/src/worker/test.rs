@@ -168,7 +168,7 @@ impl TestWorkerController {
         matches!(
             self.state,
             TestWorkerState::DeleteStart | TestWorkerState::DeleteWorker
-        )
+        ) && !self.worker_delete_issued
     }
 
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -707,6 +707,25 @@ impl TestWorkerController {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push((identifier.clone(), target_func.clone()));
         self.worker_delete_issued = true;
+
+        // Denied after this step already deleted the worker, like a handler that deletes one
+        // child and is then denied on the next.
+        if target_func
+            .environment
+            .get("SIMULATE_DELETE_DENIED_AFTER_DELETE")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "WorkerUrl".to_string(),
+                    resource_name: identifier.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Simulated denied delete after deleting worker `{identifier}`"),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
         info!(
             "→ [test-delete] Start Delete polling (0/{}) `{}`",
             DELETE_POLL_COUNT, identifier

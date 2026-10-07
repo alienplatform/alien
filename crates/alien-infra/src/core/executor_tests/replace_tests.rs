@@ -1149,3 +1149,50 @@ async fn reverting_after_a_replace_failed_mid_delete_finishes_the_delete_and_cre
     );
     Ok(())
 }
+
+/// A delete step that removed something and was then denied in the same step must not put the
+/// failed create back: the create's checkpoint still names what is gone. The earlier step
+/// deleted nothing, so the checkpoint was still kept when this step started.
+#[tokio::test]
+async fn denial_after_the_same_step_deleted_something_does_not_restore_the_create() -> Result<()> {
+    let id = "replace-denied-same-step";
+    let v1 = worker(
+        id,
+        "image-v1",
+        &[
+            CREATE_WORKER_FAILURE,
+            ("SIMULATE_DELETE_DENIED_AFTER_DELETE", "true"),
+        ],
+    );
+    let state =
+        failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id).await?;
+
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    let state = step_until(&executor, state, id, ResourceStatus::DeleteFailed).await?;
+    let failed = &state.resources[id];
+    let error = failed.error.as_ref().expect("the denial is recorded");
+    assert_eq!(error.code, "REPLACE_DELETE_DENIED");
+    assert!(
+        error.message.contains("may already be deleted")
+            && !error.message.contains("revert the configuration"),
+        "{}",
+        error.message
+    );
+    let checkpoint = failed
+        .get_last_failed_controller()?
+        .expect("the delete checkpoint");
+    assert_eq!(
+        checkpoint.get_status(),
+        ResourceStatus::Deleting,
+        "the checkpoint is the delete, not the failed create"
+    );
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(id))),
+        vec!["image-v1"],
+        "the worker was deleted before the denial"
+    );
+    Ok(())
+}
