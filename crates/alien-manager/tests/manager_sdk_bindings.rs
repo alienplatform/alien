@@ -1,6 +1,7 @@
 use alien_core::{
-    BindingValue, ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings,
-    S3StorageBinding, SecretReference, StorageBinding,
+    BindingValue, CloudSqlPostgresBinding, ContainerAppsEnvironmentBinding, ExternalBinding,
+    ExternalBindings, KvBinding, PostgresBinding, RedisKvBinding, S3StorageBinding, SecretReference,
+    StorageBinding,
 };
 use serde_json::json;
 
@@ -38,6 +39,25 @@ fn generated_manager_sdk_preserves_core_external_binding_coordinates_and_credent
                 force_path_style: Some(true),
                 access_key_id: Some("example-access-key".into()),
                 secret_access_key: Some(credential),
+            })),
+        );
+        bindings.insert(
+            "database",
+            ExternalBinding::Postgres(PostgresBinding::CloudSql(CloudSqlPostgresBinding {
+                host: "database.example.com".into(),
+                port: BindingValue::value(5432),
+                database: "application".into(),
+                username: "reader".into(),
+                server_ca_certificates: BindingValue::value(vec!["first-root".into(), "second-root".into()]),
+                password_secret_name: "database-password".into(),
+            })),
+        );
+        bindings.insert(
+            "cache",
+            ExternalBinding::Kv(KvBinding::Redis(RedisKvBinding {
+                connection_url: "redis://cache.example.com:6379".into(),
+                key_prefix: Some("application".into()),
+                database: Some(BindingValue::value(8)),
             })),
         );
         let sdk: alien_manager_api::types::ExternalBindings =
