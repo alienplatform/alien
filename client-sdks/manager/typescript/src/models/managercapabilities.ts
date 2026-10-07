@@ -11,7 +11,7 @@ export type ManagerCapabilities = {
   /**
    * AWS setup can hand off retained node identities to runtime reconciliation.
    */
-  awsSetupNodeIdentity: boolean;
+  awsSetupNodeIdentity?: boolean | undefined;
   /**
    * Helm charts at `oci://<registryHost>/charts/<stack>`.
    */
@@ -27,7 +27,7 @@ export const ManagerCapabilities$inboundSchema: z.ZodType<
   ManagerCapabilities,
   unknown
 > = z.object({
-  awsSetupNodeIdentity: z.boolean().default(false),
+  awsSetupNodeIdentity: z.boolean().optional(),
   charts: z.boolean(),
   tunnels: z.boolean(),
 });

@@ -7,6 +7,7 @@ import { ManagerInfoResponse } from "@alienplatform/manager-api/models";
 
 let value: ManagerInfoResponse = {
   capabilities: {
+    awsSetupNodeIdentity: false,
     charts: true,
     tunnels: true,
   },

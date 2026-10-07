@@ -13858,7 +13858,7 @@
           "awsSetupNodeIdentity": {
             "type": "boolean",
             "description": "AWS setup can hand off retained node identities to runtime reconciliation.",
-            "default": false
+            "example": false
           },
           "charts": {
             "type": "boolean",

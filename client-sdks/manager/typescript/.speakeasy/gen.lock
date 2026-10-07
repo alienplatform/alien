@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: 4c2221997b5083ba06b7d8696fba87aa
+  docChecksum: 68b5ad39c6899183529bc86b8b63fffc
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: 79ecc990-475c-4561-84d9-3e611ccd8c48
-  pristine_commit_hash: 8f538d61cb2bfd43463374b6fd0a3ef3941c5d9b
-  pristine_tree_hash: 64cce7fdd9528a56732a12bfbb03e006a4b70a30
+  generation_id: 3ec576a8-b032-4659-998f-e8313c08ba1c
+  pristine_commit_hash: f5cc60bd440c9b03c0083f9028468603e0e8b8d3
+  pristine_tree_hash: e16581970f6a2eed9821672b6c51a4905717d8c5
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -27,6 +27,7 @@ features:
     globalSecurityCallbacks: 0.1.0
     globalSecurityFlattening: 0.1.0
     globalServerURLs: 2.83.0
+    includes: 2.81.1
     methodArguments: 0.1.2
     nullables: 0.1.1
     responseFormat: 0.2.3
@@ -1320,12 +1321,12 @@ trackedFiles:
     pristine_git_object: a46a1f8c3694a965d2fb779743e9e762c08591e1
   docs/models/managercapabilities.md:
     id: 8f27148b6ef0
-    last_write_checksum: sha1:6b88a75bb302d1c2ddc8b11ef2ec0b26a10190e2
-    pristine_git_object: 403c9b22c564482e91b9f754397d6e65c6bd6242
+    last_write_checksum: sha1:9aa2dc25d70ae5a1eb37028aa9475dec46c95c0d
+    pristine_git_object: 2df2c637730be07e05771fcb8b15015acfe7b51d
   docs/models/managerinforesponse.md:
     id: 657adb2b97e5
-    last_write_checksum: sha1:5f885b2ed7ebc1790a75635f1f7796194e1d11a9
-    pristine_git_object: c567fe9666bb50ed701e571c7832d413173e887b
+    last_write_checksum: sha1:19d9df5e14f16cb472788f9abea2822b1b2adbce
+    pristine_git_object: 439bb9dc27019b98fb6506b35b10141bb3519291
   docs/models/metricsample.md:
     id: 88a4dc2addfb
     last_write_checksum: sha1:bdf45790f15e231e8b5269ac8b23f4f15bba5bcc
@@ -3556,8 +3557,8 @@ trackedFiles:
     pristine_git_object: c3a63e58c800adc02cbcde7f9363abb359f75484
   src/models/managercapabilities.ts:
     id: 579fe66b3d99
-    last_write_checksum: sha1:a0e01f40d902a52ff8ab9eea55b2784ac7c48e41
-    pristine_git_object: 85bf633aa6af172500619ec135a66729dab45d00
+    last_write_checksum: sha1:ddd6942191ab3a835ff6ca47830ea8489c154a56
+    pristine_git_object: d70213676d2a2fd0808716534dc4935aa35c2317
   src/models/managerinforesponse.ts:
     id: 0a1c0f2f6989
     last_write_checksum: sha1:894ebb37d523babc1e31f71c97a4800a2e3eb519
