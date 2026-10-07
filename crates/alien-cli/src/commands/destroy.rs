@@ -217,13 +217,21 @@ async fn resolve_destroy_target(
         None
     };
     #[cfg(feature = "platform")]
-    let (manager, reference) = if let Some(target) = platform_target {
-        (target.manager, String::from(target.detail.id))
+    let (manager, reference, platform_scope) = if let Some(target) = platform_target {
+        (
+            target.manager,
+            String::from(target.detail.id),
+            Some((
+                String::from(target.detail.project_id),
+                String::from(target.detail.workspace_id),
+            )),
+        )
     } else {
         (
             ctx.resolve_manager_metadata_only(&project_id, platform)
                 .await?,
             args.name.clone(),
+            None,
         )
     };
     #[cfg(not(feature = "platform"))]
@@ -232,12 +240,27 @@ async fn resolve_destroy_target(
             .await?,
         args.name.clone(),
     );
+    #[cfg(not(feature = "platform"))]
+    let platform_scope: Option<(String, String)> = None;
     let deployment = if reference.starts_with("dep_") || reference.contains('/') {
         crate::deployment_resolver::resolve(&manager.client, &reference, ctx.is_dev()).await?
     } else {
         resolve_untracked_name(ctx, &manager.client, &reference, &project_id).await?
     };
-    if deployment.project_id.as_str() != project_id {
+    if platform_scope.is_some() && deployment.id != reference {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment".to_string(),
+            message: "The manager returned a different deployment".to_string(),
+        }));
+    }
+    // Authenticated deployment discovery owns the scope; manager responses may use standalone IDs.
+    let (target_project_id, workspace_id) = platform_scope.unwrap_or_else(|| {
+        (
+            deployment.project_id.to_string(),
+            deployment.workspace_id.clone(),
+        )
+    });
+    if target_project_id != project_id {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "project".to_string(),
             message: "The deployment belongs to a different project".to_string(),
@@ -300,7 +323,7 @@ async fn resolve_destroy_target(
             name: deployment.name.to_string(),
             deployment_id: deployment.id,
             project_id,
-            workspace_id: deployment.workspace_id,
+            workspace_id,
             api_key,
         },
         manager,
@@ -928,6 +951,10 @@ mod tests {
         deleted: bool,
         invalid_after_acquire: bool,
         release_count: usize,
+        token_count: usize,
+        foreign_project: bool,
+        wrong_manager_deployment: bool,
+        wrong_manager_platform: bool,
     }
 
     type Shared = Arc<Mutex<ManagerState>>;
@@ -1008,8 +1035,16 @@ mod tests {
     }
 
     #[cfg(feature = "platform")]
-    #[tokio::test]
-    async fn logged_in_destroy_mints_a_scoped_token_without_local_tracking() {
+    #[derive(Clone, Copy)]
+    enum PlatformDestroyCase {
+        Valid,
+        ForeignProject,
+        WrongManagerDeployment,
+        WrongManagerPlatform,
+    }
+
+    #[cfg(feature = "platform")]
+    async fn exercise_platform_destroy(case: PlatformDestroyCase) {
         const ID: &str = "dep_0000000000000000000000000000";
         const PROJECT: &str = "prj_0000000000000000000000000000";
         async fn project() -> Json<serde_json::Value> {
@@ -1022,13 +1057,18 @@ mod tests {
             if state.deleted {
                 return StatusCode::NOT_FOUND.into_response();
             }
+            let project_id = if state.foreign_project {
+                "prj_1111111111111111111111111111"
+            } else {
+                PROJECT
+            };
             let status = if state.delete_authorizations.is_empty() {
                 "running"
             } else {
                 "teardown-required"
             };
             Json(
-                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
+                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": project_id, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
             ).into_response()
         }
         async fn request_delete(
@@ -1051,20 +1091,58 @@ mod tests {
             )
         }
         async fn token(
+            State(state): State<Shared>,
             headers: HeaderMap,
             Json(body): Json<serde_json::Value>,
         ) -> (StatusCode, Json<serde_json::Value>) {
             assert_eq!(headers["authorization"], "Bearer user-session");
             assert!(body["expiresAt"].is_string());
+            state.lock().unwrap().token_count += 1;
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({ "deploymentId": ID, "token": DEPLOYMENT_TOKEN })),
             )
         }
+        async fn manager_deployment(State(state): State<Shared>) -> Response {
+            let state = state.lock().unwrap();
+            if state.deleted {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            let mut record = deployment_record();
+            record["id"] = serde_json::json!(if state.wrong_manager_deployment {
+                "dep_1111111111111111111111111111"
+            } else {
+                ID
+            });
+            record["name"] = serde_json::json!("example");
+            record["projectId"] = serde_json::json!("prj_standalone000000000000000000");
+            record["workspaceId"] = serde_json::json!("ws_standalone00000000000000");
+            record["platform"] = serde_json::json!(if state.wrong_manager_platform {
+                "aws"
+            } else {
+                "test"
+            });
+            Json(record).into_response()
+        }
         let state = Shared::default();
+        {
+            let mut state = state.lock().unwrap();
+            state.foreign_project = matches!(case, PlatformDestroyCase::ForeignProject);
+            state.wrong_manager_deployment =
+                matches!(case, PlatformDestroyCase::WrongManagerDeployment);
+            state.wrong_manager_platform =
+                matches!(case, PlatformDestroyCase::WrongManagerPlatform);
+        }
+        let manager_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager_url = format!("http://{}", manager_listener.local_addr().unwrap());
+        let manager_app = Router::new()
+            .route("/v1/deployments/{id}", get(manager_deployment))
+            .route("/v1/deployments/{id}/delete", post(request_delete))
+            .route("/v1/sync/acquire", post(acquire))
+            .with_state(state.clone());
+        tokio::spawn(async move { axum::serve(manager_listener, manager_app).await.unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_url = format!("http://{}", listener.local_addr().unwrap());
-        let manager_url = server_url.clone();
         let app = Router::new()
             .route("/v1/projects/{id}", get(project))
             // Current project routing is unrelated to the deployment's recorded manager.
@@ -1078,8 +1156,6 @@ mod tests {
                 }))
             }))
             .route("/v1/deployments/{id}", get(deployment))
-            .route("/v1/deployments/{id}/delete", post(request_delete))
-            .route("/v1/sync/acquire", post(acquire))
             .route("/v1/deployments/{id}/token", post(token))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -1096,10 +1172,28 @@ mod tests {
             platform: Some("test".to_string()),
             force: false,
         };
-        let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None)
-            .await
-            .unwrap();
+        let result = resolve_destroy_target(&args, &ctx, "test", None).await;
+        let expected_field = match case {
+            PlatformDestroyCase::Valid => None,
+            PlatformDestroyCase::ForeignProject => Some("project"),
+            PlatformDestroyCase::WrongManagerDeployment => Some("deployment"),
+            PlatformDestroyCase::WrongManagerPlatform => Some("platform"),
+        };
+        if let Some(field) = expected_field {
+            let error = result.err().expect("invalid target must be refused");
+            assert!(
+                matches!(error.error.as_ref(), Some(ErrorData::ValidationError { field: actual, .. }) if actual == field)
+            );
+            let state = state.lock().unwrap();
+            assert_eq!(state.token_count, 0);
+            assert!(state.delete_authorizations.is_empty());
+            assert!(state.acquire_authorizations.is_empty());
+            return;
+        }
+        let (target, manager) = result.unwrap();
         assert_eq!(target.deployment_id, ID);
+        assert_eq!(target.project_id, PROJECT);
+        assert_eq!(target.workspace_id, "ws_000000000000000000000000");
         assert_eq!(target.api_key, DEPLOYMENT_TOKEN);
         assert_eq!(manager.auth_token.as_deref(), Some("user-session"));
         destroy_tracked_deployment(
@@ -1113,11 +1207,36 @@ mod tests {
         .unwrap();
         let state = state.lock().unwrap();
         assert!(state.deleted);
+        assert_eq!(state.token_count, 1);
         assert_eq!(state.delete_authorizations, vec!["Bearer user-session"]);
         assert_eq!(
             state.acquire_authorizations,
             vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
         );
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn logged_in_destroy_mints_a_scoped_token_without_local_tracking() {
+        exercise_platform_destroy(PlatformDestroyCase::Valid).await;
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn platform_destroy_refuses_foreign_project_before_token_mint() {
+        exercise_platform_destroy(PlatformDestroyCase::ForeignProject).await;
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn platform_destroy_refuses_wrong_manager_deployment_before_token_mint() {
+        exercise_platform_destroy(PlatformDestroyCase::WrongManagerDeployment).await;
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn platform_destroy_refuses_wrong_manager_platform_before_token_mint() {
+        exercise_platform_destroy(PlatformDestroyCase::WrongManagerPlatform).await;
     }
 
     #[tokio::test]
