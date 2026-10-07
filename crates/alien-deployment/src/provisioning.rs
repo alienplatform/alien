@@ -399,6 +399,7 @@ mod tests {
                 created_at: String::new(),
             })
             .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
             .build()
     }
 
