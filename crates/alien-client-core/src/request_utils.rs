@@ -207,6 +207,31 @@ pub async fn handle_no_response(
         }));
     }
 
+    // A successful response can still carry a body, such as SQS response metadata.
+    // Consume it before returning so HTTP/1 connections can be reused. Native responses are
+    // discarded a chunk at a time rather than buffered.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut response = response;
+        while response
+            .chunk()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Failed to finish response body".to_string(),
+            })?
+            .is_some()
+        {}
+    }
+    #[cfg(target_arch = "wasm32")]
+    response
+        .bytes()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: "Failed to finish response body".to_string(),
+        })?;
+
     Ok(())
 }
 
@@ -574,6 +599,50 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
 mod tests {
     use super::*;
     use alien_error::ContextError;
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    #[tokio::test]
+    async fn rejects_truncated_success_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            {
+                let mut reader = BufReader::new(&mut stream);
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).expect("request header") > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nshort",
+                )
+                .expect("partial response");
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("client")
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect("response headers");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let error = handle_no_response(response, None)
+            .await
+            .expect_err("truncated body must fail");
+        assert_eq!(error.code, "HTTP_REQUEST_FAILED");
+        server.join().expect("server");
+    }
 
     const SECRET: &str = "Sup3rSecret-MasterPassword!";
 
