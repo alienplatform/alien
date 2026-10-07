@@ -234,6 +234,11 @@ impl ResourceDefinition for AwsOpenSearch {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the indexed documents.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

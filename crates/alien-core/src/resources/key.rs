@@ -66,6 +66,11 @@ impl ResourceDefinition for Key {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Data encrypted with the key cannot be decrypted once it is gone.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

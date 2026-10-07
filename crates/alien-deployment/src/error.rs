@@ -147,6 +147,19 @@ pub enum ErrorData {
         summary: String,
     },
 
+    /// A retry cannot resume these failed resources from where they stopped.
+    #[error(
+        code = "RETRY_CANNOT_RESUME",
+        message = "Retry cannot resume {resources}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    RetryCannotResume {
+        /// Each resource with what it needs instead
+        resources: String,
+    },
+
     /// Required configuration is missing.
     #[error(
         code = "MISSING_CONFIGURATION",

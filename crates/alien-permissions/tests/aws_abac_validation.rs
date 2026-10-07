@@ -279,6 +279,11 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
                         || documented_ses_domain_identity_scope(resource)
+                        || documented_detached_network_interface_cleanup(
+                            permission_set_id,
+                            actions,
+                            resource,
+                        )
                     {
                         continue;
                     }
@@ -336,6 +341,21 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // wildcard safe: a connector the customer declared carries the customer's account id and this
     // pattern cannot name it.
     resource == "arn:aws:lambda:${awsRegion}:aws:network-connector:aws-network-connector:*"
+}
+
+fn documented_detached_network_interface_cleanup(
+    permission_set_id: &str,
+    actions: &[String],
+    resource: &str,
+) -> bool {
+    // Lambda leaves detached network interfaces in the managed network's subnets, and they block
+    // deleting it. They carry no Alien tags, so no tag condition can scope the delete, and the
+    // VPC ID a condition would need is only known at runtime. EC2 refuses to delete an attached
+    // interface, and the network controller deletes only available, AWS-managed `lambda`
+    // interfaces in its own subnets and security group.
+    permission_set_id == "network/provision"
+        && actions == ["ec2:DeleteNetworkInterface"]
+        && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
 }
 
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {

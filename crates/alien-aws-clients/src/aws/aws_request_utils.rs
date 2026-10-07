@@ -12,7 +12,7 @@ use tracing::{debug, trace};
 
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
 
@@ -343,6 +343,43 @@ pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
         .with_retry()
         .send_xml::<T>()
         .await
+}
+
+/// Sign the request and deserialize an XML response into `T`, retrying only throttling.
+///
+/// For a create the service cannot make idempotent: when a response is lost or a 5xx arrives
+/// after the service acted on the call, sending it again makes a second object, so those are
+/// returned to the caller, which looks the first one up. A throttled request was rejected
+/// before the service acted on it and is safe to send again.
+pub async fn sign_send_xml_retrying_throttling<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+) -> Result<T> {
+    builder
+        .sign_aws_request(config)?
+        .with_retry()
+        .retry_only_when(is_throttling)
+        .send_xml::<T>()
+        .await
+}
+
+/// Whether AWS rejected the request for its rate limit (the request was not acted on).
+fn is_throttling(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError {
+            http_status,
+            http_response_text,
+            ..
+        }) => {
+            *http_status == 429
+                || http_response_text.as_deref().is_some_and(|text| {
+                    ["RequestLimitExceeded", "Throttling", "ThrottlingException"]
+                        .iter()
+                        .any(|code| text.contains(&format!("<Code>{code}</Code>")))
+                })
+        }
+        _ => false,
+    }
 }
 
 /// Sign the request and expect no body, in a single attempt.

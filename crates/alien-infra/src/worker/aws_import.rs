@@ -67,6 +67,7 @@ impl ResourceImporter for AwsWorkerImporter {
             s3_permission_statement_ids: data.s3_permission_statement_ids,
             eventbridge_rule_names: data.eventbridge_rule_names,
             eventbridge_permission_statement_ids: data.eventbridge_permission_statement_ids,
+            delete_removed_something: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

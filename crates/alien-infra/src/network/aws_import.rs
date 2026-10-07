@@ -66,6 +66,18 @@ impl ResourceImporter for AwsNetworkImporter {
             availability_zones: data.availability_zones,
             subnets_by_failure_domain: data.subnets_by_failure_domain,
             is_byo_vpc: is_setup_owned_vpc,
+            vpc_create_token: None,
+            subnet_create_attempt: None,
+            nat_gateway_create_token: None,
+            internet_gateway_create_token: None,
+            eip_create_token: None,
+            nat_gateway_attempt: 0,
+            wait_for_create_lookup_iterations: 0,
+            wait_for_repeated_create_iterations: 0,
+            extra_vpc_ids: Vec::new(),
+            extra_internet_gateway_ids: Vec::new(),
+            extra_eip_allocation_ids: Vec::new(),
+            wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         };
         if needs_default_vpc_discovery || needs_subnet_domain_discovery {
