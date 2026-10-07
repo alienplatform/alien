@@ -1348,6 +1348,25 @@ impl StackExecutor {
                                     .insert(resource_id.clone(), desired_config.resource.clone());
                             }
                         }
+                    } else if current_resource_state.status == ResourceStatus::DeleteFailed
+                        && current_resource_state
+                            .get_last_failed_controller()?
+                            .is_some_and(|checkpoint| {
+                                checkpoint.get_status() == ResourceStatus::Deleting
+                            })
+                        && current_resource_state
+                            .config
+                            .replace_after_failed_create_is_safe()
+                        && !self.replacement_requires_setup(desired_config, current_resource_state)
+                        && !replace_delete_denied(current_resource_state)
+                    {
+                        // A replace whose delete failed part-way, with the config reverted since:
+                        // what is left cannot run, so finish the delete and create it again.
+                        info!(
+                            "Finishing the failed delete of '{}' before creating it again",
+                            resource_id
+                        );
+                        plan_result.replaces.push(resource_id.clone());
                     } else {
                         // Configs match, no update action needed from diffing.
                         // The resource will proceed based on its current state later.

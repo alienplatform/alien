@@ -1105,3 +1105,47 @@ async fn failed_artifact_registry_and_sandbox_creates_are_created_again_not_repl
     assert!(plan.replaces.is_empty(), "{plan:?}");
     Ok(())
 }
+
+/// A replace whose delete failed after it deleted the worker cannot resume the failed create.
+/// Reverting the config to what that create used finishes the delete and creates the worker
+/// again, rather than leaving the half-deleted resource as it is.
+#[tokio::test]
+async fn reverting_after_a_replace_failed_mid_delete_finishes_the_delete_and_creates_again(
+) -> Result<()> {
+    let id = "replace-mid-delete-reverted";
+    let v1 = worker(
+        id,
+        "image-v1",
+        &[
+            CREATE_WORKER_FAILURE,
+            ("SIMULATE_DELETE_POLL_FAILURE_COUNT", "10"),
+        ],
+    );
+    let state = failed_after_first_mutation(
+        &single_worker_stack(v1.clone(), ResourceLifecycle::Live),
+        id,
+    )
+    .await?;
+    let replace = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    let state = step_until(&replace, state, id, ResourceStatus::DeleteFailed).await?;
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(id))),
+        vec!["image-v1"],
+        "the worker itself was deleted before the delete failed"
+    );
+
+    let reverted = new_executor(&single_worker_stack(v1, ResourceLifecycle::Live))?;
+    assert_eq!(reverted.plan(&state)?.replaces, vec![id.to_string()]);
+    let state = step_until(&reverted, state, id, ResourceStatus::Deleted).await?;
+    assert!(state.resources[id].error.is_none());
+    let state = reverted.step(state).await?.next_state;
+    assert_eq!(
+        get_status(&state, id),
+        Some(ResourceStatus::Provisioning),
+        "the worker is created again"
+    );
+    Ok(())
+}

@@ -280,6 +280,10 @@ pub struct AwsWorkerController {
     pub(crate) eventbridge_rule_names: Vec<String>,
     /// Statement IDs for Lambda permissions granted to EventBridge for schedule triggers
     pub(crate) eventbridge_permission_statement_ids: Vec<String>,
+    /// Set by the delete flow once it removed (or found gone) any recorded object, so a delete
+    /// denied after that does not put the failed create back.
+    #[serde(default)]
+    pub(crate) delete_removed_something: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,12 +369,14 @@ fn worker_wants_streaming(worker: &Worker) -> bool {
 
 #[controller]
 impl AwsWorkerController {
-    // DeleteStart only routes; the API gateway step has not run yet.
+    // DeleteStart only routes. The API gateway step deletes the mapping, domain and API one
+    // by one and records each removal, so a denial part-way through it is not mistaken for
+    // nothing deleted.
     fn nothing_deleted_yet(&self) -> bool {
         matches!(
             self.state,
             AwsWorkerState::DeleteStart | AwsWorkerState::DeletingApiGateway
-        )
+        ) && !self.delete_removed_something
     }
 
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -3846,13 +3852,17 @@ impl AwsWorkerController {
                 .delete_base_path_mapping(domain_name, base_path)
                 .await
             {
-                Ok(()) => info!(worker=%worker_config.id, "REST base path mapping deleted"),
+                Ok(()) => {
+                    self.delete_removed_something = true;
+                    info!(worker=%worker_config.id, "REST base path mapping deleted")
+                }
                 Err(e)
                     if matches!(
                         e.error,
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    self.delete_removed_something = true;
                     info!(worker=%worker_config.id, "REST base path mapping already gone");
                 }
                 Err(e) => {
@@ -3873,13 +3883,17 @@ impl AwsWorkerController {
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
             match client.delete_api_mapping(domain_name, api_mapping_id).await {
-                Ok(()) => info!(worker=%worker_config.id, "API mapping deleted"),
+                Ok(()) => {
+                    self.delete_removed_something = true;
+                    info!(worker=%worker_config.id, "API mapping deleted")
+                }
                 Err(e)
                     if matches!(
                         e.error,
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    self.delete_removed_something = true;
                     info!(worker=%worker_config.id, "API mapping already gone");
                 }
                 Err(e) => {
@@ -3900,6 +3914,7 @@ impl AwsWorkerController {
                     .await?;
                 match client.delete_domain_name(domain_name).await {
                     Ok(()) => {
+                        self.delete_removed_something = true;
                         info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
                     }
                     Err(e)
@@ -3908,6 +3923,7 @@ impl AwsWorkerController {
                             Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                         ) =>
                     {
+                        self.delete_removed_something = true;
                         info!(worker=%worker_config.id, "Custom domain already gone or inaccessible");
                     }
                     Err(e) => {
@@ -3924,6 +3940,7 @@ impl AwsWorkerController {
                     .await?;
                 match client.delete_domain_name(domain_name).await {
                     Ok(()) => {
+                        self.delete_removed_something = true;
                         info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
                     }
                     Err(e)
@@ -3932,6 +3949,7 @@ impl AwsWorkerController {
                             Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                         ) =>
                     {
+                        self.delete_removed_something = true;
                         info!(worker=%worker_config.id, "Custom domain already gone");
                     }
                     Err(e) => {
@@ -3953,6 +3971,7 @@ impl AwsWorkerController {
                 .await?;
             match client.delete_api(api_id).await {
                 Ok(()) => {
+                    self.delete_removed_something = true;
                     info!(worker=%worker_config.id, api_id=%api_id, "API Gateway deleted")
                 }
                 Err(e)
@@ -3961,6 +3980,7 @@ impl AwsWorkerController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    self.delete_removed_something = true;
                     info!(worker=%worker_config.id, "API Gateway already gone");
                 }
                 Err(e) => {
@@ -3990,6 +4010,7 @@ impl AwsWorkerController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    self.delete_removed_something = true;
                     info!(worker=%worker_config.id, "REST API already gone");
                 }
                 Err(e) => {
@@ -4973,6 +4994,7 @@ impl AwsWorkerController {
             s3_permission_statement_ids: Vec::new(),
             eventbridge_rule_names: Vec::new(),
             eventbridge_permission_statement_ids: Vec::new(),
+            delete_removed_something: false,
             _internal_stay_count: None,
         }
     }
@@ -5012,9 +5034,12 @@ mod tests {
     use rstest::rstest;
 
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::{serialize_controller, MockPlatformServiceProvider, StackExecutor};
+    use crate::core::{
+        serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
+    };
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
+        AwsWorkerState,
     };
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
@@ -6612,5 +6637,67 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// The API gateway step deletes the mapping before the domain. A denial on the domain after
+    /// the mapping is gone must not count as "nothing deleted": restoring the failed create then
+    /// would resume a worker without its mapping. The removed mapping leaves state at once.
+    #[tokio::test]
+    async fn api_gateway_delete_denied_after_the_mapping_is_gone_is_not_nothing_deleted() {
+        let mut mock_apigw = MockApiGatewayV2Api::new();
+        mock_apigw
+            .expect_delete_api_mapping()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        mock_apigw
+            .expect_delete_domain_name()
+            .times(1)
+            .returning(|domain| {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "DomainName".to_string(),
+                    resource_name: domain.to_string(),
+                }))
+            });
+        mock_apigw.expect_delete_api().times(0);
+        let provider = setup_mock_service_provider(
+            Arc::new(MockLambdaApi::new()),
+            None,
+            Some(Arc::new(mock_apigw)),
+        );
+
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::DeletingApiGateway,
+            arn: Some("arn:aws:lambda:us-east-1:123456789012:function:test".to_string()),
+            api_id: Some("api-1".to_string()),
+            api_mapping_id: Some("mapping-1".to_string()),
+            domain_name: Some("api.example.com".to_string()),
+            ..Default::default()
+        };
+        assert!(controller.nothing_deleted_yet());
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect_err("the domain delete is denied");
+
+        let state = executor
+            .internal_state::<AwsWorkerController>()
+            .expect("worker controller");
+        assert_eq!(
+            state.api_mapping_id, None,
+            "the deleted mapping leaves state"
+        );
+        assert_eq!(state.domain_name.as_deref(), Some("api.example.com"));
+        assert_eq!(state.api_id.as_deref(), Some("api-1"));
+        assert!(!state.nothing_deleted_yet());
     }
 }
