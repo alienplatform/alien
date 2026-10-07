@@ -1,5 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { spawnSync } from "node:child_process"
 
 import { agentSyncRequestToJSON } from "../typescript/esm/models/agentsyncrequest.js"
 import { createCommandResponseFromJSON } from "../typescript/esm/models/createcommandresponse.js"
@@ -104,4 +108,38 @@ test("manager SDK round-trips typed storage binding settings without dropping co
   const parsed = stackSettingsFromJSON(JSON.stringify(settings))
   assert.equal(parsed.ok, true)
   if (parsed.ok) assert.deepEqual(JSON.parse(stackSettingsToJSON(parsed.value)), settings)
+})
+
+
+test("existing manager model imports and capability literals still typecheck", () => {
+  const sdkDirectory = fileURLToPath(new URL("../typescript/", import.meta.url))
+  const directory = fs.mkdtempSync(path.join(sdkDirectory, ".sdk-consumer-"))
+  try {
+    const consumer = path.join(directory, "consumer.ts")
+    fs.writeFileSync(consumer, `
+import {
+  type ManagerCapabilities,
+  type ExternalBindings,
+  externalBindingsFromJSON,
+  externalBindingsToJSON,
+} from "@alienplatform/manager-api/models";
+
+const capabilities: ManagerCapabilities = { charts: false, tunnels: true };
+const bindings: ExternalBindings = {
+  archive: { type: "storage", service: "s3", bucketName: "archive-bucket" },
+};
+const parsed = externalBindingsFromJSON(externalBindingsToJSON(bindings));
+if (parsed.ok) externalBindingsToJSON(parsed.value);
+void capabilities;
+`)
+    const result = spawnSync(process.execPath, [
+      path.join(sdkDirectory, "node_modules/typescript/bin/tsc"),
+      "--strict", "--skipLibCheck", "--noEmit",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext",
+      "--target", "ES2022", consumer,
+    ], { encoding: "utf8" })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
