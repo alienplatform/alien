@@ -7,9 +7,9 @@ use alien_core::{
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo,
-    Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    RemoteStackManagement, ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState,
+    TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -606,14 +606,15 @@ pub async fn sync_secrets_to_vault(
         return Ok(false);
     }
 
-    // The target stack dropped the secrets vault (its last vault-backed
-    // worker was removed). The same setup update revoked the management
-    // role's write access to it, so deleting the values written by earlier
-    // syncs would be denied and block the update. Forget them instead: they
-    // stay in the customer's account, unread by any workload.
-    if !stack.resources.contains_key(SECRETS_VAULT_ID)
+    // The target stack no longer needs the secrets vault (its last
+    // vault-backed worker was removed). The vault itself is setup-owned and
+    // stays, but setup revoked the management role's write access to it, so
+    // deleting the values written by earlier syncs would be denied and block
+    // the update. Forget them instead: they stay in the customer's account,
+    // unread by any workload.
+    if desired_secrets.is_empty()
         && has_secrets_vault(stack_state)
-        && desired_secrets.is_empty()
+        && management_lost_secrets_vault_write(stack)
     {
         if !runtime_metadata.last_synced_secret_names.is_empty() {
             warn!(
@@ -942,6 +943,31 @@ pub async fn delete_deployment_vault_secrets(
         "Deleted deployment-owned vault secrets"
     );
     Ok(true)
+}
+
+/// Whether the stack's management role no longer holds write access to the
+/// secrets vault. The secrets-vault preflight grants it whenever a workload
+/// reads from the vault; without that grant, the sync's deletes are denied.
+/// Only meaningful where management permissions are compiled into a remote
+/// management role and not overridden by the stack author.
+fn management_lost_secrets_vault_write(stack: &Stack) -> bool {
+    use alien_core::permissions::ManagementPermissions;
+
+    let has_management_role = stack
+        .resources
+        .values()
+        .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE);
+    if !has_management_role {
+        return false;
+    }
+    match &stack.permissions.management {
+        ManagementPermissions::Override(_) => false,
+        ManagementPermissions::Auto => true,
+        ManagementPermissions::Extend(profile) => !profile
+            .0
+            .get(SECRETS_VAULT_ID)
+            .is_some_and(|sets| sets.iter().any(|set| set.id() == "vault/data-write")),
+    }
 }
 
 fn has_secrets_vault(stack_state: &StackState) -> bool {
@@ -2082,9 +2108,11 @@ mod tests {
         assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
     }
 
-    /// Removing the last vault-backed worker drops the `secrets` vault from the
-    /// stack, and setup revokes the management role's write access with it.
-    /// The update must not try to delete the old values with that role.
+    /// Removing the last vault-backed worker stops the preflight from granting
+    /// the management role write access to the `secrets` vault, and setup
+    /// revokes it. The vault itself is setup-owned, so the update keeps it in
+    /// its target. The update must not try to delete the old values with a
+    /// role that can no longer write the vault.
     #[tokio::test]
     async fn vault_leaving_the_stack_forgets_owned_values_without_deleting() {
         let temp = tempfile::TempDir::new().expect("temp dir");
@@ -2122,8 +2150,29 @@ mod tests {
         metadata.last_synced_env_vars_hash = Some("previous".to_string());
         metadata.last_synced_secret_names = vec![RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()];
 
+        let mut stack = with_secrets_vault(Stack::new("no-workers".to_string()).build());
+        stack.resources.insert(
+            "management".to_string(),
+            ResourceEntry {
+                config: Resource::new(RemoteStackManagement::new("management".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        assert!(management_lost_secrets_vault_write(&stack));
+        let mut granted = stack.clone();
+        granted.permissions.management = alien_core::ManagementPermissions::Extend(
+            alien_core::PermissionProfile::new().resource(SECRETS_VAULT_ID, ["vault/data-write"]),
+        );
+        assert!(
+            !management_lost_secrets_vault_write(&granted),
+            "a management role that can still write the vault deletes stale values"
+        );
+
         assert!(!sync_secrets_to_vault(
-            &Stack::new("no-workers".to_string()).build(),
+            &stack,
             &stack_state,
             &client_config,
             &config,
