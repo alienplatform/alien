@@ -55,6 +55,12 @@ impl ResourceDefinition for ArtifactRegistry {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // A create adopts an existing repository with the same name, and deleting it deletes every
+        // image in it, including images this deployment never pushed.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

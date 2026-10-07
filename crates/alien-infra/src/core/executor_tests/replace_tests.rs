@@ -19,6 +19,7 @@ use crate::worker::{
     allow_test_worker_deletes, deny_test_worker_deletes, test_worker_deletes_denied,
     test_worker_deletes_issued, TestWorkerController, TestWorkerState,
 };
+use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
 use alien_core::{
     ClientConfig, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
     Stack, StackResourceState, StackState, StackStatus, Storage, Worker, WorkerCode,
@@ -1034,5 +1035,73 @@ async fn removing_a_resource_whose_replace_failed_mid_delete_finishes_the_delete
     assert_eq!(without.plan(&state)?.deletes, vec![id.to_string()]);
     let state = step_until(&without, state, id, ResourceStatus::Deleted).await?;
     assert!(state.resources[id].error.is_none());
+    Ok(())
+}
+
+/// An artifact registry and a sandbox are created again in place instead of replaced: their
+/// creates adopt an existing repository or image by name, which a delete would remove with
+/// images this deployment never proved it owns.
+#[tokio::test]
+async fn failed_artifact_registry_and_sandbox_creates_are_created_again_not_replaced() -> Result<()>
+{
+    let registry = |replication: bool| {
+        let mut registry = alien_core::ArtifactRegistry::new("images".to_string()).build();
+        if replication {
+            registry.replication_regions = vec!["us-west-2".to_string()];
+        }
+        registry
+    };
+    let sandbox = |bundle: &str| {
+        alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: bundle.to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Deny)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(1800),
+                idle_pause_seconds: Some(600),
+            })
+            .build()
+    };
+
+    let mut state = StackState::new(alien_core::Platform::Aws);
+    state.resources.insert(
+        "images".to_string(),
+        failed_create(
+            Resource::new(registry(false)),
+            Box::new(crate::artifact_registry::AwsArtifactRegistryController {
+                state: crate::artifact_registry::AwsArtifactRegistryState::CreateFailed,
+                ..Default::default()
+            }),
+        )?,
+    );
+    state.resources.insert(
+        "agents".to_string(),
+        failed_create(
+            Resource::new(sandbox("s3://bundles/v1.zip")),
+            Box::new(crate::sandbox::AwsSandboxController {
+                state: crate::sandbox::AwsSandboxState::ProvisionFailed,
+                ..Default::default()
+            }),
+        )?,
+    );
+
+    let stack = Stack::new("replace-test".to_owned())
+        .add(registry(true), ResourceLifecycle::Live)
+        .add(sandbox("s3://bundles/v2.zip"), ResourceLifecycle::Live)
+        .build();
+    let executor =
+        StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+            .deployment_config(&default_deployment_config())
+            .build()?;
+    let plan = executor.plan(&state)?;
+    let mut creates = plan.creates.clone();
+    creates.sort();
+    assert_eq!(
+        creates,
+        vec!["agents".to_string(), "images".to_string()],
+        "{plan:?}"
+    );
+    assert!(plan.replaces.is_empty(), "{plan:?}");
     Ok(())
 }
