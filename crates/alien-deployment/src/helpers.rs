@@ -63,31 +63,90 @@ pub(crate) fn injected_target_stack(
     Ok(target_stack)
 }
 
+/// A failed resource a retry did not resume, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnresumedFailure {
+    pub(crate) resource_id: String,
+    pub(crate) setup_owned: bool,
+    /// The stack no longer declares it (otherwise its config or dependencies changed).
+    pub(crate) removed: bool,
+}
+
+impl UnresumedFailure {
+    fn describe(&self) -> String {
+        let need = if self.removed {
+            "it is no longer in the stack; deploy an update to delete it"
+        } else if self.setup_owned {
+            "its configuration changed since it failed and it is setup-owned; rerun setup"
+        } else {
+            "its configuration changed since it failed; deploy an update"
+        };
+        format!("'{}' ({need})", self.resource_id)
+    }
+}
+
+/// The error for failures a retry cannot resume, or `None` when there are none.
+pub(crate) fn retry_cannot_resume(unresumed: &[UnresumedFailure]) -> Option<AlienError<ErrorData>> {
+    if unresumed.is_empty() {
+        return None;
+    }
+    Some(AlienError::new(ErrorData::RetryCannotResume {
+        resources: unresumed
+            .iter()
+            .map(UnresumedFailure::describe)
+            .collect::<Vec<_>>()
+            .join(", "),
+    }))
+}
+
+/// What a retry resumed and what it left for the planner, an update or setup.
+#[derive(Debug, Default)]
+pub(crate) struct RetryOutcome {
+    pub(crate) retried: Vec<String>,
+    pub(crate) unresumed: Vec<UnresumedFailure>,
+}
+
 /// Resumes the saved checkpoint of each failed resource that `eligible` accepts and that
-/// `target_stack` still declares with the config and dependencies it failed with.
+/// `target_stack` still declares with the config and dependencies it failed with, exactly as
+/// it stopped.
 ///
-/// A resource whose config changed stays failed, so the executor plans its update or replaces
-/// it: resuming a failed create with a new config would finish it with a mix of both. One
-/// the stack no longer declares stays failed too, and the executor deletes it. Failed deletes
-/// always resume, because the planner does not restart a delete that has failed.
+/// A resource whose config changed is not resumed, so the executor plans its update or
+/// replaces it: resuming a failed create with a new config would finish it with a mix of both.
+/// One the stack no longer declares is not resumed either, and the executor deletes it. Failed
+/// deletes always resume, because the planner does not restart a delete that has failed, and
+/// failed refreshes always resume, because a refresh only reads.
 pub(crate) fn resume_unchanged_failed_resources(
     stack_state: &mut StackState,
     target_stack: &Stack,
     eligible: impl Fn(&StackResourceState) -> bool,
-) -> Result<Vec<String>> {
-    let mut retried = Vec::new();
+) -> Result<RetryOutcome> {
+    let mut outcome = RetryOutcome::default();
     for (resource_id, resource_state) in &mut stack_state.resources {
-        if !eligible(resource_state) {
+        let failed = matches!(
+            resource_state.status,
+            ResourceStatus::ProvisionFailed
+                | ResourceStatus::UpdateFailed
+                | ResourceStatus::DeleteFailed
+                | ResourceStatus::RefreshFailed
+        );
+        if !failed || !eligible(resource_state) {
             continue;
         }
-        let unchanged = target_stack
-            .resources
-            .get(resource_id)
-            .is_some_and(|entry| {
-                entry.config == resource_state.config
-                    && entry.combined_dependencies() == resource_state.dependencies
+        let declared = target_stack.resources.get(resource_id);
+        let unchanged = declared.is_some_and(|entry| {
+            entry.config == resource_state.config
+                && entry.combined_dependencies() == resource_state.dependencies
+        });
+        let always_resumes = matches!(
+            resource_state.status,
+            ResourceStatus::DeleteFailed | ResourceStatus::RefreshFailed
+        );
+        if !unchanged && !always_resumes {
+            outcome.unresumed.push(UnresumedFailure {
+                resource_id: resource_id.clone(),
+                setup_owned: resource_state.lifecycle == Some(ResourceLifecycle::Frozen),
+                removed: declared.is_none(),
             });
-        if resource_state.status != ResourceStatus::DeleteFailed && !unchanged {
             continue;
         }
         if resource_state
@@ -96,24 +155,23 @@ pub(crate) fn resume_unchanged_failed_resources(
                 message: format!("Failed to retry failed resource '{resource_id}'"),
             })?
         {
-            retried.push(resource_id.clone());
+            outcome.retried.push(resource_id.clone());
         }
     }
-    Ok(retried)
+    Ok(outcome)
 }
 
-/// Prepares the failed runtime-owned resources of `stack_state` for a retry of provisioning
-/// or of a running deployment, against the stack prepared in `runtime_metadata`.
+/// Prepares the failed resources of `stack_state` for a retry of provisioning or of a running
+/// deployment, against the stack prepared in `runtime_metadata`.
 ///
-/// Like [`crate::retry_failed_setup_resources`], only failures whose config is unchanged
-/// (and failed deletes) resume their saved checkpoint. A setup-owned resource is never
-/// resumed into a create, update or delete with runtime credentials; only its failed
-/// refresh is retried, which reads it again.
+/// Every failure whose config is unchanged resumes its saved checkpoint, setup-owned or not,
+/// as do failed deletes and refreshes. The others are returned in `unresumed` for the caller
+/// to hand to the planner or report.
 pub(crate) fn retry_failed_runtime_resources(
     stack_state: &mut StackState,
     runtime_metadata: Option<&RuntimeMetadata>,
     config: &DeploymentConfig,
-) -> Result<Vec<String>> {
+) -> Result<RetryOutcome> {
     let has_failures = stack_state.resources.values().any(|resource| {
         matches!(
             resource.status,
@@ -124,7 +182,7 @@ pub(crate) fn retry_failed_runtime_resources(
         )
     });
     if !has_failures {
-        return Ok(Vec::new());
+        return Ok(RetryOutcome::default());
     }
     let runtime_metadata = runtime_metadata.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -133,10 +191,7 @@ pub(crate) fn retry_failed_runtime_resources(
         })
     })?;
     let target_stack = injected_target_stack(runtime_metadata, config, stack_state.platform)?;
-    resume_unchanged_failed_resources(stack_state, &target_stack, |resource| {
-        resource.lifecycle != Some(ResourceLifecycle::Frozen)
-            || resource.status == ResourceStatus::RefreshFailed
-    })
+    resume_unchanged_failed_resources(stack_state, &target_stack, |_| true)
 }
 
 /// Collect environment information from cloud platforms

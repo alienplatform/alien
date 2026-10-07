@@ -2191,6 +2191,112 @@ async fn provisioning_retry_replaces_a_failed_create_whose_config_changed() {
         .contains_key("SIMULATE_CREATE_WORKER_FAILURE"));
 }
 
+/// A Running deployment with this Frozen store failed mid-update at `updateConfig`, its
+/// config unchanged, and the deployment in RefreshFailed.
+async fn store_failed_mid_update(store_id: &str) -> (DeploymentState, DeploymentConfig) {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack_with_storage(
+            "retry-stack",
+            store_id,
+            "retry-fn",
+        )),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let store = state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut(store_id)
+        .unwrap();
+    let mut checkpoint = store.internal_state.clone().expect("store controller");
+    checkpoint["state"] = serde_json::json!("updateConfig");
+    store.status = alien_core::ResourceStatus::UpdateFailed;
+    store.internal_state = Some(checkpoint.clone());
+    store.last_failed_state = Some(checkpoint);
+    state.status = DeploymentStatus::RefreshFailed;
+    (state, config)
+}
+
+/// A retry resumes a failed setup-owned resource whose config is unchanged at the exact step
+/// it failed in, with runtime credentials, as the retry always did. Recovering resources
+/// stuck mid-update depends on resuming that step, not restarting the update.
+#[tokio::test]
+async fn running_retry_resumes_an_unchanged_setup_owned_failure_at_its_saved_step() {
+    let _vault = test_vault_env().await;
+    let store_id = "retry-frozen-store";
+    let (mut state, config) = store_failed_mid_update(store_id).await;
+
+    request_retry(&mut state);
+    let retried = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(retried.status, DeploymentStatus::Running);
+    assert!(retried.error.is_none());
+    let store = &retried.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(store.status, alien_core::ResourceStatus::Updating);
+    assert_eq!(
+        store.internal_state.as_ref().unwrap()["state"],
+        "updateConfig",
+        "the retry resumes the saved step, not UpdateStart"
+    );
+    assert!(store.last_failed_state.is_none());
+}
+
+/// A running deployment only refreshes, so a failure the retry cannot resume would stay failed
+/// without a word. The retry is refused instead, naming each resource and what it needs, and
+/// nothing is resumed.
+#[tokio::test]
+async fn running_retry_refuses_failures_whose_config_changed_and_names_them() {
+    let _vault = test_vault_env().await;
+    let store_id = "retry-changed-store";
+    let (mut state, config) = store_failed_mid_update(store_id).await;
+    let resources = &mut state.stack_state.as_mut().unwrap().resources;
+    resources.get_mut(store_id).unwrap().config =
+        alien_core::Resource::new(Storage::new(store_id.to_string()).versioning(true).build());
+    let worker = resources.get_mut("retry-fn").unwrap();
+    let mut old = worker.config.downcast_ref::<Worker>().unwrap().clone();
+    old.code = WorkerCode::Image {
+        image: "test:older".to_string(),
+    };
+    worker.config = alien_core::Resource::new(old);
+    let mut checkpoint = worker.internal_state.clone().unwrap();
+    checkpoint["state"] = serde_json::json!("updateCodePolling");
+    worker.status = alien_core::ResourceStatus::UpdateFailed;
+    worker.internal_state = Some(checkpoint.clone());
+    worker.last_failed_state = Some(checkpoint);
+    let before = state.stack_state.clone();
+
+    request_retry(&mut state);
+    let refused = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(refused.status, DeploymentStatus::RefreshFailed);
+    assert!(!refused.retry_requested);
+    let error = refused.error.expect("the refusal is reported");
+    assert_eq!(error.code, "RETRY_CANNOT_RESUME");
+    assert!(
+        error.message.contains(&format!("'{store_id}'")) && error.message.contains("rerun setup"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("'retry-fn'") && error.message.contains("deploy an update"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        serde_json::to_value(&refused.stack_state).unwrap(),
+        serde_json::to_value(&before).unwrap(),
+        "nothing is resumed"
+    );
+}
+
 /// A setup rerun with a corrected release does not resume the old create checkpoint of a
 /// setup-owned store whose create failed after recording its bucket. A store holds data, so
 /// it is not deleted to be replaced either: setup creates it again in place with the new

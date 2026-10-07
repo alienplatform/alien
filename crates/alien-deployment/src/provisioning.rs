@@ -281,7 +281,8 @@ pub async fn handle_provisioning(
 ///
 /// This step:
 /// 1. Checks if retry_requested flag is set
-/// 2. Resumes the failed resources whose config is unchanged (see `retry_failed_runtime_resources`)
+/// 2. Resumes every failed resource whose config is unchanged at its saved step; changed
+///    runtime resources are left to the planner, changed setup-owned ones refuse the retry
 /// 3. Transitions back to Provisioning status
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_provisioning_failed(
@@ -316,15 +317,39 @@ pub async fn handle_provisioning_failed(
         })
     })?;
 
-    // Resume only failures the retry can finish as they started; a resource whose config
-    // changed is left to the planner, which updates or replaces it.
-    let retried = crate::helpers::retry_failed_runtime_resources(
+    // Every failure whose config is unchanged resumes where it stopped. A changed runtime
+    // resource is left to the planner, which updates or replaces it. A changed setup-owned one
+    // needs setup, which this runtime executor never does for it, so the retry is refused.
+    let outcome = crate::helpers::retry_failed_runtime_resources(
         &mut stack_state,
         current.runtime_metadata.as_ref(),
         &config,
     )?;
+    let blocking = outcome
+        .unresumed
+        .iter()
+        .filter(|failure| failure.setup_owned)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(error) = crate::helpers::retry_cannot_resume(&blocking) {
+        info!(%error, "Retry refused");
+        next.status = DeploymentStatus::ProvisioningFailed;
+        next.error = Some(error.into_generic());
+        next.retry_requested = false;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
 
-    info!("Retried {} failed resources: {:?}", retried.len(), retried);
+    info!(
+        "Retried {} failed resources: {:?}",
+        outcome.retried.len(),
+        outcome.retried
+    );
 
     // Transition back to Provisioning to continue deployment
     next.status = DeploymentStatus::Provisioning;

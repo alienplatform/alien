@@ -483,9 +483,14 @@ pub fn retry_failed_setup_resources(
 
     let target_stack =
         crate::helpers::injected_target_stack(runtime_metadata, config, stack_state.platform)?;
-    crate::helpers::resume_unchanged_failed_resources(stack_state, &target_stack, |resource| {
-        resource.lifecycle == Some(ResourceLifecycle::Frozen)
-    })
+    Ok(
+        crate::helpers::resume_unchanged_failed_resources(
+            stack_state,
+            &target_stack,
+            |resource| resource.lifecycle == Some(ResourceLifecycle::Frozen),
+        )?
+        .retried,
+    )
 }
 
 /// Handle InitialSetupFailed status - retry failed resources and transition back to InitialSetup
