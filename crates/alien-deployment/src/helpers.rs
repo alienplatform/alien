@@ -191,6 +191,8 @@ pub(crate) fn retry_failed_runtime_resources(
         })
     })?;
     let target_stack = injected_target_stack(runtime_metadata, config, stack_state.platform)?;
+    // A replace whose delete was denied waits for this explicit retry.
+    alien_infra::allow_denied_replaces_to_retry(stack_state);
     resume_unchanged_failed_resources(stack_state, &target_stack, |_| true)
 }
 

@@ -30,6 +30,58 @@ pub fn test_worker_deletes_issued(identifier: &str) -> Vec<Worker> {
         .collect()
 }
 
+/// Workers whose delete the test controller denies, as a role without the delete permission
+/// would, and how many deletes it denied for each.
+static DENIED_DELETES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+
+/// Makes every delete of the worker with this identifier fail with access denied at its first
+/// step, before anything is deleted, until [`allow_test_worker_deletes`].
+pub fn deny_test_worker_deletes(identifier: &str) {
+    let mut denied = DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !denied.iter().any(|(id, _)| id == identifier) {
+        denied.push((identifier.to_string(), 0));
+    }
+}
+
+/// Grants the delete permission back. Returns how many deletes were denied meanwhile.
+pub fn allow_test_worker_deletes(identifier: &str) -> u32 {
+    let mut denied = DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let count = denied
+        .iter()
+        .find(|(id, _)| id == identifier)
+        .map_or(0, |(_, count)| *count);
+    denied.retain(|(id, _)| id != identifier);
+    count
+}
+
+/// How many deletes of this worker were denied so far.
+pub fn test_worker_deletes_denied(identifier: &str) -> u32 {
+    DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|(id, _)| id == identifier)
+        .map_or(0, |(_, count)| *count)
+}
+
+/// Counts and reports a denied delete, or `false` when deletes are allowed.
+fn delete_denied(identifier: &str) -> bool {
+    let mut denied = DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match denied.iter_mut().find(|(id, _)| id == identifier) {
+        Some((_, count)) => {
+            *count += 1;
+            true
+        }
+        None => false,
+    }
+}
+
 /// Every config the test controller deployed to a worker: in CreateWorker, where a real
 /// controller creates the function with its code, and in UpdateStart, where it updates it.
 static DEPLOYED_CONFIGS: Mutex<Vec<(String, Worker)>> = Mutex::new(Vec::new());
@@ -587,6 +639,19 @@ impl TestWorkerController {
                     resource_id: Some(target_func.id.clone()),
                 }));
             }
+        }
+
+        if delete_denied(&identifier) {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "Worker".to_string(),
+                    resource_name: identifier.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Simulated denied delete of worker `{identifier}`"),
+                resource_id: Some(target_func.id.clone()),
+            });
         }
 
         // The worker is the first of two delete steps. Deleting it again answers not-found,

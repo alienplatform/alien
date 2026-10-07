@@ -230,6 +230,21 @@ pub enum ErrorData {
         max_times: u32,
     },
 
+    /// The delete half of a replace was denied; the replace waits for an explicit retry.
+    #[error(
+        code = "REPLACE_DELETE_DENIED",
+        message = "Cannot replace '{resource_id}': {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    ReplaceDeleteDenied {
+        /// The resource being replaced
+        resource_id: String,
+        /// What was denied and what to do
+        message: String,
+    },
+
     /// A delete step gave up on a cloud object that other objects still depend on.
     #[error(
         code = "RESOURCE_DELETE_BLOCKED",

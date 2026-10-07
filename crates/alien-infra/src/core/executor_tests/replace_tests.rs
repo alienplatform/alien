@@ -9,13 +9,16 @@ use std::collections::HashMap;
 
 use super::helpers::*;
 use crate::core::state_utils::StackResourceStateExt;
-use crate::core::StackExecutor;
+use crate::core::{allow_denied_replaces_to_retry, StackExecutor};
 use crate::error::Result;
 use crate::storage::{
     test_storage_deletes_issued, TestStorageController, TestStorageState,
     SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN,
 };
-use crate::worker::{test_worker_deletes_issued, TestWorkerController, TestWorkerState};
+use crate::worker::{
+    allow_test_worker_deletes, deny_test_worker_deletes, test_worker_deletes_denied,
+    test_worker_deletes_issued, TestWorkerController, TestWorkerState,
+};
 use alien_core::{
     ClientConfig, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
     Stack, StackResourceState, StackState, StackStatus, Storage, Worker, WorkerCode,
@@ -409,9 +412,15 @@ async fn replace_delete_denied_access_fails_and_does_not_create() -> Result<()> 
         codes.push(inner.code.clone());
         source = inner.source.as_deref();
     }
+    assert_eq!(codes[0], "REPLACE_DELETE_DENIED", "{codes:?}");
     assert!(
         codes.iter().any(|code| code == "REMOTE_ACCESS_DENIED"),
         "{codes:?}"
+    );
+    let plan = executor.plan(&state)?;
+    assert!(
+        plan.replaces.is_empty(),
+        "a denied replace waits for an explicit retry: {plan:?}"
     );
     assert_eq!(image(&state, id), "image-v1");
     assert_eq!(
@@ -818,5 +827,200 @@ async fn failed_daemon_and_compute_cluster_creates_are_created_again_not_replace
     );
     assert!(plan.replaces.is_empty(), "{plan:?}");
     assert!(plan.deletes.is_empty(), "{plan:?}");
+    Ok(())
+}
+
+/// A failed create whose replace delete was denied at its first step, before anything was
+/// deleted. Returns the state after the denial, with the deletes still denied.
+async fn replace_denied_before_anything_was_deleted(id: &str) -> Result<StackState> {
+    let v1 = worker(id, "image-v1", &[CREATE_WORKER_FAILURE]);
+    let mut state =
+        failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id).await?;
+    deny_test_worker_deletes(&identifier(id));
+
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    for _ in 0..40 {
+        if state.resources[id]
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "REPLACE_DELETE_DENIED")
+        {
+            break;
+        }
+        state = executor.step(state).await?.next_state;
+        assert!(
+            matches!(
+                get_status(&state, id),
+                Some(ResourceStatus::Deleting | ResourceStatus::ProvisionFailed)
+            ),
+            "{:?}",
+            get_status(&state, id)
+        );
+    }
+
+    let failed = &state.resources[id];
+    assert_eq!(failed.status, ResourceStatus::ProvisionFailed);
+    let error = failed.error.as_ref().expect("the denial is recorded");
+    assert_eq!(error.code, "REPLACE_DELETE_DENIED");
+    assert!(
+        error.message.contains(&identifier(id)) && error.message.contains("Grant the permission"),
+        "{}",
+        error.message
+    );
+    assert_eq!(image(&state, id), "image-v1");
+    let restored = failed.get_internal_controller_typed::<TestWorkerController>()?;
+    assert_eq!(restored.state, TestWorkerState::CreateFailed);
+    assert_eq!(restored.identifier, Some(identifier(id)));
+    let checkpoint = failed
+        .get_last_failed_controller()?
+        .expect("the failed create checkpoint is restored");
+    let checkpoint = checkpoint
+        .as_any()
+        .downcast_ref::<TestWorkerController>()
+        .expect("a worker checkpoint");
+    assert_eq!(checkpoint.state, TestWorkerState::CreateWorker);
+    assert!(test_worker_deletes_issued(&identifier(id)).is_empty());
+    assert_eq!(test_worker_deletes_denied(&identifier(id)), 1);
+
+    // The denied delete is not repeated on every step.
+    let mut state = state;
+    for _ in 0..3 {
+        state = executor.step(state).await?.next_state;
+    }
+    assert_eq!(
+        get_status(&state, id),
+        Some(ResourceStatus::ProvisionFailed)
+    );
+    assert_eq!(test_worker_deletes_denied(&identifier(id)), 1);
+    Ok(state)
+}
+
+/// A replace delete denied before anything was deleted aborts the replace and puts the failed
+/// create back; it is not tried again until an explicit retry.
+#[tokio::test]
+async fn denied_replace_delete_restores_the_failed_create() -> Result<()> {
+    let id = "replace-denied-restores";
+    replace_denied_before_anything_was_deleted(id).await?;
+    allow_test_worker_deletes(&identifier(id));
+    Ok(())
+}
+
+/// Reverting the config to what the failed create used resumes that create at its saved step.
+#[tokio::test]
+async fn reverting_after_a_denied_replace_resumes_the_failed_create() -> Result<()> {
+    let id = "replace-denied-reverted";
+    let state = replace_denied_before_anything_was_deleted(id).await?;
+
+    let reverted = new_update_executor(&single_worker_stack(
+        worker(id, "image-v1", &[CREATE_WORKER_FAILURE]),
+        ResourceLifecycle::Live,
+    ))?;
+    let plan = reverted.plan(&state)?;
+    assert!(
+        plan.replaces.is_empty() && plan.creates.is_empty(),
+        "{plan:?}"
+    );
+    let state = reverted.step(state).await?.next_state;
+    // The create resumed at CreateWorker, which fails again for this config: the recorded
+    // error is that create failure now, not the denial.
+    let resumed = &state.resources[id];
+    let error = resumed.error.as_ref().expect("the create failed again");
+    assert_ne!(error.code, "REPLACE_DELETE_DENIED");
+    assert!(
+        error.message.contains("Simulated CreateWorker failure"),
+        "{}",
+        error.message
+    );
+    let checkpoint = resumed
+        .get_last_failed_controller()?
+        .expect("the create checkpoint");
+    let checkpoint = checkpoint
+        .as_any()
+        .downcast_ref::<TestWorkerController>()
+        .expect("a worker checkpoint");
+    assert_eq!(checkpoint.state, TestWorkerState::CreateWorker);
+    assert_eq!(checkpoint.identifier, Some(identifier(id)));
+    assert_eq!(test_worker_deletes_denied(&identifier(id)), 1);
+    allow_test_worker_deletes(&identifier(id));
+    Ok(())
+}
+
+/// Removing the resource from the stack deletes it, with the usual best-effort rule: a denied
+/// delete of a resource nobody wants any more counts as deleted.
+#[tokio::test]
+async fn removing_a_resource_after_a_denied_replace_deletes_it() -> Result<()> {
+    let id = "replace-denied-removed";
+    let state = replace_denied_before_anything_was_deleted(id).await?;
+
+    let without = new_executor(&Stack::new("replace-test".to_owned()).build())?;
+    assert_eq!(without.plan(&state)?.deletes, vec![id.to_string()]);
+    let state = run_to_synced(&without, state).await?;
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::Deleted));
+    assert_eq!(test_worker_deletes_denied(&identifier(id)), 2);
+    allow_test_worker_deletes(&identifier(id));
+    Ok(())
+}
+
+/// Once the permission is granted, an explicit retry completes the replace.
+#[tokio::test]
+async fn retrying_a_denied_replace_after_the_permission_is_granted_completes_it() -> Result<()> {
+    let id = "replace-denied-granted";
+    let mut state = replace_denied_before_anything_was_deleted(id).await?;
+    assert_eq!(allow_test_worker_deletes(&identifier(id)), 1);
+
+    assert_eq!(
+        allow_denied_replaces_to_retry(&mut state),
+        vec![id.to_string()]
+    );
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    assert_eq!(executor.plan(&state)?.replaces, vec![id.to_string()]);
+    let state = run_to_synced(&executor, state).await?;
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::Running));
+    assert_eq!(image(&state, id), "image-v2");
+    assert_eq!(
+        images(&test_worker_deletes_issued(&identifier(id))),
+        vec!["image-v1"]
+    );
+    Ok(())
+}
+
+/// A replace denied after a delete step succeeded stays DeleteFailed; removing the resource
+/// from the stack then resumes and finishes that delete.
+#[tokio::test]
+async fn removing_a_resource_whose_replace_failed_mid_delete_finishes_the_delete() -> Result<()> {
+    let id = "replace-denied-mid-delete-removed";
+    let v1 = worker(
+        id,
+        "image-v1",
+        &[
+            CREATE_WORKER_FAILURE,
+            ("SIMULATE_DELETE_ACCESS_DENIED", "true"),
+        ],
+    );
+    let state =
+        failed_after_first_mutation(&single_worker_stack(v1, ResourceLifecycle::Live), id).await?;
+    let executor = new_executor(&single_worker_stack(
+        worker(id, "image-v2", &[]),
+        ResourceLifecycle::Live,
+    ))?;
+    let state = step_until(&executor, state, id, ResourceStatus::DeleteFailed).await?;
+    assert!(
+        !state.resources[id].has_last_failed_state()
+            || state.resources[id]
+                .get_last_failed_controller()?
+                .is_some_and(|checkpoint| checkpoint.get_status() == ResourceStatus::Deleting),
+        "the failed create checkpoint is gone once a delete step succeeded"
+    );
+
+    let without = new_update_executor(&Stack::new("replace-test".to_owned()).build())?;
+    assert_eq!(without.plan(&state)?.deletes, vec![id.to_string()]);
+    let state = step_until(&without, state, id, ResourceStatus::Deleted).await?;
+    assert!(state.resources[id].error.is_none());
     Ok(())
 }

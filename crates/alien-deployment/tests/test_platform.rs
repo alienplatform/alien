@@ -2297,6 +2297,68 @@ async fn running_retry_refuses_failures_whose_config_changed_and_names_them() {
     );
 }
 
+/// An update whose replace delete is denied fails with the denial named and nothing deleted
+/// or created. Once the permission is granted, the user's retry completes the replace.
+#[tokio::test]
+async fn update_retry_completes_a_replace_once_its_delete_is_allowed() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let worker_id = "denied-replace-fn";
+    let identifier = "test:worker:denied-replace-fn";
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "base-fn")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    // Release 2 adds a worker whose create fails after it recorded the worker.
+    let mut stack_v2 = create_test_stack("test-stack", "base-fn");
+    let mut failing = image_worker(worker_id, "test:v2", 1024);
+    failing.environment.insert(
+        "SIMULATE_CREATE_WORKER_FAILURE".to_string(),
+        "true".to_string(),
+    );
+    add_live_worker(&mut stack_v2, failing);
+    start_update(&mut state, release_of("rel_v2", stack_v2));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+
+    // Release 3 fixes it, but this role may not delete the half-created worker.
+    alien_infra::deny_test_worker_deletes(identifier);
+    let mut stack_v3 = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack_v3, image_worker(worker_id, "test:v3", 1024));
+    start_update(&mut state, release_of("rel_v3", stack_v3));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert_eq!(
+        worker.error.as_ref().map(|error| error.code.as_str()),
+        Some("REPLACE_DELETE_DENIED")
+    );
+    assert!(alien_infra::test_worker_deletes_issued(identifier).is_empty());
+    assert_eq!(alien_infra::test_worker_deletes_denied(identifier), 1);
+
+    assert_eq!(alien_infra::allow_test_worker_deletes(identifier), 1);
+    request_retry(&mut state);
+    let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::UpdatePending);
+    let state = run_to_completion(state, config).await;
+    assert_eq!(
+        state.status,
+        DeploymentStatus::Running,
+        "{:?}",
+        state.stack_state.as_ref().unwrap().resources[worker_id]
+    );
+    let deletes = alien_infra::test_worker_deletes_issued(identifier);
+    assert_eq!(deletes.len(), 1, "the half-created worker is deleted once");
+    assert_eq!(deployed_worker_image(&state, worker_id), "test:v3");
+}
+
 /// A setup rerun with a corrected release does not resume the old create checkpoint of a
 /// setup-owned store whose create failed after recording its bucket. A store holds data, so
 /// it is not deleted to be replaced either: setup creates it again in place with the new

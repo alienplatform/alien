@@ -153,6 +153,9 @@ pub struct StackExecutor {
 
 const MAX_RETRIES: u32 = 10;
 const DEPENDENCY_NOT_READY_CODE: &str = "DEPENDENCY_NOT_READY";
+/// Error code of a replace whose delete was denied. The planner does not plan that replace
+/// again until an explicit retry clears it (see `allow_denied_replaces_to_retry`).
+pub const REPLACE_DELETE_DENIED_CODE: &str = "REPLACE_DELETE_DENIED";
 
 /// Whether a status stops the executor from stepping the resource.
 ///
@@ -320,6 +323,38 @@ fn is_best_effort_delete_error(
             .source
             .as_deref()
             .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
+}
+
+/// Clears the denial of every replace that waits for an explicit retry, so the planner plans
+/// it again. Callers handling a user's retry call this; returns the resources it cleared.
+pub fn allow_denied_replaces_to_retry(state: &mut StackState) -> Vec<String> {
+    let mut cleared = Vec::new();
+    for (resource_id, resource_state) in &mut state.resources {
+        if replace_delete_denied(resource_state) {
+            resource_state.error = None;
+            cleared.push(resource_id.clone());
+        }
+    }
+    cleared
+}
+
+/// Whether the last replace of this resource was denied and waits for an explicit retry.
+fn replace_delete_denied(state: &StackResourceState) -> bool {
+    state
+        .error
+        .as_ref()
+        .is_some_and(|error| error.code == REPLACE_DELETE_DENIED_CODE)
+}
+
+/// The messages of an error and its causes, outermost first.
+fn error_chain_text(err: &AlienError<ErrorData>) -> String {
+    let mut parts = vec![err.message.clone()];
+    let mut source = err.source.as_deref();
+    while let Some(inner) = source {
+        parts.push(inner.message.clone());
+        source = inner.source.as_deref();
+    }
+    parts.join(": ")
 }
 
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
@@ -890,9 +925,14 @@ impl StackExecutor {
         has_dependents: &HashMap<String, Vec<String>>,
         state: &StackState,
     ) -> Result<bool> {
+        // A failed delete of a resource the stack no longer declares resumes when the executor
+        // resumes unchanged failures (an update or its retry); otherwise only an explicit
+        // retry of the failure resumes it.
+        let delete_failed_waits = current_resource_state.status == ResourceStatus::DeleteFailed
+            && !self.resume_unchanged_failed_resources;
         if current_resource_state.status == ResourceStatus::Deleting
             || current_resource_state.status == ResourceStatus::Deleted
-            || current_resource_state.status == ResourceStatus::DeleteFailed
+            || delete_failed_waits
             || (self.runtime_cleanup_filter
                 && current_resource_state.status == ResourceStatus::TeardownRequired)
         {
@@ -1184,6 +1224,14 @@ impl StackExecutor {
                                     plan_result.creates.push(resource_id.clone());
                                     plan_result.updates.remove(resource_id);
                                     plan_result.deletes.retain(|id| id != resource_id);
+                                } else if replace_delete_denied(current_resource_state) {
+                                    // The last replace was denied. Trying it again on every step
+                                    // would repeat the denied delete; an explicit retry clears
+                                    // the denial and plans it again.
+                                    debug!(
+                                        "Not replacing '{}' again until a retry: its delete was denied",
+                                        resource_id
+                                    );
                                 } else {
                                     // The failed controller holds the IDs of whatever the create
                                     // already made. A fresh create would drop them and leak those
@@ -1212,6 +1260,7 @@ impl StackExecutor {
                                         desired_config,
                                         current_resource_state,
                                     )
+                                    && !replace_delete_denied(current_resource_state)
                                 {
                                     info!(
                                         "Retrying the delete of '{}' before creating it with the new config",
@@ -1743,8 +1792,11 @@ impl StackExecutor {
                             Ok(None) if replacing => resource_state.get_last_failed_controller(),
                             controller => controller,
                         };
+                        let replacing_failed_create =
+                            replacing && resource_state.status == ResourceStatus::ProvisionFailed;
                         match controller {
                             Ok(Some(mut resource_controller)) => {
+                                let failed_create = resource_controller.box_clone();
                                 match resource_controller.transition_to_delete_start() {
                                     Ok(()) => {
                                         debug!(
@@ -1755,8 +1807,22 @@ impl StackExecutor {
                                         resource_state.outputs = resource_controller.get_outputs();
                                         resource_state.retry_attempt = 0;
                                         resource_state.error = None; // Clear error when starting delete
-                                        if replacing {
-                                            // The delete supersedes the failed create checkpoint.
+                                        if replacing_failed_create {
+                                            // Keep the failed create checkpoint until a delete
+                                            // step succeeds: a delete denied before that restores
+                                            // it, so the create can still be resumed.
+                                            if !resource_state.has_last_failed_state() {
+                                                if let Err(e) = resource_state
+                                                    .set_last_failed_controller(Some(failed_create))
+                                                {
+                                                    error!(
+                                                        "Failed to keep the failed create checkpoint: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        } else if replacing {
+                                            // The delete supersedes the failed checkpoint.
                                             resource_state.last_failed_state = None;
                                         }
                                         // Update internal state with the modified controller
@@ -2281,6 +2347,10 @@ impl StackExecutor {
                 (step_result, resource_controller.box_clone())
             };
 
+            // A resource still in the desired stack is being deleted to be replaced.
+            let replacing = self.resources.contains_key(&resource_id);
+            let mut replace_delete_was_denied = false;
+
             // Handle the step result
             let (
                 next_retry_attempt,
@@ -2296,8 +2366,6 @@ impl StackExecutor {
                 Err(err) => {
                     warn!("Step failed for '{}': {}", resource_id, err);
 
-                    // A resource still in the desired stack is being deleted to be replaced.
-                    let replacing = self.resources.contains_key(&resource_id);
                     if current_resource_state.status == ResourceStatus::Deleting
                         && is_best_effort_delete_error(&err, !replacing)
                     {
@@ -2307,6 +2375,23 @@ impl StackExecutor {
                             "Best-effort delete accepted missing or inaccessible resource"
                         );
                         (0, None, None, false, true)
+                    } else if current_resource_state.status == ResourceStatus::Deleting
+                        && replacing
+                        && is_best_effort_delete_error(&err, true)
+                    {
+                        // Access denied while deleting to replace. Below, the failed create is
+                        // restored if no delete step succeeded yet; either way the replace waits
+                        // for an explicit retry.
+                        replace_delete_was_denied = true;
+                        let denial = err.clone().context(ErrorData::ReplaceDeleteDenied {
+                            resource_id: resource_id.clone(),
+                            message: format!(
+                                "deleting what its failed create made was denied ({}). Grant the permission and retry, or revert the configuration to resume the failed create",
+                                error_chain_text(&err)
+                            ),
+                        });
+                        warn!(resource_id = %resource_id, error = %denial, "Replace delete denied");
+                        (0, Some(denial.into_generic()), None, true, false)
                     } else if is_dependency_not_ready_error(&err) {
                         let delay = Duration::from_secs(10);
                         info!(
@@ -2448,7 +2533,7 @@ impl StackExecutor {
                 .map(|entry| entry.publishes_binding_params())
                 .unwrap_or(false);
 
-            let next_state = next_state.with_updates(|state| {
+            let mut next_state = next_state.with_updates(|state| {
                 state.status = next_status;
                 state.outputs = next_outputs;
                 state.remote_binding_params = if publish_binding_params {
@@ -2460,6 +2545,44 @@ impl StackExecutor {
                 state.retry_attempt = next_retry_attempt;
                 state.error = next_error;
             });
+
+            if current_resource_state.status == ResourceStatus::Deleting && replacing {
+                // The failed create checkpoint kept by the replace (a checkpoint that is not
+                // itself mid-delete) is valid only while nothing was deleted.
+                let failed_create = current_resource_state
+                    .get_last_failed_controller()
+                    .ok()
+                    .flatten()
+                    .filter(|checkpoint| checkpoint.get_status() != ResourceStatus::Deleting);
+                match failed_create {
+                    Some(checkpoint) if replace_delete_was_denied => {
+                        // Denied before any delete step succeeded: abort the replace and put
+                        // the failed create back, so reverting the config resumes it.
+                        let mut restored = checkpoint.box_clone();
+                        restored.transition_to_failure();
+                        next_state.status = restored.get_status();
+                        next_state.outputs = restored.get_outputs();
+                        next_state
+                            .set_internal_controller(Some(restored))
+                            .context(ErrorData::ResourceStateSerializationFailed {
+                                resource_id: resource_id.clone(),
+                                message: "Failed to restore the failed create".to_string(),
+                            })?;
+                        next_state
+                            .set_last_failed_controller(Some(checkpoint))
+                            .context(ErrorData::ResourceStateSerializationFailed {
+                                resource_id: resource_id.clone(),
+                                message: "Failed to restore the failed create checkpoint"
+                                    .to_string(),
+                            })?;
+                    }
+                    Some(_) if next_state.error.is_none() => {
+                        // A delete step succeeded; the create can no longer be resumed.
+                        next_state.last_failed_state = None;
+                    }
+                    _ => {}
+                }
+            }
 
             // Always record the resulting state from the step
             info!(
