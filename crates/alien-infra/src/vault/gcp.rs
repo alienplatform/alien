@@ -393,7 +393,20 @@ impl GcpVaultController {
                 &permission_context,
                 std::iter::once("vault/"),
             );
-        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
+        // Include predefined vault roles that a removed grant used to own.
+        let mut owned_exact_roles =
+            ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
+        for id in alien_permissions::list_permission_set_ids()
+            .into_iter()
+            .filter(|id| id.starts_with("vault/"))
+        {
+            if let Some(set) = alien_permissions::get_permission_set(id) {
+                for permission in set.platforms.gcp.as_deref().unwrap_or_default() {
+                    owned_exact_roles
+                        .extend(permission.grant.predefined_roles.iter().flatten().cloned());
+                }
+            }
+        }
         // Different vaults share predefined roles and the management identity.
         // Reconcile only bindings whose condition targets this vault namespace.
         let namespace = format!(
@@ -407,6 +420,7 @@ impl GcpVaultController {
                 })
             })?,
         );
+        let current_bindings = current_policy.bindings.clone();
         let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) =
             current_policy.bindings.into_iter().partition(|binding| {
                 binding
@@ -414,21 +428,24 @@ impl GcpVaultController {
                     .as_ref()
                     .is_some_and(|condition| condition.expression.contains(&namespace))
             });
-        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+        ResourcePermissionsHelper::remove_gcp_project_member_bindings(
             &mut vault_bindings,
-            new_bindings,
             &member,
-            &owned_role_prefixes,
-            &owned_exact_roles,
+            Some(&owned_role_prefixes),
+            Some(&owned_exact_roles),
         );
         all_bindings.extend(vault_bindings);
-
-        if !changed {
-            info!(
-                vault_id = %vault_id,
-                vault_prefix = %vault_prefix,
-                "GCP vault management permissions already reconciled"
-            );
+        // Unconditional roles can be shared by several vaults. Upsert them
+        // against the full policy instead of adding a duplicate on each retry.
+        ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut all_bindings,
+            new_bindings,
+            &member,
+            &[],
+            &[],
+        );
+        if all_bindings == current_bindings {
+            info!(vault_id = %vault_id, "GCP vault management permissions already reconciled");
             return Ok(());
         }
 
@@ -510,7 +527,11 @@ mod permission_update_tests {
             });
         manager
             .expect_set_project_iam_policy()
-            .times(writes)
+            .times(if lose_first_response && writes > 0 {
+                1
+            } else {
+                writes
+            })
             .returning(move |_, policy, _| {
                 assert_eq!(policy.etag.as_deref(), Some("test-etag"));
                 assert_eq!(policy.bindings.len(), 3);
@@ -822,7 +843,7 @@ mod permission_update_tests {
     }
 
     #[tokio::test]
-    async fn lost_response_resumes_the_saved_update_and_upserts_the_same_policy() {
+    async fn lost_response_resumes_the_saved_update_and_adopts_the_committed_policy() {
         let (executor, state, policies) = fixture(
             ResourceLifecycle::Frozen,
             InitialSetupAuthority::DirectSetup,
@@ -838,7 +859,10 @@ mod permission_update_tests {
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         let policies = policies.lock().unwrap();
-        assert_eq!(policies.len(), 2);
-        assert_eq!(policies[0], policies[1]);
+        assert_eq!(
+            policies.len(),
+            1,
+            "retry adopts the committed policy without a second write"
+        );
     }
 }
