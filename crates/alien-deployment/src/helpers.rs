@@ -134,7 +134,8 @@ pub(crate) fn resume_unchanged_failed_resources(
         }
         let declared = target_stack.resources.get(resource_id);
         let unchanged = declared.is_some_and(|entry| {
-            entry.config == resource_state.config
+            without_deployer_secret_metadata(&entry.config)
+                == without_deployer_secret_metadata(&resource_state.config)
                 && entry.combined_dependencies() == resource_state.dependencies
         });
         let always_resumes = matches!(
@@ -159,6 +160,35 @@ pub(crate) fn resume_unchanged_failed_resources(
         }
     }
     Ok(outcome)
+}
+
+/// `resource` without the deployer-secret metadata injected into workload environments.
+///
+/// That metadata follows the secret store (a slot filled, a value rewritten under a new
+/// version) and is refreshed while the deployment runs, independent of any release. A failure
+/// whose config differs only there is still the same create or update, and resuming it reads
+/// the current metadata, so the retry comparison ignores it.
+fn without_deployer_secret_metadata(resource: &alien_core::Resource) -> alien_core::Resource {
+    fn strip(environment: &mut HashMap<String, String>) {
+        environment.remove(ENV_ALIEN_DEPLOYER_SECRETS);
+        if let Some(secrets) = environment.get_mut(ENV_ALIEN_SECRETS) {
+            if let Ok(mut config) = serde_json::from_str::<AlienSecretsConfig>(secrets) {
+                config.deployer_secrets.clear();
+                if let Ok(stripped) = serde_json::to_string(&config) {
+                    *secrets = stripped;
+                }
+            }
+        }
+    }
+    let mut resource = resource.clone();
+    if let Some(worker) = resource.downcast_mut::<Worker>() {
+        strip(&mut worker.environment);
+    } else if let Some(container) = resource.downcast_mut::<alien_core::Container>() {
+        strip(&mut container.environment);
+    } else if let Some(daemon) = resource.downcast_mut::<alien_core::Daemon>() {
+        strip(&mut daemon.environment);
+    }
+    resource
 }
 
 /// Prepares the failed resources of `stack_state` for a retry of provisioning or of a running
@@ -1390,6 +1420,108 @@ mod tests {
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
+
+    /// A worker as the executor recorded it: its config injected with deployer secrets whose
+    /// store version is `version`, failed mid-update.
+    fn failed_worker_with_deployer_secret(
+        image: &str,
+        version: &str,
+    ) -> (Resource, StackResourceState) {
+        let mut worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: image.to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let secret = DeployerSecretEnv {
+            name: "API_KEY".to_string(),
+            vault_key: "api-key".to_string(),
+            secret_name: "stack-api-key".to_string(),
+            vault_name: None,
+            label: "API key".to_string(),
+            required: true,
+            version: Some(version.to_string()),
+        };
+        inject_into_environment(
+            "api",
+            ComputeKind::Worker,
+            &mut worker.environment,
+            &make_snapshot(&[("PLAIN_VAR", "plain")], &[]),
+            Platform::Aws,
+            &[secret],
+        )
+        .expect("inject");
+        let resource = Resource::new(worker);
+        let mut state = StackResourceState::new_pending(
+            Worker::RESOURCE_TYPE.to_string(),
+            resource.clone(),
+            Some(ResourceLifecycle::Live),
+            vec![],
+        );
+        state.status = ResourceStatus::UpdateFailed;
+        let checkpoint: Box<dyn alien_infra::ResourceController> = Box::new(
+            serde_json::from_value::<alien_infra::TestWorkerController>(serde_json::json!({
+                "state": "updateCodePolling",
+                "identifier": "test:worker:api"
+            }))
+            .expect("checkpoint"),
+        );
+        state
+            .set_internal_controller(Some(checkpoint.clone()))
+            .expect("controller");
+        state
+            .set_last_failed_controller(Some(checkpoint))
+            .expect("checkpoint");
+        (resource, state)
+    }
+
+    fn stack_with(resource: Resource) -> Stack {
+        let mut stack = Stack::new("retry".to_string()).build();
+        stack.resources.insert(
+            resource.id().to_string(),
+            ResourceEntry {
+                config: resource,
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
+    /// Deployer-secret metadata is refreshed from the secret store while a deployment runs. A
+    /// failure whose config differs only there (a rewritten secret under a new version) is the
+    /// same update and resumes; one with a real change does not.
+    #[test]
+    fn retry_ignores_deployer_secret_metadata_when_comparing_configs() {
+        let (_, recorded) = failed_worker_with_deployer_secret("api:v1", "1");
+
+        let (same, _) = failed_worker_with_deployer_secret("api:v1", "1");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded.clone());
+        let outcome = resume_unchanged_failed_resources(&mut state, &stack_with(same), |_| true)
+            .expect("retry");
+        assert_eq!(outcome.retried, ["api"], "same metadata resumes");
+
+        let (rewritten, _) = failed_worker_with_deployer_secret("api:v1", "2");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded.clone());
+        let outcome =
+            resume_unchanged_failed_resources(&mut state, &stack_with(rewritten), |_| true)
+                .expect("retry");
+        assert_eq!(outcome.retried, ["api"], "a new secret version resumes");
+        assert!(outcome.unresumed.is_empty());
+        assert_eq!(state.resources["api"].status, ResourceStatus::Updating);
+
+        let (changed, _) = failed_worker_with_deployer_secret("api:v2", "1");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("api".to_string(), recorded);
+        let outcome = resume_unchanged_failed_resources(&mut state, &stack_with(changed), |_| true)
+            .expect("retry");
+        assert!(outcome.retried.is_empty());
+        assert_eq!(outcome.unresumed.len(), 1, "a new image is a real change");
+    }
 
     fn make_snapshot(
         plain: &[(&str, &str)],
