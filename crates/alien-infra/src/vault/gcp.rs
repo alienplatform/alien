@@ -14,8 +14,8 @@ use alien_core::{
 use alien_gcp_clients::iam::IamPolicy;
 use alien_gcp_clients::resource_manager::GetPolicyOptions;
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     PermissionContext,
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
 };
 use chrono::Utc;
 
@@ -91,8 +91,17 @@ impl GcpVaultController {
 
         info!(
             vault_id = %config.id,
-            "GCP Secret Manager vault update complete (no infrastructure to update)"
+            "Reconciling GCP Secret Manager vault management permissions"
         );
+
+        let vault_prefix = self.vault_prefix.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Vault prefix is missing from saved controller state".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        self.apply_management_permissions(ctx, &config.id, vault_prefix)
+            .await?;
 
         // No infrastructure to update - Secret Manager exists implicitly
         Ok(HandlerAction::Continue {
@@ -268,6 +277,11 @@ impl GcpVaultController {
         vault_id: &str,
         vault_prefix: &str,
     ) -> Result<()> {
+        // Project IAM grants are setup-owned, even when the vault is Live.
+        if !ResourcePermissionsHelper::resource_is_setup_owned(ctx, vault_id)? {
+            return Ok(());
+        }
+
         let mut seen_ids = std::collections::HashSet::new();
         let mut management_refs = Vec::new();
         if let Some(management_profile) = ctx.desired_stack.management().profile() {
@@ -358,14 +372,34 @@ impl GcpVaultController {
                 std::iter::once("vault/"),
             );
         let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
-        let mut all_bindings = current_policy.bindings;
+        // Different vaults share predefined roles and the management identity.
+        // Reconcile only bindings whose condition targets this vault namespace.
+        let namespace = format!(
+            "resource.name.startsWith(\"projects/{}/secrets/{vault_prefix}-\")",
+            gcp_config.project_number.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message:
+                        "GCP project number is required to reconcile vault management permissions"
+                            .to_string(),
+                    resource_id: Some(vault_id.to_string()),
+                })
+            })?,
+        );
+        let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) =
+            current_policy.bindings.into_iter().partition(|binding| {
+                binding
+                    .condition
+                    .as_ref()
+                    .is_some_and(|condition| condition.expression.contains(&namespace))
+            });
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
-            &mut all_bindings,
+            &mut vault_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
             &owned_exact_roles,
         );
+        all_bindings.extend(vault_bindings);
 
         if !changed {
             info!(
@@ -399,5 +433,287 @@ impl GcpVaultController {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod permission_update_tests {
+    use super::*;
+    use crate::core::{
+        MockPlatformServiceProvider, ResourceController, StackExecutor, StackResourceStateExt,
+    };
+    use crate::remote_stack_management::GcpRemoteStackManagementController;
+    use alien_client_core::ErrorData as CloudError;
+    use alien_core::permissions::PermissionProfile;
+    use alien_core::{
+        ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+        GcpClientConfig, InitialSetupAuthority, RemoteStackManagement, Resource, ResourceLifecycle,
+        ResourceRef, Stack, StackResourceState, StackSettings, StackState,
+    };
+    use alien_gcp_clients::{GcpClientConfigExt as _, resource_manager::MockResourceManagerApi};
+    use std::sync::{Arc, Mutex};
+
+    // Simulate a committed project policy whose response is lost.
+    // Unexpected provider calls fail the mock.
+    fn fixture(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        writes: usize,
+        lose_first_response: bool,
+    ) -> (StackExecutor, StackState, Arc<Mutex<Vec<String>>>) {
+        let policies = Arc::new(Mutex::new(Vec::new()));
+        let saved = policies.clone();
+        let mut manager = MockResourceManagerApi::new();
+        let remote_policy = Arc::new(Mutex::new(
+            IamPolicy::builder()
+                .bindings(vec![alien_gcp_clients::iam::Binding {
+                    role: "roles/secretmanager.secretAccessor".to_string(),
+                    members: vec!["serviceAccount:manager@mock-project.iam.gserviceaccount.com".to_string()],
+                    condition: Some(alien_gcp_clients::iam::Expr {
+                        expression: "resource.name.startsWith(\"projects/123456789012/secrets/test-other-\")".to_string(),
+                        title: "ResourceVaultSecretsRead".to_string(),
+                        description: None, location: None,
+                    }),
+                }])
+                .etag("test-etag".to_string())
+                .build(),
+        ));
+        let read = remote_policy.clone();
+        manager
+            .expect_get_project_iam_policy()
+            .times(writes)
+            .returning(move |_, options| {
+                assert_eq!(options.unwrap().requested_policy_version, Some(3));
+                Ok(read.lock().unwrap().clone())
+            });
+        manager
+            .expect_set_project_iam_policy()
+            .times(writes)
+            .returning(move |_, policy, _| {
+                assert_eq!(policy.etag.as_deref(), Some("test-etag"));
+                assert_eq!(policy.bindings.len(), 3);
+                assert_eq!(
+                    policy.bindings[0].condition.as_ref().unwrap().expression,
+                    "resource.name.startsWith(\"projects/123456789012/secrets/test-other-\")"
+                );
+                for binding in &policy.bindings[1..] {
+                    assert!(matches!(
+                        binding.role.as_str(),
+                        "roles/secretmanager.viewer" | "roles/secretmanager.secretAccessor"
+                    ));
+                    assert_eq!(
+                        binding.members,
+                        vec!["serviceAccount:manager@mock-project.iam.gserviceaccount.com"]
+                    );
+                    assert!(
+                        binding
+                            .condition
+                            .as_ref()
+                            .unwrap()
+                            .expression
+                            .contains("projects/123456789012/secrets/test-secrets-")
+                    );
+                }
+                *remote_policy.lock().unwrap() = policy.clone();
+                saved
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::to_string(&policy).unwrap());
+                if lose_first_response && saved.lock().unwrap().len() == 1 {
+                    return Err(AlienError::new(CloudError::HttpRequestFailed {
+                        message: "Connection closed after the policy write".to_string(),
+                    }));
+                }
+                Ok(policy)
+            });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .times(writes)
+            .returning(move |_| Ok(manager.clone()));
+        let vault = Vault::new("secrets".to_string()).build();
+        let account = RemoteStackManagement::new("manager".to_string()).build();
+        let stack = Stack::new("test".to_string())
+            .add_with_dependencies(
+                vault.clone(),
+                lifecycle,
+                vec![ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    "manager",
+                )],
+            )
+            .add(account.clone(), ResourceLifecycle::Frozen)
+            .management(alien_core::ManagementPermissions::Extend(
+                PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+            ))
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .build();
+        let mut client = GcpClientConfig::mock();
+        client.project_number = Some("123456789012".to_string());
+        let executor = StackExecutor::builder(&stack, ClientConfig::Gcp(Box::new(client)))
+            .deployment_config(&config)
+            .service_provider(Arc::new(provider))
+            .initial_setup_authority(authority)
+            .step_running_resources(false)
+            .build()
+            .unwrap();
+        let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
+        let controller = GcpVaultController {
+            state: GcpVaultState::Ready,
+            project_id: Some("mock-project".to_string()),
+            location: Some("us-central1".to_string()),
+            vault_prefix: Some("test-secrets".to_string()),
+            ..Default::default()
+        };
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(vault),
+            Some(lifecycle),
+            vec![],
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.outputs = controller.get_outputs();
+        vault_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("secrets".to_string(), vault_state);
+        // Management is ready, but the vault has not recorded its new
+        // dependency or applied its explicit secret-read grant.
+        let controller = GcpRemoteStackManagementController::mock_ready("manager");
+        let mut account_state = StackResourceState::new_pending(
+            RemoteStackManagement::RESOURCE_TYPE.to_string(),
+            Resource::new(account),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        account_state.status = ResourceStatus::Running;
+        account_state.outputs = controller.get_outputs();
+        account_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("manager".to_string(), account_state);
+        (executor, state, policies)
+    }
+
+    #[tokio::test]
+    async fn setup_update_grants_existing_vault_access_to_consumer() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        assert!(
+            executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(policies.lock().unwrap().len(), 1);
+        // Repeating setup does not schedule another update after convergence.
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn imported_vault_update_refuses_permission_writes() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::ImportedHandoff,
+            0,
+            false,
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(
+            state.resources["secrets"]
+                .error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("rerun setup")
+        );
+        assert!(policies.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn live_vault_update_leaves_setup_owned_iam_untouched() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            0,
+            false,
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(policies.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_refuses_missing_saved_vault_prefix() {
+        let (executor, mut state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            0,
+            false,
+        );
+        let resource = state.resources.get_mut("secrets").unwrap();
+        let mut controller = resource
+            .get_internal_controller_typed::<GcpVaultController>()
+            .unwrap();
+        controller.vault_prefix = None;
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(
+            state.resources["secrets"]
+                .error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("Vault prefix is missing")
+        );
+        assert!(policies.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lost_response_resumes_the_saved_update_and_upserts_the_same_policy() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            2,
+            true,
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(state.resources["secrets"].error.is_some());
+        // Reload the durable checkpoint and drive the executor's actual retry.
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let policies = policies.lock().unwrap();
+        assert_eq!(policies.len(), 2);
+        assert_eq!(policies[0], policies[1]);
     }
 }
