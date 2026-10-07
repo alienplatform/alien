@@ -97,6 +97,47 @@ fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
+/// An EC2 object a network delete step removes, by ID.
+#[derive(Debug, Clone, Copy)]
+enum Ec2Object<'a> {
+    Vpc(&'a str),
+    Subnet(&'a str),
+    InternetGateway(&'a str),
+    RouteTable(&'a str),
+    RouteTableAssociation(&'a str),
+    SecurityGroup(&'a str),
+    ElasticIp(&'a str),
+    NatGateway(&'a str),
+}
+
+impl<'a> Ec2Object<'a> {
+    fn id(&self) -> &'a str {
+        match *self {
+            Self::Vpc(id)
+            | Self::Subnet(id)
+            | Self::InternetGateway(id)
+            | Self::RouteTable(id)
+            | Self::RouteTableAssociation(id)
+            | Self::SecurityGroup(id)
+            | Self::ElasticIp(id)
+            | Self::NatGateway(id) => id,
+        }
+    }
+
+    fn resource_type(&self) -> &'static str {
+        match self {
+            Self::Vpc(_) => "VPC",
+            Self::Subnet(_) => "Subnet",
+            Self::InternetGateway(_) => "InternetGateway",
+            Self::RouteTable(_) => "RouteTable",
+            Self::RouteTableAssociation(_) => "RouteTableAssociation",
+            Self::SecurityGroup(_) => "SecurityGroup",
+            Self::ElasticIp(_) => "ElasticIp",
+            Self::NatGateway(_) => "NatGateway",
+        }
+    }
+}
+
 /// `Gateway.NotAttached`: the internet gateway is already detached from the VPC.
 fn is_gateway_not_attached(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -1507,7 +1548,15 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let mut done = true;
         for allocation_id in self.extra_eip_allocation_ids.clone() {
-            match client.release_address(&allocation_id).await {
+            match self
+                .denied_means_gone(
+                    ctx,
+                    resource_id,
+                    Ec2Object::ElasticIp(&allocation_id),
+                    client.release_address(&allocation_id).await,
+                )
+                .await?
+            {
                 Ok(()) => info!(allocation_id = %allocation_id, "Released a duplicate Elastic IP"),
                 Err(error) if is_not_found(&error) => {}
                 Err(error) if is_conflict(&error) => {
@@ -1551,14 +1600,22 @@ impl AwsNetworkController {
         let mut done = true;
         for igw_id in self.extra_internet_gateway_ids.clone() {
             if let Some(vpc_id) = self.vpc_id.clone() {
-                match client
+                let detached = client
                     .detach_internet_gateway(
                         DetachInternetGatewayRequest::builder()
                             .internet_gateway_id(igw_id.clone())
                             .vpc_id(vpc_id)
                             .build(),
                     )
-                    .await
+                    .await;
+                match self
+                    .denied_means_gone(
+                        ctx,
+                        resource_id,
+                        Ec2Object::InternetGateway(&igw_id),
+                        detached,
+                    )
+                    .await?
                 {
                     Ok(()) => {}
                     Err(error) if is_not_found(&error) || is_gateway_not_attached(&error) => {}
@@ -1587,7 +1644,15 @@ impl AwsNetworkController {
                     }
                 }
             }
-            match client.delete_internet_gateway(&igw_id).await {
+            match self
+                .denied_means_gone(
+                    ctx,
+                    resource_id,
+                    Ec2Object::InternetGateway(&igw_id),
+                    client.delete_internet_gateway(&igw_id).await,
+                )
+                .await?
+            {
                 Ok(()) => info!(igw_id = %igw_id, "Deleted a duplicate Internet Gateway"),
                 Err(error) if is_not_found(&error) => {}
                 Err(error) if is_conflict(&error) => {
@@ -1627,7 +1692,15 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let mut done = true;
         for vpc_id in self.extra_vpc_ids.clone() {
-            match client.delete_vpc(&vpc_id).await {
+            match self
+                .denied_means_gone(
+                    ctx,
+                    resource_id,
+                    Ec2Object::Vpc(&vpc_id),
+                    client.delete_vpc(&vpc_id).await,
+                )
+                .await?
+            {
                 Ok(()) => info!(vpc_id = %vpc_id, "Deleted a duplicate VPC"),
                 Err(error) if is_not_found(&error) => {}
                 Err(error) if is_conflict(&error) => {
@@ -1695,6 +1768,136 @@ impl AwsNetworkController {
         }
         self.wait_for_create_lookup_iterations = 0;
         None
+    }
+
+    /// Reads a denied delete of an object that no longer exists as NotFound.
+    ///
+    /// The delete grant is conditioned on the stack's tags. Under it, EC2 answers a delete,
+    /// detach or disassociate of a VPC, subnet, internet gateway, route table, route table
+    /// association or Elastic IP that is already gone (deleted out of band, or by an earlier
+    /// attempt whose response was lost) with UnauthorizedOperation, not NotFound: nothing
+    /// carries the tags any more. A security group answers NotFound, and a deleted NAT gateway
+    /// accepts the delete again. Describe calls are granted on all resources, so one tells a
+    /// missing object from a real denial. When the object exists, or the describe is denied
+    /// too, the denial is returned unchanged.
+    async fn denied_means_gone<T>(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        object: Ec2Object<'_>,
+        result: std::result::Result<T, AlienError<CloudClientErrorData>>,
+    ) -> Result<std::result::Result<T, AlienError<CloudClientErrorData>>> {
+        match &result {
+            Err(error) if is_access_denied(error) => {}
+            _ => return Ok(result),
+        }
+        match self.ec2_object_exists(ctx, resource_id, object).await {
+            Ok(false) => {
+                info!(resource_id, object = ?object, "Delete denied for an object that no longer exists; it is gone");
+                Ok(Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: object.resource_type().to_string(),
+                        resource_name: object.id().to_string(),
+                    },
+                )))
+            }
+            Ok(true) => Ok(result),
+            Err(error) if has_access_denied_cause(&error) => Ok(result),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Whether `object` still exists, read with a describe call. A NAT gateway that is
+    /// `deleted` or `failed` no longer exists.
+    async fn ec2_object_exists(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        object: Ec2Object<'_>,
+    ) -> Result<bool> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let id = vec![object.id().to_string()];
+        let exists = match object {
+            Ec2Object::Vpc(_) => client
+                .describe_vpcs(DescribeVpcsRequest::builder().vpc_ids(id).build())
+                .await
+                .map(|r| r.vpc_set.is_some_and(|set| !set.items.is_empty())),
+            Ec2Object::Subnet(_) => client
+                .describe_subnets(DescribeSubnetsRequest::builder().subnet_ids(id).build())
+                .await
+                .map(|r| r.subnet_set.is_some_and(|set| !set.items.is_empty())),
+            Ec2Object::InternetGateway(_) => client
+                .describe_internet_gateways(
+                    DescribeInternetGatewaysRequest::builder()
+                        .internet_gateway_ids(id)
+                        .build(),
+                )
+                .await
+                .map(|r| {
+                    r.internet_gateway_set
+                        .is_some_and(|set| !set.items.is_empty())
+                }),
+            Ec2Object::RouteTable(_) => client
+                .describe_route_tables(
+                    DescribeRouteTablesRequest::builder()
+                        .route_table_ids(id)
+                        .build(),
+                )
+                .await
+                .map(|r| r.route_table_set.is_some_and(|set| !set.items.is_empty())),
+            Ec2Object::RouteTableAssociation(_) => client
+                .describe_route_tables(
+                    DescribeRouteTablesRequest::builder()
+                        .filters(vec![Filter {
+                            name: "association.route-table-association-id".to_string(),
+                            values: id,
+                        }])
+                        .build(),
+                )
+                .await
+                .map(|r| r.route_table_set.is_some_and(|set| !set.items.is_empty())),
+            Ec2Object::SecurityGroup(_) => client
+                .describe_security_groups(
+                    DescribeSecurityGroupsRequest::builder()
+                        .group_ids(id)
+                        .build(),
+                )
+                .await
+                .map(|r| {
+                    r.security_group_info
+                        .is_some_and(|set| !set.items.is_empty())
+                }),
+            Ec2Object::ElasticIp(allocation_id) => client.describe_addresses().await.map(|r| {
+                r.addresses_set.is_some_and(|set| {
+                    set.items
+                        .iter()
+                        .any(|address| address.allocation_id.as_deref() == Some(allocation_id))
+                })
+            }),
+            Ec2Object::NatGateway(_) => client
+                .describe_nat_gateways(
+                    DescribeNatGatewaysRequest::builder()
+                        .nat_gateway_ids(id)
+                        .build(),
+                )
+                .await
+                .map(|r| {
+                    r.nat_gateway_set.is_some_and(|set| {
+                        set.items.iter().any(|nat_gateway| {
+                            !matches!(nat_gateway.state.as_deref(), Some("deleted" | "failed"))
+                        })
+                    })
+                }),
+        };
+        match exists {
+            Ok(exists) => Ok(exists),
+            Err(error) if is_not_found(&error) => Ok(false),
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to check whether {object:?} still exists"),
+                resource_id: Some(resource_id.to_string()),
+            })),
+        }
     }
 
     /// Handles access denied from a delete call in a delete step.
@@ -4191,7 +4394,15 @@ impl AwsNetworkController {
 
         info!(nat_gateway_id = %nat_gateway_id, "Deleting NAT Gateway");
 
-        match client.delete_nat_gateway(&nat_gateway_id).await {
+        match self
+            .denied_means_gone(
+                ctx,
+                &config.id,
+                Ec2Object::NatGateway(&nat_gateway_id),
+                client.delete_nat_gateway(&nat_gateway_id).await,
+            )
+            .await?
+        {
             Ok(_) => Ok(HandlerAction::Continue {
                 state: WaitingForNatGatewayDeletion,
                 suggested_delay: Some(Duration::from_secs(15)),
@@ -4328,7 +4539,15 @@ impl AwsNetworkController {
 
         info!(allocation_id = %allocation_id, "Releasing Elastic IP");
 
-        match client.release_address(&allocation_id).await {
+        match self
+            .denied_means_gone(
+                ctx,
+                &config.id,
+                Ec2Object::ElasticIp(&allocation_id),
+                client.release_address(&allocation_id).await,
+            )
+            .await?
+        {
             Ok(()) => {
                 info!(allocation_id = %allocation_id, "Elastic IP released");
             }
@@ -4413,7 +4632,15 @@ impl AwsNetworkController {
 
         info!(sg_id = %sg_id, "Deleting security group");
 
-        match client.delete_security_group(&sg_id).await {
+        match self
+            .denied_means_gone(
+                ctx,
+                &config.id,
+                Ec2Object::SecurityGroup(&sg_id),
+                client.delete_security_group(&sg_id).await,
+            )
+            .await?
+        {
             Ok(()) => {
                 info!(sg_id = %sg_id, "Security group deleted");
             }
@@ -4503,7 +4730,15 @@ impl AwsNetworkController {
         for subnet_id in subnet_ids {
             info!(subnet_id = %subnet_id, "Deleting subnet");
 
-            match client.delete_subnet(&subnet_id).await {
+            match self
+                .denied_means_gone(
+                    ctx,
+                    &config.id,
+                    Ec2Object::Subnet(&subnet_id),
+                    client.delete_subnet(&subnet_id).await,
+                )
+                .await?
+            {
                 Ok(()) => {
                     info!(subnet_id = %subnet_id, "Subnet deleted");
                 }
@@ -4581,7 +4816,15 @@ impl AwsNetworkController {
 
         // Deleting a subnet removes its associations, so most of these are already gone.
         for assoc_id in self.route_table_association_ids.clone() {
-            match client.disassociate_route_table(&assoc_id).await {
+            match self
+                .denied_means_gone(
+                    ctx,
+                    &config.id,
+                    Ec2Object::RouteTableAssociation(&assoc_id),
+                    client.disassociate_route_table(&assoc_id).await,
+                )
+                .await?
+            {
                 Ok(()) => {
                     info!(assoc_id = %assoc_id, "Route table disassociated");
                 }
@@ -4619,7 +4862,15 @@ impl AwsNetworkController {
         {
             info!(rt_id = %route_table_id, "Deleting route table");
 
-            match client.delete_route_table(&route_table_id).await {
+            match self
+                .denied_means_gone(
+                    ctx,
+                    &config.id,
+                    Ec2Object::RouteTable(&route_table_id),
+                    client.delete_route_table(&route_table_id).await,
+                )
+                .await?
+            {
                 Ok(()) => {
                     info!(rt_id = %route_table_id, "Route table deleted");
                 }
@@ -4701,14 +4952,22 @@ impl AwsNetworkController {
         if let Some(vpc_id) = self.vpc_id.clone() {
             info!(igw_id = %igw_id, vpc_id = %vpc_id, "Detaching Internet Gateway");
 
-            match client
+            let detached = client
                 .detach_internet_gateway(
                     DetachInternetGatewayRequest::builder()
                         .internet_gateway_id(igw_id.clone())
                         .vpc_id(vpc_id.clone())
                         .build(),
                 )
-                .await
+                .await;
+            match self
+                .denied_means_gone(
+                    ctx,
+                    &config.id,
+                    Ec2Object::InternetGateway(&igw_id),
+                    detached,
+                )
+                .await?
             {
                 Ok(()) => {
                     info!(igw_id = %igw_id, "Internet Gateway detached");
@@ -4749,7 +5008,15 @@ impl AwsNetworkController {
 
         info!(igw_id = %igw_id, "Deleting Internet Gateway");
 
-        match client.delete_internet_gateway(&igw_id).await {
+        match self
+            .denied_means_gone(
+                ctx,
+                &config.id,
+                Ec2Object::InternetGateway(&igw_id),
+                client.delete_internet_gateway(&igw_id).await,
+            )
+            .await?
+        {
             Ok(()) => {
                 info!(igw_id = %igw_id, "Internet Gateway deleted");
             }
@@ -4817,7 +5084,15 @@ impl AwsNetworkController {
 
         info!(vpc_id = %vpc_id, "Deleting VPC");
 
-        match client.delete_vpc(&vpc_id).await {
+        match self
+            .denied_means_gone(
+                ctx,
+                &config.id,
+                Ec2Object::Vpc(&vpc_id),
+                client.delete_vpc(&vpc_id).await,
+            )
+            .await?
+        {
             Ok(()) => {
                 info!(vpc_id = %vpc_id, "VPC deleted");
             }
@@ -6658,8 +6933,9 @@ mod controller_state_tests {
                 Ok(())
             }
         });
+        // Once to tell the denial from a released address, once for the association.
         ec2.expect_describe_addresses()
-            .times(1)
+            .times(2)
             .returning(|| Ok(addresses(true)));
 
         let mut executor = executor(
@@ -6697,6 +6973,41 @@ mod controller_state_tests {
         );
     }
 
+    /// Access denied on an address that is already released (it carries no tags any more) is
+    /// a release that already happened: the ID leaves state and the delete goes on.
+    #[tokio::test]
+    async fn auth_failure_on_a_released_elastic_ip_is_a_release() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_release_address()
+            .times(1)
+            .returning(|id| Err(auth_failure(id)));
+        ec2.expect_describe_addresses()
+            .times(1)
+            .returning(|| Ok(parse(json!({}))));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::ReleasingElasticIp,
+                vpc_id: Some("vpc-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+
+        executor
+            .step()
+            .await
+            .expect("a released address needs no release");
+        assert_eq!(controller(&executor).eip_allocation_id, None);
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingSecurityGroup
+        );
+    }
+
     /// Access denied on an address that is not associated is a real permission error and is
     /// returned, so the executor's best-effort delete rule applies to it.
     #[tokio::test]
@@ -6706,7 +7017,7 @@ mod controller_state_tests {
             .times(1)
             .returning(|id| Err(auth_failure(id)));
         ec2.expect_describe_addresses()
-            .times(1)
+            .times(2)
             .returning(|| Ok(addresses(false)));
 
         let mut executor = executor(
@@ -7183,6 +7494,189 @@ mod controller_state_tests {
         }
     }
 
+    /// Describe calls that find every object of [`fully_recorded`] (the NAT gateway
+    /// `available`), so a denied delete of any of them is a real denial.
+    fn expect_every_object_exists(ec2: &mut MockEc2Api) {
+        ec2.expect_describe_nat_gateways().returning(|_| {
+            Ok(parse(json!({ "natGatewaySet": { "item": [
+                { "natGatewayId": "nat-1", "state": "available" }
+            ]}})))
+        });
+        ec2.expect_describe_security_groups().returning(|_| {
+            Ok(parse(json!({ "securityGroupInfo": { "item": [
+                { "groupId": "sg-1", "groupName": "sg", "vpcId": "vpc-1" }
+            ]}})))
+        });
+        ec2.expect_describe_subnets().returning(|request| {
+            let id = request.subnet_ids.unwrap()[0].clone();
+            Ok(parse(json!({ "subnetSet": { "item": [
+                { "subnetId": id, "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "eu-west-1a" }
+            ]}})))
+        });
+        ec2.expect_describe_route_tables().returning(|_| {
+            Ok(parse(json!({ "routeTableSet": { "item": [
+                { "routeTableId": "rtb-pub", "vpcId": "vpc-1" }
+            ]}})))
+        });
+        ec2.expect_describe_internet_gateways().returning(|_| {
+            Ok(parse(json!({ "internetGatewaySet": { "item": [
+                { "internetGatewayId": "igw-1" }
+            ]}})))
+        });
+        ec2.expect_describe_vpcs().returning(|_| {
+            Ok(parse(json!({ "vpcSet": { "item": [
+                { "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/16" }
+            ]}})))
+        });
+    }
+
+    /// Describe calls that find none of the objects (the NAT gateway `deleted`), as after an
+    /// earlier attempt deleted them and lost the responses.
+    fn expect_no_object_exists(ec2: &mut MockEc2Api) {
+        ec2.expect_describe_nat_gateways().returning(|_| {
+            Ok(parse(json!({ "natGatewaySet": { "item": [
+                { "natGatewayId": "nat-1", "state": "deleted" }
+            ]}})))
+        });
+        ec2.expect_describe_addresses()
+            .returning(|| Ok(parse(json!({}))));
+        ec2.expect_describe_security_groups().returning(|_| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "SecurityGroup".to_string(),
+                    resource_name: "sg-1".to_string(),
+                },
+            ))
+        });
+        ec2.expect_describe_subnets()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_route_tables()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_internet_gateways()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_vpcs()
+            .returning(|_| Ok(parse(json!({}))));
+    }
+
+    /// Every delete denied the way EC2 denies an object without the stack's tags.
+    fn expect_every_delete_denied(ec2: &mut MockEc2Api) {
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_release_address()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_subnet()
+            .times(2)
+            .returning(|_| Err(denied()));
+        ec2.expect_disassociate_route_table()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_route_table()
+            .times(2)
+            .returning(|_| Err(denied()));
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_internet_gateway()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_vpc()
+            .times(1)
+            .returning(|_| Err(denied()));
+    }
+
+    /// Under the tag-conditioned grant, EC2 answers deletes of a VPC, subnet, internet
+    /// gateway, route table and Elastic IP that are already gone with UnauthorizedOperation
+    /// (observed live). A replace whose earlier delete attempt removed everything, but lost the
+    /// responses, finds every object gone by describing it, and finishes instead of failing
+    /// with a permission error no grant can fix.
+    #[tokio::test]
+    async fn replace_delete_denied_for_objects_that_are_gone_finishes() {
+        let mut ec2 = MockEc2Api::new();
+        expect_every_delete_denied(&mut ec2);
+        expect_no_object_exists(&mut ec2);
+
+        let mut executor = executor(
+            ec2,
+            fully_recorded(AwsNetworkState::DeletingNatGateway),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor
+            .run_until_terminal()
+            .await
+            .expect("objects that are gone need no delete");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let state = controller(&executor);
+        assert_eq!(state.nat_gateway_id, None);
+        assert_eq!(state.eip_allocation_id, None);
+        assert_eq!(state.security_group_id, None);
+        assert!(state.public_subnet_ids.is_empty() && state.private_subnet_ids.is_empty());
+        assert!(state.route_table_association_ids.is_empty());
+        assert_eq!(state.public_route_table_id, None);
+        assert_eq!(state.private_route_table_id, None);
+        assert_eq!(state.internet_gateway_id, None);
+        assert_eq!(state.vpc_id, None);
+    }
+
+    /// The same in a teardown: the IDs of objects that are gone leave state, instead of being
+    /// kept as denied objects left behind.
+    #[tokio::test]
+    async fn teardown_with_deletes_denied_for_objects_that_are_gone_clears_them() {
+        let mut ec2 = MockEc2Api::new();
+        expect_every_delete_denied(&mut ec2);
+        expect_no_object_exists(&mut ec2);
+
+        let mut executor = executor(
+            ec2,
+            fully_recorded(AwsNetworkState::Ready),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor.delete().expect("teardown");
+        executor.run_until_terminal().await.expect("teardown runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let state = controller(&executor);
+        assert_eq!(state.nat_gateway_id, None);
+        assert_eq!(state.internet_gateway_id, None);
+        assert_eq!(state.vpc_id, None);
+        assert!(state.public_subnet_ids.is_empty());
+    }
+
+    /// A describe that is denied too cannot tell the object is gone: the delete denial stands.
+    #[tokio::test]
+    async fn replace_delete_denied_with_a_denied_describe_stays_an_error() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_subnet()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_describe_subnets()
+            .times(1)
+            .returning(|_| Err(denied()));
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::DeletingSubnets,
+                vpc_id: Some("vpc-1".to_string()),
+                public_subnet_ids: vec!["subnet-a".to_string()],
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let error = executor
+            .step()
+            .await
+            .expect_err("the denial cannot be told from a missing subnet");
+        assert!(error.message.contains("subnet-a"), "{}", error.message);
+        assert_eq!(controller(&executor).public_subnet_ids, ["subnet-a"]);
+    }
+
     /// In a teardown, access denied on one object must not end the whole delete as "already
     /// gone": every later object is still deleted. Each denied object is logged and its ID kept.
     #[tokio::test]
@@ -7191,11 +7685,13 @@ mod controller_state_tests {
         ec2.expect_delete_nat_gateway()
             .times(1)
             .returning(|_| Err(denied()));
-        ec2.expect_describe_nat_gateways().times(0);
+        // Every denied object still exists, so every denial is real.
+        expect_every_object_exists(&mut ec2);
         ec2.expect_release_address()
             .times(1)
             .returning(|_| Err(denied()));
-        ec2.expect_describe_addresses().times(1).returning(|| {
+        // Once to tell the denied release from a missing address, once for its association.
+        ec2.expect_describe_addresses().times(2).returning(|| {
             Ok(parse(json!({ "addressesSet": { "item": [
                 { "allocationId": "eipalloc-1", "domain": "vpc" }
             ]}})))
@@ -7243,6 +7739,7 @@ mod controller_state_tests {
         ec2.expect_delete_nat_gateway()
             .times(1)
             .returning(|_| Err(denied()));
+        expect_every_object_exists(&mut ec2);
 
         let mut executor = executor(
             ec2,
