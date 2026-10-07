@@ -471,7 +471,7 @@ mod permission_update_tests {
                     members: vec!["serviceAccount:manager@mock-project.iam.gserviceaccount.com".to_string()],
                     condition: Some(alien_gcp_clients::iam::Expr {
                         expression: "resource.name.startsWith(\"projects/123456789012/secrets/test-other-\")".to_string(),
-                        title: "ResourceVaultSecretsRead".to_string(),
+                        title: Some("ResourceVaultSecretsRead".to_string()),
                         description: None, location: None,
                     }),
                 }])
