@@ -372,9 +372,10 @@ async fn resolve_untracked_name(
     manager: &alien_manager_api::Client,
     name: &str,
 ) -> Result<alien_manager_api::types::DeploymentResponse> {
+    // The manager only accepts a name filter together with a deployment group, so list
+    // without one and match the exact name here.
     let page = manager
         .list_deployments()
-        .name(name)
         .send()
         .await
         .into_sdk_error()
@@ -1107,13 +1108,27 @@ mod tests {
 
     #[tokio::test]
     async fn standalone_names_resolve_by_exact_unique_name() {
-        async fn list() -> Json<serde_json::Value> {
+        // Like the manager, refuse a name filter without a deployment group.
+        async fn list(
+            axum::extract::Query(query): axum::extract::Query<
+                std::collections::HashMap<String, String>,
+            >,
+        ) -> axum::response::Response {
+            use axum::response::IntoResponse;
+            if query.contains_key("name") && !query.contains_key("deploymentGroupId") {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "name filter requires deploymentGroupId",
+                )
+                    .into_response();
+            }
             Json(serde_json::json!({ "items": [
                 manager_record("dep_test", "test"),
                 manager_record("dep_testing", "testing"),
                 manager_record("dep_a", "duplicate"),
                 manager_record("dep_b", "duplicate"),
             ] }))
+            .into_response()
         }
         async fn get_one(
             axum::extract::Path(id): axum::extract::Path<String>,
