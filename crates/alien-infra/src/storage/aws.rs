@@ -824,6 +824,22 @@ impl AwsStorageController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
+        if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::ImportedHandoff
+            && ctx
+                .desired_stack
+                .resources
+                .get(&config.id)
+                .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
+            && config == ctx.previous_resource_config::<Storage>()?
+        {
+            // Manual retries resume this handler directly, bypassing UpdateStart.
+            // Preserve the same setup-owned bucket and grants on that path too.
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Bucket name not set in state during resource permissions update"
@@ -1084,7 +1100,7 @@ mod tests {
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
+        MockPlatformServiceProvider, PlatformServiceProvider, StackResourceStateExt,
     };
     use crate::storage::AwsStorageController;
     use crate::AwsStorageState;
@@ -1356,6 +1372,94 @@ mod tests {
                 .bucket_name,
             original_bucket
         );
+    }
+
+    #[tokio::test]
+    async fn unchanged_imported_bucket_permission_retry_preserves_setup_permissions() {
+        let storage = Storage::new("objects".to_string()).build();
+        let mut controller = AwsStorageController::mock_ready(&storage.id);
+        controller.state = AwsStorageState::UpdatingResourcePermissions;
+        let failed = alien_core::StackResourceState::builder()
+            .resource_type("storage".to_string())
+            .status(ResourceStatus::UpdateFailed)
+            .config(alien_core::Resource::new(storage.clone()))
+            .previous_config(alien_core::Resource::new(storage.clone()))
+            .last_failed_state(crate::core::serialize_controller(&controller).unwrap())
+            .lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let mut failed: alien_core::StackResourceState =
+            serde_json::from_value(serde_json::to_value(failed).unwrap()).unwrap();
+        assert!(failed.retry_failed().unwrap());
+        assert_eq!(failed.status, ResourceStatus::Updating);
+        assert!(failed.last_failed_state.is_none());
+        let controller: AwsStorageController =
+            serde_json::from_value(failed.internal_state.unwrap()).unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .previous_resource(storage.clone())
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .controller(controller)
+            .platform(Platform::Aws)
+            // No provider calls are permitted for this setup-owned bucket.
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Updating);
+        let original_bucket = executor
+            .outputs()
+            .unwrap()
+            .downcast_ref::<StorageOutputs>()
+            .unwrap()
+            .bucket_name
+            .clone();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            executor
+                .internal_state::<AwsStorageController>()
+                .unwrap()
+                .state,
+            AwsStorageState::Ready
+        );
+        assert_eq!(
+            executor
+                .outputs()
+                .unwrap()
+                .downcast_ref::<StorageOutputs>()
+                .unwrap()
+                .bucket_name,
+            original_bucket
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_imported_bucket_permission_retry_still_requires_setup() {
+        let previous = Storage::new("objects".to_string()).build();
+        let mut desired = previous.clone();
+        desired.versioning = true;
+        let mut controller = AwsStorageController::mock_ready(&desired.id);
+        controller.state = AwsStorageState::UpdatingResourcePermissions;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired)
+            .previous_resource(previous)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let error = executor.run_until_terminal().await.unwrap_err();
+        assert!(matches!(
+            error.error,
+            Some(crate::error::ErrorData::ImportedSetupStateInvalid { .. })
+        ));
+        assert_eq!(executor.status(), ResourceStatus::Updating);
     }
 
     #[rstest]
