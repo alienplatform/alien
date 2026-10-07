@@ -14,8 +14,8 @@ use alien_core::{
 use alien_gcp_clients::iam::IamPolicy;
 use alien_gcp_clients::resource_manager::GetPolicyOptions;
 use alien_permissions::{
-    PermissionContext,
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    PermissionContext,
 };
 use chrono::Utc;
 
@@ -519,7 +519,7 @@ mod permission_update_tests {
         GcpClientConfig, InitialSetupAuthority, RemoteStackManagement, Resource, ResourceLifecycle,
         ResourceRef, Stack, StackResourceState, StackSettings, StackState,
     };
-    use alien_gcp_clients::{GcpClientConfigExt as _, resource_manager::MockResourceManagerApi};
+    use alien_gcp_clients::{resource_manager::MockResourceManagerApi, GcpClientConfigExt as _};
     use std::sync::{Arc, Mutex};
 
     // Simulate a committed project policy whose response is lost.
@@ -578,14 +578,12 @@ mod permission_update_tests {
                         binding.members,
                         vec!["serviceAccount:manager@mock-project.iam.gserviceaccount.com"]
                     );
-                    assert!(
-                        binding
-                            .condition
-                            .as_ref()
-                            .unwrap()
-                            .expression
-                            .contains("projects/123456789012/secrets/test-secrets-")
-                    );
+                    assert!(binding
+                        .condition
+                        .as_ref()
+                        .unwrap()
+                        .expression
+                        .contains("projects/123456789012/secrets/test-secrets-"));
                 }
                 *remote_policy.lock().unwrap() = policy.clone();
                 saved
@@ -697,13 +695,11 @@ mod permission_update_tests {
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
         state.resources.insert("manager".to_string(), account_state);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("manager")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("manager"));
         (executor, state, policies)
     }
 
@@ -715,24 +711,20 @@ mod permission_update_tests {
             1,
             false,
         );
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(policies.lock().unwrap().len(), 1);
         // Repeating setup does not schedule another update after convergence.
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -812,13 +804,11 @@ mod permission_update_tests {
             state.resources.insert("manager".to_string(), manager_state);
             let state = executor.step(state).await.unwrap().next_state;
             assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
-            assert!(
-                !executor
-                    .plan(&state)
-                    .unwrap()
-                    .updates
-                    .contains_key("secrets")
-            );
+            assert!(!executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets"));
         }
     }
 
@@ -842,23 +832,19 @@ mod permission_update_tests {
         resource
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(writes.lock().unwrap().len(), 1);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -869,31 +855,27 @@ mod permission_update_tests {
             1,
             false,
         );
-        assert!(
-            state
-                .resources
-                .get_mut("secrets")
-                .unwrap()
-                .internal_state
-                .as_mut()
-                .unwrap()
-                .as_object_mut()
-                .unwrap()
-                .remove("permissionsRevision")
-                .is_some()
-        );
+        assert!(state
+            .resources
+            .get_mut("secrets")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("permissionsRevision")
+            .is_some());
         let state: StackState =
             serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(writes.lock().unwrap().len(), 1);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -906,14 +888,12 @@ mod permission_update_tests {
         );
         let state = executor.step(state).await.unwrap().next_state;
         assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(
-            state.resources["secrets"]
-                .error
-                .as_ref()
-                .unwrap()
-                .to_string()
-                .contains("rerun setup")
-        );
+        assert!(state.resources["secrets"]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("rerun setup"));
         assert!(policies.lock().unwrap().is_empty());
     }
 
@@ -948,14 +928,12 @@ mod permission_update_tests {
             .unwrap();
         let state = executor.step(state).await.unwrap().next_state;
         assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(
-            state.resources["secrets"]
-                .error
-                .as_ref()
-                .unwrap()
-                .to_string()
-                .contains("Vault prefix is missing")
-        );
+        assert!(state.resources["secrets"]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("Vault prefix is missing"));
         assert!(policies.lock().unwrap().is_empty());
     }
 

@@ -1,8 +1,8 @@
 //! Importer for Azure Vault (Key Vault).
 
 use alien_core::{
+    import::{data::AzureVaultImportData, ImportContext},
     Result, StackResourceState,
-    import::{ImportContext, data::AzureVaultImportData},
 };
 
 use crate::import::ResourceImporter;

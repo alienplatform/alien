@@ -1,8 +1,8 @@
 //! Importer for GCP Vault (Secret Manager namespace).
 
 use alien_core::{
+    import::{data::GcpVaultImportData, ImportContext},
     Result, StackResourceState,
-    import::{ImportContext, data::GcpVaultImportData},
 };
 
 use crate::import::ResourceImporter;

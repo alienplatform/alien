@@ -535,7 +535,7 @@ mod permission_update_tests {
     };
     use crate::infra_requirements::AzureResourceGroupController;
     use crate::service_account::AzureServiceAccountController;
-    use alien_azure_clients::{AzureClientConfigExt as _, authorization::MockAuthorizationApi};
+    use alien_azure_clients::{authorization::MockAuthorizationApi, AzureClientConfigExt as _};
     use alien_client_core::ErrorData as CloudError;
     use alien_core::permissions::PermissionProfile;
     use alien_core::{
@@ -678,24 +678,20 @@ mod permission_update_tests {
             1,
             false,
         );
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(policies.lock().unwrap().len(), 1);
         // Repeating setup does not schedule another update after convergence.
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -718,23 +714,19 @@ mod permission_update_tests {
         resource
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(writes.lock().unwrap().len(), 1);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -745,31 +737,27 @@ mod permission_update_tests {
             1,
             false,
         );
-        assert!(
-            state
-                .resources
-                .get_mut("secrets")
-                .unwrap()
-                .internal_state
-                .as_mut()
-                .unwrap()
-                .as_object_mut()
-                .unwrap()
-                .remove("permissionsRevision")
-                .is_some()
-        );
+        assert!(state
+            .resources
+            .get_mut("secrets")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("permissionsRevision")
+            .is_some());
         let state: StackState =
             serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(writes.lock().unwrap().len(), 1);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -782,14 +770,12 @@ mod permission_update_tests {
         );
         let state = executor.step(state).await.unwrap().next_state;
         assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(
-            state.resources["secrets"]
-                .error
-                .as_ref()
-                .unwrap()
-                .to_string()
-                .contains("rerun setup")
-        );
+        assert!(state.resources["secrets"]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("rerun setup"));
         assert!(policies.lock().unwrap().is_empty());
     }
 
@@ -829,14 +815,12 @@ mod permission_update_tests {
                 .unwrap();
             let state = executor.step(state).await.unwrap().next_state;
             assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
-            assert!(
-                state.resources["secrets"]
-                    .error
-                    .as_ref()
-                    .unwrap()
-                    .to_string()
-                    .contains("missing from saved controller state")
-            );
+            assert!(state.resources["secrets"]
+                .error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("missing from saved controller state"));
             assert!(assignments.lock().unwrap().is_empty());
         }
     }
