@@ -356,7 +356,7 @@ impl EnvironmentVariableBuilder {
         }
 
         let wildcard_endpoints = current_resource_wildcard_endpoints(ctx);
-        let mut env_endpoints = HashMap::new();
+        let mut env_endpoints = BTreeMap::new();
         for (endpoint_name, public_url) in &endpoint_urls {
             let host = public_url_host(public_url).ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -708,6 +708,10 @@ impl EnvironmentVariableBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "local")]
+    use crate::{core::controller_test::SingleControllerExecutor, daemon::LocalDaemonController};
+    #[cfg(feature = "local")]
+    use alien_core::{DaemonCode, ExposeProtocol, Platform, PublicEndpoint};
     use serde_json::json;
 
     #[cfg(feature = "local")]
@@ -970,21 +974,22 @@ mod tests {
     #[cfg(feature = "local")]
     #[tokio::test]
     async fn public_endpoint_environment_is_stable_across_reconciliation() {
-        use crate::core::controller_test::SingleControllerExecutor;
-        use crate::daemon::LocalDaemonController;
-        use alien_core::{DaemonCode, ExposeProtocol, Platform, PublicEndpoint};
-
         let mut daemon = Daemon::new("gateway".to_string())
-            .code(DaemonCode::Image { image: "gateway:latest".to_string() })
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
             .build();
         let names = ["api", "shares", "webhooks"];
-        daemon.public_endpoints = names.iter().map(|name| PublicEndpoint {
-            name: (*name).to_string(),
-            port: 8080,
-            protocol: ExposeProtocol::Http,
-            host_label: None,
-            wildcard_subdomains: *name != "api",
-        }).collect();
+        daemon.public_endpoints = names
+            .iter()
+            .map(|name| PublicEndpoint {
+                name: (*name).to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: *name != "api",
+            })
+            .collect();
         let expected = json!({
             "api": {"url": "https://api.example.test", "host": "api.example.test"},
             "shares": {"url": "https://shares.example.test", "host": "shares.example.test", "wildcardHost": "*.shares.example.test"},
@@ -995,7 +1000,11 @@ mod tests {
             // Fresh hash seeds and opposite insertion orders simulate independent reconciles.
             let mut urls = HashMap::new();
             for index in 0..names.len() {
-                let name = names[if iteration % 2 == 0 { index } else { names.len() - 1 - index }];
+                let name = names[if iteration % 2 == 0 {
+                    index
+                } else {
+                    names.len() - 1 - index
+                }];
                 urls.insert(name.to_string(), format!("https://{name}.example.test"));
             }
             let executor = SingleControllerExecutor::builder()
@@ -1003,20 +1012,28 @@ mod tests {
                 .controller(LocalDaemonController::default())
                 .platform(Platform::Local)
                 .public_endpoints(HashMap::from([("gateway".to_string(), urls)]))
-                .build().await.unwrap();
+                .build()
+                .await
+                .unwrap();
             let environment = executor.with_context(|ctx| {
                 EnvironmentVariableBuilder::new(&HashMap::new())
                     .add_current_resource_public_endpoint(ctx, "gateway")
-                    .unwrap().build()
+                    .unwrap()
+                    .build()
             });
             let endpoints = &environment[ENV_ALIEN_PUBLIC_ENDPOINTS_JSON];
-            assert_eq!(serde_json::from_str::<serde_json::Value>(endpoints).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(endpoints).unwrap(),
+                expected
+            );
             // Workload request comparison treats this JSON as an opaque env string.
             if let Some(previous) = &previous_environment {
-                assert_eq!(&environment, previous, "reconcile {iteration} changed identical endpoint metadata");
+                assert_eq!(
+                    &environment, previous,
+                    "reconcile {iteration} changed identical endpoint metadata"
+                );
             }
             previous_environment = Some(environment);
         }
     }
-
 }
