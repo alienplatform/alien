@@ -219,6 +219,10 @@ fn adopt_create_attempt_matches(
 const CREATE_LOOKUP_MAX_POLLS: u32 = 4;
 /// Delay between those lookups.
 const CREATE_LOOKUP_DELAY: Duration = Duration::from_secs(5);
+/// Create calls for one object before the create gives up. The lookups between failed creates
+/// succeed, which resets the executor's retry count, so without this bound a create that keeps
+/// failing would repeat forever.
+const MAX_CREATE_CALLS: u32 = 3;
 
 fn create_attempt_tag(token: &str) -> (String, String) {
     (CREATE_ATTEMPT_TAG.to_string(), token.to_string())
@@ -907,6 +911,10 @@ pub struct AwsNetworkController {
     /// Lookups of a recorded create token that found nothing yet; see `CREATE_LOOKUP_MAX_POLLS`.
     #[serde(default)]
     pub(crate) wait_for_create_lookup_iterations: u32,
+    /// Create calls made for the object being created since one was last recorded; see
+    /// `MAX_CREATE_CALLS`. Reset when an object is recorded and by a manual retry.
+    #[serde(default)]
+    pub(crate) wait_for_repeated_create_iterations: u32,
     /// VPCs, internet gateways and Elastic IPs found under this controller's create tokens
     /// besides the recorded one (a create repeated after a read missed the first object).
     /// Delete removes them.
@@ -1619,6 +1627,23 @@ impl AwsNetworkController {
         Ok(done)
     }
 
+    /// Counts one more create call for the object being created, or fails without one once
+    /// `MAX_CREATE_CALLS` were made. The failure is not retryable, so the resource ends failed
+    /// with this message; a manual retry resets the count and creates again.
+    fn count_create_call(&mut self, object: &str, resource_id: &str) -> Result<()> {
+        if self.wait_for_repeated_create_iterations >= MAX_CREATE_CALLS {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Creating the {object} failed {} times; retry to try again",
+                    self.wait_for_repeated_create_iterations
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        self.wait_for_repeated_create_iterations += 1;
+        Ok(())
+    }
+
     /// Before repeating a create whose token found nothing, looks again a few times: the object
     /// a lost create made may not be visible yet. Returns the wait, or `None` once the lookups
     /// are used up and the create may be repeated.
@@ -1829,6 +1854,7 @@ impl AwsNetworkController {
                 info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet created by an earlier attempt");
                 self.subnet_create_attempt = None;
                 self.wait_for_create_lookup_iterations = 0;
+                self.wait_for_repeated_create_iterations = 0;
                 return Ok(Some(subnet_id));
             }
             if self.wait_before_repeating_a_create().is_some() {
@@ -1849,6 +1875,7 @@ impl AwsNetworkController {
         self.subnet_create_attempt = Some(attempt.clone());
         let token = attempt.token.clone();
 
+        self.count_create_call(&format!("subnet {cidr}"), resource_id)?;
         let created = client
             .create_subnet(
                 CreateSubnetRequest::builder()
@@ -1879,6 +1906,7 @@ impl AwsNetworkController {
                 {
                     info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet an earlier attempt created");
                     self.subnet_create_attempt = None;
+                    self.wait_for_repeated_create_iterations = 0;
                     return Ok(Some(subnet_id));
                 }
                 return Err(error.context(ErrorData::CloudPlatformError {
@@ -1905,6 +1933,7 @@ impl AwsNetworkController {
         })?;
         // The caller records the ID before its next call.
         self.subnet_create_attempt = None;
+        self.wait_for_repeated_create_iterations = 0;
         Ok(Some(subnet_id))
     }
 
@@ -2662,6 +2691,7 @@ impl AwsNetworkController {
             if adopt_create_attempt_matches(found, &mut self.vpc_id, &mut self.extra_vpc_ids) {
                 info!(vpc_id = ?self.vpc_id, cidr = %attempted_cidr, "Found the VPC created by an earlier attempt");
                 self.wait_for_create_lookup_iterations = 0;
+                self.wait_for_repeated_create_iterations = 0;
                 return Ok(HandlerAction::Continue {
                     state: ConfiguringVpcDns,
                     suggested_delay: None,
@@ -2690,6 +2720,7 @@ impl AwsNetworkController {
             .clone();
         info!(cidr = %vpc_cidr, "Creating VPC");
 
+        self.count_create_call("VPC", &config.id)?;
         let create_response = client
             .create_vpc(
                 CreateVpcRequest::builder()
@@ -2718,6 +2749,7 @@ impl AwsNetworkController {
 
         info!(vpc_id = %vpc_id, azs = ?self.availability_zones, "VPC created");
         self.vpc_id = Some(vpc_id);
+        self.wait_for_repeated_create_iterations = 0;
 
         Ok(HandlerAction::Continue {
             state: ConfiguringVpcDns,
@@ -2815,6 +2847,7 @@ impl AwsNetworkController {
             ) {
                 info!(igw_id = ?self.internet_gateway_id, "Found the Internet Gateway created by an earlier attempt");
                 self.wait_for_create_lookup_iterations = 0;
+                self.wait_for_repeated_create_iterations = 0;
                 return Ok(HandlerAction::Continue {
                     state: AttachingInternetGateway,
                     suggested_delay: None,
@@ -2831,6 +2864,7 @@ impl AwsNetworkController {
             .clone();
         info!("Creating Internet Gateway");
 
+        self.count_create_call("Internet Gateway", &config.id)?;
         let igw_response = client
             .create_internet_gateway(
                 CreateInternetGatewayRequest::builder()
@@ -2861,6 +2895,7 @@ impl AwsNetworkController {
 
         info!(igw_id = %igw_id, "Internet Gateway created");
         self.internet_gateway_id = Some(igw_id);
+        self.wait_for_repeated_create_iterations = 0;
 
         Ok(HandlerAction::Continue {
             state: AttachingInternetGateway,
@@ -3345,6 +3380,7 @@ impl AwsNetworkController {
             ) {
                 info!(allocation_id = ?self.eip_allocation_id, "Found the Elastic IP allocated by an earlier attempt");
                 self.wait_for_create_lookup_iterations = 0;
+                self.wait_for_repeated_create_iterations = 0;
                 return Ok(HandlerAction::Continue {
                     state: CreatingNatGateway,
                     suggested_delay: None,
@@ -3361,6 +3397,7 @@ impl AwsNetworkController {
             .clone();
         info!("Allocating Elastic IP for NAT Gateway");
 
+        self.count_create_call("Elastic IP", &config.id)?;
         let eip_response = client
             .allocate_address(
                 AllocateAddressRequest::builder()
@@ -3389,6 +3426,7 @@ impl AwsNetworkController {
 
         info!(allocation_id = %allocation_id, "Elastic IP allocated");
         self.eip_allocation_id = Some(allocation_id);
+        self.wait_for_repeated_create_iterations = 0;
 
         Ok(HandlerAction::Continue {
             state: CreatingNatGateway,
@@ -4867,6 +4905,7 @@ impl AwsNetworkController {
             eip_create_token: None,
             nat_gateway_attempt: 0,
             wait_for_create_lookup_iterations: 0,
+            wait_for_repeated_create_iterations: 0,
             extra_vpc_ids: Vec::new(),
             extra_internet_gateway_ids: Vec::new(),
             extra_eip_allocation_ids: Vec::new(),
@@ -4916,6 +4955,7 @@ impl AwsNetworkController {
             eip_create_token: None,
             nat_gateway_attempt: 0,
             wait_for_create_lookup_iterations: 0,
+            wait_for_repeated_create_iterations: 0,
             extra_vpc_ids: Vec::new(),
             extra_internet_gateway_ids: Vec::new(),
             extra_eip_allocation_ids: Vec::new(),
@@ -7284,6 +7324,71 @@ mod controller_state_tests {
         assert!(state.extra_vpc_ids.is_empty());
         assert!(state.extra_internet_gateway_ids.is_empty());
         assert!(state.extra_eip_allocation_ids.is_empty());
+    }
+
+    /// A create that keeps failing retryably while the lookups between attempts find nothing
+    /// must not repeat forever (the successful lookups reset the executor's retry count): after
+    /// `MAX_CREATE_CALLS` creates the step fails for good. A manual retry resets the count.
+    #[tokio::test]
+    async fn a_create_that_keeps_failing_gives_up_after_a_bounded_number_of_calls() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs()
+            .returning(|_| Ok(parse(json!({}))));
+        let creates = Arc::new(AtomicUsize::new(0));
+        let count = creates.clone();
+        ec2.expect_create_vpc().returning(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Err(unavailable())
+        });
+
+        let mut failing = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                cidr_block: Some("100.70.0.0/16".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        let mut final_error = None;
+        for _ in 0..60 {
+            match failing.step().await {
+                Ok(_) => {}
+                Err(error) if error.retryable => {}
+                Err(error) => {
+                    final_error = Some(error);
+                    break;
+                }
+            }
+        }
+        let error = final_error.expect("the create gives up");
+        assert!(
+            error.message.contains("VPC failed 3 times"),
+            "{}",
+            error.message
+        );
+        assert_eq!(creates.load(Ordering::SeqCst), MAX_CREATE_CALLS as usize);
+        assert_eq!(controller(&failing).vpc_id, None);
+
+        // A manual retry resets the count, so the create is tried again.
+        let mut retried = controller(&failing).clone();
+        retried.reset_stay_count();
+        assert_eq!(retried.wait_for_repeated_create_iterations, 0);
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_create_vpc()
+            .times(1)
+            .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } }))));
+        let mut retry = executor(ec2, retried, None).await;
+        wait_out_create_lookups(&mut retry).await;
+        retry.step().await.expect("the retried create succeeds");
+        assert_eq!(controller(&retry).vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(controller(&retry).wait_for_repeated_create_iterations, 0);
     }
 
     /// A delete checkpoint saved before the poll counter existed resumes polling; the old

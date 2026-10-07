@@ -73,6 +73,7 @@ impl ResourceImporter for AwsNetworkImporter {
             eip_create_token: None,
             nat_gateway_attempt: 0,
             wait_for_create_lookup_iterations: 0,
+            wait_for_repeated_create_iterations: 0,
             extra_vpc_ids: Vec::new(),
             extra_internet_gateway_ids: Vec::new(),
             extra_eip_allocation_ids: Vec::new(),
