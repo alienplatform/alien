@@ -437,7 +437,13 @@ impl GcpVaultController {
                 })
             })?,
         );
-        let current_bindings = current_policy.bindings.clone();
+        let current_bindings = serde_json::to_value(&current_policy.bindings)
+            .into_alien_error()
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to serialize current vault IAM bindings".to_string(),
+                operation: Some("compare_vault_management_bindings".to_string()),
+                resource_id: Some(vault_id.to_string()),
+            })?;
         let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) =
             current_policy.bindings.into_iter().partition(|binding| {
                 binding
@@ -461,7 +467,14 @@ impl GcpVaultController {
             &[],
             &[],
         );
-        if all_bindings == current_bindings {
+        let proposed_bindings = serde_json::to_value(&all_bindings)
+            .into_alien_error()
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to serialize desired vault IAM bindings".to_string(),
+                operation: Some("compare_vault_management_bindings".to_string()),
+                resource_id: Some(vault_id.to_string()),
+            })?;
+        if proposed_bindings == current_bindings {
             info!(vault_id = %vault_id, "GCP vault management permissions already reconciled");
             return Ok(());
         }
