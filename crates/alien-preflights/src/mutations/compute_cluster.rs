@@ -1132,8 +1132,8 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec, VolumeBackups,
-        StackSettings,
+        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec,
+        StackSettings, VolumeBackups,
     };
     use indexmap::IndexMap;
 

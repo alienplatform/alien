@@ -7,9 +7,9 @@ use alien_core::{
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
     DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    RemoteStackManagement, ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState,
-    TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    ResourceLifecycle, ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo,
+    Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_DEPLOYER_SECRETS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -606,27 +606,6 @@ pub async fn sync_secrets_to_vault(
         return Ok(false);
     }
 
-    // The target stack no longer needs the secrets vault (its last
-    // vault-backed worker was removed). The vault itself is setup-owned and
-    // stays, but setup revoked the management role's write access to it, so
-    // deleting the values written by earlier syncs would be denied and block
-    // the update. Forget them instead: they stay in the customer's account,
-    // unread by any workload.
-    if desired_secrets.is_empty()
-        && has_secrets_vault(stack_state)
-        && management_lost_secrets_vault_write(stack)
-    {
-        if !runtime_metadata.last_synced_secret_names.is_empty() {
-            warn!(
-                abandoned = ?runtime_metadata.last_synced_secret_names,
-                "Secrets vault left the stack; leaving its deployment-owned values in place"
-            );
-        }
-        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
-        runtime_metadata.last_synced_secret_names.clear();
-        return Ok(false);
-    }
-
     // A deployment without a secrets vault never stored the legacy command token. Avoid turning
     // its first empty reconcile into a vault dependency solely for that one-time cleanup.
     if !has_secrets_vault(stack_state)
@@ -700,15 +679,26 @@ pub async fn sync_secrets_to_vault(
     // exception: it is a reserved, control-plane-owned key that pre-v2 sync wrote without an
     // ownership inventory. The sync-schema hash forces one idempotent cleanup after upgrade.
     // Never list or infer any other ownership from the shared vault.
+    //
+    // A delete the cloud denies is let go rather than failing the update: setup
+    // revokes the management role's vault access once no workload reads the
+    // vault, and the customer may run it before this update. The value stays
+    // in the customer's account, read by nothing.
     for name in &removed_secret_names {
-        vault
-            .delete_secret(name)
-            .await
-            .context(ErrorData::SecretSyncFailed {
-                vault_name: "secrets".to_string(),
-                reason: format!("Failed to delete removed secret '{name}'"),
-            })?;
-        debug!("Deleted removed deployment-owned secret '{name}' from vault");
+        match vault.delete_secret(name).await {
+            Ok(()) => debug!("Deleted removed deployment-owned secret '{name}' from vault"),
+            Err(error) if is_access_denied(&error) => warn!(
+                secret = %name,
+                error = %error,
+                "Management role can no longer delete a removed secret; leaving it in place"
+            ),
+            Err(error) => {
+                return Err(error).context(ErrorData::SecretSyncFailed {
+                    vault_name: "secrets".to_string(),
+                    reason: format!("Failed to delete removed secret '{name}'"),
+                })
+            }
+        }
     }
 
     // Record ownership only after every mutation succeeds. A partial failure
@@ -945,29 +935,25 @@ pub async fn delete_deployment_vault_secrets(
     Ok(true)
 }
 
-/// Whether the stack's management role no longer holds write access to the
-/// secrets vault. The secrets-vault preflight grants it whenever a workload
-/// reads from the vault; without that grant, the sync's deletes are denied.
-/// Only meaningful where management permissions are compiled into a remote
-/// management role and not overridden by the stack author.
-fn management_lost_secrets_vault_write(stack: &Stack) -> bool {
-    use alien_core::permissions::ManagementPermissions;
-
-    let has_management_role = stack
-        .resources
-        .values()
-        .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE);
-    if !has_management_role {
-        return false;
+/// Whether an error, or any error it wraps, is the cloud refusing access.
+fn is_access_denied<T>(error: &AlienError<T>) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let denied = |code: &str, status: Option<u16>| {
+        code == "REMOTE_ACCESS_DENIED" || matches!(status, Some(401 | 403))
+    };
+    if denied(&error.code, error.http_status_code) {
+        return true;
     }
-    match &stack.permissions.management {
-        ManagementPermissions::Override(_) => false,
-        ManagementPermissions::Auto => true,
-        ManagementPermissions::Extend(profile) => !profile
-            .0
-            .get(SECRETS_VAULT_ID)
-            .is_some_and(|sets| sets.iter().any(|set| set.id() == "vault/data-write")),
+    let mut source = error.source.as_deref();
+    while let Some(error) = source {
+        if denied(&error.code, error.http_status_code) {
+            return true;
+        }
+        source = error.source.as_deref();
     }
+    false
 }
 
 fn has_secrets_vault(stack_state: &StackState) -> bool {
@@ -2108,90 +2094,28 @@ mod tests {
         assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
     }
 
-    /// Removing the last vault-backed worker stops the preflight from granting
-    /// the management role write access to the `secrets` vault, and setup
-    /// revokes it. The vault itself is setup-owned, so the update keeps it in
-    /// its target. The update must not try to delete the old values with a
-    /// role that can no longer write the vault.
-    #[tokio::test]
-    async fn vault_leaving_the_stack_forgets_owned_values_without_deleting() {
-        let temp = tempfile::TempDir::new().expect("temp dir");
-        let state_dir = temp.path().to_string_lossy().to_string();
-        let client_config = ClientConfig::Local {
-            state_directory: state_dir.clone(),
-        };
-        let mut vault_state = StackResourceState::new_pending(
-            Vault::RESOURCE_TYPE.to_string(),
-            Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
-            Some(ResourceLifecycle::Frozen),
-            Vec::new(),
-        );
-        vault_state.status = ResourceStatus::Running;
-        vault_state.remote_binding_params = Some(
-            serde_json::to_value(VaultBinding::local(SECRETS_VAULT_ID, &state_dir))
-                .expect("local vault binding"),
-        );
-        let mut stack_state = StackState::new(Platform::Local);
-        stack_state
-            .resources
-            .insert(SECRETS_VAULT_ID.to_string(), vault_state);
-        let vault = BindingsProvider::from_stack_state(&stack_state, client_config.clone())
-            .expect("bindings provider")
-            .load_vault(SECRETS_VAULT_ID)
-            .await
-            .expect("local vault");
-        vault
-            .set_secret(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET, "old-header")
-            .await
-            .expect("seed owned value");
+    /// The AWS SSM vault reports a denied delete as a cloud-platform error
+    /// wrapping the denial. Only that lets a removed secret go; any other
+    /// failure still fails the sync.
+    #[test]
+    fn a_denied_delete_is_recognised_through_the_error_chain() {
+        let mut denied = AlienError::new(GenericError {
+            message: "Request failed with HTTP 400: Bad Request".to_string(),
+        });
+        denied.code = "REMOTE_ACCESS_DENIED".to_string();
+        let mut wrapped = AlienError::new(GenericError {
+            message: "Failed to delete parameter".to_string(),
+        });
+        wrapped.code = "CLOUD_PLATFORM_ERROR".to_string();
+        wrapped.source = Some(Box::new(denied));
+        assert!(is_access_denied(&wrapped));
 
-        let config = make_config(make_snapshot(&[], &[]));
-        let mut metadata = RuntimeMetadata::default();
-        metadata.last_synced_env_vars_hash = Some("previous".to_string());
-        metadata.last_synced_secret_names = vec![RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()];
-
-        let mut stack = with_secrets_vault(Stack::new("no-workers".to_string()).build());
-        stack.resources.insert(
-            "management".to_string(),
-            ResourceEntry {
-                config: Resource::new(RemoteStackManagement::new("management".to_string()).build()),
-                lifecycle: ResourceLifecycle::Frozen,
-                dependencies: Vec::new(),
-                remote_access: false,
-                enabled_when: None,
-            },
-        );
-        assert!(management_lost_secrets_vault_write(&stack));
-        let mut granted = stack.clone();
-        granted.permissions.management = alien_core::ManagementPermissions::Extend(
-            alien_core::PermissionProfile::new().resource(SECRETS_VAULT_ID, ["vault/data-write"]),
-        );
-        assert!(
-            !management_lost_secrets_vault_write(&granted),
-            "a management role that can still write the vault deletes stale values"
-        );
-
-        assert!(!sync_secrets_to_vault(
-            &stack,
-            &stack_state,
-            &client_config,
-            &config,
-            &mut metadata,
-        )
-        .await
-        .expect("a vault leaving the stack must not block the update"));
-        assert!(metadata.last_synced_secret_names.is_empty());
-        assert_eq!(
-            metadata.last_synced_env_vars_hash.as_deref(),
-            Some(secrets_sync_hash(&BTreeMap::new()).as_str())
-        );
-        assert_eq!(
-            vault
-                .get_secret(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET)
-                .await
-                .expect("the value is left in place, not deleted"),
-            "old-header"
-        );
+        let mut throttled = AlienError::new(GenericError {
+            message: "Rate exceeded".to_string(),
+        });
+        throttled.code = "CLOUD_PLATFORM_ERROR".to_string();
+        throttled.http_status_code = Some(429);
+        assert!(!is_access_denied(&throttled));
     }
 
     #[tokio::test]

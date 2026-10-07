@@ -1,3 +1,4 @@
+use crate::compatibility::narrowing::service_account_narrowed;
 use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::is_same_architecture_aws_machine;
@@ -225,6 +226,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     )
+                    && !service_account_narrowed(&old_entry.config, &new_entry.config)
                 {
                     let details = machine_changes_needing_setup(
                         self.platform,
@@ -665,6 +667,47 @@ mod tests {
         .unwrap();
         assert!(!result.success);
         assert!(!result.errors.is_empty());
+    }
+
+    /// A frozen service account that only lost permission sets keeps its
+    /// installed role until setup; one that gained any still needs setup.
+    #[tokio::test]
+    async fn a_service_account_may_lose_but_not_gain_permissions() {
+        let account = |sets: &[&str]| {
+            let profile = alien_core::PermissionProfile::new().global(sets.iter().copied());
+            alien_core::ServiceAccount::from_permission_profile(
+                "worker-sa".to_string(),
+                &profile,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .expect("service account")
+        };
+        let stack = |sets: &[&str]| {
+            Stack::new("s".to_string())
+                .add(account(sets), ResourceLifecycle::Frozen)
+                .build()
+        };
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+
+        let narrowed = check
+            .check(
+                &stack(&["storage/data-read", "storage/data-write"]),
+                &stack(&["storage/data-read"]),
+            )
+            .await
+            .expect("check should run");
+        assert!(narrowed.success, "{:?}", narrowed.errors);
+
+        let widened = check
+            .check(
+                &stack(&["storage/data-read"]),
+                &stack(&["storage/data-read", "storage/data-write"]),
+            )
+            .await
+            .expect("check should run");
+        assert!(!widened.success);
     }
 
     #[tokio::test]

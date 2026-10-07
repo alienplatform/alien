@@ -129,6 +129,7 @@ pub struct StackExecutor {
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
     runtime_cleanup_filter: bool,
+    teardown: bool,
     running_resource_policy: RunningResourcePolicy,
     step_out_of_scope_resources: bool,
     resume_unchanged_failed_resources: bool,
@@ -298,29 +299,35 @@ mod controller_platform_tests {
 /// Such an error ends the whole resource as `Deleted` and the delete steps after it never
 /// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
 /// access-denied answer it expects as success and continue, instead of returning it.
-fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code)
+/// Whether a failed delete may count as done. A resource that is already gone
+/// always may. One the executor can no longer reach only may during teardown,
+/// where the customer may have removed access before the deployment: during an
+/// update, access denied means the resource is still there and would leak.
+fn is_best_effort_delete_error(err: &AlienError<ErrorData>, teardown: bool) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code, teardown)
         || err
             .source
             .as_deref()
-            .is_some_and(is_best_effort_delete_source)
+            .is_some_and(|source| is_best_effort_delete_source(source, teardown))
 }
 
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
     err.code == DEPENDENCY_NOT_READY_CODE
 }
 
-fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code)
+fn is_best_effort_delete_source(err: &AlienError<GenericError>, teardown: bool) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code, teardown)
         || err
             .source
             .as_deref()
-            .is_some_and(is_best_effort_delete_source)
+            .is_some_and(|source| is_best_effort_delete_source(source, teardown))
 }
 
-fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>) -> bool {
-    matches!(http_status_code, Some(401 | 403 | 404))
-        || matches!(code, "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_DENIED")
+fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>, teardown: bool) -> bool {
+    let missing = matches!(http_status_code, Some(404)) || code == "REMOTE_RESOURCE_NOT_FOUND";
+    let inaccessible =
+        matches!(http_status_code, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED";
+    missing || (teardown && inaccessible)
 }
 
 fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
@@ -365,6 +372,11 @@ pub struct StackExecutorConfig<'a> {
     /// Frozen resources that explicitly have runtime cleanup before teardown.
     #[builder(default = false)]
     runtime_cleanup_filter: bool,
+
+    /// Tearing the deployment down rather than updating it: a resource the
+    /// executor can no longer reach counts as deleted.
+    #[builder(default = false)]
+    teardown: bool,
 
     /// Whether resources that are already Running should execute their Ready handler.
     #[builder(default = true)]
@@ -474,6 +486,7 @@ impl StackExecutor {
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let runtime_cleanup_filter = config.runtime_cleanup_filter;
+        let teardown = config.teardown;
         let running_resource_policy =
             config
                 .running_resource_policy
@@ -616,6 +629,7 @@ impl StackExecutor {
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
             runtime_cleanup_filter,
+            teardown,
             running_resource_policy,
             step_out_of_scope_resources,
             resume_unchanged_failed_resources,
@@ -642,6 +656,7 @@ impl StackExecutor {
             .deployment_config(deployment_config)
             .step_out_of_scope_resources(false)
             .maybe_lifecycle_filter(lifecycle_filter)
+            .teardown(true)
             .build()
     }
 
@@ -661,6 +676,7 @@ impl StackExecutor {
             .service_provider(service_provider)
             .step_out_of_scope_resources(false)
             .maybe_lifecycle_filter(lifecycle_filter)
+            .teardown(true)
             .build()
     }
 
@@ -680,6 +696,7 @@ impl StackExecutor {
             .service_provider(service_provider)
             .step_out_of_scope_resources(false)
             .runtime_cleanup_filter(true)
+            .teardown(true)
             .build()
     }
 
@@ -2123,7 +2140,7 @@ impl StackExecutor {
                     warn!("Step failed for '{}': {}", resource_id, err);
 
                     if current_resource_state.status == ResourceStatus::Deleting
-                        && is_best_effort_delete_error(&err)
+                        && is_best_effort_delete_error(&err, self.teardown)
                     {
                         info!(
                             resource_id = %resource_id,
