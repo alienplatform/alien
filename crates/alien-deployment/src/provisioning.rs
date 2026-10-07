@@ -498,7 +498,9 @@ mod tests {
         let mut previous = stack(&["consumer", "old-dependency"]);
         previous.resources.get_mut("consumer").unwrap().dependencies =
             vec![ResourceRef::new("storage".into(), "old-dependency")];
-        let target = stack(&["consumer"]);
+        let mut target = stack(&["consumer", "new-dependency"]);
+        target.resources.get_mut("consumer").unwrap().dependencies =
+            vec![ResourceRef::new("storage".into(), "new-dependency")];
         let mut state = provisioning(installed(&previous).await, target);
         state = step(state).await;
         assert_eq!(state.status, DeploymentStatus::Provisioning);
@@ -514,6 +516,7 @@ mod tests {
             let resources = &state.stack_state.as_ref().unwrap().resources;
             if resources["consumer"].status == ResourceStatus::Running
                 && resources["old-dependency"].status == ResourceStatus::Running
+                && resources["new-dependency"].status == ResourceStatus::Running
             {
                 saw_running_with_pending_deletion = true;
                 assert_eq!(state.status, DeploymentStatus::Provisioning);
@@ -527,7 +530,11 @@ mod tests {
         assert_eq!(state.status, DeploymentStatus::Running);
         let resources = &state.stack_state.as_ref().unwrap().resources;
         assert_eq!(resources["old-dependency"].status, ResourceStatus::Deleted);
-        assert!(resources["consumer"].dependencies.is_empty());
+        assert_eq!(
+            resources["consumer"].dependencies,
+            vec![ResourceRef::new("storage".into(), "new-dependency")]
+        );
+        assert_eq!(resources["new-dependency"].status, ResourceStatus::Running);
         assert!(state.current_release.is_some());
         assert!(state.target_release.is_none());
     }
