@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use utoipa::{
     PartialSchema, ToSchema,
     openapi::{
-        Ref, RefOr,
+        Ref, RefBuilder, RefOr,
         schema::{AnyOfBuilder, ObjectBuilder, Schema, Type},
     },
 };
@@ -114,8 +114,10 @@ impl<T: ToSchema> utoipa::__dev::ComposeSchema for BindingValue<T> {
                     .property("secretRef", Ref::from_schema_name("SecretReference")),
             )
             .item(
-                Ref::from_schema_name("Value")
-                    .description(Some("A template expression (used by IaC template generators)")),
+                RefBuilder::new()
+                    .ref_location_from_schema_name("Value")
+                    .description(Some("A template expression (used by IaC template generators)"))
+                    .build(),
             )
             .description(Some("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"))
             .into()

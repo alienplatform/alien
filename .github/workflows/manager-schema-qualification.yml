@@ -54,16 +54,10 @@ jobs:
           version: "35.x"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Install operation compiler generation tools
-        run: |
-          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare install rust
-          VERSION=$(node -e 'const fs = require("node:fs"); console.log(fs.readFileSync("Cargo.lock", "utf8").match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1])')
-          MISE_DATA_DIR="$RUNNER_TEMP/mise-rust" mise -E release-prepare exec -- cargo install --locked --version "$VERSION" wasm-bindgen-cli
-
       - name: Generate Core packages
         env:
           NODE_OPTIONS: "--max-old-space-size=12288"
-        run: pnpm generate
+        run: pnpm --filter @alienplatform/core generate
       - name: Generate manager Rust SDK inputs
         run: pnpm run generate:manager-rust-sdk
       - name: Validate published binding schemas
@@ -105,7 +99,7 @@ jobs:
               core_files[name] = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else None
           receipt = {
               "source": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-              "commands": ["pnpm generate", "pnpm run generate:manager-rust-sdk", "node --test client-sdks/manager/scripts/binding-schema.test.mjs"],
+              "commands": ["pnpm --filter @alienplatform/core generate", "pnpm run generate:manager-rust-sdk", "node --test client-sdks/manager/scripts/binding-schema.test.mjs"],
               "coreGeneratedFiles": core_files,
               "rustc": subprocess.check_output(["rustc", "-Vv"], text=True).strip(),
               "node": subprocess.check_output(["node", "--version"], text=True).strip(),
