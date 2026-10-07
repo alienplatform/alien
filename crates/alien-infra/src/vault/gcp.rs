@@ -292,6 +292,22 @@ fn emit_gcp_secret_manager_vault_heartbeat(
     });
 }
 
+// IAM bindings and members are sets; provider ordering does not change access.
+fn normalized_bindings(
+    bindings: &[alien_gcp_clients::iam::Binding],
+) -> std::result::Result<Vec<String>, AlienError> {
+    let mut normalized = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let mut binding = binding.clone();
+        binding.members.sort();
+        binding.members.dedup();
+        normalized.push(serde_json::to_string(&binding).into_alien_error()?);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
 impl GcpVaultController {
     async fn apply_management_permissions(
         &self,
@@ -329,10 +345,8 @@ impl GcpVaultController {
         let gcp_config = ctx.get_gcp_config()?;
         if management_refs.is_empty() && gcp_config.project_number.is_none() {
             let revision = super::permissions_revision(ctx)?;
-            if self
-                .permissions_revision
-                .as_deref()
-                .is_none_or(|previous| previous == revision)
+            if self.permissions_revision.as_deref() == Some(revision.as_str())
+                || self.state == GcpVaultState::CreateStart
             {
                 // A new or unchanged empty profile has no namespace IAM work.
                 return Ok(());
@@ -437,13 +451,13 @@ impl GcpVaultController {
                 })
             })?,
         );
-        let current_bindings = serde_json::to_value(&current_policy.bindings)
-            .into_alien_error()
-            .context(ErrorData::InfrastructureError {
+        let current_bindings = normalized_bindings(&current_policy.bindings).context(
+            ErrorData::InfrastructureError {
                 message: "Failed to serialize current vault IAM bindings".to_string(),
                 operation: Some("compare_vault_management_bindings".to_string()),
                 resource_id: Some(vault_id.to_string()),
-            })?;
+            },
+        )?;
         let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) =
             current_policy.bindings.into_iter().partition(|binding| {
                 binding
@@ -467,9 +481,8 @@ impl GcpVaultController {
             &[],
             &[],
         );
-        let proposed_bindings = serde_json::to_value(&all_bindings)
-            .into_alien_error()
-            .context(ErrorData::InfrastructureError {
+        let proposed_bindings =
+            normalized_bindings(&all_bindings).context(ErrorData::InfrastructureError {
                 message: "Failed to serialize desired vault IAM bindings".to_string(),
                 operation: Some("compare_vault_management_bindings".to_string()),
                 resource_id: Some(vault_id.to_string()),
@@ -520,6 +533,7 @@ mod permission_update_tests {
         ResourceRef, Stack, StackResourceState, StackSettings, StackState,
     };
     use alien_gcp_clients::{resource_manager::MockResourceManagerApi, GcpClientConfigExt as _};
+    use sha2::Digest;
     use std::sync::{Arc, Mutex};
 
     // Simulate a committed project policy whose response is lost.
@@ -585,7 +599,15 @@ mod permission_update_tests {
                         .expression
                         .contains("projects/123456789012/secrets/test-secrets-"));
                 }
-                *remote_policy.lock().unwrap() = policy.clone();
+                let mut committed = policy.clone();
+                if lose_first_response {
+                    // A concurrent writer reorders the policy and shares a binding.
+                    committed.bindings[1].members.push(
+                        "serviceAccount:other@mock-project.iam.gserviceaccount.com".to_string(),
+                    );
+                    committed.bindings.reverse();
+                }
+                *remote_policy.lock().unwrap() = committed;
                 saved
                     .lock()
                     .unwrap()
@@ -729,7 +751,11 @@ mod permission_update_tests {
 
     #[tokio::test]
     async fn empty_management_grants_do_not_require_a_project_number() {
-        for operation in [GcpVaultState::CreateStart, GcpVaultState::UpdateStart] {
+        for (operation, known_empty) in [
+            (GcpVaultState::CreateStart, false),
+            (GcpVaultState::UpdateStart, true),
+            (GcpVaultState::UpdateStart, false),
+        ] {
             let vault = Vault::new("secrets".to_string()).build();
             let manager = RemoteStackManagement::new("manager".to_string()).build();
             let stack = Stack::new("test".to_string())
@@ -781,7 +807,9 @@ mod permission_update_tests {
             };
             vault_state
                 .set_internal_controller(Some(Box::new(GcpVaultController {
-                    state: operation,
+                    state: operation.clone(),
+                    permissions_revision: known_empty
+                        .then(|| format!("{:x}", sha2::Sha256::digest(b"[]"))),
                     project_id: Some("mock-project".to_string()),
                     location: Some("us-central1".to_string()),
                     vault_prefix: Some("test-secrets".to_string()),
@@ -803,6 +831,21 @@ mod permission_update_tests {
                 .unwrap();
             state.resources.insert("manager".to_string(), manager_state);
             let state = executor.step(state).await.unwrap().next_state;
+            if operation == GcpVaultState::UpdateStart && !known_empty {
+                // Old checkpoints may have grants even without a saved revision.
+                assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+                assert!(state.resources["secrets"]
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .to_string()
+                    .contains("required to remove previous vault grants"));
+                let controller = state.resources["secrets"]
+                    .get_internal_controller_typed::<GcpVaultController>()
+                    .unwrap();
+                assert!(controller.permissions_revision.is_none());
+                continue;
+            }
             assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
             assert!(!executor
                 .plan(&state)
