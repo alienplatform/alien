@@ -303,7 +303,8 @@ jobs:
             # Cloud client and bindings crates: their `tests/` targets only — the unit
             # tests under `src/` still run here. cloud-tests.yml runs these targets
             # with real cloud credentials.
-            'and not (package(alien-aws-clients) and kind(test))'
+            # This target uses only signed HTTP requests to a local mock server.
+            'and not (package(alien-aws-clients) and kind(test) and not binary_id(alien-aws-clients::aws_ec2_launch_template_tests))'
             'and not (package(alien-gcp-clients) and kind(test))'
             'and not (package(alien-azure-clients) and kind(test))'
             'and not (package(alien-bindings) and kind(test))'
@@ -536,6 +537,11 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm build && pnpm -C packages/package-layout check
+
+      - name: Manager SDK compatibility tests
+        run: |
+          pnpm -C client-sdks/manager/typescript build
+          node --test client-sdks/manager/scripts/typescript-sdk.test.mjs client-sdks/manager/scripts/binding-schema.test.mjs
 
       - name: Rust and TypeScript command integration
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'

@@ -37,7 +37,8 @@ typescript:
   version: 3.3.30
   acceptHeaderEnum: true
   additionalDependencies:
-    dependencies: {}
+    dependencies:
+      zod: ^4.6.5
     devDependencies:
       globals: ^17.0.0
       typescript: ~5.9.0

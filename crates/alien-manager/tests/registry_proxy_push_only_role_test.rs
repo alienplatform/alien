@@ -238,6 +238,7 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
         releases_url: None,
         targets: vec![],
         supported_aws_regions: Vec::new(),
+        supports_aws_setup_node_identity: false,
         disable_deployment_loop: true,
         disable_heartbeat_loop: true,
         enable_local_log_ingest: false,

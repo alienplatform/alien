@@ -1976,9 +1976,137 @@ impl Ec2Api for Ec2Client {
             );
         }
 
-        // Add launch template data
-        let data = &request.launch_template_data;
+        Self::add_launch_template_data(&mut form_data, &request.launch_template_data);
 
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        self.send_form(
+            form_data,
+            "CreateLaunchTemplate",
+            &request.launch_template_name,
+        )
+        .await
+    }
+
+    async fn create_launch_template_version(
+        &self,
+        request: CreateLaunchTemplateVersionRequest,
+    ) -> Result<CreateLaunchTemplateVersionResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "CreateLaunchTemplateVersion".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        let resource_name;
+        if let Some(ref id) = request.launch_template_id {
+            form_data.insert("LaunchTemplateId".to_string(), id.clone());
+            resource_name = id.clone();
+        } else if let Some(ref name) = request.launch_template_name {
+            form_data.insert("LaunchTemplateName".to_string(), name.clone());
+            resource_name = name.clone();
+        } else {
+            return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
+                message: "Either launch_template_id or launch_template_name must be provided"
+                    .to_string(),
+                field_name: Some("launch_template_id".to_string()),
+            }));
+        }
+
+        if let Some(ref source_version) = request.source_version {
+            form_data.insert("SourceVersion".to_string(), source_version.clone());
+        }
+        if let Some(ref description) = request.version_description {
+            form_data.insert("VersionDescription".to_string(), description.clone());
+        }
+
+        Self::add_launch_template_data(&mut form_data, &request.launch_template_data);
+
+        self.send_form(form_data, "CreateLaunchTemplateVersion", &resource_name)
+            .await
+    }
+
+    async fn delete_launch_template(
+        &self,
+        request: DeleteLaunchTemplateRequest,
+    ) -> Result<DeleteLaunchTemplateResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteLaunchTemplate".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        let resource: String;
+        if let Some(launch_template_id) = &request.launch_template_id {
+            form_data.insert("LaunchTemplateId".to_string(), launch_template_id.clone());
+            resource = launch_template_id.clone();
+        } else if let Some(launch_template_name) = &request.launch_template_name {
+            form_data.insert(
+                "LaunchTemplateName".to_string(),
+                launch_template_name.clone(),
+            );
+            resource = launch_template_name.clone();
+        } else {
+            resource = "unknown".to_string();
+        }
+
+        self.send_form(form_data, "DeleteLaunchTemplate", &resource)
+            .await
+    }
+
+    async fn describe_launch_templates(
+        &self,
+        request: DescribeLaunchTemplatesRequest,
+    ) -> Result<DescribeLaunchTemplatesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DescribeLaunchTemplates".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(launch_template_ids) = &request.launch_template_ids {
+            for (i, lt_id) in launch_template_ids.iter().enumerate() {
+                form_data.insert(format!("LaunchTemplateId.{}", i + 1), lt_id.clone());
+            }
+        }
+
+        if let Some(launch_template_names) = &request.launch_template_names {
+            for (i, lt_name) in launch_template_names.iter().enumerate() {
+                form_data.insert(format!("LaunchTemplateName.{}", i + 1), lt_name.clone());
+            }
+        }
+
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(form_data, "DescribeLaunchTemplates", "LaunchTemplate")
+            .await
+    }
+
+    async fn get_console_output(&self, instance_id: String) -> Result<GetConsoleOutputResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "GetConsoleOutput".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("InstanceId".to_string(), instance_id.clone());
+
+        self.send_form(form_data, "GetConsoleOutput", &instance_id)
+            .await
+    }
+}
+
+impl Ec2Client {
+    fn add_launch_template_data(
+        form_data: &mut HashMap<String, String>,
+        data: &RequestLaunchTemplateData,
+    ) {
         if let Some(image_id) = &data.image_id {
             form_data.insert("LaunchTemplateData.ImageId".to_string(), image_id.clone());
         }
@@ -2154,188 +2282,17 @@ impl Ec2Api for Ec2Client {
             }
         }
 
-        Self::add_cpu_options(&mut form_data, data.cpu_options.as_ref());
+        Self::add_cpu_options(form_data, data.cpu_options.as_ref());
 
         if let Some(tag_specs) = &data.tag_specifications {
             Self::add_tag_specifications_with_prefix(
-                &mut form_data,
+                form_data,
                 "LaunchTemplateData.TagSpecification",
                 tag_specs,
             );
         }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(
-            form_data,
-            "CreateLaunchTemplate",
-            &request.launch_template_name,
-        )
-        .await
     }
 
-    async fn create_launch_template_version(
-        &self,
-        request: CreateLaunchTemplateVersionRequest,
-    ) -> Result<CreateLaunchTemplateVersionResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "CreateLaunchTemplateVersion".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        let resource_name;
-        if let Some(ref id) = request.launch_template_id {
-            form_data.insert("LaunchTemplateId".to_string(), id.clone());
-            resource_name = id.clone();
-        } else if let Some(ref name) = request.launch_template_name {
-            form_data.insert("LaunchTemplateName".to_string(), name.clone());
-            resource_name = name.clone();
-        } else {
-            return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
-                message: "Either launch_template_id or launch_template_name must be provided"
-                    .to_string(),
-                field_name: Some("launch_template_id".to_string()),
-            }));
-        }
-
-        if let Some(ref source_version) = request.source_version {
-            form_data.insert("SourceVersion".to_string(), source_version.clone());
-        }
-        if let Some(ref description) = request.version_description {
-            form_data.insert("VersionDescription".to_string(), description.clone());
-        }
-
-        let data = &request.launch_template_data;
-        if let Some(ref user_data) = data.user_data {
-            form_data.insert("LaunchTemplateData.UserData".to_string(), user_data.clone());
-        }
-        if let Some(ref image_id) = data.image_id {
-            form_data.insert("LaunchTemplateData.ImageId".to_string(), image_id.clone());
-        }
-        if let Some(ref instance_type) = data.instance_type {
-            form_data.insert(
-                "LaunchTemplateData.InstanceType".to_string(),
-                instance_type.clone(),
-            );
-        }
-        if let Some(metadata_options) = &data.metadata_options {
-            if let Some(http_tokens) = &metadata_options.http_tokens {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpTokens".to_string(),
-                    http_tokens.clone(),
-                );
-            }
-            if let Some(http_endpoint) = &metadata_options.http_endpoint {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpEndpoint".to_string(),
-                    http_endpoint.clone(),
-                );
-            }
-            if let Some(http_put_response_hop_limit) = metadata_options.http_put_response_hop_limit
-            {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpPutResponseHopLimit".to_string(),
-                    http_put_response_hop_limit.to_string(),
-                );
-            }
-            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
-                    instance_metadata_tags.clone(),
-                );
-            }
-        }
-        Self::add_cpu_options(&mut form_data, data.cpu_options.as_ref());
-        if let Some(tag_specs) = &data.tag_specifications {
-            Self::add_tag_specifications_with_prefix(
-                &mut form_data,
-                "LaunchTemplateData.TagSpecification",
-                tag_specs,
-            );
-        }
-
-        self.send_form(form_data, "CreateLaunchTemplateVersion", &resource_name)
-            .await
-    }
-
-    async fn delete_launch_template(
-        &self,
-        request: DeleteLaunchTemplateRequest,
-    ) -> Result<DeleteLaunchTemplateResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteLaunchTemplate".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        let resource: String;
-        if let Some(launch_template_id) = &request.launch_template_id {
-            form_data.insert("LaunchTemplateId".to_string(), launch_template_id.clone());
-            resource = launch_template_id.clone();
-        } else if let Some(launch_template_name) = &request.launch_template_name {
-            form_data.insert(
-                "LaunchTemplateName".to_string(),
-                launch_template_name.clone(),
-            );
-            resource = launch_template_name.clone();
-        } else {
-            resource = "unknown".to_string();
-        }
-
-        self.send_form(form_data, "DeleteLaunchTemplate", &resource)
-            .await
-    }
-
-    async fn describe_launch_templates(
-        &self,
-        request: DescribeLaunchTemplatesRequest,
-    ) -> Result<DescribeLaunchTemplatesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeLaunchTemplates".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(launch_template_ids) = &request.launch_template_ids {
-            for (i, lt_id) in launch_template_ids.iter().enumerate() {
-                form_data.insert(format!("LaunchTemplateId.{}", i + 1), lt_id.clone());
-            }
-        }
-
-        if let Some(launch_template_names) = &request.launch_template_names {
-            for (i, lt_name) in launch_template_names.iter().enumerate() {
-                form_data.insert(format!("LaunchTemplateName.{}", i + 1), lt_name.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeLaunchTemplates", "LaunchTemplate")
-            .await
-    }
-
-    async fn get_console_output(&self, instance_id: String) -> Result<GetConsoleOutputResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "GetConsoleOutput".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("InstanceId".to_string(), instance_id.clone());
-
-        self.send_form(form_data, "GetConsoleOutput", &instance_id)
-            .await
-    }
-}
-
-impl Ec2Client {
     /// Append `LaunchTemplateData.CpuOptions.*` form fields.
     ///
     /// Currently only emits `NestedVirtualization` when set. AWS validates
@@ -3623,6 +3580,7 @@ pub struct Instance {
     pub instance_id: Option<String>,
     pub image_id: Option<String>,
     pub instance_type: Option<String>,
+    pub iam_instance_profile: Option<IamInstanceProfile>,
     pub key_name: Option<String>,
     pub launch_time: Option<String>,
     pub placement: Option<Placement>,
@@ -3639,6 +3597,14 @@ pub struct Instance {
     pub root_device_name: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
+}
+
+/// IAM instance profile attached to an instance.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IamInstanceProfile {
+    pub arn: Option<String>,
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4034,7 +4000,7 @@ pub struct RequestLaunchTemplateData {
 }
 
 /// IAM instance profile specification for launch template.
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct LaunchTemplateIamInstanceProfileSpecification {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arn: Option<String>,
@@ -4138,10 +4104,19 @@ pub struct CreateLaunchTemplateVersionResponse {
 /// A version of a launch template.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LaunchTemplateVersion {
+    #[serde(rename = "launchTemplateData")]
+    pub launch_template_data: Option<ResponseLaunchTemplateData>,
     #[serde(rename = "launchTemplateId")]
     pub launch_template_id: Option<String>,
     #[serde(rename = "versionNumber")]
     pub version_number: Option<i64>,
+}
+
+/// Launch template data returned by EC2.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseLaunchTemplateData {
+    pub iam_instance_profile: Option<LaunchTemplateIamInstanceProfileSpecification>,
 }
 
 /// Request to delete a launch template.
@@ -4397,7 +4372,10 @@ mod volume_operation_tests {
             .max_results(1000)
             .build();
         let describe_form = Ec2Client::describe_snapshots_form_data(&describe);
-        assert_eq!(describe_form.get("Owner.1").map(String::as_str), Some("self"));
+        assert_eq!(
+            describe_form.get("Owner.1").map(String::as_str),
+            Some("self")
+        );
         assert_eq!(
             describe_form.get("Filter.1.Name").map(String::as_str),
             Some("tag:Container")
@@ -4425,7 +4403,10 @@ mod volume_operation_tests {
                 .build(),
         );
         assert_eq!(create.get("Action").map(String::as_str), Some("CreateTags"));
-        assert_eq!(create.get("ResourceId.1").map(String::as_str), Some("vol-1"));
+        assert_eq!(
+            create.get("ResourceId.1").map(String::as_str),
+            Some("vol-1")
+        );
         assert_eq!(create.get("Tag.1.Key").map(String::as_str), Some("Ordinal"));
         assert_eq!(create.get("Tag.1.Value").map(String::as_str), Some("2"));
 
@@ -4470,7 +4451,10 @@ mod volume_operation_tests {
         )
         .expect("DescribeSnapshots response should deserialize");
         let snapshot = &response.snapshot_set.expect("snapshot set").items[0];
-        assert_eq!(snapshot.snapshot_id.as_deref(), Some("snap-0abcdef1234567890"));
+        assert_eq!(
+            snapshot.snapshot_id.as_deref(),
+            Some("snap-0abcdef1234567890")
+        );
         assert_eq!(snapshot.state.as_deref(), Some("completed"));
         assert_eq!(
             snapshot.start_time.as_deref(),
@@ -4479,7 +4463,10 @@ mod volume_operation_tests {
         assert_eq!(snapshot.volume_size, Some(8));
         assert_eq!(snapshot.owner_id.as_deref(), Some("123456789012"));
         let tags = &snapshot.tag_set.as_ref().expect("tags").items;
-        assert_eq!((tags[0].key.as_str(), tags[0].value.as_str()), ("Ordinal", "1"));
+        assert_eq!(
+            (tags[0].key.as_str(), tags[0].value.as_str()),
+            ("Ordinal", "1")
+        );
 
         let created: Snapshot = quick_xml::de::from_str(
             r#"<CreateSnapshotResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
@@ -4495,7 +4482,10 @@ mod volume_operation_tests {
             </CreateSnapshotResponse>"#,
         )
         .expect("CreateSnapshot response should deserialize");
-        assert_eq!(created.snapshot_id.as_deref(), Some("snap-1234567890abcdef0"));
+        assert_eq!(
+            created.snapshot_id.as_deref(),
+            Some("snap-1234567890abcdef0")
+        );
         assert_eq!(created.state.as_deref(), Some("pending"));
     }
 
@@ -4946,7 +4936,10 @@ mod tests {
         let attachment = &volume.attachment_set.as_ref().expect("attachments").items[0];
         assert_eq!(volume.state.as_deref(), Some("in-use"));
         assert_eq!(attachment.state.as_deref(), Some("attached"));
-        assert_eq!(attachment.instance_id.as_deref(), Some("i-1234567890abcdef0"));
+        assert_eq!(
+            attachment.instance_id.as_deref(),
+            Some("i-1234567890abcdef0")
+        );
     }
 
     #[test]

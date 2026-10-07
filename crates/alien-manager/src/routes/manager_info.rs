@@ -5,15 +5,15 @@
 //! from how they connected.
 
 use axum::{
+    Json, Router,
     extract::State,
     http::HeaderMap,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::Serialize;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -44,6 +44,10 @@ pub struct ManagerCapabilities {
     pub tunnels: bool,
     /// Helm charts at `oci://<registryHost>/charts/<stack>`.
     pub charts: bool,
+    /// AWS setup can hand off retained node identities to runtime reconciliation.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = false))]
+    pub aws_setup_node_identity: bool,
 }
 
 pub fn router() -> Router<AppState> {
@@ -73,6 +77,7 @@ async fn manager_info(State(state): State<AppState>, headers: HeaderMap) -> Resp
         capabilities: ManagerCapabilities {
             tunnels: state.tunnels.is_some(),
             charts: state.charts.is_some(),
+            aws_setup_node_identity: state.config.supports_aws_setup_node_identity,
         },
         operator_image: state
             .charts
