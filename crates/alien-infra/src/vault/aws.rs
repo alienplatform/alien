@@ -92,12 +92,25 @@ impl AwsVaultController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Vault>()?;
 
-        info!(
-            vault_id = %config.id,
-            "AWS SSM Parameter Store vault update complete (no infrastructure to update)"
-        );
+        let vault_prefix = self.vault_prefix.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Vault prefix missing during permission update".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
-        // No infrastructure to update - Secrets Manager exists implicitly
+        // The namespace needs no update, but a new consumer or changed grant
+        // still needs its setup-owned policy. The helper enforces setup authority;
+        // IAM policy upserts make the whole permission phase safe to resume.
+        ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+            ctx,
+            &config.id,
+            vault_prefix,
+            "vault",
+        )
+        .await?;
+
+        info!(vault_id = %config.id, "AWS vault permissions reconciled");
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -337,4 +350,234 @@ fn aws_epoch_seconds_to_utc(seconds: f64) -> Option<DateTime<Utc>> {
     let secs = seconds.trunc() as i64;
     let nanos = (seconds.fract() * 1_000_000_000.0).round() as u32;
     DateTime::<Utc>::from_timestamp(secs, nanos.min(999_999_999))
+}
+
+#[cfg(test)]
+mod permission_update_tests {
+    use super::*;
+    use crate::core::{
+        MockPlatformServiceProvider, ResourceController, StackExecutor, StackResourceStateExt,
+    };
+    use crate::service_account::AwsServiceAccountController;
+    use alien_aws_clients::{AwsClientConfigExt as _, iam::MockIamApi};
+    use alien_client_core::ErrorData as CloudError;
+    use alien_core::permissions::PermissionProfile;
+    use alien_core::{
+        AwsClientConfig, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
+        ExternalBindings, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef,
+        ServiceAccount, Stack, StackResourceState, StackSettings, StackState,
+    };
+    use std::sync::{Arc, Mutex};
+
+    // Simulate IAM upsert semantics, including a write whose response is lost.
+    // Only the consumer's role is touched; unexpected provider calls fail the mock.
+    fn fixture(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        writes: usize,
+        lose_first_response: bool,
+    ) -> (StackExecutor, StackState, Arc<Mutex<Vec<String>>>) {
+        let policies = Arc::new(Mutex::new(Vec::new()));
+        let saved = policies.clone();
+        let mut iam = MockIamApi::new();
+        iam.expect_put_role_policy()
+            .times(writes)
+            .returning(move |role, name, document| {
+                assert_eq!(role, "test-consumer-sa");
+                assert_eq!(name, "alien-secrets-vault-data-read");
+                let policy: serde_json::Value = serde_json::from_str(document).unwrap();
+                assert!(
+                    policy["Statement"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|statement| {
+                            statement["Action"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|action| action == "ssm:GetParameter")
+                                && statement["Resource"].as_array().unwrap().iter().any(
+                                    |resource| {
+                                        resource
+                                            .as_str()
+                                            .unwrap()
+                                            .ends_with(":parameter/test-secrets-*")
+                                    },
+                                )
+                        })
+                );
+                let mut saved = saved.lock().unwrap();
+                saved.push(document.to_string());
+                if lose_first_response && saved.len() == 1 {
+                    return Err(AlienError::new(CloudError::RemoteAccessDenied {
+                        resource_type: "role-policy".to_string(),
+                        resource_name: name.to_string(),
+                    }));
+                }
+                Ok(())
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .times(writes)
+            .returning(move |_| Ok(iam.clone()));
+        let vault = Vault::new("secrets".to_string()).build();
+        let account = ServiceAccount::new("consumer-sa".to_string()).build();
+        let stack = Stack::new("test".to_string())
+            .add_with_dependencies(
+                vault.clone(),
+                lifecycle,
+                vec![ResourceRef::new(
+                    ServiceAccount::RESOURCE_TYPE,
+                    "consumer-sa",
+                )],
+            )
+            .add(account.clone(), ResourceLifecycle::Frozen)
+            .permission(
+                "consumer",
+                PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .build();
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+                .deployment_config(&config)
+                .service_provider(Arc::new(provider))
+                .initial_setup_authority(authority)
+                .step_running_resources(false)
+                .build()
+                .unwrap();
+        let mut state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        let controller = AwsVaultController {
+            state: AwsVaultState::Ready,
+            account_id: Some("123456789012".to_string()),
+            region: Some("us-east-1".to_string()),
+            vault_prefix: Some("test-secrets".to_string()),
+            ..Default::default()
+        };
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(vault),
+            Some(lifecycle),
+            vec![],
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.outputs = controller.get_outputs();
+        vault_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("secrets".to_string(), vault_state);
+        // The newly created role is ready, but the existing vault has not yet
+        // recorded its new dependency or installed its read policy.
+        let controller = AwsServiceAccountController::mock_ready("test-consumer-sa");
+        let mut account_state = StackResourceState::new_pending(
+            ServiceAccount::RESOURCE_TYPE.to_string(),
+            Resource::new(account),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        account_state.status = ResourceStatus::Running;
+        account_state.outputs = controller.get_outputs();
+        account_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state
+            .resources
+            .insert("consumer-sa".to_string(), account_state);
+        (executor, state, policies)
+    }
+
+    #[tokio::test]
+    async fn setup_update_grants_existing_vault_access_to_consumer() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        assert!(
+            executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(policies.lock().unwrap().len(), 1);
+        // Repeating setup does not schedule another update after convergence.
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn imported_vault_update_refuses_permission_writes() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::ImportedHandoff,
+            0,
+            false,
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(
+            state.resources["secrets"]
+                .error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("rerun setup")
+        );
+        assert!(policies.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn live_vault_update_leaves_setup_owned_iam_untouched() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Live,
+            InitialSetupAuthority::ImportedHandoff,
+            0,
+            false,
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(policies.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lost_response_resumes_the_saved_update_and_upserts_the_same_policy() {
+        let (executor, state, policies) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            2,
+            true,
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(state.resources["secrets"].error.is_some());
+        // Reload the durable checkpoint and drive the executor's actual retry.
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let policies = policies.lock().unwrap();
+        assert_eq!(policies.len(), 2);
+        assert_eq!(policies[0], policies[1]);
+    }
 }
