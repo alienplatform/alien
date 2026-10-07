@@ -1425,7 +1425,7 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    fn resource_is_setup_owned(
+    pub(crate) fn resource_is_setup_owned(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<bool> {
