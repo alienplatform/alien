@@ -1,8 +1,8 @@
 //! Importer for AWS Vault (Parameter Store SecureString namespace).
 
 use alien_core::{
-    import::{data::AwsVaultImportData, ImportContext},
     Result, StackResourceState,
+    import::{ImportContext, data::AwsVaultImportData},
 };
 
 use crate::import::ResourceImporter;
@@ -26,6 +26,7 @@ impl ResourceImporter for AwsVaultImporter {
             account_id: Some(data.account_id),
             region: Some(data.region),
             vault_prefix: Some(data.parameter_prefix),
+            permissions_revision: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

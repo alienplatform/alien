@@ -23,6 +23,9 @@ use chrono::{DateTime, Utc};
 /// The vault represents a namespace prefix for SecureString parameters in SSM.
 #[controller]
 pub struct AwsVaultController {
+    /// Revision of the vault grants successfully applied by setup.
+    #[serde(default)]
+    pub(crate) permissions_revision: Option<String>,
     /// AWS account ID for generating the Secrets Manager reference
     pub(crate) account_id: Option<String>,
     /// The AWS region for this vault
@@ -61,6 +64,9 @@ impl AwsVaultController {
             "vault",
         )
         .await?;
+        if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
+            self.permissions_revision = Some(super::permissions_revision(ctx)?);
+        }
 
         // Store the vault prefix using resource_prefix-config.id pattern
         self.vault_prefix = Some(vault_prefix);
@@ -110,6 +116,9 @@ impl AwsVaultController {
         )
         .await?;
 
+        if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
+            self.permissions_revision = Some(super::permissions_revision(ctx)?);
+        }
         info!(vault_id = %config.id, "AWS vault permissions reconciled");
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -228,6 +237,18 @@ impl AwsVaultController {
         status = ResourceStatus::RefreshFailed
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            || !ResourcePermissionsHelper::resource_is_setup_owned(ctx, ctx.desired_config.id())?
+        {
+            return Ok(false);
+        }
+        Ok(
+            self.permissions_revision.as_deref()
+                != Some(super::permissions_revision(ctx)?.as_str()),
+        )
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(account_id), Some(region)) = (&self.account_id, &self.region) {
@@ -516,6 +537,80 @@ mod permission_update_tests {
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert_eq!(policies.lock().unwrap().len(), 1);
         // Repeating setup does not schedule another update after convergence.
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_only_update_reconciles_and_then_converges() {
+        let (executor, mut state, writes) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        let resource = state.resources.get_mut("secrets").unwrap();
+        resource.dependencies = vec![ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            "consumer-sa",
+        )];
+        let mut controller = resource
+            .get_internal_controller_typed::<AwsVaultController>()
+            .unwrap();
+        controller.permissions_revision = Some("previous-grants".to_string());
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        assert!(
+            executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(writes.lock().unwrap().len(), 1);
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
+    #[tokio::test]
+    async fn previous_checkpoint_without_revision_reconciles_once() {
+        let (executor, mut state, writes) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            1,
+            false,
+        );
+        assert!(
+            state
+                .resources
+                .get_mut("secrets")
+                .unwrap()
+                .internal_state
+                .as_mut()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("permissionsRevision")
+                .is_some()
+        );
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(writes.lock().unwrap().len(), 1);
         assert!(
             !executor
                 .plan(&state)
