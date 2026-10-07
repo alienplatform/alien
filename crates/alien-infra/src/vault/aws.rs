@@ -410,9 +410,8 @@ mod permission_update_tests {
                 let mut saved = saved.lock().unwrap();
                 saved.push(document.to_string());
                 if lose_first_response && saved.len() == 1 {
-                    return Err(AlienError::new(CloudError::RemoteAccessDenied {
-                        resource_type: "role-policy".to_string(),
-                        resource_name: name.to_string(),
+                    return Err(AlienError::new(CloudError::HttpRequestFailed {
+                        message: "Connection closed after the policy write".to_string(),
                     }));
                 }
                 Ok(())
