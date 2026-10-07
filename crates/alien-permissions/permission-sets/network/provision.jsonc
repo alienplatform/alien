@@ -97,9 +97,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
-            ]
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"]
           }
         }
       },
