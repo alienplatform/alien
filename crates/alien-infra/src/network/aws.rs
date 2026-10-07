@@ -78,6 +78,18 @@ fn is_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
+/// Whether access denied is the cause of this error, at any depth.
+fn has_access_denied_cause(error: &AlienError<ErrorData>) -> bool {
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        if inner.code == "REMOTE_ACCESS_DENIED" {
+            return true;
+        }
+        source = inner.source.as_deref();
+    }
+    false
+}
+
 fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
@@ -1395,6 +1407,51 @@ impl AwsNetworkController {
         Ok(())
     }
 
+    /// Handles access denied from a delete call in a delete step.
+    ///
+    /// In a replace (the network is still desired) the error is returned naming the object and
+    /// the action, so the executor stops the replace instead of creating next to what is left.
+    /// In a teardown the step logs it, keeps the ID and the delete moves on to the next object:
+    /// returning it would end the whole delete as "already gone" and skip every later object.
+    fn denied_delete(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        object: &str,
+        action: &str,
+        error: AlienError<CloudClientErrorData>,
+    ) -> Result<()> {
+        if ctx.desired_stack.resources.contains_key(resource_id) {
+            return Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Access denied deleting {object} ({action})"),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        warn!(resource_id, object, action, error = %error, "Access denied deleting a network object; continuing the delete without it");
+        Ok(())
+    }
+
+    /// Like [`Self::denied_delete`] for a lookup made while deleting: in a teardown a denied
+    /// lookup finds nothing and the delete moves on.
+    fn denied_lookup<T>(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        what: &str,
+        result: Result<Option<T>>,
+    ) -> Result<Option<T>> {
+        match result {
+            Err(error)
+                if has_access_denied_cause(&error)
+                    && !ctx.desired_stack.resources.contains_key(resource_id) =>
+            {
+                warn!(resource_id, what, error = %error, "Access denied looking up a network object to delete; continuing without it");
+                Ok(None)
+            }
+            other => other,
+        }
+    }
+
     /// Whether the Elastic IP with this allocation ID is still associated with a network
     /// interface. An address that no longer exists is not associated.
     async fn elastic_ip_associated(
@@ -1626,10 +1683,13 @@ impl AwsNetworkController {
             if let (Some(token), Some(cidr)) =
                 (self.vpc_create_token.clone(), self.cidr_block.clone())
             {
-                if let Some(vpc_id) = self
-                    .find_vpc_by_create_attempt(ctx, resource_id, &token, &cidr)
-                    .await?
-                {
+                if let Some(vpc_id) = self.denied_lookup(
+                    ctx,
+                    resource_id,
+                    "the VPC of a lost create",
+                    self.find_vpc_by_create_attempt(ctx, resource_id, &token, &cidr)
+                        .await,
+                )? {
                     info!(vpc_id = %vpc_id, "Recovered the VPC of a create whose response was lost");
                     self.vpc_id = Some(vpc_id);
                 }
@@ -1639,10 +1699,13 @@ impl AwsNetworkController {
         if let (Some(attempt), Some(vpc_id)) =
             (self.subnet_create_attempt.clone(), self.vpc_id.clone())
         {
-            if let Some(subnet_id) = self
-                .find_subnet_by_create_attempt(ctx, &vpc_id, &attempt, resource_id)
-                .await?
-            {
+            if let Some(subnet_id) = self.denied_lookup(
+                ctx,
+                resource_id,
+                "the subnet of a lost create",
+                self.find_subnet_by_create_attempt(ctx, &vpc_id, &attempt, resource_id)
+                    .await,
+            )? {
                 info!(subnet_id = %subnet_id, "Recovered the subnet of a create whose response was lost");
                 let recorded = if attempt.subnet_type == "Public" {
                     &mut self.public_subnet_ids
@@ -1658,10 +1721,13 @@ impl AwsNetworkController {
 
         if self.internet_gateway_id.is_none() {
             if let Some(token) = self.internet_gateway_create_token.clone() {
-                if let Some(igw_id) = self
-                    .find_internet_gateway_by_create_attempt(ctx, &token, resource_id)
-                    .await?
-                {
+                if let Some(igw_id) = self.denied_lookup(
+                    ctx,
+                    resource_id,
+                    "the Internet Gateway of a lost create",
+                    self.find_internet_gateway_by_create_attempt(ctx, &token, resource_id)
+                        .await,
+                )? {
                     info!(igw_id = %igw_id, "Recovered the Internet Gateway of a create whose response was lost");
                     self.internet_gateway_id = Some(igw_id);
                 }
@@ -1670,10 +1736,13 @@ impl AwsNetworkController {
 
         if self.eip_allocation_id.is_none() {
             if let Some(token) = self.eip_create_token.clone() {
-                if let Some(allocation_id) = self
-                    .find_elastic_ip_by_create_attempt(ctx, &token, resource_id)
-                    .await?
-                {
+                if let Some(allocation_id) = self.denied_lookup(
+                    ctx,
+                    resource_id,
+                    "the Elastic IP of a lost create",
+                    self.find_elastic_ip_by_create_attempt(ctx, &token, resource_id)
+                        .await,
+                )? {
                     info!(allocation_id = %allocation_id, "Recovered the Elastic IP of an allocation whose response was lost");
                     self.eip_allocation_id = Some(allocation_id);
                 }
@@ -1697,8 +1766,13 @@ impl AwsNetworkController {
                     continue;
                 }
                 let route_table_id = self
-                    .find_existing_route_table_by_name(ctx, &vpc_id, &name, resource_id)
-                    .await?
+                    .denied_lookup(
+                        ctx,
+                        resource_id,
+                        "an unrecorded route table",
+                        self.find_existing_route_table_by_name(ctx, &vpc_id, &name, resource_id)
+                            .await,
+                    )?
                     .and_then(|route_table| route_table.route_table_id);
                 if let Some(route_table_id) = route_table_id {
                     info!(rt_id = %route_table_id, name = %name, "Recovered a route table whose ID was not recorded");
@@ -1712,10 +1786,13 @@ impl AwsNetworkController {
 
             if self.security_group_id.is_none() {
                 let group_name = format!("{}-sg", ctx.resource_prefix);
-                if let Some(sg_id) = self
-                    .find_security_group_id_by_name(ctx, &vpc_id, &group_name, resource_id)
-                    .await?
-                {
+                if let Some(sg_id) = self.denied_lookup(
+                    ctx,
+                    resource_id,
+                    "an unrecorded security group",
+                    self.find_security_group_id_by_name(ctx, &vpc_id, &group_name, resource_id)
+                        .await,
+                )? {
                     info!(sg_id = %sg_id, "Recovered a security group whose ID was not recorded");
                     self.security_group_id = Some(sg_id);
                 }
@@ -1724,10 +1801,13 @@ impl AwsNetworkController {
 
         if self.nat_gateway_id.is_none() {
             if let Some(token) = self.nat_gateway_create_token.clone() {
-                if let Some(nat_gateway_id) = self
-                    .find_nat_gateway_by_create_attempt(ctx, &token, resource_id)
-                    .await?
-                {
+                if let Some(nat_gateway_id) = self.denied_lookup(
+                    ctx,
+                    resource_id,
+                    "the NAT gateway of a lost create",
+                    self.find_nat_gateway_by_create_attempt(ctx, &token, resource_id)
+                        .await,
+                )? {
                     info!(nat_gateway_id = %nat_gateway_id, "Recovered the NAT Gateway of a create whose response was lost");
                     self.nat_gateway_id = Some(nat_gateway_id);
                 }
@@ -3722,6 +3802,19 @@ impl AwsNetworkController {
                     suggested_delay: None,
                 })
             }
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(
+                    ctx,
+                    &config.id,
+                    &format!("NAT gateway '{nat_gateway_id}'"),
+                    "ec2:DeleteNatGateway",
+                    error,
+                )?;
+                Ok(HandlerAction::Continue {
+                    state: ReleasingElasticIp,
+                    suggested_delay: None,
+                })
+            }
             Err(error) => Err(error.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to delete NAT Gateway '{nat_gateway_id}'"),
                 resource_id: Some(config.id.clone()),
@@ -3764,6 +3857,19 @@ impl AwsNetworkController {
                 .and_then(|set| set.items.into_iter().next())
                 .and_then(|nat_gateway| nat_gateway.state),
             Err(error) if is_not_found(&error) => None,
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(
+                    ctx,
+                    &config.id,
+                    &format!("NAT gateway '{nat_gateway_id}' (waiting for its deletion)"),
+                    "ec2:DescribeNatGateways",
+                    error,
+                )?;
+                return Ok(HandlerAction::Continue {
+                    state: ReleasingElasticIp,
+                    suggested_delay: None,
+                });
+            }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to describe NAT Gateway '{nat_gateway_id}'"),
@@ -3832,20 +3938,34 @@ impl AwsNetworkController {
             // which would skip every later step, so it counts as a permission error only once
             // the address is no longer associated.
             Err(error) if is_access_denied(&error) => {
-                if self
-                    .elastic_ip_associated(ctx, &allocation_id, &config.id)
-                    .await?
-                {
+                let associated = self
+                    .denied_lookup(
+                        ctx,
+                        &config.id,
+                        "Elastic IP association",
+                        self.elastic_ip_associated(ctx, &allocation_id, &config.id)
+                            .await
+                            .map(Some),
+                    )?
+                    .unwrap_or(false);
+                if associated {
                     debug!(allocation_id = %allocation_id, "Elastic IP still associated");
                     return Ok(HandlerAction::Stay {
                         max_times: Some(ELASTIC_IP_RELEASE_MAX_POLLS),
                         suggested_delay: Some(Duration::from_secs(15)),
                     });
                 }
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!("Access denied releasing Elastic IP '{allocation_id}'"),
-                    resource_id: Some(config.id.clone()),
-                }));
+                self.denied_delete(
+                    ctx,
+                    &config.id,
+                    &format!("Elastic IP '{allocation_id}'"),
+                    "ec2:ReleaseAddress",
+                    error,
+                )?;
+                return Ok(HandlerAction::Continue {
+                    state: DeletingSecurityGroup,
+                    suggested_delay: None,
+                });
             }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
@@ -3916,6 +4036,20 @@ impl AwsNetworkController {
                     suggested_delay: Some(Duration::from_secs(30)),
                 });
             }
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(
+                    ctx,
+                    &config.id,
+                    &format!("security group '{sg_id}'"),
+                    "ec2:DeleteSecurityGroup",
+                    error,
+                )?;
+                self.wait_for_delete_dependencies_iterations = 0;
+                return Ok(HandlerAction::Continue {
+                    state: DeletingSubnets,
+                    suggested_delay: None,
+                });
+            }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to delete security group '{sg_id}'"),
@@ -3968,6 +4102,16 @@ impl AwsNetworkController {
                 Err(error) if is_conflict(&error) => {
                     debug!(subnet_id = %subnet_id, "Subnet still in use");
                     in_use.push(subnet_id);
+                    continue;
+                }
+                Err(error) if is_access_denied(&error) => {
+                    self.denied_delete(
+                        ctx,
+                        &config.id,
+                        &format!("subnet '{subnet_id}'"),
+                        "ec2:DeleteSubnet",
+                        error,
+                    )?;
                     continue;
                 }
                 Err(error) => {
@@ -4032,6 +4176,16 @@ impl AwsNetworkController {
                 Err(error) if is_not_found(&error) => {
                     debug!(assoc_id = %assoc_id, "Route table association already removed");
                 }
+                Err(error) if is_access_denied(&error) => {
+                    self.denied_delete(
+                        ctx,
+                        &config.id,
+                        &format!("route table association '{assoc_id}'"),
+                        "ec2:DisassociateRouteTable",
+                        error,
+                    )?;
+                    continue;
+                }
                 Err(error) => {
                     return Err(error.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to disassociate route table '{assoc_id}'"),
@@ -4063,6 +4217,16 @@ impl AwsNetworkController {
                 Err(error) if is_conflict(&error) => {
                     debug!(rt_id = %route_table_id, "Route table still in use");
                     in_use = true;
+                    continue;
+                }
+                Err(error) if is_access_denied(&error) => {
+                    self.denied_delete(
+                        ctx,
+                        &config.id,
+                        &format!("route table '{route_table_id}'"),
+                        "ec2:DeleteRouteTable",
+                        error,
+                    )?;
                     continue;
                 }
                 Err(error) => {
@@ -4141,6 +4305,20 @@ impl AwsNetworkController {
                         suggested_delay: Some(Duration::from_secs(15)),
                     });
                 }
+                Err(error) if is_access_denied(&error) => {
+                    // A gateway that stays attached cannot be deleted either.
+                    self.denied_delete(
+                        ctx,
+                        &config.id,
+                        &format!("Internet Gateway '{igw_id}'"),
+                        "ec2:DetachInternetGateway",
+                        error,
+                    )?;
+                    return Ok(HandlerAction::Continue {
+                        state: DeletingVpc,
+                        suggested_delay: None,
+                    });
+                }
                 Err(error) => {
                     return Err(error.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to detach Internet Gateway '{igw_id}'"),
@@ -4164,6 +4342,19 @@ impl AwsNetworkController {
                 return Ok(HandlerAction::Stay {
                     max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
                     suggested_delay: Some(Duration::from_secs(15)),
+                });
+            }
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(
+                    ctx,
+                    &config.id,
+                    &format!("Internet Gateway '{igw_id}'"),
+                    "ec2:DeleteInternetGateway",
+                    error,
+                )?;
+                return Ok(HandlerAction::Continue {
+                    state: DeletingVpc,
+                    suggested_delay: None,
                 });
             }
             Err(error) => {
@@ -4232,6 +4423,20 @@ impl AwsNetworkController {
                 return Ok(HandlerAction::Stay {
                     max_times: None,
                     suggested_delay: Some(Duration::from_secs(15)),
+                });
+            }
+            Err(error) if is_access_denied(&error) => {
+                self.denied_delete(
+                    ctx,
+                    &config.id,
+                    &format!("VPC '{vpc_id}'"),
+                    "ec2:DeleteVpc",
+                    error,
+                )?;
+                self.wait_for_delete_dependencies_iterations = 0;
+                return Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
                 });
             }
             Err(error) => {
@@ -6377,6 +6582,151 @@ mod controller_state_tests {
             controller(&executor).security_group_id.as_deref(),
             Some("sg-1")
         );
+    }
+
+    fn denied() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "EC2 Resource".to_string(),
+            resource_name: "x".to_string(),
+        })
+    }
+
+    fn fully_recorded(state: AwsNetworkState) -> AwsNetworkController {
+        AwsNetworkController {
+            state,
+            vpc_id: Some("vpc-1".to_string()),
+            cidr_block: Some("10.0.0.0/16".to_string()),
+            internet_gateway_id: Some("igw-1".to_string()),
+            nat_gateway_id: Some("nat-1".to_string()),
+            eip_allocation_id: Some("eipalloc-1".to_string()),
+            public_subnet_ids: vec!["subnet-a".to_string()],
+            private_subnet_ids: vec!["subnet-b".to_string()],
+            public_route_table_id: Some("rtb-pub".to_string()),
+            private_route_table_id: Some("rtb-priv".to_string()),
+            route_table_association_ids: vec!["rtbassoc-1".to_string()],
+            security_group_id: Some("sg-1".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// In a teardown, access denied on one object must not end the whole delete as "already
+    /// gone": every later object is still deleted. Each denied object is logged and its ID kept.
+    #[tokio::test]
+    async fn teardown_with_every_delete_denied_still_tries_every_object() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_describe_nat_gateways().times(0);
+        ec2.expect_release_address()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_describe_addresses().times(1).returning(|| {
+            Ok(parse(json!({ "addressesSet": { "item": [
+                { "allocationId": "eipalloc-1", "domain": "vpc" }
+            ]}})))
+        });
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_subnet()
+            .times(2)
+            .returning(|_| Err(denied()));
+        ec2.expect_disassociate_route_table()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_route_table()
+            .times(2)
+            .returning(|_| Err(denied()));
+        ec2.expect_detach_internet_gateway()
+            .times(1)
+            .returning(|_| Err(denied()));
+        ec2.expect_delete_internet_gateway().times(0);
+        ec2.expect_delete_vpc()
+            .times(1)
+            .returning(|_| Err(denied()));
+
+        let mut executor = executor(
+            ec2,
+            fully_recorded(AwsNetworkState::Ready),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor.delete().expect("teardown");
+        executor.run_until_terminal().await.expect("teardown runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let state = controller(&executor);
+        assert_eq!(state.nat_gateway_id.as_deref(), Some("nat-1"));
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(state.public_subnet_ids, ["subnet-a"]);
+    }
+
+    /// In a replace (the network is still desired) access denied is returned, naming the object
+    /// and the action, with the access-denied cause the executor stops the replace on.
+    #[tokio::test]
+    async fn replace_delete_denied_names_the_object_and_action() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .returning(|_| Err(denied()));
+
+        let mut executor = executor(
+            ec2,
+            fully_recorded(AwsNetworkState::DeletingNatGateway),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let error = executor
+            .step()
+            .await
+            .expect_err("a denied replace delete fails");
+        assert!(
+            error.message.contains("NAT gateway 'nat-1'")
+                && error.message.contains("ec2:DeleteNatGateway"),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.source.as_deref().map(|source| source.code.as_str()),
+            Some("REMOTE_ACCESS_DENIED")
+        );
+        assert_eq!(
+            controller(&executor).nat_gateway_id.as_deref(),
+            Some("nat-1")
+        );
+    }
+
+    /// A lookup for a lost create that is denied finds nothing in a teardown, and the delete
+    /// goes on; in a replace it fails.
+    #[tokio::test]
+    async fn denied_lost_create_lookup_does_not_end_a_teardown() {
+        let lost_vpc = || AwsNetworkController {
+            state: AwsNetworkState::Ready,
+            cidr_block: Some("10.0.0.0/16".to_string()),
+            vpc_create_token: Some("tok".to_string()),
+            ..Default::default()
+        };
+
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .returning(|_| Err(denied()));
+        let mut teardown = executor(ec2, lost_vpc(), Some("10.0.0.0/16")).await;
+        teardown.delete().expect("teardown");
+        teardown.run_until_terminal().await.expect("teardown runs");
+        assert_eq!(teardown.status(), ResourceStatus::Deleted);
+
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .returning(|_| Err(denied()));
+        let mut replacing = lost_vpc();
+        replacing.state = AwsNetworkState::DeleteStart;
+        let mut replace = executor(ec2, replacing, Some("10.0.0.0/16")).await;
+        replace
+            .step()
+            .await
+            .expect_err("a replace stops on the denied lookup");
     }
 
     /// A delete checkpoint saved before the poll counter existed resumes polling; the old
