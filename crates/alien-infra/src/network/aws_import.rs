@@ -71,6 +71,7 @@ impl ResourceImporter for AwsNetworkImporter {
             nat_gateway_create_token: None,
             internet_gateway_create_token: None,
             eip_create_token: None,
+            nat_gateway_attempt: 0,
             wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         };

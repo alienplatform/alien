@@ -116,9 +116,15 @@ const NETWORK_INTERFACE_DRAIN_MAX_POLLS: u32 = 90;
 /// Polls of a route table, internet gateway or VPC that still has dependents (15 s apart).
 const DEPENDENCY_DRAIN_MAX_POLLS: u32 = 40;
 
-/// Idempotency token for `CreateNatGateway`. EC2 allows up to 64 ASCII characters.
-fn nat_gateway_client_token(allocation_id: &str) -> String {
-    format!("alien-nat-{allocation_id}")
+/// Idempotency token for `CreateNatGateway`. EC2 allows up to 64 ASCII characters. The first
+/// gateway keeps the token earlier versions used; each replacement of a failed gateway gets
+/// its own.
+fn nat_gateway_client_token(allocation_id: &str, attempt: u32) -> String {
+    if attempt == 0 {
+        format!("alien-nat-{allocation_id}")
+    } else {
+        format!("alien-nat-{allocation_id}-{attempt}")
+    }
 }
 
 fn nat_gateway_failure_reason(nat_gateway: &NatGateway) -> String {
@@ -860,6 +866,10 @@ pub struct AwsNetworkController {
     /// Token of the latest `allocate_address` call, recorded before the call.
     #[serde(default)]
     pub(crate) eip_create_token: Option<String>,
+    /// NAT gateways that ended `failed` and were replaced; part of the next create's client
+    /// token, so the replacement is a new gateway.
+    #[serde(default)]
+    pub(crate) nat_gateway_attempt: u32,
     /// Polls of the current delete step while AWS reports its object in use. Reset when the
     /// step moves on, and by a manual retry.
     #[serde(default)]
@@ -3165,7 +3175,10 @@ impl AwsNetworkController {
                         format!("{}-natgateway", ctx.resource_prefix),
                         [create_attempt_tag(&attempt_token)],
                     )])
-                    .client_token(nat_gateway_client_token(&allocation_id))
+                    .client_token(nat_gateway_client_token(
+                        &allocation_id,
+                        self.nat_gateway_attempt,
+                    ))
                     .build(),
             )
             .await
@@ -3297,13 +3310,36 @@ impl AwsNetworkController {
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }
-            // Terminal for this gateway, so retrying the wait cannot help. The ID stays in
-            // state so delete cleans the gateway and its Elastic IP up.
+            // Terminal for this gateway, so waiting longer cannot help. The gateway is deleted
+            // (a failed one keeps nothing; deleting it frees the Elastic IP for the next one)
+            // and the failure is reported; the retry starts at CreatingNatGateway, which creates
+            // a new gateway with the same Elastic IP under a new client token.
             Some(state @ ("failed" | "deleted")) => {
+                if state == "failed" {
+                    match client.delete_nat_gateway(nat_gateway_id).await {
+                        Ok(_) => {}
+                        Err(error) if is_not_found(&error) => {}
+                        Err(error) => {
+                            return Err(error.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to delete failed NAT Gateway '{nat_gateway_id}'"
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            }));
+                        }
+                    }
+                }
+                let reason = nat_gateway_failure_reason(&nat_gateway);
+                let failed_id = nat_gateway_id.clone();
+                self.nat_gateway_id = None;
+                self.nat_gateway_create_token = None;
+                self.nat_gateway_attempt += 1;
+                // The executor keeps what a failed handler wrote, so the retry of this failure
+                // runs the create, not this wait.
+                self.state = AwsNetworkState::CreatingNatGateway;
                 Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
-                        "NAT Gateway '{nat_gateway_id}' is {state}: {}",
-                        nat_gateway_failure_reason(&nat_gateway)
+                        "NAT Gateway '{failed_id}' is {state}: {reason}; a retry creates a new one"
                     ),
                     resource_id: Some(config.id.clone()),
                 }))
@@ -4523,6 +4559,7 @@ impl AwsNetworkController {
             nat_gateway_create_token: None,
             internet_gateway_create_token: None,
             eip_create_token: None,
+            nat_gateway_attempt: 0,
             wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         }
@@ -4567,6 +4604,7 @@ impl AwsNetworkController {
             nat_gateway_create_token: None,
             internet_gateway_create_token: None,
             eip_create_token: None,
+            nat_gateway_attempt: 0,
             wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         }
@@ -5496,7 +5534,7 @@ mod controller_state_tests {
     }
 
     #[tokio::test]
-    async fn failed_nat_gateway_surfaces_the_aws_reason_and_keeps_ids_for_delete() {
+    async fn failed_nat_gateway_is_deleted_and_a_retry_creates_a_new_one() {
         let mut ec2 = MockEc2Api::new();
         ec2.expect_describe_nat_gateways().times(1).returning(|_| {
             Ok(parse(json!({ "natGatewaySet": { "item": [{
@@ -5506,12 +5544,24 @@ mod controller_state_tests {
                 "failureMessage": "Subnet has insufficient free addresses to create this NAT gateway"
             }]}})))
         });
+        ec2.expect_delete_nat_gateway()
+            .times(1)
+            .withf(|id| id == "nat-1")
+            .returning(|_| Ok(parse(json!({ "natGatewayId": "nat-1" }))));
         ec2.expect_create_route().times(0);
+        ec2.expect_create_nat_gateway()
+            .times(1)
+            .withf(|request| {
+                request.allocation_id.as_deref() == Some("eipalloc-1")
+                    && request.client_token.as_deref() == Some("alien-nat-eipalloc-1-1")
+            })
+            .returning(|_| Ok(parse(json!({ "natGateway": { "natGatewayId": "nat-2" } }))));
 
         let mut executor = executor(
             ec2,
             AwsNetworkController {
                 nat_gateway_id: Some("nat-1".to_string()),
+                nat_gateway_create_token: Some("tok-1".to_string()),
                 eip_allocation_id: Some("eipalloc-1".to_string()),
                 ..after_route_tables(AwsNetworkState::WaitingForNatGateway)
             },
@@ -5526,18 +5576,20 @@ mod controller_state_tests {
             ),
             "{error}"
         );
-        assert!(
-            !error.retryable,
-            "re-reading a failed NAT gateway cannot succeed"
-        );
-        assert_eq!(
-            controller(&executor).nat_gateway_id.as_deref(),
-            Some("nat-1")
-        );
-        assert_eq!(
-            controller(&executor).eip_allocation_id.as_deref(),
-            Some("eipalloc-1")
-        );
+        assert!(!error.retryable);
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
+        assert_eq!(state.nat_gateway_id, None);
+        assert_eq!(state.nat_gateway_create_token, None);
+        assert_eq!(state.nat_gateway_attempt, 1);
+        assert_eq!(state.eip_allocation_id.as_deref(), Some("eipalloc-1"));
+
+        // The retry resumes at the create: a new gateway, same Elastic IP, new client token.
+        executor.step().await.expect("a new NAT gateway is created");
+        let state = controller(&executor);
+        assert_eq!(state.state, AwsNetworkState::WaitingForNatGateway);
+        assert_eq!(state.nat_gateway_id.as_deref(), Some("nat-2"));
+        assert!(state.nat_gateway_create_token.is_some());
     }
 
     // ─────────────── Delete ───────────────
