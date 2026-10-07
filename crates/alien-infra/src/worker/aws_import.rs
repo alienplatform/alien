@@ -61,6 +61,8 @@ impl ResourceImporter for AwsWorkerImporter {
             rest_deployment_id: None,
             rest_base_path: None,
             domain_name: None,
+            domain_confirmed: false,
+            domain_create_token: None,
             load_balancer: None,
             certificate_issued_at: None,
             uses_custom_domain: false,

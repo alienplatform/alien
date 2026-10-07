@@ -2420,9 +2420,9 @@ impl StackExecutor {
                         let next = if failed_create_checkpoint.is_some()
                             && updated_controller.nothing_deleted_yet()
                         {
-                            "Nothing was deleted and the failed create is kept: grant the permission and retry, or revert the configuration to resume the failed create"
+                            "Nothing was deleted and the failed create is kept. If the role lacks this permission, grant it and retry, or revert the configuration to resume the failed create"
                         } else {
-                            "Part of it may already be deleted, so the failed create cannot be resumed: grant the permission and retry to finish the replace, or remove the resource from the stack to delete what is left"
+                            "Part of it may already be deleted, so the failed create cannot be resumed. If the role lacks this permission, grant it and retry to finish the replace; removing the resource from the stack deletes what is left"
                         };
                         let denial = err.clone().context(ErrorData::ReplaceDeleteDenied {
                             resource_id: resource_id.clone(),
