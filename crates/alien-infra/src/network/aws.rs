@@ -186,6 +186,40 @@ fn single_create_attempt_match(
     }
 }
 
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
+/// Records the objects found under one create token: the first becomes `recorded` if nothing
+/// is recorded yet, and every other one goes to `extras`, which delete removes. Several objects
+/// under one token mean a create was repeated while a read missed the first one; adopting one
+/// and deleting the rest never needs a human. Returns whether an object was adopted.
+fn adopt_create_attempt_matches(
+    ids: Vec<String>,
+    recorded: &mut Option<String>,
+    extras: &mut Vec<String>,
+) -> bool {
+    let mut adopted = false;
+    for id in ids {
+        if recorded.is_none() {
+            *recorded = Some(id);
+            adopted = true;
+        } else if recorded.as_deref() != Some(id.as_str()) && !extras.contains(&id) {
+            warn!(id = %id, "Found a duplicate created under the same create token; delete removes it");
+            extras.push(id);
+        }
+    }
+    adopted
+}
+
+/// Lookups of a recorded create token that found nothing before the create is repeated. EC2
+/// reads are eventually consistent: an object a lost create made can be missing from a read
+/// for a few seconds, and a repeated create under the same token makes a second object.
+const CREATE_LOOKUP_MAX_POLLS: u32 = 4;
+/// Delay between those lookups.
+const CREATE_LOOKUP_DELAY: Duration = Duration::from_secs(5);
+
 fn create_attempt_tag(token: &str) -> (String, String) {
     (CREATE_ATTEMPT_TAG.to_string(), token.to_string())
 }
@@ -870,6 +904,18 @@ pub struct AwsNetworkController {
     /// token, so the replacement is a new gateway.
     #[serde(default)]
     pub(crate) nat_gateway_attempt: u32,
+    /// Lookups of a recorded create token that found nothing yet; see `CREATE_LOOKUP_MAX_POLLS`.
+    #[serde(default)]
+    pub(crate) wait_for_create_lookup_iterations: u32,
+    /// VPCs, internet gateways and Elastic IPs found under this controller's create tokens
+    /// besides the recorded one (a create repeated after a read missed the first object).
+    /// Delete removes them.
+    #[serde(default)]
+    pub(crate) extra_vpc_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) extra_internet_gateway_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) extra_eip_allocation_ids: Vec<String>,
     /// Polls of the current delete step while AWS reports its object in use. Reset when the
     /// step moves on, and by a manual retry.
     #[serde(default)]
@@ -1068,14 +1114,15 @@ impl AwsNetworkController {
     /// Find the VPC the `create_vpc` call with this attempt token made: one with this
     /// resource's ownership tags, the token tag and `cidr`.
     ///
-    /// More than one match is an error, because one call creates at most one VPC.
+    /// Every match is returned: a create repeated after a read missed the first VPC leaves
+    /// two under one token.
     async fn find_vpc_by_create_attempt(
         &self,
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
         token: &str,
         cidr: &str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Vec<String>> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let resource_prefix = ctx.resource_prefix;
@@ -1116,18 +1163,7 @@ impl AwsNetworkController {
             })
             .collect::<Result<_>>()?;
 
-        match vpc_ids.as_slice() {
-            [] => Ok(None),
-            [vpc_id] => Ok(Some(vpc_id.clone())),
-            _ => Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Found {} VPCs for create attempt {token} ({}); delete the extra VPCs and retry",
-                    vpc_ids.len(),
-                    vpc_ids.join(", ")
-                ),
-                resource_id: Some(resource_id.to_string()),
-            })),
-        }
+        Ok(sorted(vpc_ids))
     }
 
     /// Find the subnet the `create_subnet` call of `attempt` made in `vpc_id`.
@@ -1188,7 +1224,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
         token: &str,
         resource_id: &str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Vec<String>> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
@@ -1224,7 +1260,7 @@ impl AwsNetworkController {
             })
             .filter_map(|gateway| gateway.internet_gateway_id)
             .collect::<Vec<_>>())
-        .and_then(|ids| single_create_attempt_match(ids, "Internet Gateway", token, resource_id))
+        .map(sorted)
     }
 
     /// Find the Elastic IP the `allocate_address` call with this token allocated.
@@ -1235,7 +1271,7 @@ impl AwsNetworkController {
         ctx: &ResourceControllerContext<'_>,
         token: &str,
         resource_id: &str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Vec<String>> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
@@ -1262,7 +1298,7 @@ impl AwsNetworkController {
             })
             .filter_map(|address| address.allocation_id)
             .collect::<Vec<_>>())
-        .and_then(|ids| single_create_attempt_match(ids, "Elastic IP", token, resource_id))
+        .map(sorted)
     }
 
     /// Describes the network interfaces `filter` matches that still hold the object a delete
@@ -1421,6 +1457,185 @@ impl AwsNetworkController {
             }));
         }
         Ok(())
+    }
+
+    /// Releases the duplicate Elastic IPs found under this network's create token. Returns
+    /// whether none is left; a duplicate never backed a NAT gateway, so none is in use for long.
+    async fn release_extra_elastic_ips(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.extra_eip_allocation_ids.is_empty() {
+            return Ok(true);
+        }
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let mut done = true;
+        for allocation_id in self.extra_eip_allocation_ids.clone() {
+            match client.release_address(&allocation_id).await {
+                Ok(()) => info!(allocation_id = %allocation_id, "Released a duplicate Elastic IP"),
+                Err(error) if is_not_found(&error) => {}
+                Err(error) if is_conflict(&error) => {
+                    done = false;
+                    continue;
+                }
+                Err(error) if is_access_denied(&error) => self.denied_delete(
+                    ctx,
+                    resource_id,
+                    &format!("duplicate Elastic IP '{allocation_id}'"),
+                    "ec2:ReleaseAddress",
+                    error,
+                )?,
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to release duplicate Elastic IP '{allocation_id}'"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            }
+            self.extra_eip_allocation_ids
+                .retain(|id| id != &allocation_id);
+        }
+        Ok(done)
+    }
+
+    /// Detaches and deletes the duplicate Internet Gateways found under this network's create
+    /// token. Returns whether none is left.
+    async fn delete_extra_internet_gateways(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.extra_internet_gateway_ids.is_empty() {
+            return Ok(true);
+        }
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let mut done = true;
+        for igw_id in self.extra_internet_gateway_ids.clone() {
+            if let Some(vpc_id) = self.vpc_id.clone() {
+                match client
+                    .detach_internet_gateway(
+                        DetachInternetGatewayRequest::builder()
+                            .internet_gateway_id(igw_id.clone())
+                            .vpc_id(vpc_id)
+                            .build(),
+                    )
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(error) if is_not_found(&error) || is_gateway_not_attached(&error) => {}
+                    Err(error) if is_conflict(&error) => {
+                        done = false;
+                        continue;
+                    }
+                    Err(error) if is_access_denied(&error) => {
+                        self.denied_delete(
+                            ctx,
+                            resource_id,
+                            &format!("duplicate Internet Gateway '{igw_id}'"),
+                            "ec2:DetachInternetGateway",
+                            error,
+                        )?;
+                        self.extra_internet_gateway_ids.retain(|id| id != &igw_id);
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to detach duplicate Internet Gateway '{igw_id}'"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }))
+                    }
+                }
+            }
+            match client.delete_internet_gateway(&igw_id).await {
+                Ok(()) => info!(igw_id = %igw_id, "Deleted a duplicate Internet Gateway"),
+                Err(error) if is_not_found(&error) => {}
+                Err(error) if is_conflict(&error) => {
+                    done = false;
+                    continue;
+                }
+                Err(error) if is_access_denied(&error) => self.denied_delete(
+                    ctx,
+                    resource_id,
+                    &format!("duplicate Internet Gateway '{igw_id}'"),
+                    "ec2:DeleteInternetGateway",
+                    error,
+                )?,
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete duplicate Internet Gateway '{igw_id}'"),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            }
+            self.extra_internet_gateway_ids.retain(|id| id != &igw_id);
+        }
+        Ok(done)
+    }
+
+    /// Deletes the duplicate VPCs found under this network's create token (nothing is created
+    /// in them). Returns whether none is left.
+    async fn delete_extra_vpcs(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        if self.extra_vpc_ids.is_empty() {
+            return Ok(true);
+        }
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let mut done = true;
+        for vpc_id in self.extra_vpc_ids.clone() {
+            match client.delete_vpc(&vpc_id).await {
+                Ok(()) => info!(vpc_id = %vpc_id, "Deleted a duplicate VPC"),
+                Err(error) if is_not_found(&error) => {}
+                Err(error) if is_conflict(&error) => {
+                    done = false;
+                    continue;
+                }
+                Err(error) if is_access_denied(&error) => self.denied_delete(
+                    ctx,
+                    resource_id,
+                    &format!("duplicate VPC '{vpc_id}'"),
+                    "ec2:DeleteVpc",
+                    error,
+                )?,
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete duplicate VPC '{vpc_id}'"),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            }
+            self.extra_vpc_ids.retain(|id| id != &vpc_id);
+        }
+        Ok(done)
+    }
+
+    /// Before repeating a create whose token found nothing, looks again a few times: the object
+    /// a lost create made may not be visible yet. Returns the wait, or `None` once the lookups
+    /// are used up and the create may be repeated.
+    fn wait_before_repeating_a_create(&mut self) -> Option<AwsNetworkHandlerAction> {
+        if self.wait_for_create_lookup_iterations < CREATE_LOOKUP_MAX_POLLS {
+            self.wait_for_create_lookup_iterations += 1;
+            debug!(
+                lookups = self.wait_for_create_lookup_iterations,
+                "No object under the recorded create token yet; looking again before creating"
+            );
+            return Some(AwsNetworkHandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(CREATE_LOOKUP_DELAY),
+            });
+        }
+        self.wait_for_create_lookup_iterations = 0;
+        None
     }
 
     /// Handles access denied from a delete call in a delete step.
@@ -1582,11 +1797,13 @@ impl AwsNetworkController {
     /// Return the subnet with `cidr` in this network's VPC, creating it if it does not
     /// exist. Subnet CIDRs are derived from the VPC CIDR, so a subnet with that CIDR in our
     /// VPC is the one an earlier attempt created; it must also carry our ownership tags.
+    /// `None` means a recorded attempt found nothing yet and the caller should look again
+    /// before creating.
     async fn ensure_subnet(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
         subnet: SubnetSpec<'_>,
-    ) -> Result<String> {
+    ) -> Result<Option<String>> {
         let SubnetSpec {
             vpc_id,
             cidr,
@@ -1611,7 +1828,11 @@ impl AwsNetworkController {
             {
                 info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet created by an earlier attempt");
                 self.subnet_create_attempt = None;
-                return Ok(subnet_id);
+                self.wait_for_create_lookup_iterations = 0;
+                return Ok(Some(subnet_id));
+            }
+            if self.wait_before_repeating_a_create().is_some() {
+                return Ok(None);
             }
         }
 
@@ -1658,7 +1879,7 @@ impl AwsNetworkController {
                 {
                     info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet an earlier attempt created");
                     self.subnet_create_attempt = None;
-                    return Ok(subnet_id);
+                    return Ok(Some(subnet_id));
                 }
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!("Subnet {cidr} conflicts with an existing subnet"),
@@ -1684,31 +1905,35 @@ impl AwsNetworkController {
         })?;
         // The caller records the ID before its next call.
         self.subnet_create_attempt = None;
-        Ok(subnet_id)
+        Ok(Some(subnet_id))
     }
 
-    /// Record the objects that create calls made but whose responses were lost: the VPC, an
-    /// in-flight subnet and the NAT gateway. Each is looked up by its create-attempt token;
-    /// nothing found means that call created nothing.
+    /// Record the objects that create calls made but whose responses were lost, and any
+    /// duplicates under the same create token: the VPC, an in-flight subnet, the Internet
+    /// Gateway, the Elastic IP and the NAT gateway. Each is looked up by its create-attempt
+    /// token; nothing found means that call created nothing.
     async fn recover_lost_creates(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<()> {
-        if self.vpc_id.is_none() {
-            if let (Some(token), Some(cidr)) =
-                (self.vpc_create_token.clone(), self.cidr_block.clone())
-            {
-                if let Some(vpc_id) = self.denied_lookup(
+        // Every object under a create token is looked up, not only one whose ID is missing: a
+        // create repeated after a read missed the first object leaves two under one token, and
+        // only the second one's ID was recorded.
+        if let (Some(token), Some(cidr)) = (self.vpc_create_token.clone(), self.cidr_block.clone())
+        {
+            let found = self
+                .denied_lookup(
                     ctx,
                     resource_id,
-                    "the VPC of a lost create",
+                    "VPCs of this network's create token",
                     self.find_vpc_by_create_attempt(ctx, resource_id, &token, &cidr)
-                        .await,
-                )? {
-                    info!(vpc_id = %vpc_id, "Recovered the VPC of a create whose response was lost");
-                    self.vpc_id = Some(vpc_id);
-                }
+                        .await
+                        .map(Some),
+                )?
+                .unwrap_or_default();
+            if adopt_create_attempt_matches(found, &mut self.vpc_id, &mut self.extra_vpc_ids) {
+                info!(vpc_id = ?self.vpc_id, "Recovered the VPC of a create whose response was lost");
             }
         }
 
@@ -1735,33 +1960,43 @@ impl AwsNetworkController {
             self.subnet_create_attempt = None;
         }
 
-        if self.internet_gateway_id.is_none() {
-            if let Some(token) = self.internet_gateway_create_token.clone() {
-                if let Some(igw_id) = self.denied_lookup(
+        if let Some(token) = self.internet_gateway_create_token.clone() {
+            let found = self
+                .denied_lookup(
                     ctx,
                     resource_id,
-                    "the Internet Gateway of a lost create",
+                    "Internet Gateways of this network's create token",
                     self.find_internet_gateway_by_create_attempt(ctx, &token, resource_id)
-                        .await,
-                )? {
-                    info!(igw_id = %igw_id, "Recovered the Internet Gateway of a create whose response was lost");
-                    self.internet_gateway_id = Some(igw_id);
-                }
+                        .await
+                        .map(Some),
+                )?
+                .unwrap_or_default();
+            if adopt_create_attempt_matches(
+                found,
+                &mut self.internet_gateway_id,
+                &mut self.extra_internet_gateway_ids,
+            ) {
+                info!(igw_id = ?self.internet_gateway_id, "Recovered the Internet Gateway of a create whose response was lost");
             }
         }
 
-        if self.eip_allocation_id.is_none() {
-            if let Some(token) = self.eip_create_token.clone() {
-                if let Some(allocation_id) = self.denied_lookup(
+        if let Some(token) = self.eip_create_token.clone() {
+            let found = self
+                .denied_lookup(
                     ctx,
                     resource_id,
-                    "the Elastic IP of a lost create",
+                    "Elastic IPs of this network's create token",
                     self.find_elastic_ip_by_create_attempt(ctx, &token, resource_id)
-                        .await,
-                )? {
-                    info!(allocation_id = %allocation_id, "Recovered the Elastic IP of an allocation whose response was lost");
-                    self.eip_allocation_id = Some(allocation_id);
-                }
+                        .await
+                        .map(Some),
+                )?
+                .unwrap_or_default();
+            if adopt_create_attempt_matches(
+                found,
+                &mut self.eip_allocation_id,
+                &mut self.extra_eip_allocation_ids,
+            ) {
+                info!(allocation_id = ?self.eip_allocation_id, "Recovered the Elastic IP of an allocation whose response was lost");
             }
         }
 
@@ -2414,22 +2649,26 @@ impl AwsNetworkController {
         // A recorded attempt token without a VPC ID means `create_vpc` was called and its
         // response may have been lost. Only the VPC carrying that token (and the attempted
         // CIDR) is ours; a VPC merely tagged for this network, such as one left by an earlier
-        // instance of the resource, is never adopted. When the token finds nothing, the create
-        // is repeated under the same token. State persisted before tokens existed has none, so
+        // instance of the resource, is never adopted. When the token finds nothing, it is looked
+        // up again a few times (reads are eventually consistent) before the create is repeated
+        // under the same token. State persisted before tokens existed has none, so
         // it creates a new VPC.
         if let (Some(token), Some(attempted_cidr)) =
             (self.vpc_create_token.clone(), self.cidr_block.clone())
         {
-            if let Some(vpc_id) = self
+            let found = self
                 .find_vpc_by_create_attempt(ctx, &config.id, &token, &attempted_cidr)
-                .await?
-            {
-                info!(vpc_id = %vpc_id, cidr = %attempted_cidr, "Found the VPC created by an earlier attempt");
-                self.vpc_id = Some(vpc_id);
+                .await?;
+            if adopt_create_attempt_matches(found, &mut self.vpc_id, &mut self.extra_vpc_ids) {
+                info!(vpc_id = ?self.vpc_id, cidr = %attempted_cidr, "Found the VPC created by an earlier attempt");
+                self.wait_for_create_lookup_iterations = 0;
                 return Ok(HandlerAction::Continue {
                     state: ConfiguringVpcDns,
                     suggested_delay: None,
                 });
+            }
+            if let Some(wait) = self.wait_before_repeating_a_create() {
+                return Ok(wait);
             }
         }
 
@@ -2566,16 +2805,23 @@ impl AwsNetworkController {
         // A recorded token without an ID: the create may have succeeded and its response
         // been lost. Only the gateway carrying that token is ours.
         if let Some(token) = self.internet_gateway_create_token.clone() {
-            if let Some(igw_id) = self
+            let found = self
                 .find_internet_gateway_by_create_attempt(ctx, &token, &config.id)
-                .await?
-            {
-                info!(igw_id = %igw_id, "Found the Internet Gateway created by an earlier attempt");
-                self.internet_gateway_id = Some(igw_id);
+                .await?;
+            if adopt_create_attempt_matches(
+                found,
+                &mut self.internet_gateway_id,
+                &mut self.extra_internet_gateway_ids,
+            ) {
+                info!(igw_id = ?self.internet_gateway_id, "Found the Internet Gateway created by an earlier attempt");
+                self.wait_for_create_lookup_iterations = 0;
                 return Ok(HandlerAction::Continue {
                     state: AttachingInternetGateway,
                     suggested_delay: None,
                 });
+            }
+            if let Some(wait) = self.wait_before_repeating_a_create() {
+                return Ok(wait);
             }
         }
 
@@ -2735,7 +2981,7 @@ impl AwsNetworkController {
             if i < self.public_subnet_ids.len() {
                 continue;
             }
-            let subnet_id = self
+            let Some(subnet_id) = self
                 .ensure_subnet(
                     ctx,
                     SubnetSpec::builder()
@@ -2747,7 +2993,13 @@ impl AwsNetworkController {
                         .resource_id(&config.id)
                         .build(),
                 )
-                .await?;
+                .await?
+            else {
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(CREATE_LOOKUP_DELAY),
+                });
+            };
             self.public_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
                 .entry(az.clone())
@@ -2760,7 +3012,7 @@ impl AwsNetworkController {
             if i < self.private_subnet_ids.len() {
                 continue;
             }
-            let subnet_id = self
+            let Some(subnet_id) = self
                 .ensure_subnet(
                     ctx,
                     SubnetSpec::builder()
@@ -2772,7 +3024,13 @@ impl AwsNetworkController {
                         .resource_id(&config.id)
                         .build(),
                 )
-                .await?;
+                .await?
+            else {
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(CREATE_LOOKUP_DELAY),
+                });
+            };
             self.private_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
                 .entry(az.clone())
@@ -3077,16 +3335,23 @@ impl AwsNetworkController {
         // A recorded token without an allocation ID: the allocation may have succeeded and its
         // response been lost. Only the address carrying that token is ours.
         if let Some(token) = self.eip_create_token.clone() {
-            if let Some(allocation_id) = self
+            let found = self
                 .find_elastic_ip_by_create_attempt(ctx, &token, &config.id)
-                .await?
-            {
-                info!(allocation_id = %allocation_id, "Found the Elastic IP allocated by an earlier attempt");
-                self.eip_allocation_id = Some(allocation_id);
+                .await?;
+            if adopt_create_attempt_matches(
+                found,
+                &mut self.eip_allocation_id,
+                &mut self.extra_eip_allocation_ids,
+            ) {
+                info!(allocation_id = ?self.eip_allocation_id, "Found the Elastic IP allocated by an earlier attempt");
+                self.wait_for_create_lookup_iterations = 0;
                 return Ok(HandlerAction::Continue {
                     state: CreatingNatGateway,
                     suggested_delay: None,
                 });
+            }
+            if let Some(wait) = self.wait_before_repeating_a_create() {
+                return Ok(wait);
             }
         }
 
@@ -3960,6 +4225,13 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
+        if !self.release_extra_elastic_ips(ctx, &config.id).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(ELASTIC_IP_RELEASE_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(15)),
+            });
+        }
+
         let Some(allocation_id) = self.eip_allocation_id.clone() else {
             return Ok(HandlerAction::Continue {
                 state: DeletingSecurityGroup,
@@ -4323,6 +4595,13 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
+        if !self.delete_extra_internet_gateways(ctx, &config.id).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(15)),
+            });
+        }
+
         let Some(igw_id) = self.internet_gateway_id.clone() else {
             return Ok(HandlerAction::Continue {
                 state: DeletingVpc,
@@ -4434,6 +4713,13 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
+
+        if !self.delete_extra_vpcs(ctx, &config.id).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(15)),
+            });
+        }
 
         let Some(vpc_id) = self.vpc_id.clone() else {
             return Ok(HandlerAction::Continue {
@@ -4580,6 +4866,10 @@ impl AwsNetworkController {
             internet_gateway_create_token: None,
             eip_create_token: None,
             nat_gateway_attempt: 0,
+            wait_for_create_lookup_iterations: 0,
+            extra_vpc_ids: Vec::new(),
+            extra_internet_gateway_ids: Vec::new(),
+            extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         }
@@ -4625,6 +4915,10 @@ impl AwsNetworkController {
             internet_gateway_create_token: None,
             eip_create_token: None,
             nat_gateway_attempt: 0,
+            wait_for_create_lookup_iterations: 0,
+            extra_vpc_ids: Vec::new(),
+            extra_internet_gateway_ids: Vec::new(),
+            extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             _internal_stay_count: None,
         }
@@ -4746,6 +5040,15 @@ mod controller_state_tests {
             .build()
             .await
             .expect("executor should build")
+    }
+
+    /// Steps through the lookups a create makes before repeating a create whose recorded
+    /// token found nothing.
+    async fn wait_out_create_lookups(executor: &mut SingleControllerExecutor) {
+        for _ in 0..CREATE_LOOKUP_MAX_POLLS {
+            let result = executor.step().await.expect("looks again before creating");
+            assert_eq!(result.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+        }
     }
 
     fn controller(executor: &SingleControllerExecutor) -> &AwsNetworkController {
@@ -4878,7 +5181,7 @@ mod controller_state_tests {
     }
 
     #[tokio::test]
-    async fn creating_vpc_refuses_to_pick_between_several_owned_vpcs() {
+    async fn creating_vpc_adopts_one_of_several_owned_vpcs_and_records_the_rest() {
         let mut ec2 = MockEc2Api::new();
         expect_two_zones(&mut ec2);
         ec2.expect_describe_vpcs().times(1).returning(|_| {
@@ -4901,13 +5204,14 @@ mod controller_state_tests {
         )
         .await;
 
-        let error = executor
+        executor
             .step()
             .await
-            .expect_err("two owned VPCs must not be adopted");
-        assert!(error.to_string().contains("vpc-a, vpc-b"), "{error}");
-        assert_eq!(controller(&executor).vpc_id, None);
-        assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
+            .expect("one VPC is adopted, the duplicate is recorded for delete");
+        let state = controller(&executor);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-a"));
+        assert_eq!(state.extra_vpc_ids, ["vpc-b"]);
+        assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
     }
 
     #[tokio::test]
@@ -4990,6 +5294,7 @@ mod controller_state_tests {
         .await;
 
         executor.step().await.expect_err("first create fails");
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("retry succeeds");
 
         let cidrs = cidrs.lock().unwrap();
@@ -5031,14 +5336,8 @@ mod controller_state_tests {
                     "tagSet": attempt_tags_json("attempt-1")
                 }]}})))
             });
-        // The repeated create carries the original token and fails (throttled).
-        ec2.expect_create_vpc().times(1).returning(|request| {
-            assert_eq!(
-                tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG).as_deref(),
-                Some("attempt-1")
-            );
-            Err(unavailable())
-        });
+        // A read that misses the VPC does not lead to a second create.
+        ec2.expect_create_vpc().times(0);
 
         let mut executor = executor(
             ec2,
@@ -5052,15 +5351,14 @@ mod controller_state_tests {
         )
         .await;
 
-        executor
-            .step()
-            .await
-            .expect_err("the repeated create fails");
+        let wait = executor.step().await.expect("the miss waits");
+        assert_eq!(wait.suggested_delay, Some(CREATE_LOOKUP_DELAY));
+        assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
         assert_eq!(
             controller(&executor).vpc_create_token.as_deref(),
             Some("attempt-1")
         );
-        executor.step().await.expect("the retry finds the VPC");
+        executor.step().await.expect("the next read finds the VPC");
         let state = controller(&executor);
         assert_eq!(state.vpc_id.as_deref(), Some("vpc-lost"));
         assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
@@ -5089,9 +5387,7 @@ mod controller_state_tests {
                     "tagSet": attempt_tags_json("attempt-1")
                 }]}})))
             });
-        ec2.expect_create_vpc()
-            .times(1)
-            .returning(|_| Err(unavailable()));
+        ec2.expect_create_vpc().times(0);
         ec2.expect_delete_vpc()
             .times(1)
             .withf(|id| id == "vpc-lost")
@@ -5109,12 +5405,9 @@ mod controller_state_tests {
         )
         .await;
 
-        // The read misses the VPC and the repeated create fails; then the resource is deleted
-        // (as a replace would do after the create gives up).
-        executor
-            .step()
-            .await
-            .expect_err("the repeated create fails");
+        // The read misses the VPC and the create waits; then the resource is deleted (as a
+        // replace would do after the create gives up).
+        executor.step().await.expect("the miss waits");
         executor.delete().expect("delete transition");
         executor
             .run_until_terminal()
@@ -5268,6 +5561,7 @@ mod controller_state_tests {
         );
         assert_eq!(controller(&executor).private_subnet_ids, ["subnet-128"]);
 
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("retry succeeds");
         let state = controller(&executor);
         assert_eq!(state.state, AwsNetworkState::CreatingRouteTables);
@@ -5353,15 +5647,17 @@ mod controller_state_tests {
     async fn subnet_from_another_create_attempt_is_not_adopted() {
         let mut ec2 = MockEc2Api::new();
         // Same VPC, CIDR and ownership tags, but another controller's token. Looked up before
-        // the create and again after its conflict.
-        ec2.expect_describe_subnets().times(2).returning(|_| {
-            Ok(parse(json!({ "subnetSet": { "item": [{
-                "subnetId": "subnet-other",
-                "vpcId": "vpc-1",
-                "cidrBlock": "10.0.0.0/20",
-                "tagSet": attempt_tags_json("attempt-0")
-            }]}})))
-        });
+        // the create (a few times, the token finding nothing) and again after its conflict.
+        ec2.expect_describe_subnets()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 2)
+            .returning(|_| {
+                Ok(parse(json!({ "subnetSet": { "item": [{
+                    "subnetId": "subnet-other",
+                    "vpcId": "vpc-1",
+                    "cidrBlock": "10.0.0.0/20",
+                    "tagSet": attempt_tags_json("attempt-0")
+                }]}})))
+            });
         let new_token = Arc::new(Mutex::new(None));
         let seen = new_token.clone();
         ec2.expect_create_subnet()
@@ -5385,6 +5681,7 @@ mod controller_state_tests {
         )
         .await;
 
+        wait_out_create_lookups(&mut executor).await;
         executor
             .step()
             .await
@@ -5400,11 +5697,11 @@ mod controller_state_tests {
     }
 
     #[tokio::test]
-    async fn subnet_missed_by_an_eventually_consistent_read_is_found_after_the_conflict() {
+    async fn subnet_missed_by_an_eventually_consistent_read_is_found_by_the_next_read() {
         let mut ec2 = MockEc2Api::new();
         let lookups = Arc::new(AtomicUsize::new(0));
         let count = lookups.clone();
-        // The first lookup misses the subnet the lost create made; after the conflict it shows.
+        // The first lookup misses the subnet the lost create made; the next one finds it.
         ec2.expect_describe_subnets().returning(move |request| {
             assert_eq!(
                 filters_token(request.filters.as_ref()).as_deref(),
@@ -5421,19 +5718,10 @@ mod controller_state_tests {
             }]}})))
         });
         ec2.expect_create_subnet().returning(|request| {
-            if request.cidr_block == "10.0.0.0/20" {
-                assert_eq!(
-                    tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG).as_deref(),
-                    Some("attempt-1")
-                );
-                return Err(AlienError::new(
-                    CloudClientErrorData::RemoteResourceConflict {
-                        message: "InvalidSubnet.Conflict".to_string(),
-                        resource_type: "Subnet".to_string(),
-                        resource_name: request.cidr_block,
-                    },
-                ));
-            }
+            assert_ne!(
+                request.cidr_block, "10.0.0.0/20",
+                "a read that missed the subnet must not lead to a second create"
+            );
             Ok(parse(
                 json!({ "subnet": { "subnetId": subnet_id_for(&request.cidr_block) } }),
             ))
@@ -5446,10 +5734,12 @@ mod controller_state_tests {
         )
         .await;
 
+        let wait = executor.step().await.expect("the miss waits");
+        assert_eq!(wait.suggested_delay, Some(CREATE_LOOKUP_DELAY));
         executor
             .step()
             .await
-            .expect("the conflict resolves to our subnet");
+            .expect("the next read finds our subnet");
         let state = controller(&executor);
         assert_eq!(state.public_subnet_ids, ["subnet-lost", "subnet-16"]);
         assert_eq!(lookups.load(Ordering::SeqCst), 2);
@@ -5851,7 +6141,7 @@ mod controller_state_tests {
     async fn internet_gateway_retry_without_a_match_reuses_its_token() {
         let mut ec2 = MockEc2Api::new();
         ec2.expect_describe_internet_gateways()
-            .times(1)
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
             .returning(|_| {
                 Ok(parse(json!({ "internetGatewaySet": { "item": [
                     { "internetGatewayId": "igw-other", "tagSet": attempt_tags_json("attempt-0") }
@@ -5879,6 +6169,7 @@ mod controller_state_tests {
         )
         .await;
 
+        wait_out_create_lookups(&mut executor).await;
         executor.step().await.expect("create succeeds");
         let state = controller(&executor);
         assert_eq!(state.internet_gateway_id.as_deref(), Some("igw-new"));
@@ -6853,6 +7144,148 @@ mod controller_state_tests {
             .expect_err("a replace stops on the denied lookup");
     }
 
+    /// After a lost create response, a read that keeps missing the VPC does not repeat the
+    /// create at once: the create waits for the bounded lookups, then creates under the same
+    /// token.
+    #[tokio::test]
+    async fn lost_vpc_create_with_empty_reads_creates_again_only_after_the_lookups() {
+        let mut ec2 = MockEc2Api::new();
+        expect_two_zones(&mut ec2);
+        ec2.expect_describe_vpcs()
+            .times(CREATE_LOOKUP_MAX_POLLS as usize + 1)
+            .returning(|_| Ok(parse(json!({}))));
+        let creates = Arc::new(AtomicUsize::new(0));
+        let count = creates.clone();
+        ec2.expect_create_vpc().returning(move |request| {
+            assert_eq!(
+                tag_value(request.tag_specifications.as_ref(), CREATE_ATTEMPT_TAG).as_deref(),
+                Some("attempt-1")
+            );
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(parse(json!({ "vpc": { "vpcId": "vpc-2" } })))
+        });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                cidr_block: Some("100.70.0.0/16".to_string()),
+                vpc_create_token: Some("attempt-1".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        wait_out_create_lookups(&mut executor).await;
+        assert_eq!(creates.load(Ordering::SeqCst), 0, "no create while looking");
+        executor
+            .step()
+            .await
+            .expect("creates once the lookups are done");
+        assert_eq!(creates.load(Ordering::SeqCst), 1);
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-2"));
+        assert_eq!(controller(&executor).wait_for_create_lookup_iterations, 0);
+    }
+
+    /// A create repeated after a read missed the first object leaves two objects under one
+    /// token, and only the second ID recorded. Delete finds every object under the tokens and
+    /// removes the duplicates too: the extra Elastic IP released, the extra Internet Gateway
+    /// detached and deleted, the extra VPC deleted.
+    #[tokio::test]
+    async fn delete_removes_every_object_under_the_create_tokens() {
+        let mut ec2 = MockEc2Api::new();
+        expect_no_named_leftovers(&mut ec2);
+        ec2.expect_describe_vpcs().times(1).returning(|_| {
+            Ok(parse(json!({ "vpcSet": { "item": [
+                { "vpcId": "vpc-dup", "cidrBlock": "10.0.0.0/16", "tagSet": attempt_tags_json("vpc-tok") },
+                { "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/16", "tagSet": attempt_tags_json("vpc-tok") }
+            ]}})))
+        });
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .returning(|_| {
+                Ok(parse(json!({ "internetGatewaySet": { "item": [
+                    { "internetGatewayId": "igw-1", "tagSet": attempt_tags_json("igw-tok") },
+                    { "internetGatewayId": "igw-dup", "tagSet": attempt_tags_json("igw-tok") }
+                ]}})))
+            });
+        ec2.expect_describe_addresses().times(1).returning(|| {
+            Ok(parse(json!({ "addressesSet": { "item": [
+                { "allocationId": "eipalloc-1", "domain": "vpc", "tagSet": attempt_tags_json("eip-tok") },
+                { "allocationId": "eipalloc-dup", "domain": "vpc", "tagSet": attempt_tags_json("eip-tok") }
+            ]}})))
+        });
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = calls.clone();
+        ec2.expect_release_address().times(2).returning(move |id| {
+            log.lock().unwrap().push(format!("release {id}"));
+            Ok(())
+        });
+        let log = calls.clone();
+        ec2.expect_detach_internet_gateway()
+            .times(2)
+            .returning(move |request| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("detach {}", request.internet_gateway_id));
+                Ok(())
+            });
+        let log = calls.clone();
+        ec2.expect_delete_internet_gateway()
+            .times(2)
+            .returning(move |id| {
+                log.lock().unwrap().push(format!("delete {id}"));
+                Ok(())
+            });
+        let log = calls.clone();
+        ec2.expect_delete_vpc().times(2).returning(move |id| {
+            log.lock().unwrap().push(format!("delete {id}"));
+            Ok(())
+        });
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::Ready,
+                vpc_id: Some("vpc-1".to_string()),
+                cidr_block: Some("10.0.0.0/16".to_string()),
+                internet_gateway_id: Some("igw-1".to_string()),
+                eip_allocation_id: Some("eipalloc-1".to_string()),
+                vpc_create_token: Some("vpc-tok".to_string()),
+                internet_gateway_create_token: Some("igw-tok".to_string()),
+                eip_create_token: Some("eip-tok".to_string()),
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor.delete().expect("teardown");
+        executor.run_until_terminal().await.expect("delete runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+
+        let calls = calls.lock().unwrap();
+        for expected in [
+            "release eipalloc-1",
+            "release eipalloc-dup",
+            "detach igw-1",
+            "detach igw-dup",
+            "delete igw-1",
+            "delete igw-dup",
+            "delete vpc-1",
+            "delete vpc-dup",
+        ] {
+            assert!(
+                calls.iter().any(|call| call == expected),
+                "{expected}: {calls:?}"
+            );
+        }
+        let state = controller(&executor);
+        assert!(state.extra_vpc_ids.is_empty());
+        assert!(state.extra_internet_gateway_ids.is_empty());
+        assert!(state.extra_eip_allocation_ids.is_empty());
+    }
+
     /// A delete checkpoint saved before the poll counter existed resumes polling; the old
     /// stay budget does not fail it at once.
     #[tokio::test]
@@ -7124,8 +7557,14 @@ mod controller_state_tests {
         ec2.expect_describe_addresses()
             .returning(|| Ok(parse(json!({}))));
         expect_two_zones(&mut ec2);
-        // The CIDR is configured and nothing was attempted before, so no VPC lookup runs.
-        ec2.expect_describe_vpcs().times(0);
+        // The CIDR is configured and nothing was attempted before, so create looks nothing up;
+        // delete looks the VPC token up once for duplicates and finds none.
+        ec2.expect_describe_vpcs()
+            .times(1)
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_create_vpc()
             .times(1)
             .returning(|_| Ok(parse(json!({ "vpc": { "vpcId": "vpc-1" } }))));
