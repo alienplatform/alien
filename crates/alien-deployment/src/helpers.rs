@@ -16,7 +16,7 @@ use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
@@ -601,6 +601,26 @@ pub async fn sync_secrets_to_vault(
 
     if client_config.platform() == Platform::Machines {
         debug!("Machines platform syncs workload secrets through the runtime controller");
+        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+        runtime_metadata.last_synced_secret_names.clear();
+        return Ok(false);
+    }
+
+    // The target stack dropped the secrets vault (its last vault-backed
+    // worker was removed). The same setup update revoked the management
+    // role's write access to it, so deleting the values written by earlier
+    // syncs would be denied and block the update. Forget them instead: they
+    // stay in the customer's account, unread by any workload.
+    if !stack.resources.contains_key(SECRETS_VAULT_ID)
+        && has_secrets_vault(stack_state)
+        && desired_secrets.is_empty()
+    {
+        if !runtime_metadata.last_synced_secret_names.is_empty() {
+            warn!(
+                abandoned = ?runtime_metadata.last_synced_secret_names,
+                "Secrets vault left the stack; leaving its deployment-owned values in place"
+            );
+        }
         runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
         runtime_metadata.last_synced_secret_names.clear();
         return Ok(false);
@@ -1389,6 +1409,22 @@ mod tests {
         }
     }
 
+    /// A prepared stack: preflights add the `secrets` vault whenever a
+    /// workload reads secrets from it.
+    fn with_secrets_vault(mut stack: Stack) -> Stack {
+        stack.resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            ResourceEntry {
+                config: Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    }
+
     fn make_worker_resource_state(id: &str, error: Option<AlienError>) -> StackResourceState {
         let worker = Worker::new(id.to_string())
             .code(WorkerCode::Image {
@@ -2046,6 +2082,69 @@ mod tests {
         assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
     }
 
+    /// Removing the last vault-backed worker drops the `secrets` vault from the
+    /// stack, and setup revokes the management role's write access with it.
+    /// The update must not try to delete the old values with that role.
+    #[tokio::test]
+    async fn vault_leaving_the_stack_forgets_owned_values_without_deleting() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let state_dir = temp.path().to_string_lossy().to_string();
+        let client_config = ClientConfig::Local {
+            state_directory: state_dir.clone(),
+        };
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.remote_binding_params = Some(
+            serde_json::to_value(VaultBinding::local(SECRETS_VAULT_ID, &state_dir))
+                .expect("local vault binding"),
+        );
+        let mut stack_state = StackState::new(Platform::Local);
+        stack_state
+            .resources
+            .insert(SECRETS_VAULT_ID.to_string(), vault_state);
+        let vault = BindingsProvider::from_stack_state(&stack_state, client_config.clone())
+            .expect("bindings provider")
+            .load_vault(SECRETS_VAULT_ID)
+            .await
+            .expect("local vault");
+        vault
+            .set_secret(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET, "old-header")
+            .await
+            .expect("seed owned value");
+
+        let config = make_config(make_snapshot(&[], &[]));
+        let mut metadata = RuntimeMetadata::default();
+        metadata.last_synced_env_vars_hash = Some("previous".to_string());
+        metadata.last_synced_secret_names = vec![RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()];
+
+        assert!(!sync_secrets_to_vault(
+            &Stack::new("no-workers".to_string()).build(),
+            &stack_state,
+            &client_config,
+            &config,
+            &mut metadata,
+        )
+        .await
+        .expect("a vault leaving the stack must not block the update"));
+        assert!(metadata.last_synced_secret_names.is_empty());
+        assert_eq!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some(secrets_sync_hash(&BTreeMap::new()).as_str())
+        );
+        assert_eq!(
+            vault
+                .get_secret(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET)
+                .await
+                .expect("the value is left in place, not deleted"),
+            "old-header"
+        );
+    }
+
     #[tokio::test]
     async fn vault_sync_removes_stale_owned_values_and_preserves_unrelated_values() {
         let temp = tempfile::TempDir::new().expect("temp dir");
@@ -2093,7 +2192,7 @@ mod tests {
         first.environment_variables.hash = "first".to_string();
         first.monitoring = Some(make_monitoring_with_metrics());
         let mut metadata = RuntimeMetadata::default();
-        let stack = make_single_function_stack("worker");
+        let stack = with_secrets_vault(make_single_function_stack("worker"));
         // This is the real pre-inventory upgrade case: the old hash exists, but there is no list
         // of owned names. The reserved token still has to be deleted from the shared vault.
         metadata.last_synced_env_vars_hash = Some("legacy".to_string());
