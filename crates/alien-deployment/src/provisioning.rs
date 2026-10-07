@@ -501,7 +501,12 @@ mod tests {
         let mut target = stack(&["consumer", "new-dependency"]);
         target.resources.get_mut("consumer").unwrap().dependencies =
             vec![ResourceRef::new("storage".into(), "new-dependency")];
-        let mut state = provisioning(installed(&previous).await, target);
+        let checkpoint = installed(&previous).await;
+        assert_eq!(
+            checkpoint.resources["consumer"].dependencies,
+            vec![ResourceRef::new("storage".into(), "old-dependency")]
+        );
+        let mut state = provisioning(checkpoint, target);
         state = step(state).await;
         assert_eq!(state.status, DeploymentStatus::Provisioning);
         assert!(state.current_release.is_none());
