@@ -345,16 +345,24 @@ impl AwsWorkerController {
         self.rest_base_path = None;
     }
 
-    /// The tags a domain create carries: this worker's ownership tags plus the create token,
-    /// which is recorded here, before the call, and kept for every retry.
-    fn domain_create_tags(&mut self, prefix: &str, resource_id: &str) -> HashMap<String, String> {
-        let token = self
-            .domain_create_token
-            .get_or_insert_with(|| Uuid::new_v4().to_string())
-            .clone();
+    /// The tags a domain create carries: this worker's ownership tags plus the create token.
+    ///
+    /// `None` means no token was saved yet: the caller records the new one and returns, and the
+    /// create runs in the next step. The executor saves state only between steps, so a token
+    /// generated in the step that calls create would be lost if the process stopped after AWS
+    /// accepted the call, and the retry would reject the domain as not this worker's.
+    fn domain_create_tags(
+        &mut self,
+        prefix: &str,
+        resource_id: &str,
+    ) -> Option<HashMap<String, String>> {
+        let Some(token) = self.domain_create_token.clone() else {
+            self.domain_create_token = Some(Uuid::new_v4().to_string());
+            return None;
+        };
         let mut tags = standard_resource_tags(prefix, resource_id);
         tags.insert(CREATE_ATTEMPT_TAG.to_string(), token);
-        tags
+        Some(tags)
     }
 
     fn foreign_domain_error(
@@ -1210,7 +1218,12 @@ impl AwsWorkerController {
             })
         })?;
 
-        let tags = self.domain_create_tags(ctx.resource_prefix, &worker_config.id);
+        let Some(tags) = self.domain_create_tags(ctx.resource_prefix, &worker_config.id) else {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiDomain,
+                suggested_delay: None,
+            });
+        };
         let domain = match client
             .create_domain_name(
                 CreateDomainNameRequest::builder()
@@ -1689,7 +1702,12 @@ impl AwsWorkerController {
             })
         })?;
 
-        let tags = self.domain_create_tags(ctx.resource_prefix, &worker_config.id);
+        let Some(tags) = self.domain_create_tags(ctx.resource_prefix, &worker_config.id) else {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRestDomain,
+                suggested_delay: None,
+            });
+        };
         let domain = match client
             .create_domain_name(
                 CreateRestDomainNameRequest::builder()
@@ -1717,12 +1735,14 @@ impl AwsWorkerController {
                     {
                         return Err(Self::foreign_domain_error(&fqdn, &worker_config.id, error))
                     }
-                    Err(lookup) => return Err(lookup.context(ErrorData::CloudPlatformError {
-                        message: format!(
+                    Err(lookup) => {
+                        return Err(lookup.context(ErrorData::CloudPlatformError {
+                            message: format!(
                             "Failed to look up REST API domain '{fqdn}' after a create conflict"
                         ),
-                        resource_id: Some(worker_config.id.clone()),
-                    })),
+                            resource_id: Some(worker_config.id.clone()),
+                        }))
+                    }
                 }
             }
             Err(error) => {
@@ -3186,6 +3206,13 @@ impl AwsWorkerController {
                 state: UpdateCreatingApiMapping,
                 suggested_delay,
             }),
+            HandlerAction::Continue {
+                state: CreatingApiDomain,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiDomain,
+                suggested_delay,
+            }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
                 &worker_config.id,
                 "creating_api_domain",
@@ -3389,6 +3416,13 @@ impl AwsWorkerController {
                 suggested_delay,
             } => Ok(HandlerAction::Continue {
                 state: UpdateCreatingRestBasePathMapping,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingRestDomain,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestDomain,
                 suggested_delay,
             }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
@@ -7208,6 +7242,7 @@ mod tests {
             .await
             .unwrap();
 
+        executor.step().await.expect("records the create token");
         executor.step().await.expect_err("the domain create fails");
         let failed = executor.internal_state::<AwsWorkerController>().unwrap();
         assert_eq!(failed.domain_name.as_deref(), Some(DOMAIN));
@@ -7452,92 +7487,185 @@ mod tests {
         codes
     }
 
-    /// Runs `CreatingApiDomain` twice: the first create reaches AWS but its response is lost;
-    /// the retry is answered ConflictException and finds the domain with `found_tags`, where
-    /// `None` stands for this attempt's own tags.
-    async fn domain_create_retry_after_lost_response(
-        found_tags: Option<HashMap<String, String>>,
-    ) -> (SingleControllerExecutor, crate::error::Result<()>) {
-        let attempt_tags: Arc<Mutex<Vec<HashMap<String, String>>>> = Default::default();
+    /// API Gateway as the tests below see it: at most one domain named `DOMAIN`, with its tags.
+    type DomainWorld = Arc<Mutex<Option<HashMap<String, String>>>>;
+
+    /// A V2 client over `world`: CreateDomainName stores the domain (or answers
+    /// ConflictException when one exists) and GetDomainName reads it. While `lose_responses`
+    /// is above zero, a create that AWS accepted answers 503 instead, as a lost response does.
+    fn domain_world_provider(
+        world: DomainWorld,
+        creates: Arc<Mutex<Vec<HashMap<String, String>>>>,
+        lose_responses: usize,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut apigw = MockApiGatewayV2Api::new();
-        let seen = attempt_tags.clone();
-        let mut attempts = 0;
-        apigw
-            .expect_create_domain_name()
-            .times(2)
-            .returning(move |request| {
-                seen.lock().unwrap().push(request.tags.clone().unwrap());
-                attempts += 1;
-                if attempts == 1 {
-                    Err(AlienError::new(
-                        CloudClientErrorData::RemoteServiceUnavailable {
-                            message: "connection reset".to_string(),
-                        },
-                    ))
-                } else {
-                    Err(AlienError::new(
-                        CloudClientErrorData::RemoteResourceConflict {
-                            resource_type: "ApiGateway".to_string(),
-                            resource_name: DOMAIN.to_string(),
-                            message: "already exists".to_string(),
-                        },
-                    ))
-                }
-            });
-        let seen = attempt_tags.clone();
+        let created = world.clone();
+        let mut lose_responses = lose_responses;
+        apigw.expect_create_domain_name().returning(move |request| {
+            let tags = request.tags.clone().unwrap();
+            creates.lock().unwrap().push(tags.clone());
+            let mut domain = created.lock().unwrap();
+            if domain.is_some() {
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "ApiGateway".to_string(),
+                        resource_name: DOMAIN.to_string(),
+                        message: "already exists".to_string(),
+                    },
+                ));
+            }
+            *domain = Some(tags.clone());
+            if lose_responses > 0 {
+                lose_responses -= 1;
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteServiceUnavailable {
+                        message: "connection reset".to_string(),
+                    },
+                ));
+            }
+            Ok(domain_with_tags(DOMAIN, tags))
+        });
         apigw
             .expect_get_domain_name()
-            .times(1)
-            .returning(move |domain| {
-                let own = seen.lock().unwrap()[0].clone();
-                Ok(domain_with_tags(domain, found_tags.clone().unwrap_or(own)))
+            .returning(move |name| match world.lock().unwrap().clone() {
+                Some(tags) => Ok(domain_with_tags(name, tags)),
+                None => Err(not_found("DomainName")),
             });
-        let provider = setup_mock_service_provider(
-            Arc::new(MockLambdaApi::new()),
-            None,
-            Some(Arc::new(apigw)),
-        );
+        setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, Some(Arc::new(apigw)))
+    }
 
-        let mut controller = failed_at_creating_api_domain();
-        controller.state = AwsWorkerState::CreatingApiDomain;
-        let mut executor = SingleControllerExecutor::builder()
+    async fn domain_executor(
+        controller: AwsWorkerController,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
             .resource(function_public_ingress())
             .controller(controller)
             .platform(Platform::Aws)
             .service_provider(provider)
             .build()
             .await
-            .unwrap();
-
-        executor
-            .step()
-            .await
-            .expect_err("the first response is lost");
-        let retry = executor.step().await.map(|_| ());
-        let tags = attempt_tags.lock().unwrap();
-        assert_eq!(tags[0], tags[1], "the retry keeps the create token");
-        (executor, retry)
+            .unwrap()
     }
 
+    fn at_creating_api_domain() -> AwsWorkerController {
+        let mut controller = failed_at_creating_api_domain();
+        controller.state = AwsWorkerState::CreatingApiDomain;
+        controller
+    }
+
+    /// The token is saved by a step of its own, before the step that calls create.
     #[tokio::test]
-    async fn lost_domain_create_response_is_adopted_by_its_create_token() {
-        let (executor, retry) = domain_create_retry_after_lost_response(None).await;
-        retry.expect("the retry adopts its own domain");
+    async fn domain_create_token_is_saved_before_the_create_step() {
+        let world = DomainWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = domain_executor(
+            at_creating_api_domain(),
+            domain_world_provider(world.clone(), creates.clone(), 0),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(saved.state, AwsWorkerState::CreatingApiDomain);
+        let token = saved.domain_create_token.clone().expect("token saved");
+        assert!(
+            creates.lock().unwrap().is_empty(),
+            "no create in the token step"
+        );
+
+        executor.step().await.expect("creates the domain");
+        assert_eq!(
+            creates.lock().unwrap()[0].get("CreateAttempt"),
+            Some(&token)
+        );
         let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiMapping);
+        assert!(state.domain_confirmed);
+    }
+
+    /// AWS creates the domain but the process stops before the create step is saved. The
+    /// controller restarts from the checkpoint saved before that step, which already holds the
+    /// token, so the retry recognizes the domain as its own.
+    #[tokio::test]
+    async fn domain_created_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let world = DomainWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let provider = domain_world_provider(world.clone(), creates.clone(), 0);
+        let mut executor = domain_executor(at_creating_api_domain(), provider.clone()).await;
+
+        executor.step().await.expect("records the token");
+        let checkpoint = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        executor.step().await.expect("AWS accepts the create");
+        assert!(world.lock().unwrap().is_some());
+        drop(executor);
+
+        let mut restarted = domain_executor(checkpoint, provider).await;
+        restarted
+            .step()
+            .await
+            .expect("the retry adopts its own domain");
+        let state = restarted.internal_state::<AwsWorkerController>().unwrap();
         assert_eq!(state.state, AwsWorkerState::CreatingApiMapping);
         assert_eq!(state.domain_name.as_deref(), Some(DOMAIN));
         assert!(state.domain_confirmed);
         assert!(state.load_balancer.is_some());
+        let creates = creates.lock().unwrap();
+        assert_eq!(
+            creates.len(),
+            2,
+            "the retry's create is answered ConflictException"
+        );
+        assert_eq!(creates[0], creates[1], "both carry the saved token");
+    }
+
+    /// The first create reaches AWS but its response is lost; the retry adopts the domain.
+    #[tokio::test]
+    async fn lost_domain_create_response_is_adopted_by_its_create_token() {
+        let world = DomainWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = domain_executor(
+            at_creating_api_domain(),
+            domain_world_provider(world.clone(), creates.clone(), 1),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        executor
+            .step()
+            .await
+            .expect("the retry adopts its own domain");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiMapping);
+        assert!(state.domain_confirmed);
+        let creates = creates.lock().unwrap();
+        assert_eq!(creates.len(), 2);
+        assert_eq!(creates[0], creates[1]);
     }
 
     /// Same name and ownership tags, but another create's token: a leftover from an earlier
     /// instance is not adopted.
     #[tokio::test]
     async fn domain_from_another_create_attempt_is_not_adopted() {
-        let mut tags = standard_resource_tags("test", "public-func");
-        tags.insert("CreateAttempt".to_string(), "another-attempt".to_string());
-        let (executor, retry) = domain_create_retry_after_lost_response(Some(tags)).await;
-        retry.expect_err("the domain is not this create's");
+        let mut leftover = standard_resource_tags("test", "public-func");
+        leftover.insert("CreateAttempt".to_string(), "another-attempt".to_string());
+        let world: DomainWorld = Arc::new(Mutex::new(Some(leftover)));
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = domain_executor(
+            at_creating_api_domain(),
+            domain_world_provider(world, creates, 0),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor
+            .step()
+            .await
+            .expect_err("the domain is not this create's");
         let state = executor.internal_state::<AwsWorkerController>().unwrap();
         assert!(!state.domain_confirmed);
         assert!(state.load_balancer.is_none());
