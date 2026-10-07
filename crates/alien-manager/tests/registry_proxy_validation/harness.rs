@@ -297,6 +297,7 @@ pub async fn start_manager_with_binding(registry_url: String, binding_env: &str)
         releases_url: None,
         targets: vec![],
         supported_aws_regions: Vec::new(),
+        supports_aws_setup_node_identity: false,
         disable_deployment_loop: true,
         disable_heartbeat_loop: true,
         enable_local_log_ingest: false,

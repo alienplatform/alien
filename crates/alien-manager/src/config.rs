@@ -38,6 +38,10 @@ pub struct ManagerConfig {
     /// AWS regions supported by this Alien environment for setup imports.
     /// Empty means the manager does not enforce an allowlist.
     pub supported_aws_regions: Vec<String>,
+    /// Whether supplied execution providers support AWS setup node-identity handoff.
+    /// Enable only when retained identities survive runtime reconciliation and
+    /// instance-profile changes are validated before replacement.
+    pub supports_aws_setup_node_identity: bool,
     /// Disable the deployment loop.
     pub disable_deployment_loop: bool,
     /// Disable the heartbeat loop.
@@ -106,6 +110,7 @@ impl Default for ManagerConfig {
             releases_url: None,
             targets: Vec::new(),
             supported_aws_regions: Vec::new(),
+            supports_aws_setup_node_identity: false,
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,

@@ -360,6 +360,7 @@ pub struct SingleControllerExecutor {
     service_provider: Arc<dyn PlatformServiceProvider>,
     // Resource prefix
     resource_prefix: String,
+    manager_url: String,
     // Heartbeats emitted by the most recent step.
     last_heartbeats: Vec<ResourceHeartbeat>,
     initial_setup_authority: alien_core::InitialSetupAuthority,
@@ -418,7 +419,7 @@ impl SingleControllerExecutor {
                 .maybe_domain_metadata(self.domain_metadata.clone())
                 .maybe_public_endpoints(self.public_endpoints.clone())
                 .volume_restores(self.volume_restores.clone())
-                .manager_url("https://test-manager.alien.dev".to_string())
+                .manager_url(self.manager_url.clone())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
             initial_setup_authority: self.initial_setup_authority,
@@ -672,7 +673,7 @@ impl SingleControllerExecutor {
             .maybe_domain_metadata(self.domain_metadata.clone())
             .maybe_public_endpoints(self.public_endpoints.clone())
             .volume_restores(self.volume_restores.clone())
-            .manager_url("https://test-manager.alien.dev".to_string())
+            .manager_url(self.manager_url.clone())
             .deployment_token("test-deployment-token".to_string())
             .build();
         let context = ResourceControllerContext {
@@ -751,6 +752,7 @@ pub struct SingleControllerExecutorBuilder {
     resource_lifecycle: ResourceLifecycle,
     initial_setup_authority: alien_core::InitialSetupAuthority,
     resource_prefix: String,
+    manager_url: String,
     permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
     delay_mode: DelayMode,
 }
@@ -782,6 +784,7 @@ impl SingleControllerExecutorBuilder {
             resource_lifecycle: ResourceLifecycle::Live,
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             resource_prefix: "test".to_string(),
+            manager_url: "https://test-manager.alien.dev".to_string(),
             permission_profiles: Vec::new(),
             delay_mode: DelayMode::default(),
         }
@@ -791,6 +794,12 @@ impl SingleControllerExecutorBuilder {
     /// cloud APIs; mocked tests keep the default, which records delays without sleeping.
     pub fn real_delays(mut self) -> Self {
         self.delay_mode = DelayMode::Real;
+        self
+    }
+
+    /// Sets the manager endpoint used by controller requests.
+    pub fn manager_url(mut self, manager_url: impl Into<String>) -> Self {
+        self.manager_url = manager_url.into();
         self
     }
 
@@ -1383,6 +1392,7 @@ impl SingleControllerExecutorBuilder {
                 .service_provider
                 .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
             resource_prefix: self.resource_prefix,
+            manager_url: self.manager_url,
             last_heartbeats: Vec::new(),
             initial_setup_authority: self.initial_setup_authority,
             delay_mode: self.delay_mode,
