@@ -92,6 +92,7 @@ pub fn plan_compute(
             &requirements,
             &group.scale,
             group.requires_failure_domain,
+            group.generated,
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
         if selected_choice.failure_domains().is_none() {
@@ -106,13 +107,22 @@ pub fn plan_compute(
                 }
             }
         }
-        let errors = validate_compute_pool_selection(
+        let mut errors = validate_compute_pool_selection(
             platform,
             &pool_id,
             &selected_choice,
             &requirements,
             &group.scale,
         );
+        // Only workloads assigned to the pool give it real demand; a declared pool without
+        // them carries just its machine profile.
+        if !group.workloads.is_empty() {
+            if let Err(message) =
+                check_pool_capacity(platform, &pool_id, &selected_choice, &requirements)
+            {
+                errors.push(message);
+            }
+        }
         let machines = machine_options(platform, &requirements, selected_choice.machine())?;
 
         pools.push(ComputePoolPlan {
@@ -147,36 +157,60 @@ pub const GENERATED_POOL_MAX_MACHINES: u32 = 10;
 /// Allowed scale for a pool that no capacity group declares.
 ///
 /// The planner derives `default_min`/`default_max` from workload replicas, assuming one
-/// container per machine. They are a recommendation: the developer did not bound the pool,
-/// and a larger machine fits more containers. The installer may choose any count from the
+/// container per machine. They are a recommendation, not a bound: the developer did not bound
+/// the pool, a larger machine fits more containers, and replica counts change between releases
+/// while the installer's saved choice stays. The installer may choose any count from the
 /// workload minimum (one machine when any workload runs) up to
-/// [`GENERATED_POOL_MAX_MACHINES`]. The recommendation stays the default, and its mode
-/// stays the policy's mode: a pool whose workloads never scale is fixed.
+/// [`GENERATED_POOL_MAX_MACHINES`], fixed or autoscaling (a fixed N is accepted as the
+/// autoscale range N..N). Whether the choice can hold the workloads is
+/// [`check_pool_capacity`]'s question.
 pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> CapacityGroupScalePolicy {
     let ceiling = GENERATED_POOL_MAX_MACHINES.max(default_max);
-    let lowest_max = default_min.max(1);
-    if default_min == default_max {
-        CapacityGroupScalePolicy::Fixed {
-            machines: ComputeChoiceRange {
-                min: lowest_max,
-                max: ceiling,
-                default: default_min,
-            },
-        }
-    } else {
-        CapacityGroupScalePolicy::Autoscale {
-            min: ComputeChoiceRange {
-                min: default_min,
-                max: ceiling,
-                default: default_min,
-            },
-            max: ComputeChoiceRange {
-                min: lowest_max,
-                max: ceiling,
-                default: default_max,
-            },
-        }
+    CapacityGroupScalePolicy::Autoscale {
+        min: ComputeChoiceRange {
+            min: default_min,
+            max: ceiling,
+            default: default_min,
+        },
+        max: ComputeChoiceRange {
+            min: default_min.max(1),
+            max: ceiling,
+            default: default_max,
+        },
     }
+}
+
+/// Rejects a selection whose largest fleet cannot hold the workloads at their desired replica
+/// counts. Packing is not modelled, so passing is necessary but not sufficient.
+pub fn check_pool_capacity(
+    platform: Platform,
+    pool_id: &str,
+    selection: &ComputePoolSelection,
+    requirements: &WorkloadRequirements,
+) -> std::result::Result<(), String> {
+    let Some(spec) = selection
+        .machine()
+        .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+    else {
+        // Machine presence and catalog membership are reported by the selection checks.
+        return Ok(());
+    };
+    let machines = selection.max_size();
+    let cpu = f64::from(machines) * instance_catalog::allocatable_cpu(spec);
+    let memory = u64::from(machines) * instance_catalog::allocatable_memory_bytes(spec);
+    if cpu + f64::EPSILON >= requirements.total_cpu_at_desired
+        && memory >= requirements.total_memory_bytes_at_desired
+    {
+        return Ok(());
+    }
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    Err(format!(
+        "Pool '{pool_id}' is too small for its workloads: {machines} x {} provides {cpu:.2} vCPU and {:.1} GiB to workloads, which request {:.2} vCPU and {:.1} GiB at their desired replica counts",
+        spec.name,
+        memory as f64 / GIB,
+        requirements.total_cpu_at_desired,
+        requirements.total_memory_bytes_at_desired as f64 / GIB,
+    ))
 }
 
 fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup>, ErrorData> {
@@ -287,6 +321,7 @@ fn recommended_selection(
     requirements: &WorkloadRequirements,
     scale: &CapacityGroupScalePolicy,
     requires_failure_domain: bool,
+    generated: bool,
 ) -> Result<ComputePoolSelection, ErrorData> {
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
@@ -312,6 +347,16 @@ fn recommended_selection(
             machine,
             failure_domains,
         }),
+        // Workloads that never scale need no autoscaling fleet, even where any mode is allowed.
+        CapacityGroupScalePolicy::Autoscale { min, max }
+            if generated && min.default == max.default =>
+        {
+            Ok(ComputePoolSelection::Fixed {
+                machines: min.default.max(1),
+                machine,
+                failure_domains,
+            })
+        }
         CapacityGroupScalePolicy::Autoscale { min, max } => Ok(ComputePoolSelection::Autoscale {
             min: min.default,
             max: max.default.max(min.default),
@@ -1324,15 +1369,68 @@ mod tests {
             (1, 3)
         );
 
-        // Workloads that never scale keep a fixed recommendation.
+        // Workloads that never scale get a fixed recommendation, but either mode stays
+        // allowed: replica counts change between releases while the saved choice stays.
         let plan =
             plan_compute(&stack_with_container(), Platform::Aws, None).expect("plan should build");
         assert_eq!(
             plan.pools[0].scale,
-            CapacityGroupScalePolicy::Fixed {
-                machines: range(1, 10, 1),
+            CapacityGroupScalePolicy::Autoscale {
+                min: range(1, 10, 1),
+                max: range(1, 10, 1),
             }
         );
+        assert!(matches!(
+            plan.pools[0].recommended,
+            ComputePoolSelection::Fixed { machines: 1, .. }
+        ));
+        assert!(plan.pools[0].errors.is_empty());
+    }
+
+    #[test]
+    fn generated_pool_rejects_a_fleet_too_small_for_desired_replicas() {
+        let mut stack = stack_with_container();
+        let api = stack
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container");
+        // 3 x 2 vCPU / 4 GiB requested at the desired count.
+        api.replicas = Some(3);
+        let selection = |machines| ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines,
+                    machine: Some("m7g.xlarge".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        // m7g.xlarge: 4 vCPU and 16 GiB, 3.5 vCPU after the system reserve.
+        let errors = plan_compute(&stack, Platform::Aws, Some(&selection(1)))
+            .expect("plan should build")
+            .pools
+            .remove(0)
+            .errors;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with(
+                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge provides 3.50 vCPU"
+            ),
+            "{errors:?}"
+        );
+        assert!(errors[0].contains("request 6.00 vCPU"), "{errors:?}");
+
+        let errors = plan_compute(&stack, Platform::Aws, Some(&selection(2)))
+            .expect("plan should build")
+            .pools
+            .remove(0)
+            .errors;
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]

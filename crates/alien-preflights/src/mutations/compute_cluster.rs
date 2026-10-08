@@ -12,7 +12,7 @@ use crate::{
 };
 use alien_core::{
     compute_planner::{
-        capacity_group_requirements, default_persistent_failure_domains,
+        capacity_group_requirements, check_pool_capacity, default_persistent_failure_domains,
         generated_pool_scale_policy, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
@@ -756,12 +756,13 @@ fn declared_scale_policy(group: &CapacityGroup) -> CapacityGroupScalePolicy {
     })
 }
 
-fn materialize_group(
+/// Materializes `group` from the deployment's selection for it and returns that selection.
+fn materialize_group<'c>(
     group: &mut CapacityGroup,
     platform: Platform,
-    config: &DeploymentConfig,
+    config: &'c DeploymentConfig,
     scale: &CapacityGroupScalePolicy,
-) -> Result<()> {
+) -> Result<&'c ComputePoolSelection> {
     let selection = config
         .stack_settings
         .compute
@@ -775,7 +776,8 @@ fn materialize_group(
                 ),
             })
         })?;
-    materialize_selection_within(group, platform, selection, scale)
+    materialize_selection_within(group, platform, selection, scale)?;
+    Ok(selection)
 }
 
 /// Use the same validation and profile derivation for declared machine changes
@@ -1018,7 +1020,16 @@ fn build_capacity_group_for_id(
         // No source declaration bounds a generated pool; its counts are only the
         // recommendation, and the installer may choose others.
         let scale = generated_pool_scale_policy(group.min_size, group.max_size);
-        materialize_group(&mut group, platform, config, &scale)?;
+        let selection = materialize_group(&mut group, platform, config, &scale)?;
+        if !containers.is_empty() {
+            check_pool_capacity(platform, group_id, selection, &effective).map_err(|message| {
+                AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: "ComputeClusterMutation".to_string(),
+                    message,
+                    resource_id: None,
+                })
+            })?;
+        }
     } else {
         group.profile = Some(MachineProfile {
             cpu: format!(
@@ -2566,6 +2577,121 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    /// The `gw` container of a release, with half a vCPU and 1 GiB per replica.
+    fn gw_release(replicas: ContainerReplicas) -> Stack {
+        let mut gw = test_container("gw", "0.5", "1Gi");
+        match replicas {
+            ContainerReplicas::Fixed(count) => gw.replicas = Some(count),
+            ContainerReplicas::Autoscale(min, max) => {
+                gw.autoscaling = Some(ContainerAutoscaling {
+                    min,
+                    desired: min,
+                    max,
+                    target_cpu_percent: Some(70.0),
+                    target_memory_percent: None,
+                    target_http_in_flight_per_replica: None,
+                    max_http_p95_latency_ms: None,
+                })
+            }
+        }
+        Stack::new("replica-change".to_string())
+            .add(gw, ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum ContainerReplicas {
+        Fixed(u32),
+        Autoscale(u32, u32),
+    }
+
+    async fn prepare_release(stack: Stack, selection: &ComputePoolSelection) -> Result<CapacityGroup> {
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let stack = ComputeClusterMutation
+            .mutate(stack, &stack_state, &general_selection(selection.clone()))
+            .await?;
+        let cluster = stack
+            .resources
+            .get("compute")
+            .and_then(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .expect("the mutation should generate the compute cluster");
+        Ok(cluster.capacity_groups[0].clone())
+    }
+
+    /// A release that changes replica counts keeps the deployer's saved pool choice, in both
+    /// directions, for fixed and autoscaling pools. The planner's own recommendation moves
+    /// with the replicas, and used to be the only accepted choice.
+    #[tokio::test]
+    async fn replica_changes_keep_the_saved_pool_choice() {
+        let fixed_one = ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: Some("m7g.large".to_string()),
+            failure_domains: None,
+        };
+        let autoscale_one_two = ComputePoolSelection::Autoscale {
+            min: 1,
+            max: 2,
+            machine: Some("m7g.large".to_string()),
+            failure_domains: None,
+        };
+        let releases = [
+            ContainerReplicas::Fixed(1),
+            // Scale up: fixed replicas and autoscaling replicas past the saved maximum.
+            ContainerReplicas::Fixed(2),
+            ContainerReplicas::Autoscale(1, 3),
+            ContainerReplicas::Autoscale(2, 6),
+            // Scale back down.
+            ContainerReplicas::Autoscale(1, 2),
+            ContainerReplicas::Fixed(1),
+        ];
+        for (saved, expected) in [(&fixed_one, (1, 1)), (&autoscale_one_two, (1, 2))] {
+            for replicas in releases {
+                let plan = plan_compute(&gw_release(replicas), Platform::Aws, None)
+                    .expect("compute plan should build");
+                let recommended = &plan.pools[0].recommended;
+                let group = prepare_release(gw_release(replicas), saved)
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{replicas:?} (recommended {}-{}) with saved {saved:?}: {error}",
+                            recommended.min_size(),
+                            recommended.max_size()
+                        )
+                    });
+                assert_eq!(
+                    (group.min_size, group.max_size),
+                    expected,
+                    "{replicas:?} with saved {saved:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn replica_change_beyond_the_saved_fleet_is_refused_with_its_size() {
+        let fixed_one = ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: Some("m7g.large".to_string()),
+            failure_domains: None,
+        };
+        // m7g.large gives workloads 1.5 vCPU; four replicas request 2.
+        let error = prepare_release(gw_release(ContainerReplicas::Fixed(4)), &fixed_one)
+            .await
+            .expect_err("four replicas cannot fit one machine");
+        assert!(
+            error.message.contains(
+                "Pool 'general' is too small for its workloads: 1 x m7g.large provides 1.50 vCPU"
+            ),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("request 2.00 vCPU"), "{}", error.message);
     }
 
     #[tokio::test]
