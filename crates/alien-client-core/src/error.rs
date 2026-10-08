@@ -136,6 +136,19 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// Body cleanup failed after the service accepted the request.
+    #[error(
+        code = "HTTP_RESPONSE_BODY_READ_FAILED",
+        message = "HTTP {http_status} succeeded, but its response body could not be read",
+        retryable = "false",
+        internal = "false",
+        hint = "The request was already accepted. Check the remote state before retrying."
+    )]
+    HttpResponseBodyReadFailed {
+        /// Successful HTTP status received before the body read failed.
+        http_status: u16,
+    },
+
     /// HTTP request succeeded but returned a non-success status code.
     #[error(
         code = "HTTP_RESPONSE_ERROR",

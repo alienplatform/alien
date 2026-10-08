@@ -199,7 +199,7 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
         .as_ref()
         .expect("permission set must have AWS permissions");
 
-    assert_eq!(aws_permissions.len(), 2);
+    assert_eq!(aws_permissions.len(), 3);
     for permission in aws_permissions {
         assert!(
             permission.binding.stack.is_none(),
@@ -210,12 +210,23 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
             .resource
             .as_ref()
             .expect("resource binding required");
+        let actions = permission.grant.actions.as_ref().expect("actions required");
+        // ListCertificates supports no resource scoping, so it is the one unscoped grant, and
+        // it may carry nothing else.
+        if actions
+            .iter()
+            .any(|action| action == "acm:ListCertificates")
+        {
+            assert_eq!(actions, &["acm:ListCertificates"]);
+            assert_eq!(binding.resources, ["*"]);
+            assert!(binding.condition.is_none());
+            continue;
+        }
         assert_eq!(
             binding.resources,
             ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
         );
 
-        let actions = permission.grant.actions.as_ref().expect("actions required");
         if actions
             .iter()
             .any(|action| action == "acm:DeleteCertificate")
@@ -279,6 +290,11 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
                         || documented_ses_domain_identity_scope(resource)
+                        || documented_detached_network_interface_cleanup(
+                            permission_set_id,
+                            actions,
+                            resource,
+                        )
                     {
                         continue;
                     }
@@ -336,6 +352,21 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // wildcard safe: a connector the customer declared carries the customer's account id and this
     // pattern cannot name it.
     resource == "arn:aws:lambda:${awsRegion}:aws:network-connector:aws-network-connector:*"
+}
+
+fn documented_detached_network_interface_cleanup(
+    permission_set_id: &str,
+    actions: &[String],
+    resource: &str,
+) -> bool {
+    // Lambda leaves detached network interfaces in the managed network's subnets, and they block
+    // deleting it. They carry no Alien tags, so no tag condition can scope the delete, and the
+    // VPC ID a condition would need is only known at runtime. EC2 refuses to delete an attached
+    // interface, and the network controller deletes only available, AWS-managed `lambda`
+    // interfaces in its own subnets and security group.
+    permission_set_id == "network/provision"
+        && actions == ["ec2:DeleteNetworkInterface"]
+        && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
 }
 
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {
@@ -845,6 +876,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "ec2:DeleteVpc"
             | "ec2:DescribeVpcAttribute"
             | "ec2:DetachInternetGateway"
+            | "ec2:DetachVolume"
             | "ec2:DisassociateRouteTable"
             | "ec2:GetConsoleOutput"
             | "ec2:ModifyVpcAttribute"

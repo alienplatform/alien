@@ -20,7 +20,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::net::lookup_host;
 use tracing::info;
+use uuid::Uuid;
 
+#[cfg(feature = "aws")]
+use crate::core::aws_tag_scoped::{
+    certificates_imported_with_token, delete_imported_certificate, with_import_token,
+};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 #[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
@@ -39,6 +44,15 @@ pub(crate) struct KubernetesPublicEndpointState {
     pub(crate) azure_health_check_policy_name: Option<String>,
     pub(crate) managed_tls_secret_name: Option<String>,
     pub(crate) managed_acm_certificate_arn: Option<String>,
+    /// Token tagged on the certificate a `managedAcmImport` import makes, recorded before the
+    /// import so a retry after a lost response, and the delete, find that certificate.
+    #[serde(default)]
+    pub(crate) managed_acm_import_token: Option<String>,
+    /// Region the managed ACM certificate is imported into, recorded with the import token.
+    /// `managedAcmImport` may name a region other than the cluster's, and the lookup and
+    /// delete must use it even after the endpoint switches to another certificate mode.
+    #[serde(default)]
+    pub(crate) managed_acm_region: Option<String>,
     pub(crate) public_url: Option<String>,
     pub(crate) load_balancer_endpoint: Option<LoadBalancerEndpoint>,
     pub(crate) published_certificate_id: Option<String>,
@@ -153,6 +167,26 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         }
         EndpointPlanResolution::Ready(plan) => plan,
     };
+    // A first managed ACM import needs its token saved by a step of its own, before anything
+    // else this reconcile changes: the executor saves state only between steps, so a token
+    // made in the step that imports would be lost if the process stopped after ACM accepted
+    // the import.
+    if let EndpointCertificate::ManagedAcmImport { region, .. } = &plan.certificate {
+        if is_aws_alb_ingress(&plan.route)
+            && state.managed_acm_certificate_arn.is_none()
+            && state.managed_acm_import_token.is_none()
+        {
+            state.managed_acm_region = Some(resolve_managed_acm_region(
+                ctx,
+                target.resource_id,
+                region.as_ref(),
+            )?);
+            state.managed_acm_import_token = Some(Uuid::new_v4().to_string());
+            return Ok(KubernetesEndpointAction::Waiting {
+                suggested_delay: Duration::from_secs(1),
+            });
+        }
+    }
     let previous_ingress_name = state.ingress_name.clone();
     let previous_gateway_name = state.gateway_name.clone();
     let previous_http_route_name = state.http_route_name.clone();
@@ -277,6 +311,13 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 },
             )
             .await?;
+            // The import has a provider-assigned ARN, so it is kept even when a later step of
+            // this reconcile fails and the rest of `pending_state` is dropped.
+            state.managed_acm_certificate_arn = pending_state.managed_acm_certificate_arn.clone();
+            state.managed_acm_region = pending_state.managed_acm_region.clone();
+            state.published_certificate_id = pending_state.published_certificate_id.clone();
+            state.published_certificate_issued_at =
+                pending_state.published_certificate_issued_at.clone();
             active_managed_acm_certificate = true;
             plan.certificate = EndpointCertificate::AwsAcmArn(certificate_arn);
             None
@@ -412,15 +453,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     )
     .await;
     if let Err(error) = cleanup_result {
-        // ACM imports have provider-assigned identities and must survive a
-        // retry even when stale Kubernetes cleanup fails. Route and Secret
-        // names remain at their previous values so the retry still knows
-        // exactly which stale objects to remove.
-        if active_managed_acm_certificate {
-            state.managed_acm_certificate_arn = pending_state.managed_acm_certificate_arn;
-            state.published_certificate_id = pending_state.published_certificate_id;
-            state.published_certificate_issued_at = pending_state.published_certificate_issued_at;
-        }
+        // Route and Secret names remain at their previous values so the retry still knows
+        // exactly which stale objects to remove. A managed ACM import was already kept above.
         return Err(error);
     }
     *state = pending_state;
@@ -1023,16 +1057,30 @@ async fn publish_managed_acm_certificate(
         }
     }
 
+    // A recorded certificate (or import token) stays in the region it was imported into.
+    let configured_region =
+        resolve_managed_acm_region(ctx, target.resource_id, input.region.as_ref())?;
+    let region = match recorded_managed_acm_region(state) {
+        Some(recorded) if recorded != configured_region => {
+            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: target.resource_id.to_string(),
+                message: format!(
+                    "The managed ACM certificate was imported into '{recorded}', but managedAcmImport now names '{configured_region}'. Moving an imported certificate to another region is not supported; switch to another certificate mode first, then back"
+                ),
+            }));
+        }
+        Some(recorded) => recorded,
+        None => configured_region,
+    };
     let mut aws_config = ctx.get_aws_config()?.clone();
-    if let Some(region) = input.region.as_ref() {
-        aws_config.region = region.clone();
-    }
+    aws_config.region = region.clone();
 
     let acm_client = ctx.service_provider.get_aws_acm_client(&aws_config).await?;
     let tags = acm_tags(ctx.resource_prefix, target.resource_id, input.tags);
     let (leaf, chain) = split_certificate_chain(&input.certificate_chain);
 
     let certificate_arn = if let Some(certificate_arn) = state.managed_acm_certificate_arn.clone() {
+        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
         acm_client
             .reimport_certificate(
                 alien_aws_clients::acm::ReimportCertificateRequest::builder()
@@ -1040,7 +1088,6 @@ async fn publish_managed_acm_certificate(
                     .certificate(leaf)
                     .private_key(input.private_key)
                     .maybe_certificate_chain(chain)
-                    .tags(tags)
                     .build(),
             )
             .await
@@ -1051,25 +1098,51 @@ async fn publish_managed_acm_certificate(
             })?;
         certificate_arn
     } else {
-        acm_client
-            .import_certificate(
-                alien_aws_clients::acm::ImportCertificateRequest::builder()
-                    .certificate(leaf)
-                    .private_key(input.private_key)
-                    .maybe_certificate_chain(chain)
-                    .tags(tags)
-                    .build(),
-            )
+        let token = state.managed_acm_import_token.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: target.resource_id.to_string(),
+                message: "A managed ACM certificate import has no recorded import token"
+                    .to_string(),
+            })
+        })?;
+        // Every ImportCertificate without an ARN makes a new certificate, so an earlier import
+        // under this token whose response was lost is looked up first.
+        let earlier_import = certificates_imported_with_token(acm_client.as_ref(), &token)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to import Kubernetes public endpoint certificate to ACM"
+                message: "Failed to look up certificates imported by an earlier attempt"
                     .to_string(),
                 resource_id: Some(target.resource_id.to_string()),
             })?
-            .certificate_arn
+            .and_then(|found| found.into_iter().next());
+        match earlier_import {
+            Some(certificate_arn) => {
+                info!(certificate_arn=%certificate_arn, "Adopting the Kubernetes public endpoint certificate an earlier import made");
+                certificate_arn
+            }
+            None => {
+                acm_client
+                    .import_certificate(
+                        alien_aws_clients::acm::ImportCertificateRequest::builder()
+                            .certificate(leaf)
+                            .private_key(input.private_key)
+                            .maybe_certificate_chain(chain)
+                            .tags(with_import_token(tags, &token))
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to import Kubernetes public endpoint certificate to ACM"
+                            .to_string(),
+                        resource_id: Some(target.resource_id.to_string()),
+                    })?
+                    .certificate_arn
+            }
+        }
     };
 
     state.managed_acm_certificate_arn = Some(certificate_arn.clone());
+    state.managed_acm_region = Some(region);
     state.published_certificate_id = Some(input.certificate_id);
     state.published_certificate_issued_at = input.issued_at;
 
@@ -1095,32 +1168,90 @@ async fn delete_managed_acm_certificate(
     resource_id: &str,
     state: &mut KubernetesPublicEndpointState,
 ) -> Result<()> {
-    let Some(certificate_arn) = state.managed_acm_certificate_arn.clone() else {
+    if state.managed_acm_certificate_arn.is_none() && state.managed_acm_import_token.is_none() {
         return Ok(());
-    };
-
-    let aws_config = ctx.get_aws_config()?;
-    let acm_client = ctx.service_provider.get_aws_acm_client(aws_config).await?;
-    match acm_client.delete_certificate(&certificate_arn).await {
-        Ok(()) => {
-            info!(certificate_arn=%certificate_arn, "Deleted Kubernetes public endpoint ACM certificate");
-            state.managed_acm_certificate_arn = None;
-            Ok(())
-        }
-        Err(e)
-            if matches!(
-                e.error,
-                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-            ) =>
-        {
-            state.managed_acm_certificate_arn = None;
-            Ok(())
-        }
-        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-            message: "Failed to delete Kubernetes public endpoint ACM certificate".to_string(),
-            resource_id: Some(resource_id.to_string()),
-        })),
     }
+
+    // The certificate lives where it was imported, whatever the endpoint's mode is now.
+    let mut aws_config = ctx.get_aws_config()?.clone();
+    if let Some(region) = recorded_managed_acm_region(state) {
+        aws_config.region = region;
+    }
+    let acm_client = ctx.service_provider.get_aws_acm_client(&aws_config).await?;
+    let mut certificate_arns: Vec<String> =
+        state.managed_acm_certificate_arn.iter().cloned().collect();
+    // An import whose response was lost left a certificate that only its token finds.
+    if let Some(token) = state.managed_acm_import_token.as_deref() {
+        let found = certificates_imported_with_token(acm_client.as_ref(), token)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message:
+                    "Failed to look up Kubernetes public endpoint certificates imported to ACM"
+                        .to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        for certificate_arn in found.into_iter().flatten() {
+            if !certificate_arns.contains(&certificate_arn) {
+                certificate_arns.push(certificate_arn);
+            }
+        }
+    }
+    for certificate_arn in &certificate_arns {
+        // The delete and read are granted only on certificates carrying this resource's tags,
+        // so ACM answers both with AccessDenied for a certificate that is already gone.
+        let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to delete Kubernetes public endpoint ACM certificate '{certificate_arn}'"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        info!(certificate_arn=%certificate_arn, outcome=?outcome, "Kubernetes public endpoint ACM certificate removed");
+    }
+    state.managed_acm_certificate_arn = None;
+    state.managed_acm_import_token = None;
+    state.managed_acm_region = None;
+    Ok(())
+}
+
+/// The region `managedAcmImport` imports into: the configured one, or the cluster's.
+#[cfg(feature = "aws")]
+fn resolve_managed_acm_region(
+    ctx: &ResourceControllerContext<'_>,
+    _resource_id: &str,
+    configured: Option<&String>,
+) -> Result<String> {
+    match configured {
+        Some(region) => Ok(region.clone()),
+        None => Ok(ctx.get_aws_config()?.region.clone()),
+    }
+}
+
+#[cfg(not(feature = "aws"))]
+fn resolve_managed_acm_region(
+    _ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    _configured: Option<&String>,
+) -> Result<String> {
+    Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+        resource_id: resource_id.to_string(),
+        message: "managedAcmImport certificate mode requires the aws feature".to_string(),
+    }))
+}
+
+/// The region of the recorded managed ACM certificate: the one saved with the import, else the
+/// one in the recorded ARN (state saved before the region was recorded).
+#[cfg(feature = "aws")]
+fn recorded_managed_acm_region(state: &KubernetesPublicEndpointState) -> Option<String> {
+    state.managed_acm_region.clone().or_else(|| {
+        state
+            .managed_acm_certificate_arn
+            .as_deref()
+            .and_then(|arn| arn.split(':').nth(3))
+            .filter(|region| !region.is_empty())
+            .map(str::to_string)
+    })
 }
 
 #[cfg(not(feature = "aws"))]
@@ -1129,7 +1260,7 @@ async fn delete_managed_acm_certificate(
     resource_id: &str,
     state: &mut KubernetesPublicEndpointState,
 ) -> Result<()> {
-    if state.managed_acm_certificate_arn.is_none() {
+    if state.managed_acm_certificate_arn.is_none() && state.managed_acm_import_token.is_none() {
         return Ok(());
     }
     Err(AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -3420,5 +3551,830 @@ mod tests {
         assert_eq!(tags.get("resource"), Some(&"api".to_string()));
         assert_eq!(tags.get("managed-by"), Some(&"runtime".to_string()));
         assert_eq!(tags.get("team"), Some(&"platform".to_string()));
+    }
+
+    // ─────────────── MANAGED ACM IMPORTS ────────────────
+
+    #[cfg(feature = "aws")]
+    mod managed_acm {
+        use super::*;
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use crate::core::MockPlatformServiceProvider;
+        use alien_aws_clients::acm::{
+            CertificateSummary, ImportCertificateResponse, ListCertificatesResponse, MockAcmApi,
+            Tag,
+        };
+        use alien_core::{
+            standard_resource_tags, AwsClientConfig, AwsCredentials, ClientConfig, DnsRecordStatus,
+            DomainMetadata, KubernetesSettings, Resource, ResourceDomainInfo, Worker, WorkerCode,
+        };
+        use alien_k8s_clients::kubernetes::services::MockServiceApi;
+        use alien_k8s_clients::{RouteApi, ServiceApi};
+        use std::sync::{Arc, Mutex};
+
+        /// ACM as these tests see it: the imported certificates, by ARN, with their tags.
+        type CertificateWorld = Arc<Mutex<Vec<(String, Vec<Tag>)>>>;
+
+        fn arn(n: usize) -> String {
+            format!("arn:aws:acm:us-east-1:123456789012:certificate/imported-{n}")
+        }
+
+        fn access_denied() -> AlienError<CloudClientErrorData> {
+            AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                resource_type: "Certificate".to_string(),
+                resource_name: "certificate".to_string(),
+            })
+        }
+
+        fn not_found() -> AlienError<CloudClientErrorData> {
+            AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                resource_type: "Certificate".to_string(),
+                resource_name: "certificate".to_string(),
+            })
+        }
+
+        #[derive(Clone, Default)]
+        struct AcmCalls {
+            imports: Arc<Mutex<Vec<Vec<Tag>>>>,
+            deletes: Arc<Mutex<Vec<String>>>,
+        }
+
+        /// Whether the runtime role's tag-conditioned grant covers a certificate with `tags`.
+        fn ours(tags: &[Tag]) -> bool {
+            standard_resource_tags("test", "api")
+                .into_iter()
+                .all(|(key, value)| tags.contains(&Tag { key, value }))
+        }
+
+        /// The tags an import by this endpoint carries, plus `token`.
+        fn our_tags(token: &str) -> Vec<Tag> {
+            let mut tags: Vec<Tag> = standard_resource_tags("test", "api")
+                .into_iter()
+                .map(|(key, value)| Tag { key, value })
+                .collect();
+            tags.push(Tag {
+                key: "CreateAttempt".to_string(),
+                value: token.to_string(),
+            });
+            tags
+        }
+
+        /// An ACM client over `world`, as the runtime role sees it (checked live): a
+        /// certificate that does not exist is NotFound for every call, and one that exists
+        /// without this resource's tags is AccessDenied for the tag-conditioned delete,
+        /// describe and tag read. While `lose_responses` is above zero, an import ACM accepted
+        /// answers 503 instead.
+        fn world_acm(
+            world: CertificateWorld,
+            calls: AcmCalls,
+            lose_responses: usize,
+        ) -> MockAcmApi {
+            fn find(
+                world: &CertificateWorld,
+                certificate_arn: &str,
+            ) -> std::result::Result<Vec<Tag>, AlienError<CloudClientErrorData>> {
+                let tags = world
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(stored, _)| stored == certificate_arn)
+                    .map(|(_, tags)| tags.clone())
+                    .ok_or_else(not_found)?;
+                if ours(&tags) {
+                    Ok(tags)
+                } else {
+                    Err(access_denied())
+                }
+            }
+
+            let mut acm = MockAcmApi::new();
+            let stored = world.clone();
+            let imports = calls.imports.clone();
+            let mut lose_responses = lose_responses;
+            acm.expect_import_certificate().returning(move |request| {
+                let tags = request.tags.clone().unwrap_or_default();
+                imports.lock().unwrap().push(tags.clone());
+                let mut certificates = stored.lock().unwrap();
+                let certificate_arn = arn(certificates.len() + 1);
+                certificates.push((certificate_arn.clone(), tags));
+                if lose_responses > 0 {
+                    lose_responses -= 1;
+                    return Err(AlienError::new(
+                        CloudClientErrorData::RemoteServiceUnavailable {
+                            message: "connection reset".to_string(),
+                        },
+                    ));
+                }
+                Ok(ImportCertificateResponse { certificate_arn })
+            });
+            let listed = world.clone();
+            acm.expect_list_certificates().returning(move |_| {
+                Ok(ListCertificatesResponse {
+                    certificate_summary_list: listed
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|(certificate_arn, _)| CertificateSummary {
+                            certificate_arn: Some(certificate_arn.clone()),
+                            domain_name: Some("api.example.com".to_string()),
+                            status: Some("ISSUED".to_string()),
+                            certificate_type: Some("IMPORTED".to_string()),
+                            key_algorithm: None,
+                            in_use: Some(false),
+                            imported_at: None,
+                        })
+                        .collect(),
+                    next_token: None,
+                })
+            });
+            let tagged = world.clone();
+            acm.expect_list_tags_for_certificate()
+                .returning(move |certificate_arn| find(&tagged, certificate_arn));
+            let removed = world.clone();
+            let deletes = calls.deletes.clone();
+            acm.expect_delete_certificate()
+                .returning(move |certificate_arn| {
+                    deletes.lock().unwrap().push(certificate_arn.to_string());
+                    find(&removed, certificate_arn)?;
+                    removed
+                        .lock()
+                        .unwrap()
+                        .retain(|(stored, _)| stored != certificate_arn);
+                    Ok(())
+                });
+            let described = world;
+            acm.expect_describe_certificate()
+                .returning(move |certificate_arn| {
+                    find(&described, certificate_arn)?;
+                    Ok(alien_aws_clients::acm::DescribeCertificateResponse { certificate: None })
+                });
+            acm
+        }
+
+        /// The cluster's routes: creating the Ingress fails, as an API server error does.
+        #[derive(Debug)]
+        struct IngressCreateFails;
+
+        #[async_trait::async_trait]
+        impl RouteApi for IngressCreateFails {
+            async fn create_ingress(
+                &self,
+                _namespace: &str,
+                _ingress: &K8sIngress,
+            ) -> alien_client_core::Result<K8sIngress> {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteServiceUnavailable {
+                        message: "the API server is unavailable".to_string(),
+                    },
+                ))
+            }
+            async fn get_ingress(&self, _: &str, _: &str) -> alien_client_core::Result<K8sIngress> {
+                unreachable!("no Ingress exists")
+            }
+            async fn update_ingress(
+                &self,
+                _: &str,
+                _: &str,
+                _: &K8sIngress,
+            ) -> alien_client_core::Result<K8sIngress> {
+                unreachable!("no Ingress exists")
+            }
+            async fn delete_ingress(&self, _: &str, _: &str) -> alien_client_core::Result<()> {
+                unreachable!("nothing is deleted")
+            }
+            async fn create_gateway(&self, _: &str, _: &Value) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn get_gateway(&self, _: &str, _: &str) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn update_gateway(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn delete_gateway(&self, _: &str, _: &str) -> alien_client_core::Result<()> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn create_http_route(
+                &self,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn get_http_route(&self, _: &str, _: &str) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn update_http_route(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn delete_http_route(&self, _: &str, _: &str) -> alien_client_core::Result<()> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn create_gke_health_check_policy(
+                &self,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn get_gke_health_check_policy(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn update_gke_health_check_policy(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn delete_gke_health_check_policy(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> alien_client_core::Result<()> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn create_azure_health_check_policy(
+                &self,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn get_azure_health_check_policy(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn update_azure_health_check_policy(
+                &self,
+                _: &str,
+                _: &str,
+                _: &Value,
+            ) -> alien_client_core::Result<Value> {
+                unreachable!("the route is an Ingress")
+            }
+            async fn delete_azure_health_check_policy(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> alien_client_core::Result<()> {
+                unreachable!("the route is an Ingress")
+            }
+        }
+
+        /// The cluster's own region.
+        const CLUSTER_REGION: &str = "us-east-1";
+
+        fn managed_acm_import(region: Option<&str>) -> KubernetesCertificateMode {
+            KubernetesCertificateMode::ManagedAcmImport {
+                region: region.map(str::to_string),
+                tags: HashMap::new(),
+            }
+        }
+
+        /// An EKS cluster in `CLUSTER_REGION` whose public endpoint imports the issued
+        /// certificate into ACM in that region.
+        fn harness(acm: MockAcmApi) -> KubernetesManifestTestHarness {
+            harness_with(vec![(CLUSTER_REGION, acm)], managed_acm_import(None))
+        }
+
+        /// An EKS cluster in `CLUSTER_REGION` with `certificate` as its endpoints' certificate
+        /// mode, and one ACM client per region. A call into any other region fails the test.
+        fn harness_with(
+            acm_by_region: Vec<(&str, MockAcmApi)>,
+            certificate: KubernetesCertificateMode,
+        ) -> KubernetesManifestTestHarness {
+            let acm_by_region: HashMap<String, Arc<dyn alien_aws_clients::acm::AcmApi>> =
+                acm_by_region
+                    .into_iter()
+                    .map(|(region, acm)| {
+                        (
+                            region.to_string(),
+                            Arc::new(acm) as Arc<dyn alien_aws_clients::acm::AcmApi>,
+                        )
+                    })
+                    .collect();
+            let mut services = MockServiceApi::new();
+            services
+                .expect_create_service()
+                .returning(|_, service| Ok(service.clone()));
+            let services: Arc<dyn ServiceApi> = Arc::new(services);
+            let routes: Arc<dyn RouteApi> = Arc::new(IngressCreateFails);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_acm_client()
+                .returning(move |config| {
+                    Ok(acm_by_region
+                        .get(&config.region)
+                        .unwrap_or_else(|| panic!("no ACM call expected in {}", config.region))
+                        .clone())
+                });
+            provider
+                .expect_get_kubernetes_service_client()
+                .returning(move |_| Ok(services.clone()));
+            provider
+                .expect_get_kubernetes_route_client()
+                .returning(move |_| Ok(routes.clone()));
+
+            let worker = Worker::new("api".to_string())
+                .code(WorkerCode::Image {
+                    image: "api:latest".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build();
+            let mut harness = KubernetesManifestTestHarness::new(Resource::new(worker), vec![])
+                .with_service_provider(Arc::new(provider))
+                .with_cloud(ClientConfig::Aws(Box::new(AwsClientConfig {
+                    account_id: "123456789012".to_string(),
+                    region: CLUSTER_REGION.to_string(),
+                    credentials: AwsCredentials::AccessKeys {
+                        access_key_id: "test".to_string(),
+                        secret_access_key: "test".to_string(),
+                        session_token: None,
+                    },
+                    service_overrides: None,
+                })));
+            let config = harness.deployment_config_mut();
+            config.stack_settings.kubernetes = Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(KubernetesExposureSettings::Generated {
+                    route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                        ingress_class_name: "alb".to_string(),
+                        provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                            scheme: "internet-facing".to_string(),
+                            target_type: "ip".to_string(),
+                            ip_address_type: None,
+                            subnet_ids: vec![],
+                        }),
+                        ..Default::default()
+                    }),
+                    certificate,
+                }),
+            });
+            config.domain_metadata = Some(DomainMetadata {
+                base_domain: "example.com".to_string(),
+                public_subdomain: "app".to_string(),
+                hosted_zone_id: "Z1234567890ABC".to_string(),
+                resources: HashMap::from([(
+                    "api".to_string(),
+                    ResourceDomainInfo {
+                        fqdn: "api.example.com".to_string(),
+                        certificate_id: "cert-1".to_string(),
+                        certificate_status: CertificateStatus::Issued,
+                        dns_status: DnsRecordStatus::Active,
+                        dns_error: None,
+                        certificate_chain: Some(
+                            "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                                .to_string(),
+                        ),
+                        private_key: Some(
+                            "-----BEGIN PRIVATE KEY-----\nMIIBtest\n-----END PRIVATE KEY-----\n"
+                                .to_string(),
+                        ),
+                        endpoints: HashMap::new(),
+                        aliases: Vec::new(),
+                        issued_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    },
+                )]),
+            });
+            harness
+        }
+
+        fn import_token(tags: &[Tag]) -> Option<&str> {
+            tags.iter()
+                .find(|tag| tag.key == "CreateAttempt")
+                .map(|tag| tag.value.as_str())
+        }
+
+        /// The first reconcile records the import token and stops before importing, so the
+        /// controller saves it. The next one imports with the token, and the import's ARN is
+        /// kept although creating the Ingress fails afterwards; the retry does not import again.
+        #[tokio::test]
+        async fn import_token_is_saved_first_and_the_arn_survives_a_later_failure() {
+            let world = CertificateWorld::default();
+            let calls = AcmCalls::default();
+            let harness = harness(world_acm(world.clone(), calls.clone(), 0));
+            let mut state = KubernetesPublicEndpointState::default();
+
+            let action =
+                reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                    .await
+                    .expect("records the token");
+            assert!(matches!(action, KubernetesEndpointAction::Waiting { .. }));
+            let token = state.managed_acm_import_token.clone().expect("token saved");
+            assert!(calls.imports.lock().unwrap().is_empty(), "no import yet");
+
+            reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("the Ingress create fails");
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
+            assert_eq!(state.published_certificate_id.as_deref(), Some("cert-1"));
+            assert_eq!(
+                import_token(&calls.imports.lock().unwrap()[0]),
+                Some(token.as_str())
+            );
+
+            reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("the Ingress create fails again");
+            assert_eq!(calls.imports.lock().unwrap().len(), 1, "no second import");
+            assert_eq!(world.lock().unwrap().len(), 1);
+        }
+
+        /// ACM imports the certificate but the process stops before the reconcile that imported
+        /// is saved. The controller restarts from the state saved before it, which holds the
+        /// token, and adopts the certificate instead of importing a second one.
+        #[tokio::test]
+        async fn certificate_imported_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+            let world = CertificateWorld::default();
+            let calls = AcmCalls::default();
+            let first = harness(world_acm(world.clone(), calls.clone(), 0));
+            let mut state = KubernetesPublicEndpointState::default();
+            reconcile_kubernetes_public_endpoint(&first.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect("records the token");
+            let checkpoint = state.clone();
+            reconcile_kubernetes_public_endpoint(&first.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("imports, then the Ingress create fails");
+            assert_eq!(calls.imports.lock().unwrap().len(), 1);
+
+            let restarted = harness(world_acm(world.clone(), calls.clone(), 0));
+            let mut state = checkpoint;
+            reconcile_kubernetes_public_endpoint(&restarted.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("the Ingress create fails after the adoption");
+
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
+            assert_eq!(calls.imports.lock().unwrap().len(), 1, "no second import");
+            assert_eq!(world.lock().unwrap().len(), 1);
+        }
+
+        /// The import reaches ACM but its response is lost; the retry adopts the certificate by
+        /// its token instead of importing a second one.
+        #[tokio::test]
+        async fn lost_import_response_is_adopted_by_its_token() {
+            let world = CertificateWorld::default();
+            let calls = AcmCalls::default();
+            let harness = harness(world_acm(world.clone(), calls.clone(), 1));
+            let mut state = KubernetesPublicEndpointState::default();
+
+            reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect("records the token");
+            reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("the import response is lost");
+            assert_eq!(state.managed_acm_certificate_arn, None);
+            reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("the Ingress create fails after the adoption");
+
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
+            assert_eq!(calls.imports.lock().unwrap().len(), 1);
+        }
+
+        /// A lost import followed by a delete: the certificate is found by its token.
+        #[tokio::test]
+        async fn delete_finds_a_lost_import_by_its_token() {
+            let world: CertificateWorld = Arc::new(Mutex::new(vec![(arn(1), our_tags("token-1"))]));
+            let calls = AcmCalls::default();
+            let harness = harness(world_acm(world.clone(), calls.clone(), 0));
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_import_token: Some("token-1".to_string()),
+                ..Default::default()
+            };
+
+            delete_managed_acm_certificate(&harness.ctx(), "api", &mut state)
+                .await
+                .expect("deletes the certificate");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
+            assert!(world.lock().unwrap().is_empty());
+            assert_eq!(state, KubernetesPublicEndpointState::default());
+        }
+
+        /// `managedAcmImport` names a region other than the cluster's. The import's response is
+        /// lost; teardown finds the certificate by its token in that region and deletes it
+        /// there. The cluster region's ACM is never called.
+        #[tokio::test]
+        async fn lost_import_in_a_configured_region_is_found_and_deleted_there() {
+            let world = CertificateWorld::default();
+            let calls = AcmCalls::default();
+            let creating = harness_with(
+                vec![("eu-west-1", world_acm(world.clone(), calls.clone(), 1))],
+                managed_acm_import(Some("eu-west-1")),
+            );
+            let mut state = KubernetesPublicEndpointState::default();
+            reconcile_kubernetes_public_endpoint(&creating.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect("records the token");
+            assert_eq!(state.managed_acm_region.as_deref(), Some("eu-west-1"));
+            reconcile_kubernetes_public_endpoint(&creating.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("the import response is lost");
+            assert_eq!(state.managed_acm_certificate_arn, None);
+            assert_eq!(world.lock().unwrap().len(), 1, "ACM holds the certificate");
+
+            let deleting = harness_with(
+                vec![("eu-west-1", world_acm(world.clone(), calls.clone(), 0))],
+                managed_acm_import(Some("eu-west-1")),
+            );
+            delete_managed_acm_certificate(&deleting.ctx(), "api", &mut state)
+                .await
+                .expect("deletes the certificate");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
+            assert!(world.lock().unwrap().is_empty(), "no certificate is left");
+            assert_eq!(state, KubernetesPublicEndpointState::default());
+        }
+
+        /// An update that switches from `managedAcmImport` in another region to a mode with no
+        /// region deletes the certificate in the region it was imported into.
+        #[tokio::test]
+        async fn switching_away_from_managed_acm_deletes_in_the_import_region() {
+            let world = CertificateWorld::default();
+            let calls = AcmCalls::default();
+            let importing = harness_with(
+                vec![("eu-west-1", world_acm(world.clone(), calls.clone(), 0))],
+                managed_acm_import(Some("eu-west-1")),
+            );
+            let mut state = KubernetesPublicEndpointState::default();
+            reconcile_kubernetes_public_endpoint(&importing.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect("records the token");
+            reconcile_kubernetes_public_endpoint(&importing.ctx(), endpoint_target(), &mut state)
+                .await
+                .expect_err("imports, then the Ingress create fails");
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
+            assert_eq!(state.managed_acm_region.as_deref(), Some("eu-west-1"));
+
+            let switched = harness_with(
+                vec![("eu-west-1", world_acm(world.clone(), calls.clone(), 0))],
+                KubernetesCertificateMode::None,
+            );
+            clean_up_after_leaving_managed_acm(&switched, &mut state)
+                .await
+                .expect("deletes the certificate");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
+            assert!(world.lock().unwrap().is_empty());
+            assert_eq!(state.managed_acm_certificate_arn, None);
+            assert_eq!(state.managed_acm_import_token, None);
+            assert_eq!(state.managed_acm_region, None);
+        }
+
+        /// State saved before the import region was recorded has only the ARN; the delete
+        /// uses the region in it.
+        #[tokio::test]
+        async fn certificate_recorded_without_a_region_is_deleted_in_its_arn_region() {
+            let old_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/old".to_string();
+            let world: CertificateWorld =
+                Arc::new(Mutex::new(vec![(old_arn.clone(), our_tags("unused"))]));
+            let calls = AcmCalls::default();
+            let harness = harness_with(
+                vec![("eu-west-1", world_acm(world.clone(), calls.clone(), 0))],
+                KubernetesCertificateMode::None,
+            );
+            let mut value = serde_json::to_value(KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(old_arn.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+            value.as_object_mut().unwrap().remove("managedAcmRegion");
+            value
+                .as_object_mut()
+                .unwrap()
+                .remove("managedAcmImportToken");
+            let mut state: KubernetesPublicEndpointState = serde_json::from_value(value).unwrap();
+
+            delete_managed_acm_certificate(&harness.ctx(), "api", &mut state)
+                .await
+                .expect("deletes the certificate");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [old_arn]);
+            assert!(world.lock().unwrap().is_empty());
+        }
+
+        /// A certificate stays in the region it was imported into: changing the configured
+        /// region under it fails loudly instead of reimporting into a region where the ARN
+        /// does not exist.
+        #[tokio::test]
+        async fn changing_the_region_of_an_imported_certificate_is_refused() {
+            let harness = harness_with(vec![], managed_acm_import(Some("eu-central-1")));
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(
+                    "arn:aws:acm:eu-west-1:123456789012:certificate/imported".to_string(),
+                ),
+                managed_acm_region: Some("eu-west-1".to_string()),
+                ..Default::default()
+            };
+
+            let error =
+                reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                    .await
+                    .expect_err("the region change is refused");
+
+            assert!(error.message.contains("eu-west-1"), "{}", error.message);
+            assert!(error.message.contains("eu-central-1"), "{}", error.message);
+            assert_eq!(state.managed_acm_region.as_deref(), Some("eu-west-1"));
+        }
+
+        /// Runs the stale-object cleanup of an update that switched away from
+        /// `managedAcmImport`: no route or Secret changed, so it only removes the certificate.
+        async fn clean_up_after_leaving_managed_acm(
+            harness: &KubernetesManifestTestHarness,
+            state: &mut KubernetesPublicEndpointState,
+        ) -> Result<()> {
+            let routes: Arc<dyn RouteApi> = Arc::new(IngressCreateFails);
+            cleanup_stale_endpoint_objects(
+                &harness.ctx(),
+                "app",
+                "api",
+                "api-v1",
+                "container",
+                &routes,
+                PreviousEndpointObjects {
+                    ingress_name: None,
+                    gateway_name: None,
+                    http_route_name: None,
+                    gke_health_check_policy_name: None,
+                    azure_health_check_policy_name: None,
+                    managed_tls_secret_name: None,
+                    managed_tls_certificate_id: None,
+                },
+                ActiveEndpointObjects {
+                    ingress_name: None,
+                    gateway_name: None,
+                    http_route_name: None,
+                    gke_health_check_policy_name: None,
+                    azure_health_check_policy_name: None,
+                    managed_tls_secret_name: None,
+                    managed_acm_certificate: false,
+                },
+                state,
+            )
+            .await
+        }
+
+        /// An update that switches away from `managedAcmImport` deletes the recorded
+        /// certificate and every other import under its token.
+        #[tokio::test]
+        async fn update_away_from_managed_acm_deletes_every_import_under_the_token() {
+            let world: CertificateWorld = Arc::new(Mutex::new(vec![
+                (arn(1), our_tags("token-1")),
+                (arn(2), our_tags("token-1")),
+                (arn(3), our_tags("another-endpoint")),
+            ]));
+            let calls = AcmCalls::default();
+            let harness = harness(world_acm(world.clone(), calls.clone(), 0));
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(arn(2)),
+                managed_acm_import_token: Some("token-1".to_string()),
+                ..Default::default()
+            };
+
+            clean_up_after_leaving_managed_acm(&harness, &mut state)
+                .await
+                .expect("deletes the certificates");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [arn(2), arn(1)]);
+            assert_eq!(
+                world
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(certificate_arn, _)| certificate_arn.clone())
+                    .collect::<Vec<_>>(),
+                [arn(3)]
+            );
+            assert_eq!(state.managed_acm_certificate_arn, None);
+            assert_eq!(state.managed_acm_import_token, None);
+        }
+
+        /// The recorded certificate is already gone (deleted out of band, or by an attempt
+        /// whose response was lost): the update goes on.
+        #[tokio::test]
+        async fn update_away_from_managed_acm_finishes_when_the_certificate_is_gone() {
+            let calls = AcmCalls::default();
+            let harness = harness(world_acm(CertificateWorld::default(), calls.clone(), 0));
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(arn(1)),
+                managed_acm_import_token: Some("token-1".to_string()),
+                ..Default::default()
+            };
+
+            clean_up_after_leaving_managed_acm(&harness, &mut state)
+                .await
+                .expect("a certificate that is gone needs no delete");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
+            assert_eq!(state.managed_acm_certificate_arn, None);
+            assert_eq!(state.managed_acm_import_token, None);
+        }
+
+        /// The recorded certificate exists but no longer carries this resource's tags, so the
+        /// tag-conditioned delete and describe are both denied. It is not this resource's to
+        /// delete any more: the update goes on instead of failing with a permission error no
+        /// grant can fix, and the certificate is left alone.
+        #[tokio::test]
+        async fn update_away_from_managed_acm_leaves_a_certificate_that_is_no_longer_ours() {
+            let retagged = vec![Tag {
+                key: "deployment".to_string(),
+                value: "someone-else".to_string(),
+            }];
+            let world: CertificateWorld = Arc::new(Mutex::new(vec![(arn(1), retagged)]));
+            let calls = AcmCalls::default();
+            let harness = harness(world_acm(world.clone(), calls.clone(), 0));
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(arn(1)),
+                ..Default::default()
+            };
+
+            clean_up_after_leaving_managed_acm(&harness, &mut state)
+                .await
+                .expect("a certificate that is not ours is not deleted");
+
+            assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
+            assert_eq!(
+                world.lock().unwrap().len(),
+                1,
+                "the certificate is left alone"
+            );
+            assert_eq!(state.managed_acm_certificate_arn, None);
+        }
+
+        /// When the certificate is still readable, its denied delete is a real denial: the
+        /// error is returned and the ARN kept for the retry.
+        #[tokio::test]
+        async fn denied_delete_of_a_certificate_that_still_exists_is_an_error() {
+            let mut acm = MockAcmApi::new();
+            acm.expect_delete_certificate()
+                .withf(|certificate_arn| certificate_arn == arn(1))
+                .times(1)
+                .returning(|_| Err(access_denied()));
+            acm.expect_describe_certificate().times(1).returning(|_| {
+                Ok(alien_aws_clients::acm::DescribeCertificateResponse { certificate: None })
+            });
+            let harness = harness(acm);
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(arn(1)),
+                ..Default::default()
+            };
+
+            let error = delete_managed_acm_certificate(&harness.ctx(), "api", &mut state)
+                .await
+                .expect_err("the denial is real");
+
+            let mut codes = vec![error.code.clone()];
+            let mut source = error.source.as_deref();
+            while let Some(inner) = source {
+                codes.push(inner.code.clone());
+                source = inner.source.as_deref();
+            }
+            assert!(
+                codes.contains(&"REMOTE_ACCESS_DENIED".to_string()),
+                "{codes:?}"
+            );
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
+        }
+
+        /// A delete answered NotFound is finished without a describe.
+        #[tokio::test]
+        async fn not_found_delete_is_finished() {
+            let mut acm = MockAcmApi::new();
+            acm.expect_delete_certificate()
+                .times(1)
+                .returning(|_| Err(not_found()));
+            acm.expect_describe_certificate().times(0);
+            let harness = harness(acm);
+            let mut state = KubernetesPublicEndpointState {
+                managed_acm_certificate_arn: Some(arn(1)),
+                ..Default::default()
+            };
+
+            delete_managed_acm_certificate(&harness.ctx(), "api", &mut state)
+                .await
+                .expect("a certificate that is gone needs no delete");
+            assert_eq!(state.managed_acm_certificate_arn, None);
+        }
     }
 }

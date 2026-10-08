@@ -266,14 +266,37 @@ impl GcpRemoteStackManagementController {
 
         let member = format!("serviceAccount:{service_account_email}");
         let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
-        let mut all_bindings = current_policy.bindings;
-        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+        // Vault controllers own this member's bindings conditioned on their
+        // namespace, and they can share predefined roles with the stack-wide
+        // grants (e.g. `roles/secretmanager.viewer` from `vault/heartbeat`).
+        // Leave those bindings out of this reconcile so an update that commits
+        // after a vault's does not strip the vault's grants.
+        let vault_namespaces = gcp_config
+            .project_number
+            .as_deref()
+            .map(|project_number| {
+                crate::vault::gcp_stack_vault_namespace_conditions(ctx, project_number)
+            })
+            .unwrap_or_default();
+        let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) =
+            current_policy.bindings.into_iter().partition(|binding| {
+                crate::vault::binding_targets_vault_namespace(binding, &vault_namespaces)
+            });
+        // No owned roles: only drop `deleted:` aliases, which GCP rejects anywhere.
+        let mut changed = ResourcePermissionsHelper::remove_gcp_project_member_bindings(
+            &mut vault_bindings,
+            &member,
+            Some(&[]),
+            Some(&[]),
+        );
+        changed |= ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
             &owned_exact_roles,
         );
+        all_bindings.extend(vault_bindings);
 
         if changed {
             let new_policy = IamPolicy::builder()

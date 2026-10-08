@@ -20,7 +20,6 @@ use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::{
     ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
-    ResourceLifecycle,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
@@ -29,7 +28,7 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_infra::{ClientConfigExt, StackStateExt};
+use alien_infra::ClientConfigExt;
 use alien_platform_api::types::DeploymentUpdateOperationStatus;
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt as _;
@@ -2755,24 +2754,22 @@ async fn prepare_setup_update(
             message: "An installed deployment has no prepared setup metadata".to_string(),
         })
     })?;
-    current.runtime_metadata = Some(
-        alien_deployment::prepare_direct_setup_update(
-            target_stack,
-            stack_state,
-            config,
-            client_config,
-            existing_metadata,
-        )
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to prepare the setup update".to_string(),
-        })?,
-    );
-    stack_state
-        .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+    let runtime_metadata = alien_deployment::prepare_direct_setup_update(
+        target_stack,
+        stack_state,
+        config,
+        client_config,
+        existing_metadata,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "Failed to prepare the setup update".to_string(),
+    })?;
+    alien_deployment::retry_failed_setup_resources(stack_state, &runtime_metadata, config)
         .context(ErrorData::ConfigurationError {
             message: "Failed to retry failed setup-owned resources".to_string(),
         })?;
+    current.runtime_metadata = Some(runtime_metadata);
     current.status = DeploymentStatus::InitialSetup;
     Ok(())
 }

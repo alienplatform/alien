@@ -1,4 +1,5 @@
 use alien_error::{AlienError, Context};
+use std::sync::Mutex;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -11,6 +12,101 @@ pub(crate) const CREATE_POLL_COUNT: u32 = 3; // Reduced from 5 for faster tests
 pub(crate) const UPDATE_POLL_COUNT: u32 = 2; // Reduced from 3
 pub(crate) const DELETE_POLL_COUNT: u32 = 2; // Reduced from 3
 pub(crate) const POLL_DELAY_MS: u64 = 50; // Short delay for tests
+
+/// Every delete the test controller issued against a created worker: its identifier and the
+/// config the delete handler saw.
+static ISSUED_DELETES: Mutex<Vec<(String, Worker)>> = Mutex::new(Vec::new());
+
+/// The configs seen by each delete issued against the worker with this identifier, in order.
+///
+/// Process-wide, so tests that read it should give their workers unique ids.
+pub fn test_worker_deletes_issued(identifier: &str) -> Vec<Worker> {
+    ISSUED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(issued_for, _)| issued_for == identifier)
+        .map(|(_, config)| config.clone())
+        .collect()
+}
+
+/// Workers whose delete the test controller denies, as a role without the delete permission
+/// would, and how many deletes it denied for each.
+static DENIED_DELETES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+
+/// Makes every delete of the worker with this identifier fail with access denied at the step
+/// that deletes it (the second delete step), before anything is deleted, until
+/// [`allow_test_worker_deletes`].
+pub fn deny_test_worker_deletes(identifier: &str) {
+    let mut denied = DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !denied.iter().any(|(id, _)| id == identifier) {
+        denied.push((identifier.to_string(), 0));
+    }
+}
+
+/// Grants the delete permission back. Returns how many deletes were denied meanwhile.
+pub fn allow_test_worker_deletes(identifier: &str) -> u32 {
+    let mut denied = DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let count = denied
+        .iter()
+        .find(|(id, _)| id == identifier)
+        .map_or(0, |(_, count)| *count);
+    denied.retain(|(id, _)| id != identifier);
+    count
+}
+
+/// How many deletes of this worker were denied so far.
+pub fn test_worker_deletes_denied(identifier: &str) -> u32 {
+    DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|(id, _)| id == identifier)
+        .map_or(0, |(_, count)| *count)
+}
+
+/// Counts and reports a denied delete, or `false` when deletes are allowed.
+fn delete_denied(identifier: &str) -> bool {
+    let mut denied = DENIED_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match denied.iter_mut().find(|(id, _)| id == identifier) {
+        Some((_, count)) => {
+            *count += 1;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Every config the test controller deployed to a worker: in CreateWorker, where a real
+/// controller creates the function with its code, and in UpdateStart, where it updates it.
+static DEPLOYED_CONFIGS: Mutex<Vec<(String, Worker)>> = Mutex::new(Vec::new());
+
+/// The configs deployed to the worker with this identifier, in order. Unlike the config the
+/// executor records for the resource, this is what the worker actually received.
+///
+/// Process-wide, so tests that read it should give their workers unique ids.
+pub fn test_worker_configs_deployed(identifier: &str) -> Vec<Worker> {
+    DEPLOYED_CONFIGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(deployed_to, _)| deployed_to == identifier)
+        .map(|(_, config)| config.clone())
+        .collect()
+}
+
+fn record_deployed_config(identifier: &str, config: &Worker) {
+    DEPLOYED_CONFIGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((identifier.to_string(), config.clone()));
+}
 
 #[controller]
 pub struct TestWorkerController {
@@ -54,10 +150,27 @@ pub struct TestWorkerController {
     /// Polling counter for delete
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) delete_poll_count: u32,
+    /// Delete attempts failed so far under SIMULATE_DELETE_FAILURE_COUNT.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) delete_failures_count: u32,
+    /// Set once DeleteStart deleted the worker, so a repeated delete of it can answer the
+    /// way a provider does for an object that is already gone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) worker_delete_issued: bool,
+    /// Delete polls failed so far under SIMULATE_DELETE_POLL_FAILURE_COUNT.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) delete_poll_failures_count: u32,
 }
 
 #[controller]
 impl TestWorkerController {
+    fn nothing_deleted_yet(&self) -> bool {
+        matches!(
+            self.state,
+            TestWorkerState::DeleteStart | TestWorkerState::DeleteWorker
+        ) && !self.worker_delete_issued
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
     #[flow_entry(Create)]
     #[handler(
@@ -212,6 +325,20 @@ impl TestWorkerController {
             })
         })?;
 
+        // Fails after CreateStart recorded the identifier, at a checkpoint the Update flow
+        // does not start from: a partly created resource that only a delete can clean up.
+        if target_func
+            .environment
+            .get("SIMULATE_CREATE_WORKER_FAILURE")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("Simulated CreateWorker failure for `{}`", identifier),
+                resource_id: Some(target_func.id.clone()),
+            }));
+        }
+
+        record_deployed_config(identifier, target_func);
         info!(
             "→ [test-create] Start polling (0/{}) for worker readiness `{}`",
             CREATE_POLL_COUNT, identifier
@@ -387,6 +514,7 @@ impl TestWorkerController {
             })
         })?;
 
+        record_deployed_config(identifier, target_func);
         info!(
             "→ [test-update] Start UpdateCode polling (0/{}) `{}`",
             UPDATE_POLL_COUNT, identifier
@@ -487,6 +615,8 @@ impl TestWorkerController {
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
+    // The first delete step deletes nothing, like real controllers whose first step only looks
+    // things up; the worker is deleted in DeleteWorker.
     #[flow_entry(Delete)]
     #[handler(
         state = DeleteStart,
@@ -497,16 +627,105 @@ impl TestWorkerController {
         &mut self,
         _ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        Ok(HandlerAction::Continue {
+            state: DeleteWorker,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeleteWorker,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn delete_worker(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         // If no identifier exists, the resource was never created, go directly to deleted
-        if self.identifier.is_none() {
+        let Some(identifier) = self.identifier.clone() else {
             info!("Resource failed before creation, marking as Deleted.");
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
             });
+        };
+        let target_func = ctx.desired_resource_config::<Worker>()?;
+
+        if let Some(target_failures) = target_func
+            .environment
+            .get("SIMULATE_DELETE_FAILURE_COUNT")
+            .and_then(|count| count.parse::<u32>().ok())
+        {
+            if self.delete_failures_count < target_failures {
+                self.delete_failures_count += 1;
+                return Err(AlienError::new(ErrorData::ExecutionStepFailed {
+                    message: format!(
+                        "Simulated delete failure {}/{}",
+                        self.delete_failures_count, target_failures
+                    ),
+                    resource_id: Some(target_func.id.clone()),
+                }));
+            }
         }
 
-        let identifier = self.identifier.as_ref().unwrap();
+        if delete_denied(&identifier) {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "Worker".to_string(),
+                    resource_name: identifier.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Simulated denied delete of worker `{identifier}`"),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
+
+        // The worker is the first of two delete steps. Deleting it again answers not-found,
+        // which the executor treats as "the whole resource is gone".
+        if self.worker_delete_issued
+            && target_func
+                .environment
+                .get("SIMULATE_DELETED_WORKER_NOT_FOUND")
+                .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Worker".to_string(),
+                    resource_name: identifier.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: "Simulated delete of an already deleted worker".to_string(),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
+
+        ISSUED_DELETES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((identifier.clone(), target_func.clone()));
+        self.worker_delete_issued = true;
+
+        // Denied after this step already deleted the worker, like a handler that deletes one
+        // child and is then denied on the next.
+        if target_func
+            .environment
+            .get("SIMULATE_DELETE_DENIED_AFTER_DELETE")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "WorkerUrl".to_string(),
+                    resource_name: identifier.clone(),
+                },
+            ))
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Simulated denied delete after deleting worker `{identifier}`"),
+                resource_id: Some(target_func.id.clone()),
+            });
+        }
         info!(
             "→ [test-delete] Start Delete polling (0/{}) `{}`",
             DELETE_POLL_COUNT, identifier
@@ -569,6 +788,24 @@ impl TestWorkerController {
                 message: "Simulated delete access denied".to_string(),
                 resource_id: Some(target_func.id.clone()),
             });
+        }
+
+        // The second delete step failing, after the worker itself was deleted.
+        if let Some(target_failures) = target_func
+            .environment
+            .get("SIMULATE_DELETE_POLL_FAILURE_COUNT")
+            .and_then(|count| count.parse::<u32>().ok())
+        {
+            if self.delete_poll_failures_count < target_failures {
+                self.delete_poll_failures_count += 1;
+                return Err(AlienError::new(ErrorData::ExecutionStepFailed {
+                    message: format!(
+                        "Simulated delete poll failure {}/{}",
+                        self.delete_poll_failures_count, target_failures
+                    ),
+                    resource_id: Some(target_func.id.clone()),
+                }));
+            }
         }
 
         self.delete_poll_count += 1;

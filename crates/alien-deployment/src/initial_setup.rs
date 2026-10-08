@@ -2,7 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    InitialSetupAuthority, ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus,
+    InitialSetupAuthority, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack, StackState,
+    StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{
@@ -48,35 +49,8 @@ pub async fn handle_initial_setup(
         })
     })?;
 
-    // Use the prepared stack from Pending phase (already mutated)
-    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::MissingConfiguration {
-            message: "Prepared stack not found in runtime metadata".to_string(),
-        })
-    })?;
-
-    // Inject all environment variables — plain AND secrets.
-    //
-    // Worker wrappers that consume vault pointers receive the secrets vault as
-    // a dependency from SecretsVaultMutation. Native-projected workloads do
-    // not need workload vault access. Secret values are synced below, between
-    // the step where the vault becomes Running and the step where Workers can
-    // consume it.
-    crate::helpers::inject_environment_variables(
-        &mut target_stack,
-        &config,
-        current.platform,
-        &runtime_metadata.deployer_secrets,
-    )?;
-
-    // Inject OTLP monitoring env vars if monitoring is configured
-    if let Some(monitoring) = &config.monitoring {
-        crate::helpers::inject_monitoring_environment_variables(
-            &mut target_stack,
-            monitoring,
-            current.platform,
-        )?;
-    }
+    let target_stack =
+        crate::helpers::injected_target_stack(&runtime_metadata, &config, current.platform)?;
 
     // Sync secrets to vault if the vault is already Running (from a previous
     // step). The executor checks dependencies against the pre-step state, so a
@@ -484,6 +458,64 @@ fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) 
         .collect()
 }
 
+/// Prepares the failed setup-owned resources of `stack_state` for another setup attempt
+/// against the stack prepared in `runtime_metadata`.
+///
+/// An imported setup continues the controller states its importer registered, so every
+/// failed one resumes its saved checkpoint. A direct setup resumes a failed resource only
+/// when the setup stack still declares it with the config it failed with. One whose config
+/// changed stays failed, so the setup executor plans its update or replaces it: resuming a
+/// failed create with a new config would finish it with a mix of both. One the stack no
+/// longer declares stays failed too, and the executor deletes it. Failed deletes always
+/// resume, because the planner does not restart a delete that has failed.
+pub fn retry_failed_setup_resources(
+    stack_state: &mut StackState,
+    runtime_metadata: &RuntimeMetadata,
+    config: &DeploymentConfig,
+) -> Result<Vec<String>> {
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::ImportedHandoff {
+        return stack_state
+            .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+            .context(ErrorData::StackExecutionFailed {
+                message: "Failed to retry failed setup-owned resources".to_string(),
+            });
+    }
+
+    let target_stack =
+        crate::helpers::injected_target_stack(runtime_metadata, config, stack_state.platform)?;
+    // A replace whose delete was denied waits for this explicit retry.
+    alien_infra::allow_denied_replaces_to_retry(stack_state);
+    Ok(
+        crate::helpers::resume_unchanged_failed_resources(
+            stack_state,
+            &target_stack,
+            |resource| resource.lifecycle == Some(ResourceLifecycle::Frozen),
+        )?
+        .retried,
+    )
+}
+
+/// Whether a setup run has an update to apply to a deployment, judged from the
+/// status and release pointers its manager reports.
+///
+/// A setup run on an installed deployment re-enters `InitialSetup` and hands
+/// the deployment back at `Provisioning`, where the manager applies the
+/// desired release. An installed deployment that is running, or whose last
+/// refresh failed, with no desired release has nothing for that handoff to
+/// apply. A manager that runs only pending updates never takes it, so the
+/// deployment would stay in `Provisioning` with nothing driving it.
+pub fn setup_run_has_pending_update(
+    status: DeploymentStatus,
+    has_installed_release: bool,
+    desired_release_id: Option<&str>,
+) -> bool {
+    let settled = matches!(
+        status,
+        DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+    );
+    !(settled && has_installed_release && desired_release_id.is_none())
+}
+
 /// Handle InitialSetupFailed status - retry failed resources and transition back to InitialSetup
 ///
 /// This step:
@@ -494,7 +526,7 @@ fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) 
 pub async fn handle_initial_setup_failed(
     current: DeploymentState,
     _target_stack: Stack,
-    _config: DeploymentConfig,
+    config: DeploymentConfig,
     _client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
@@ -523,12 +555,12 @@ pub async fn handle_initial_setup_failed(
         })
     })?;
 
-    // Retry failed resources using alien-infra
-    let retried = stack_state
-        .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to retry failed resources".to_string(),
-        })?;
+    let runtime_metadata = current.runtime_metadata.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: "Runtime metadata with prepared stack required for setup retry".to_string(),
+        })
+    })?;
+    let retried = retry_failed_setup_resources(&mut stack_state, runtime_metadata, &config)?;
 
     info!("Retried {} failed resources: {:?}", retried.len(), retried);
 

@@ -12,7 +12,7 @@ use tracing::{debug, trace};
 
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
 
@@ -333,6 +333,52 @@ pub async fn sign_send_json_once<T: DeserializeOwned + Send + 'static>(
     builder.sign_aws_request(config)?.send_json::<T>().await
 }
 
+/// Sign the request and deserialize a JSON response into `T`, retrying only errors for which
+/// `retry_when` is true.
+pub async fn sign_send_json_retrying_when<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+    retry_when: fn(&AlienError<ErrorData>) -> bool,
+) -> Result<T> {
+    builder
+        .sign_aws_request(config)?
+        .with_retry()
+        .retry_only_when(retry_when)
+        .send_json::<T>()
+        .await
+}
+
+/// Whether a JSON-protocol service rejected the request for its rate limit. The request was not
+/// acted on, so sending it again is safe even for a create.
+pub fn is_json_throttling(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError {
+            http_status,
+            http_response_text,
+            ..
+        }) => {
+            *http_status == 429
+                || http_response_text.as_deref().is_some_and(|text| {
+                    ["ThrottlingException", "TooManyRequestsException"]
+                        .iter()
+                        .any(|code| text.contains(code))
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether a read failed for a reason that may pass: throttling, a 5xx or a transport error.
+/// A 4xx answer (denied, not found, invalid) is final.
+pub fn is_transient_json_error(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError { http_status, .. }) => {
+            *http_status >= 500 || is_json_throttling(error)
+        }
+        _ => error.retryable,
+    }
+}
+
 /// Sign, retry and deserialize an XML response into `T`.
 pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
     builder: RequestBuilder,
@@ -343,6 +389,43 @@ pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
         .with_retry()
         .send_xml::<T>()
         .await
+}
+
+/// Sign the request and deserialize an XML response into `T`, retrying only throttling.
+///
+/// For a create the service cannot make idempotent: when a response is lost or a 5xx arrives
+/// after the service acted on the call, sending it again makes a second object, so those are
+/// returned to the caller, which looks the first one up. A throttled request was rejected
+/// before the service acted on it and is safe to send again.
+pub async fn sign_send_xml_retrying_throttling<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+) -> Result<T> {
+    builder
+        .sign_aws_request(config)?
+        .with_retry()
+        .retry_only_when(is_throttling)
+        .send_xml::<T>()
+        .await
+}
+
+/// Whether AWS rejected the request for its rate limit (the request was not acted on).
+fn is_throttling(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError {
+            http_status,
+            http_response_text,
+            ..
+        }) => {
+            *http_status == 429
+                || http_response_text.as_deref().is_some_and(|text| {
+                    ["RequestLimitExceeded", "Throttling", "ThrottlingException"]
+                        .iter()
+                        .any(|code| text.contains(&format!("<Code>{code}</Code>")))
+                })
+        }
+        _ => false,
+    }
 }
 
 /// Sign the request and expect no body, in a single attempt.

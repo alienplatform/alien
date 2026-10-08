@@ -1,5 +1,5 @@
 //! AWS CloudWatch Logs client: the log group operations Alien needs to own a
-//! Lambda function's log group (create it and set its retention).
+//! Lambda function's log group (create it, set its retention, delete it).
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
@@ -24,6 +24,10 @@ pub trait CloudWatchLogsApi: Send + Sync + std::fmt::Debug {
 
     /// Sets how many days a log group keeps its events.
     async fn put_retention_policy(&self, request: PutRetentionPolicyRequest) -> Result<()>;
+
+    /// Deletes a log group and its events. A group that does not exist is a
+    /// `RemoteResourceNotFound`.
+    async fn delete_log_group(&self, log_group_name: &str) -> Result<()>;
 }
 
 /// `CreateLogGroup` request.
@@ -33,6 +37,13 @@ pub struct CreateLogGroupRequest {
     pub log_group_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, String>>,
+}
+
+/// `DeleteLogGroup` request.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteLogGroupRequest<'a> {
+    log_group_name: &'a str,
 }
 
 /// `PutRetentionPolicy` request.
@@ -203,6 +214,18 @@ impl CloudWatchLogsApi for CloudWatchLogsClient {
         self.send("PutRetentionPolicy", body, &request.log_group_name, true)
             .await
     }
+
+    async fn delete_log_group(&self, log_group_name: &str) -> Result<()> {
+        let body = serde_json::to_string(&DeleteLogGroupRequest { log_group_name })
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize DeleteLogGroupRequest for '{log_group_name}'"
+                ),
+            })?;
+        self.send("DeleteLogGroup", body, log_group_name, true)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +324,50 @@ mod tests {
                 error.error,
                 Some(ErrorData::RemoteResourceConflict { ref resource_name, .. })
                     if resource_name == "/aws/lambda/app-api"
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deletes_a_log_group_and_reports_a_missing_one_as_not_found() {
+        let server = MockServer::start_async().await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "Logs_20140328.DeleteLogGroup")
+                    .json_body(serde_json::json!({ "logGroupName": "/aws/lambda/app-api" }));
+                then.status(200);
+            })
+            .await;
+        let missing = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "Logs_20140328.DeleteLogGroup")
+                    .json_body(serde_json::json!({ "logGroupName": "/aws/lambda/app-gone" }));
+                then.status(400).body(
+                    r#"{"__type":"com.amazonaws.logs#ResourceNotFoundException","message":"The specified log group does not exist."}"#,
+                );
+            })
+            .await;
+        let client = client(&server);
+
+        client
+            .delete_log_group("/aws/lambda/app-api")
+            .await
+            .expect("delete log group");
+        let error = client
+            .delete_log_group("/aws/lambda/app-gone")
+            .await
+            .expect_err("missing log group");
+
+        delete.assert_hits_async(1).await;
+        assert!(missing.hits_async().await >= 1);
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::RemoteResourceNotFound { ref resource_name, .. })
+                    if resource_name == "/aws/lambda/app-gone"
             ),
             "{error:?}"
         );

@@ -4,6 +4,7 @@
 
 ### Available Operations
 
+* [move](#move) - Reassign a deployment to another group within its project
 * [list](#list) - Retrieve all deployments.
 * [create](#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
@@ -30,6 +31,106 @@
 * [listVolumeRestores](#listvolumerestores) - List a deployment's volume restore requests, newest first.
 * [restoreVolume](#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
 * [cancelVolumeRestore](#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
+
+## move
+
+Reassign a deployment to another group within its project
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="moveDeployment" method="post" path="/v1/deployments/{id}/move" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.move({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    moveDeploymentRequest: {
+      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsMove } from "@alienplatform/platform-api/funcs/deploymentsMove.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsMove(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    moveDeploymentRequest: {
+      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsMove failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentsMoveMutation
+} from "@alienplatform/platform-api/react-query/deploymentsMove.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.MoveDeploymentRequest](../../models/operations/movedeploymentrequest.md)                                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.MoveDeploymentResponse](../../models/movedeploymentresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 401, 403, 404, 409  | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## list
 

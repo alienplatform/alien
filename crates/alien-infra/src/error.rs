@@ -230,6 +230,38 @@ pub enum ErrorData {
         max_times: u32,
     },
 
+    /// The delete half of a replace was denied; the replace waits for an explicit retry.
+    #[error(
+        code = "REPLACE_DELETE_DENIED",
+        message = "Cannot replace '{resource_id}': {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    ReplaceDeleteDenied {
+        /// The resource being replaced
+        resource_id: String,
+        /// What was denied and what to do
+        message: String,
+    },
+
+    /// A delete step gave up on a cloud object that other objects still depend on.
+    #[error(
+        code = "RESOURCE_DELETE_BLOCKED",
+        message = "Cannot delete {object} of resource '{resource_id}'; still in use by: {blockers}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ResourceDeleteBlocked {
+        /// The resource being deleted
+        resource_id: String,
+        /// The cloud object that cannot be deleted yet
+        object: String,
+        /// What still holds it, with enough detail to find it
+        blockers: String,
+    },
+
     /// A workload update was accepted, but its rollout was not confirmed before the wait ended.
     ///
     /// The accepted configuration stays desired downstream, so the rollout can still complete

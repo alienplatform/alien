@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, GenericError};
+use alien_error::{AlienError, Context, ContextError, GenericError};
 use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -50,6 +50,15 @@ pub struct PlanResult {
     pub updates: HashMap<String, Resource>,
     /// Resource IDs to be deleted.
     pub deletes: Vec<String>,
+    /// Desired resource IDs whose failed create left controller state behind. Each is
+    /// deleted from that state, against the config it was created with, and created again
+    /// with the new config once it reaches `Deleted`.
+    #[serde(default)]
+    pub replaces: Vec<String>,
+    /// Setup-owned resource IDs whose failed create would need a replace that runtime
+    /// credentials must not perform. They stay failed until setup is rerun.
+    #[serde(default)]
+    pub setup_required: Vec<String>,
 }
 
 /// Represents the outcome of a single step in the stack execution process.
@@ -144,6 +153,9 @@ pub struct StackExecutor {
 
 const MAX_RETRIES: u32 = 10;
 const DEPENDENCY_NOT_READY_CODE: &str = "DEPENDENCY_NOT_READY";
+/// Error code of a replace whose delete was denied. The planner does not plan that replace
+/// again until an explicit retry clears it (see `allow_denied_replaces_to_retry`).
+pub const REPLACE_DELETE_DENIED_CODE: &str = "REPLACE_DELETE_DENIED";
 
 /// Whether a status stops the executor from stepping the resource.
 ///
@@ -298,29 +310,77 @@ mod controller_platform_tests {
 /// Such an error ends the whole resource as `Deleted` and the delete steps after it never
 /// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
 /// access-denied answer it expects as success and continue, instead of returning it.
-fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code)
+///
+/// Access denied counts only when `access_denied_ends_delete`. A replace passes false: the
+/// resource is still desired and is created right after its delete, so treating a denied
+/// delete as done would create a second one next to the first.
+fn is_best_effort_delete_error(
+    err: &AlienError<ErrorData>,
+    access_denied_ends_delete: bool,
+) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
         || err
             .source
             .as_deref()
-            .is_some_and(is_best_effort_delete_source)
+            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
+}
+
+/// Clears the denial of every replace that waits for an explicit retry, so the planner plans
+/// it again. Callers handling a user's retry call this; returns the resources it cleared.
+pub fn allow_denied_replaces_to_retry(state: &mut StackState) -> Vec<String> {
+    let mut cleared = Vec::new();
+    for (resource_id, resource_state) in &mut state.resources {
+        if replace_delete_denied(resource_state) {
+            resource_state.error = None;
+            cleared.push(resource_id.clone());
+        }
+    }
+    cleared
+}
+
+/// Whether the last replace of this resource was denied and waits for an explicit retry.
+fn replace_delete_denied(state: &StackResourceState) -> bool {
+    state
+        .error
+        .as_ref()
+        .is_some_and(|error| error.code == REPLACE_DELETE_DENIED_CODE)
+}
+
+/// The messages of an error and its causes, outermost first.
+fn error_chain_text(err: &AlienError<ErrorData>) -> String {
+    let mut parts = vec![err.message.clone()];
+    let mut source = err.source.as_deref();
+    while let Some(inner) = source {
+        parts.push(inner.message.clone());
+        source = inner.source.as_deref();
+    }
+    parts.join(": ")
 }
 
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
     err.code == DEPENDENCY_NOT_READY_CODE
 }
 
-fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code)
+fn is_best_effort_delete_source(
+    err: &AlienError<GenericError>,
+    access_denied_ends_delete: bool,
+) -> bool {
+    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
         || err
             .source
             .as_deref()
-            .is_some_and(is_best_effort_delete_source)
+            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
 }
 
-fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>) -> bool {
-    matches!(http_status_code, Some(401 | 403 | 404))
-        || matches!(code, "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_DENIED")
+fn is_best_effort_delete_code(
+    code: &str,
+    http_status_code: Option<u16>,
+    access_denied_ends_delete: bool,
+) -> bool {
+    let not_found = http_status_code == Some(404) || code == "REMOTE_RESOURCE_NOT_FOUND";
+    let access_denied =
+        matches!(http_status_code, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED";
+    not_found || (access_denied_ends_delete && access_denied)
 }
 
 fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
@@ -804,6 +864,32 @@ impl StackExecutor {
             || current_resource_state.outputs != outputs)
     }
 
+    /// Whether replacing this resource is setup's job: a setup-owned resource is never
+    /// deleted with runtime credentials, only by an executor running as setup.
+    fn replacement_requires_setup(
+        &self,
+        desired: &ResourceConfig,
+        current_resource_state: &StackResourceState,
+    ) -> bool {
+        (desired.lifecycle == ResourceLifecycle::Frozen
+            || current_resource_state.lifecycle == Some(ResourceLifecycle::Frozen))
+            && self.initial_setup_authority != InitialSetupAuthority::DirectSetup
+    }
+
+    /// Whether a dependent may proceed past this dependency: it is Running, or Deleted and no
+    /// longer desired. A desired dependency that is Deleted is being replaced and will be
+    /// created again, so it has nothing for the dependent to use yet.
+    fn dependency_settled(&self, dependency_id: &str, state: &StackState) -> bool {
+        state
+            .resources
+            .get(dependency_id)
+            .is_some_and(|dependency| match dependency.status {
+                ResourceStatus::Running => true,
+                ResourceStatus::Deleted => !self.resources.contains_key(dependency_id),
+                _ => false,
+            })
+    }
+
     /// Map of resource id to the ids still depending on it, for deletion safety checks.
     fn deletion_dependents(&self, state: &StackState) -> HashMap<String, Vec<String>> {
         let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
@@ -839,9 +925,14 @@ impl StackExecutor {
         has_dependents: &HashMap<String, Vec<String>>,
         state: &StackState,
     ) -> Result<bool> {
+        // A failed delete of a resource the stack no longer declares resumes when the executor
+        // resumes unchanged failures (an update or its retry); otherwise only an explicit
+        // retry of the failure resumes it.
+        let delete_failed_waits = current_resource_state.status == ResourceStatus::DeleteFailed
+            && !self.resume_unchanged_failed_resources;
         if current_resource_state.status == ResourceStatus::Deleting
             || current_resource_state.status == ResourceStatus::Deleted
-            || current_resource_state.status == ResourceStatus::DeleteFailed
+            || delete_failed_waits
             || (self.runtime_cleanup_filter
                 && current_resource_state.status == ResourceStatus::TeardownRequired)
         {
@@ -917,6 +1008,8 @@ impl StackExecutor {
     /// 1. **Creates**: Resources in desired state but not in current state
     /// 2. **Updates**: Resources in both states but with different configurations
     /// 3. **Deletes**: Resources in current state but not in desired state (respecting lifecycle filters)
+    /// 4. **Replaces**: Desired resources whose failed create (or replace) left controller state
+    ///    and whose config changed. They are deleted first and created again once `Deleted`.
     pub fn plan(&self, state: &StackState) -> Result<PlanResult> {
         // 0. Validate that every dependency *outside* the filtered executor scope
         //    already exists in the state and is `Running` / `Deleted`.  This
@@ -1016,17 +1109,10 @@ impl StackExecutor {
                         match current_resource_state.status {
                             status if status_allows_update_planning(status) => {
                                 // Check if all new dependencies are ready before planning the update
-                                let new_dependencies_ready =
-                                    desired_config.dependencies.iter().all(|dep_ref| {
-                                        let dep_id = dep_ref.id();
-                                        match state.resources.get(dep_id) {
-                                            Some(dep_view) => matches!(
-                                                dep_view.status,
-                                                ResourceStatus::Running | ResourceStatus::Deleted
-                                            ),
-                                            None => false, // Dependency not present in state (yet)
-                                        }
-                                    });
+                                let new_dependencies_ready = desired_config
+                                    .dependencies
+                                    .iter()
+                                    .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
                                 if new_dependencies_ready {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
@@ -1075,15 +1161,7 @@ impl StackExecutor {
                                     });
                                 let dependencies_ready =
                                     desired_config.dependencies.iter().all(|dependency| {
-                                        state.resources.get(dependency.id()).is_some_and(
-                                            |resource| {
-                                                matches!(
-                                                    resource.status,
-                                                    ResourceStatus::Running
-                                                        | ResourceStatus::Deleted
-                                                )
-                                            },
-                                        )
+                                        self.dependency_settled(dependency.id(), state)
                                     });
 
                                 if can_reconcile_in_place && dependencies_ready {
@@ -1109,7 +1187,10 @@ impl StackExecutor {
                                         "Deferring in-place reconciliation for '{}' until its dependencies are ready",
                                         resource_id
                                     );
-                                } else {
+                                } else if !current_resource_state.has_internal_state()
+                                    && !current_resource_state.has_last_failed_state()
+                                {
+                                    // No controller ever ran, so nothing remote can exist.
                                     info!(
                                         "Restarting CREATE for '{}' due to config change during ProvisionFailed",
                                         resource_id
@@ -1117,13 +1198,85 @@ impl StackExecutor {
                                     plan_result.creates.push(resource_id.clone());
                                     plan_result.updates.remove(resource_id);
                                     plan_result.deletes.retain(|id| id != resource_id);
+                                } else if self.replacement_requires_setup(
+                                    desired_config,
+                                    current_resource_state,
+                                ) {
+                                    warn!(
+                                        "Setup-owned resource '{}' failed to provision and its config changed; rerun setup to replace it",
+                                        resource_id
+                                    );
+                                    plan_result.setup_required.push(resource_id.clone());
+                                } else if !current_resource_state
+                                    .config
+                                    .replace_after_failed_create_is_safe()
+                                {
+                                    // Deleting it could destroy what the failed create already
+                                    // holds: data in a resource it adopted (an existing bucket,
+                                    // table or database with the same name) or live capacity
+                                    // (started replicas, launched instances). Create it again in
+                                    // place, as before replaces existed. Not every create can
+                                    // pick its resource up again (some fail on the existing name
+                                    // until it is resolved by hand, a key create makes a new
+                                    // key), but none of them destroys what is there.
+                                    info!(
+                                        "Restarting CREATE for '{}' after a config change during ProvisionFailed; it is not safe to delete",
+                                        resource_id
+                                    );
+                                    plan_result.creates.push(resource_id.clone());
+                                    plan_result.updates.remove(resource_id);
+                                    plan_result.deletes.retain(|id| id != resource_id);
+                                } else if replace_delete_denied(current_resource_state) {
+                                    // The last replace was denied. Trying it again on every step
+                                    // would repeat the denied delete; an explicit retry clears
+                                    // the denial and plans it again.
+                                    debug!(
+                                        "Not replacing '{}' again until a retry: its delete was denied",
+                                        resource_id
+                                    );
+                                } else {
+                                    // The failed controller holds the IDs of whatever the create
+                                    // already made. A fresh create would drop them and leak those
+                                    // resources, so delete them first.
+                                    info!(
+                                        "Replacing '{}': deleting what its failed create left before creating it with the new config",
+                                        resource_id
+                                    );
+                                    plan_result.replaces.push(resource_id.clone());
+                                    plan_result.creates.retain(|id| id != resource_id);
+                                    plan_result.updates.remove(resource_id);
+                                    plan_result.deletes.retain(|id| id != resource_id);
                                 }
                             }
                             ResourceStatus::DeleteFailed => {
-                                warn!(
-                                    "Config changed for '{}' while in DeleteFailed status, ignoring change",
-                                    resource_id
-                                );
+                                // A replace whose delete failed: finish the delete, then the
+                                // create follows. Never create over what is left. Resources that
+                                // are not safe to replace never start one, so this delete is not
+                                // ours to finish.
+                                if (current_resource_state.has_internal_state()
+                                    || current_resource_state.has_last_failed_state())
+                                    && current_resource_state
+                                        .config
+                                        .replace_after_failed_create_is_safe()
+                                    && !self.replacement_requires_setup(
+                                        desired_config,
+                                        current_resource_state,
+                                    )
+                                    && !replace_delete_denied(current_resource_state)
+                                {
+                                    info!(
+                                        "Retrying the delete of '{}' before creating it with the new config",
+                                        resource_id
+                                    );
+                                    plan_result.replaces.push(resource_id.clone());
+                                    plan_result.creates.retain(|id| id != resource_id);
+                                    plan_result.updates.remove(resource_id);
+                                } else {
+                                    warn!(
+                                        "Config changed for '{}' while in DeleteFailed status, ignoring change",
+                                        resource_id
+                                    );
+                                }
                             }
                             ResourceStatus::Deleted => {
                                 // Resource is deleted but desired again (with different config) - plan for recreation
@@ -1148,16 +1301,19 @@ impl StackExecutor {
                                 // Do not interrupt a create that is already in flight. Desired
                                 // config can legitimately drift while a controller is still
                                 // provisioning, for example when deployment-level env injection
-                                // gains concrete runtime values. Let the create finish or fail;
-                                // once stable, the normal update/failure recovery path reconciles
-                                // the latest desired config.
+                                // gains concrete runtime values. The create finishes with the
+                                // config it started with, which stays recorded, so once it is
+                                // Running this diff plans the update (or, if it failed, the
+                                // failure recovery above reconciles the new config).
                                 info!(
                                     "Config changed for '{}' during Provisioning, deferring until resource is stable",
                                     resource_id
                                 );
                             }
                             _ => {
-                                // Updating, Deleting -- wait for stable before acting
+                                // Updating, Deleting -- wait for stable before acting. An update
+                                // also finishes with the config it started with, so the change
+                                // is planned once it is Running.
                                 warn!(
                                     "Config changed for '{}' while in status {:?}, ignoring change until stable",
                                     resource_id, current_resource_state.status
@@ -1195,6 +1351,25 @@ impl StackExecutor {
                                     .insert(resource_id.clone(), desired_config.resource.clone());
                             }
                         }
+                    } else if current_resource_state.status == ResourceStatus::DeleteFailed
+                        && current_resource_state
+                            .get_last_failed_controller()?
+                            .is_some_and(|checkpoint| {
+                                checkpoint.get_status() == ResourceStatus::Deleting
+                            })
+                        && current_resource_state
+                            .config
+                            .replace_after_failed_create_is_safe()
+                        && !self.replacement_requires_setup(desired_config, current_resource_state)
+                        && !replace_delete_denied(current_resource_state)
+                    {
+                        // A replace whose delete failed part-way, with the config reverted since:
+                        // what is left cannot run, so finish the delete and create it again.
+                        info!(
+                            "Finishing the failed delete of '{}' before creating it again",
+                            resource_id
+                        );
+                        plan_result.replaces.push(resource_id.clone());
                     } else {
                         // Configs match, no update action needed from diffing.
                         // The resource will proceed based on its current state later.
@@ -1215,6 +1390,8 @@ impl StackExecutor {
                 if current_updates.contains(resource_id)
                     || plan_result.creates.contains(resource_id)
                     || plan_result.deletes.contains(resource_id)
+                    || plan_result.replaces.contains(resource_id)
+                    || plan_result.setup_required.contains(resource_id)
                 {
                     continue;
                 }
@@ -1230,17 +1407,10 @@ impl StackExecutor {
                         match current_resource_state.status {
                             status if status_allows_update_planning(status) => {
                                 // Check if all dependencies are ready before planning the update from dependency propagation
-                                let dependencies_ready =
-                                    desired_config.dependencies.iter().all(|dep_ref| {
-                                        let dep_id = dep_ref.id();
-                                        match state.resources.get(dep_id) {
-                                            Some(dep_view) => matches!(
-                                                dep_view.status,
-                                                ResourceStatus::Running | ResourceStatus::Deleted
-                                            ),
-                                            None => false, // Dependency not present in state (yet)
-                                        }
-                                    });
+                                let dependencies_ready = desired_config
+                                    .dependencies
+                                    .iter()
+                                    .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
                                 if dependencies_ready {
                                     debug!(
@@ -1469,7 +1639,7 @@ impl StackExecutor {
                 let Some(desired) = self.resources.get(resource_id) else {
                     continue;
                 };
-                if resource_state.config != desired.resource
+                if !crate::core::retry_config_unchanged(&resource_state.config, &desired.resource)
                     || resource_state.dependencies != desired.dependencies
                     || self.external_binding_drifted(resource_id, resource_state)?
                 {
@@ -1493,10 +1663,11 @@ impl StackExecutor {
             PlanResult::default()
         };
         debug!(
-            "Plan result: {} creates, {} updates, {} deletes",
+            "Plan result: {} creates, {} updates, {} deletes, {} replaces",
             plan_result.creates.len(),
             plan_result.updates.len(),
-            plan_result.deletes.len()
+            plan_result.deletes.len(),
+            plan_result.replaces.len()
         );
 
         // Apply planned transitions directly or prepare initial state
@@ -1573,8 +1744,19 @@ impl StackExecutor {
             initial_transitions.insert(resource_id.clone(), pending_view);
         }
 
-        // Handle Deletes - initiate deletion transitions only for deletion-ready resources
-        for resource_id in &plan_result.deletes {
+        // Handle Deletes and the delete half of Replaces - initiate deletion transitions only
+        // for deletion-ready resources
+        let planned_deletes = plan_result
+            .deletes
+            .iter()
+            .map(|resource_id| (resource_id, false))
+            .chain(
+                plan_result
+                    .replaces
+                    .iter()
+                    .map(|resource_id| (resource_id, true)),
+            );
+        for (resource_id, replacing) in planned_deletes {
             if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
                 debug!(
                     "Processing planned DELETE for '{}' (status: {:?})",
@@ -1595,7 +1777,7 @@ impl StackExecutor {
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
                         // Check if this resource is ready for deletion (all dependents are deleted)
-                        if !self.deletion_ready(resource_id, &state) {
+                        if !self.deletion_ready(resource_id, &state, replacing) {
                             debug!(
                                 "Resource '{}' not ready for deletion - skipping until dependents are deleted",
                                 resource_id
@@ -1603,8 +1785,42 @@ impl StackExecutor {
                             continue;
                         }
 
-                        match resource_state.get_internal_controller() {
+                        // A failed delete resumes at the delete step that failed, as a manual
+                        // retry does. Restarting at the first delete step would repeat deletes
+                        // of children that are already gone, and their not-found ends the whole
+                        // delete as best-effort, leaking the children still left.
+                        let failed_mid_delete = resource_state.status
+                            == ResourceStatus::DeleteFailed
+                            && resource_state
+                                .get_last_failed_controller()
+                                .ok()
+                                .flatten()
+                                .is_some_and(|checkpoint| {
+                                    checkpoint.get_status() == ResourceStatus::Deleting
+                                });
+                        if failed_mid_delete {
+                            if let Err(e) = resource_state.retry_failed() {
+                                error!(
+                                    "Failed to resume the failed delete of '{}': {}",
+                                    resource_id, e
+                                );
+                                *resource_state = resource_state
+                                    .with_failure(ResourceStatus::DeleteFailed, e.into_generic());
+                            }
+                            continue;
+                        }
+
+                        // A replace of a failed create starts from whichever failed controller
+                        // was saved; both hold the IDs the create recorded.
+                        let controller = match resource_state.get_internal_controller() {
+                            Ok(None) if replacing => resource_state.get_last_failed_controller(),
+                            controller => controller,
+                        };
+                        let replacing_failed_create =
+                            replacing && resource_state.status == ResourceStatus::ProvisionFailed;
+                        match controller {
                             Ok(Some(mut resource_controller)) => {
+                                let failed_create = resource_controller.box_clone();
                                 match resource_controller.transition_to_delete_start() {
                                     Ok(()) => {
                                         debug!(
@@ -1615,7 +1831,25 @@ impl StackExecutor {
                                         resource_state.outputs = resource_controller.get_outputs();
                                         resource_state.retry_attempt = 0;
                                         resource_state.error = None; // Clear error when starting delete
-                                                                     // Update internal state with the modified controller
+                                        if replacing_failed_create {
+                                            // Keep the failed create checkpoint until a delete
+                                            // step succeeds: a delete denied before that restores
+                                            // it, so the create can still be resumed.
+                                            if !resource_state.has_last_failed_state() {
+                                                if let Err(e) = resource_state
+                                                    .set_last_failed_controller(Some(failed_create))
+                                                {
+                                                    error!(
+                                                        "Failed to keep the failed create checkpoint: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        } else if replacing {
+                                            // The delete supersedes the failed checkpoint.
+                                            resource_state.last_failed_state = None;
+                                        }
+                                        // Update internal state with the modified controller
                                         if let Err(e) = resource_state
                                             .set_internal_controller(Some(resource_controller))
                                         {
@@ -1707,6 +1941,30 @@ impl StackExecutor {
                     "Planned delete for resource '{}' not found in current state, skipping",
                     resource_id
                 );
+            }
+        }
+
+        // Surface why a setup-owned failed create is left as it is, keeping the create error
+        // as the cause. Every step plans this again, so wrap the create error only once.
+        for resource_id in &plan_result.setup_required {
+            if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
+                let setup_required = ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "setup-owned resource '{}' failed to provision and its configuration changed; replacing it requires setup credentials, so rerun setup",
+                        resource_id
+                    ),
+                    resource_id: Some(resource_id.clone()),
+                };
+                let surfaced = AlienError::new(setup_required.clone()).into_generic();
+                resource_state.error = Some(match resource_state.error.take() {
+                    Some(error)
+                        if error.code == surfaced.code && error.message == surfaced.message =>
+                    {
+                        error
+                    }
+                    Some(create_error) => create_error.context(setup_required).into_generic(),
+                    None => surfaced,
+                });
             }
         }
 
@@ -1932,7 +2190,9 @@ impl StackExecutor {
             // just when entering Deleting. A dependent may still need its
             // dependency's outputs while its delete flow is polling.
             let is_ready = if current_resource_view.status == ResourceStatus::Deleting {
-                self.deletion_ready(resource_id, &next_state)
+                // A desired resource is only ever deleted to be replaced.
+                let replacing = self.resources.contains_key(resource_id);
+                self.deletion_ready(resource_id, &next_state, replacing)
             } else if current_resource_view.status == ResourceStatus::Updating {
                 true
             } else if current_resource_view.status == ResourceStatus::Running {
@@ -1954,7 +2214,7 @@ impl StackExecutor {
                 } else {
                     // Resource is in state but not in target graph (i.e., being deleted)
                     // For deletion, check if all dependents are already deleted
-                    self.deletion_ready(resource_id, &state)
+                    self.deletion_ready(resource_id, &state, false)
                 }
             };
 
@@ -1992,18 +2252,6 @@ impl StackExecutor {
                     })
                 })?;
 
-            let context_resource: Resource;
-
-            // Use current desired config from the stack if it exists, otherwise use stored config for deletion
-            context_resource = if apply_plan {
-                self.resources
-                    .get(&resource_id)
-                    .map(|resource_config| resource_config.resource.clone())
-                    .unwrap_or_else(|| current_resource_state.config.clone())
-            } else {
-                current_resource_state.config.clone()
-            };
-
             // Handle initialization for Pending resources without controller
             if current_resource_state.status == ResourceStatus::Pending
                 && !current_resource_state.has_internal_state()
@@ -2013,8 +2261,17 @@ impl StackExecutor {
                     resource_id
                 );
 
+                // Nothing ran yet, so the create starts from the latest desired config, and
+                // waited for (see `dependencies_met`) the latest desired dependencies.
+                if apply_plan {
+                    if let Some(desired) = self.resources.get(&resource_id) {
+                        current_resource_state.config = desired.resource.clone();
+                        current_resource_state.dependencies = desired.dependencies.clone();
+                    }
+                }
+
                 // Get the controller for this resource type
-                let resource_type = context_resource.resource_type();
+                let resource_type = current_resource_state.config.resource_type();
                 let controller_platform =
                     controller_platform_for_state(step_state.platform, &current_resource_state);
                 let controller = self
@@ -2059,6 +2316,15 @@ impl StackExecutor {
                 );
                 return Ok(None);
             }
+
+            // A flow runs against the config recorded for the resource: the config its create
+            // or update started with, never a desired config that changed under it. The record
+            // then says what the cloud holds, a delete runs against what was created, and a
+            // change that arrived mid-flow differs from the record, so the planner updates the
+            // resource once the flow finishes. `desired_stack` stays the latest stack, so a
+            // helper that reads this resource's own entry there can see the newer config until
+            // that update runs.
+            let context_resource = current_resource_state.config.clone();
 
             let controller_platform =
                 controller_platform_for_state(step_state.platform, &current_resource_state);
@@ -2107,6 +2373,23 @@ impl StackExecutor {
                 (step_result, resource_controller.box_clone())
             };
 
+            // A resource still in the desired stack is being deleted to be replaced.
+            let replacing = self.resources.contains_key(&resource_id);
+            let mut replace_delete_was_denied = false;
+            // The failed create checkpoint a replace keeps while its delete has removed nothing
+            // (a checkpoint that is not itself mid-delete).
+            let failed_create_checkpoint = if replacing
+                && current_resource_state.status == ResourceStatus::Deleting
+            {
+                current_resource_state
+                    .get_last_failed_controller()
+                    .ok()
+                    .flatten()
+                    .filter(|checkpoint| checkpoint.get_status() != ResourceStatus::Deleting)
+            } else {
+                None
+            };
+
             // Handle the step result
             let (
                 next_retry_attempt,
@@ -2123,7 +2406,7 @@ impl StackExecutor {
                     warn!("Step failed for '{}': {}", resource_id, err);
 
                     if current_resource_state.status == ResourceStatus::Deleting
-                        && is_best_effort_delete_error(&err)
+                        && is_best_effort_delete_error(&err, !replacing)
                     {
                         info!(
                             resource_id = %resource_id,
@@ -2131,6 +2414,30 @@ impl StackExecutor {
                             "Best-effort delete accepted missing or inaccessible resource"
                         );
                         (0, None, None, false, true)
+                    } else if current_resource_state.status == ResourceStatus::Deleting
+                        && replacing
+                        && is_best_effort_delete_error(&err, true)
+                    {
+                        // Access denied while deleting to replace. Below, the failed create is
+                        // restored if nothing was deleted yet, including by this step before its
+                        // denied call; either way the replace waits for an explicit retry.
+                        replace_delete_was_denied = true;
+                        let next = if failed_create_checkpoint.is_some()
+                            && updated_controller.nothing_deleted_yet()
+                        {
+                            "Nothing was deleted and the failed create is kept. If the role lacks this permission, grant it and retry, or revert the configuration to resume the failed create"
+                        } else {
+                            "Part of it may already be deleted, so the failed create cannot be resumed. If the role lacks this permission, grant it and retry to finish the replace; removing the resource from the stack deletes what is left"
+                        };
+                        let denial = err.clone().context(ErrorData::ReplaceDeleteDenied {
+                            resource_id: resource_id.clone(),
+                            message: format!(
+                                "deleting what its failed create made was denied ({}). {next}",
+                                error_chain_text(&err)
+                            ),
+                        });
+                        warn!(resource_id = %resource_id, error = %denial, "Replace delete denied");
+                        (0, Some(denial.into_generic()), None, true, false)
                     } else if is_dependency_not_ready_error(&err) {
                         let delay = Duration::from_secs(10);
                         info!(
@@ -2227,20 +2534,6 @@ impl StackExecutor {
                     )
                 };
 
-            // Automatically update config to match desired state (except during deletion)
-            let next_config = if !apply_plan
-                || current_resource_state.status == ResourceStatus::Deleting
-            {
-                // Refresh and deletion preserve the deployed config.
-                current_resource_state.config.clone()
-            } else {
-                // For create/update operations, ensure config matches desired state
-                self.resources
-                    .get(&resource_id)
-                    .map(|rc| rc.resource.clone())
-                    .unwrap_or_else(|| current_resource_state.config.clone())
-            };
-
             // Set the internal controller outside the closure to handle errors properly
             let mut next_state = current_resource_state.clone();
             next_state
@@ -2272,7 +2565,7 @@ impl StackExecutor {
                 .map(|entry| entry.publishes_binding_params())
                 .unwrap_or(false);
 
-            let next_state = next_state.with_updates(|state| {
+            let mut next_state = next_state.with_updates(|state| {
                 state.status = next_status;
                 state.outputs = next_outputs;
                 state.remote_binding_params = if publish_binding_params {
@@ -2280,10 +2573,36 @@ impl StackExecutor {
                 } else {
                     None
                 };
-                state.config = next_config;
                 state.retry_attempt = next_retry_attempt;
                 state.error = next_error;
             });
+
+            if let Some(checkpoint) = failed_create_checkpoint {
+                if replace_delete_was_denied && updated_controller.nothing_deleted_yet() {
+                    // Denied while nothing was deleted, not even by this step: abort the
+                    // replace and put the failed create back, so reverting the config resumes it.
+                    // Otherwise the failure checkpoint is this delete, recorded above.
+                    let mut restored = checkpoint.box_clone();
+                    restored.transition_to_failure();
+                    next_state.status = restored.get_status();
+                    next_state.outputs = restored.get_outputs();
+                    next_state
+                        .set_internal_controller(Some(restored))
+                        .context(ErrorData::ResourceStateSerializationFailed {
+                            resource_id: resource_id.clone(),
+                            message: "Failed to restore the failed create".to_string(),
+                        })?;
+                    next_state
+                        .set_last_failed_controller(Some(checkpoint))
+                        .context(ErrorData::ResourceStateSerializationFailed {
+                            resource_id: resource_id.clone(),
+                            message: "Failed to restore the failed create checkpoint".to_string(),
+                        })?;
+                } else if next_state.error.is_none() && !updated_controller.nothing_deleted_yet() {
+                    // This step may have deleted something; the create can no longer resume.
+                    next_state.last_failed_state = None;
+                }
+            }
 
             // Always record the resulting state from the step
             info!(
@@ -2447,22 +2766,20 @@ impl StackExecutor {
             None => return false, // Defensive.
         };
 
-        resource_cfg.dependencies.iter().all(|dep_ref| {
-            let dep_id = dep_ref.id();
-            match state.resources.get(dep_id) {
-                Some(dep_view) => matches!(
-                    dep_view.status,
-                    ResourceStatus::Running | ResourceStatus::Deleted
-                ),
-                None => false, // Dependency not present in state (yet)
-            }
-        })
+        resource_cfg
+            .dependencies
+            .iter()
+            .all(|dep_ref| self.dependency_settled(dep_ref.id(), state))
     }
 
     /// Checks if a resource is ready for deletion by verifying all its dependents are deleted.
     /// For deletion, the dependency logic is reversed: a resource can only be deleted when
     /// all resources that depend on it are already deleted.
-    fn deletion_ready(&self, resource_id: &str, state: &StackState) -> bool {
+    ///
+    /// A replace deletes a resource that never reached Running, so a dependent can only be
+    /// using it if its own controller has started: `replacing` ignores dependents with no
+    /// controller state, which are waiting for the replacement.
+    fn deletion_ready(&self, resource_id: &str, state: &StackState, replacing: bool) -> bool {
         // Find all resources in the state that depend on this resource
         for (dependent_id, dependent_state) in &state.resources {
             // Skip self and dependents that are fully deleted. A dependent in
@@ -2473,6 +2790,7 @@ impl StackExecutor {
                     dependent_state.status,
                     ResourceStatus::Deleted | ResourceStatus::TeardownRequired
                 )
+                || (replacing && !dependent_state.has_internal_state())
             {
                 continue;
             }

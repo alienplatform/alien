@@ -11,6 +11,7 @@ use bon::Builder;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -218,6 +219,11 @@ impl ApiGatewayV2Client {
             "NotFoundException" => ErrorData::RemoteResourceNotFound {
                 resource_type: "ApiGateway".into(),
                 resource_name: resource.into(),
+            },
+            "ConflictException" => ErrorData::RemoteResourceConflict {
+                resource_type: "ApiGateway".into(),
+                resource_name: resource.into(),
+                message,
             },
             "TooManyRequestsException" | "ThrottlingException" => {
                 ErrorData::RateLimitExceeded { message }
@@ -468,6 +474,8 @@ pub struct CreateDomainNameRequest {
 pub struct DomainName {
     pub domain_name: Option<String>,
     pub domain_name_configurations: Option<Vec<DomainNameConfiguration>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
@@ -537,6 +545,42 @@ mod tests {
                     "securityPolicy": "TLS_1_2"
                 }]
             })
+        );
+    }
+
+    /// The worker's delete recognizes its own domain by these tags, so they have to survive
+    /// parsing the GetDomainName response AWS sends (lowercase `tags`).
+    #[test]
+    fn get_domain_name_response_carries_tags() {
+        let domain: DomainName = serde_json::from_value(json!({
+            "domainName": "worker.example.com",
+            "domainNameConfigurations": [],
+            "tags": { "alien-stack": "prefix", "alien-resource": "worker" }
+        }))
+        .unwrap();
+        assert_eq!(
+            domain.tags,
+            Some(HashMap::from([
+                ("alien-stack".to_string(), "prefix".to_string()),
+                ("alien-resource".to_string(), "worker".to_string()),
+            ]))
+        );
+    }
+
+    /// A retried CreateDomainName whose first attempt succeeded answers ConflictException;
+    /// the worker only adopts the domain when the error says so.
+    #[test]
+    fn conflict_exception_maps_to_resource_conflict() {
+        let error = ApiGatewayV2Client::map_apigw_error(
+            StatusCode::CONFLICT,
+            r#"{"message":"The domain name you provided already exists.","__type":"ConflictException"}"#,
+            "CreateDomainName",
+            "worker.example.com",
+            None,
+        );
+        assert!(
+            matches!(error, Some(ErrorData::RemoteResourceConflict { ref resource_name, .. }) if resource_name == "worker.example.com"),
+            "{error:?}"
         );
     }
 }
