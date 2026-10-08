@@ -1351,6 +1351,7 @@ mod tests {
     fn deployment_readiness_not_ready_blocks_with_check_codes() {
         let info = DeploymentInfoResponse {
             setup_config: None,
+            setup_items: None,
             readiness: Some(DeploymentReadiness {
                 status: "notReady".to_string(),
                 checks: vec![
@@ -1379,6 +1380,7 @@ mod tests {
     fn deployment_readiness_unknown_checks_do_not_block() {
         let info = DeploymentInfoResponse {
             setup_config: None,
+            setup_items: None,
             readiness: Some(DeploymentReadiness {
                 status: "unknown".to_string(),
                 checks: vec![DeploymentReadinessCheck {
@@ -1398,6 +1400,7 @@ mod tests {
     fn absent_readiness_does_not_block() {
         let info = DeploymentInfoResponse {
             setup_config: None,
+            setup_items: None,
             readiness: None,
         };
 
