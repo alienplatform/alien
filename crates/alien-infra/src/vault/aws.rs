@@ -555,6 +555,23 @@ mod permission_update_tests {
         fault: Fault,
         existing: &[(&str, &str)],
     ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
+        fixture_with_removed_profile()
+            .lifecycle(lifecycle)
+            .authority(authority)
+            .fault(fault)
+            .existing(existing)
+            .remove_consumer(false)
+            .call()
+    }
+
+    #[bon::builder]
+    fn fixture_with_removed_profile(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        fault: Fault,
+        existing: &[(&str, &str)],
+        remove_consumer: bool,
+    ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
         let iam = Arc::new(Mutex::new(Iam::default()));
         for (role, name) in existing {
             iam.lock()
@@ -572,7 +589,7 @@ mod permission_update_tests {
         let vault = Vault::new("secrets".to_string()).build();
         let consumer = ServiceAccount::new("consumer-sa".to_string()).build();
         let former = ServiceAccount::new("former-sa".to_string()).build();
-        let stack = Stack::new("test".to_string())
+        let mut stack = Stack::new("test".to_string())
             .add_with_dependencies(
                 vault.clone(),
                 lifecycle,
@@ -589,6 +606,9 @@ mod permission_update_tests {
             )
             .permission("former", PermissionProfile::new())
             .build();
+        if remove_consumer {
+            stack.permissions.profiles.remove("consumer");
+        }
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(EnvironmentVariablesSnapshot {
@@ -869,6 +889,24 @@ mod permission_update_tests {
             .unwrap()
             .updates
             .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn removed_profile_revokes_vault_grant_on_retained_service_account() {
+        let (executor, mut state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[(CONSUMER_ROLE, READ_POLICY), (CONSUMER_ROLE, "alien-other-vault-data-read")])
+            .remove_consumer(true)
+            .call();
+        set_revision(&mut state, "previous-grants");
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.policies(CONSUMER_ROLE), vec!["alien-other-vault-data-read"]);
+        assert_eq!(iam.count("delete "), 1);
+        assert!(!executor.plan(&state).unwrap().updates.contains_key("secrets"));
     }
 
     #[tokio::test]

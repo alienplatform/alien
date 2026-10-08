@@ -1458,7 +1458,21 @@ impl ResourcePermissionsHelper {
 
         // (role, owned policy names, desired policy names)
         let mut roles: Vec<(String, HashSet<String>, HashSet<String>)> = Vec::new();
-        for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
+        // A role may outlive its entire permission profile. Include retained
+        // service accounts so deleting a profile also revokes its owned grants.
+        let mut profile_names: HashSet<&str> = ctx
+            .desired_stack
+            .permissions
+            .profiles
+            .keys()
+            .map(String::as_str)
+            .collect();
+        profile_names.extend(ctx.desired_stack.resources.iter().filter_map(|(id, entry)| {
+            (entry.config.resource_type() == alien_core::ServiceAccount::RESOURCE_TYPE)
+                .then(|| id.strip_suffix("-sa"))
+                .flatten()
+        }));
+        for profile_name in profile_names {
             let Some(role_name) = Self::existing_aws_service_account_role_name(ctx, profile_name)?
             else {
                 continue;
@@ -1467,7 +1481,13 @@ impl ResourcePermissionsHelper {
                 .iter()
                 .map(|id| aws_resource_policy_name(resource_id, id))
                 .collect();
-            let desired = Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix)
+            let desired = ctx
+                .desired_stack
+                .permissions
+                .profiles
+                .get(profile_name)
+                .map(|profile| Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix))
+                .unwrap_or_default()
                 .iter()
                 .map(|r| aws_resource_policy_name(resource_id, r.id()))
                 .collect();
