@@ -1602,11 +1602,13 @@ async fn deploy_task_with_environment(
                 .into_inner();
             validate_existing_public_subdomain(
                 requested,
-                existing.public_subdomain.as_ref().map(|value| value.as_str()),
+                existing
+                    .public_subdomain
+                    .as_ref()
+                    .map(|value| value.as_str()),
             )?;
         }
     }
-
 
     steps.complete(
         0,
