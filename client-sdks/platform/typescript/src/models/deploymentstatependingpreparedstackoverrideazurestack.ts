@@ -1837,6 +1837,13 @@ export type DeploymentStateLocation = {
    */
   consoleUrl?: string | null | undefined;
   /**
+   * Command that deletes the secret. Deleting a deployment keeps the
+   *
+   * @remarks
+   * secrets the deployer wrote, since Alien never owned their values.
+   */
+  deleteCommand?: string | null | undefined;
+  /**
    * Full name of the secret in that store.
    */
   name: string;
@@ -1905,6 +1912,13 @@ export type DeploymentStateDeployerSecret = {
    * metadata only and never reads the value.
    */
   status: DeploymentStateRuntimeMetadataStatus;
+  /**
+   * The secret store's version of the present value (never the value or a
+   *
+   * @remarks
+   * hash of it). A new version reaches workloads with the next update.
+   */
+  version?: string | null | undefined;
 };
 
 /**
@@ -7060,6 +7074,7 @@ export const DeploymentStateLocation$inboundSchema: z.ZodType<
 > = z.object({
   cliCommand: z.string(),
   consoleUrl: z.nullable(z.string()).optional(),
+  deleteCommand: z.nullable(z.string()).optional(),
   name: z.string(),
   store: DeploymentStateStore$inboundSchema,
   vaultName: z.nullable(z.string()).optional(),
@@ -7068,6 +7083,7 @@ export const DeploymentStateLocation$inboundSchema: z.ZodType<
 export type DeploymentStateLocation$Outbound = {
   cliCommand: string;
   consoleUrl?: string | null | undefined;
+  deleteCommand?: string | null | undefined;
   name: string;
   store: string;
   vaultName?: string | null | undefined;
@@ -7080,6 +7096,7 @@ export const DeploymentStateLocation$outboundSchema: z.ZodType<
 > = z.object({
   cliCommand: z.string(),
   consoleUrl: z.nullable(z.string()).optional(),
+  deleteCommand: z.nullable(z.string()).optional(),
   name: z.string(),
   store: DeploymentStateStore$outboundSchema,
   vaultName: z.nullable(z.string()).optional(),
@@ -7122,6 +7139,7 @@ export const DeploymentStateDeployerSecret$inboundSchema: z.ZodType<
   message: z.nullable(z.string()).optional(),
   required: z.boolean(),
   status: DeploymentStateRuntimeMetadataStatus$inboundSchema,
+  version: z.nullable(z.string()).optional(),
 });
 /** @internal */
 export type DeploymentStateDeployerSecret$Outbound = {
@@ -7131,6 +7149,7 @@ export type DeploymentStateDeployerSecret$Outbound = {
   message?: string | null | undefined;
   required: boolean;
   status: string;
+  version?: string | null | undefined;
 };
 
 /** @internal */
@@ -7144,6 +7163,7 @@ export const DeploymentStateDeployerSecret$outboundSchema: z.ZodType<
   message: z.nullable(z.string()).optional(),
   required: z.boolean(),
   status: DeploymentStateRuntimeMetadataStatus$outboundSchema,
+  version: z.nullable(z.string()).optional(),
 });
 
 export function deploymentStateDeployerSecretToJSON(

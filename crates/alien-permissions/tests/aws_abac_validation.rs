@@ -876,6 +876,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "ec2:DeleteVpc"
             | "ec2:DescribeVpcAttribute"
             | "ec2:DetachInternetGateway"
+            | "ec2:DetachVolume"
             | "ec2:DisassociateRouteTable"
             | "ec2:GetConsoleOutput"
             | "ec2:ModifyVpcAttribute"

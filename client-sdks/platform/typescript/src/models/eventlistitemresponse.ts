@@ -14,6 +14,10 @@ import {
   DeploymentCredentialRotationEvent,
   DeploymentCredentialRotationEvent$inboundSchema,
 } from "./deploymentcredentialrotationevent.js";
+import {
+  DeploymentGroupMovedEvent,
+  DeploymentGroupMovedEvent$inboundSchema,
+} from "./deploymentgroupmovedevent.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type EventListItemResponseDataDeploymentDeletionRequested = {
@@ -1717,6 +1721,7 @@ export type EventListItemResponseDataLoadingConfiguration = {
 };
 
 export type EventListItemResponseDataUnion =
+  | DeploymentGroupMovedEvent
   | EventListItemResponseDataLoadingConfiguration
   | EventListItemResponseDataFinished
   | EventListItemResponseDataBuildingStack
@@ -1918,6 +1923,7 @@ export type EventListItemResponse = {
    */
   debugSessionId?: string | null | undefined;
   data:
+    | DeploymentGroupMovedEvent
     | EventListItemResponseDataLoadingConfiguration
     | EventListItemResponseDataFinished
     | EventListItemResponseDataBuildingStack
@@ -4272,6 +4278,7 @@ export const EventListItemResponseDataUnion$inboundSchema: z.ZodType<
   EventListItemResponseDataUnion,
   unknown
 > = z.union([
+  DeploymentGroupMovedEvent$inboundSchema,
   z.lazy(() => EventListItemResponseDataLoadingConfiguration$inboundSchema),
   z.lazy(() => EventListItemResponseDataFinished$inboundSchema),
   z.lazy(() => EventListItemResponseDataBuildingStack$inboundSchema),
@@ -4486,6 +4493,7 @@ export const EventListItemResponse$inboundSchema: z.ZodType<
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
+    DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventListItemResponseDataLoadingConfiguration$inboundSchema),
     z.lazy(() => EventListItemResponseDataFinished$inboundSchema),
     z.lazy(() => EventListItemResponseDataBuildingStack$inboundSchema),
