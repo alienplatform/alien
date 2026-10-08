@@ -181,7 +181,8 @@ pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> Capaci
 }
 
 /// Rejects a selection whose largest fleet cannot hold the workloads at their desired replica
-/// counts. Packing is not modelled, so passing is necessary but not sufficient.
+/// counts. Like the per-container machine check, it compares hardware totals and does not model
+/// packing, so passing is necessary but not sufficient.
 pub fn check_pool_capacity(
     platform: Platform,
     pool_id: &str,
@@ -196,8 +197,8 @@ pub fn check_pool_capacity(
         return Ok(());
     };
     let machines = selection.max_size();
-    let cpu = f64::from(machines) * instance_catalog::allocatable_cpu(spec);
-    let memory = u64::from(machines) * instance_catalog::allocatable_memory_bytes(spec);
+    let cpu = f64::from(machines) * f64::from(spec.vcpu);
+    let memory = u64::from(machines) * spec.memory_bytes;
     if cpu + f64::EPSILON >= requirements.total_cpu_at_desired
         && memory >= requirements.total_memory_bytes_at_desired
     {
@@ -205,7 +206,7 @@ pub fn check_pool_capacity(
     }
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
     Err(format!(
-        "Pool '{pool_id}' is too small for its workloads: {machines} x {} provides {cpu:.2} vCPU and {:.1} GiB to workloads, which request {:.2} vCPU and {:.1} GiB at their desired replica counts",
+        "Pool '{pool_id}' is too small for its workloads: {machines} x {} has {cpu:.2} vCPU and {:.1} GiB, and the workloads request {:.2} vCPU and {:.1} GiB at their desired replica counts",
         spec.name,
         memory as f64 / GIB,
         requirements.total_cpu_at_desired,
@@ -1410,7 +1411,7 @@ mod tests {
             .collect(),
         };
 
-        // m7g.xlarge: 4 vCPU and 16 GiB, 3.5 vCPU after the system reserve.
+        // m7g.xlarge: 4 vCPU and 16 GiB.
         let errors = plan_compute(&stack, Platform::Aws, Some(&selection(1)))
             .expect("plan should build")
             .pools
@@ -1419,7 +1420,7 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].starts_with(
-                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge provides 3.50 vCPU"
+                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge has 4.00 vCPU"
             ),
             "{errors:?}"
         );

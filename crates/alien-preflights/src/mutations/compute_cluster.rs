@@ -2680,18 +2680,18 @@ mod tests {
             machine: Some("m7g.large".to_string()),
             failure_domains: None,
         };
-        // m7g.large gives workloads 1.5 vCPU; four replicas request 2.
-        let error = prepare_release(gw_release(ContainerReplicas::Fixed(4)), &fixed_one)
+        // m7g.large has 2 vCPU; five replicas request 2.5.
+        let error = prepare_release(gw_release(ContainerReplicas::Fixed(5)), &fixed_one)
             .await
-            .expect_err("four replicas cannot fit one machine");
+            .expect_err("five replicas cannot fit one machine");
         assert!(
             error.message.contains(
-                "Pool 'general' is too small for its workloads: 1 x m7g.large provides 1.50 vCPU"
+                "Pool 'general' is too small for its workloads: 1 x m7g.large has 2.00 vCPU"
             ),
             "{}",
             error.message
         );
-        assert!(error.message.contains("request 2.00 vCPU"), "{}", error.message);
+        assert!(error.message.contains("request 2.50 vCPU"), "{}", error.message);
     }
 
     #[tokio::test]
