@@ -2,12 +2,13 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
+use alien_cli_common::SetupItem;
 use alien_core::{
     deployer_secret_value_refusal, is_deployer_secret_input, Platform, Stack, StackInputDefinition,
     StackInputKind, StackInputProvider,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -32,7 +33,7 @@ pub struct OnboardArgs {
         value_delimiter = ',',
         default_value = "application"
     )]
-    pub setup_items: Vec<OnboardSetupItem>,
+    pub setup_items: Vec<SetupItem>,
 
     /// Maximum number of deployments for this customer
     #[arg(long, default_value = "100")]
@@ -72,16 +73,6 @@ pub struct OnboardArgs {
     pub airgapped: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum OnboardSetupItem {
-    Application,
-    Models,
-    Keys,
-    Storage,
-    Registry,
-    Sandbox,
-}
-
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     let name = if let Some(ref name) = args.name {
         name.clone()
@@ -117,7 +108,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     let available_setup =
         fetch_available_setup(&client, workspace.query.as_deref(), &project_id).await?;
     validate_setup_items(&args.setup_items, &available_setup.items)?;
-    let includes_application = args.setup_items.contains(&OnboardSetupItem::Application);
+    let includes_application = args.setup_items.contains(&SetupItem::Application);
     let release_inputs = if includes_application {
         fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?
     } else {
@@ -233,12 +224,12 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     .iter()
                     .map(|item| alien_platform_api::types::DeploymentSetupItemSelection {
                     item: match item {
-                        OnboardSetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::Deployment,
-                        OnboardSetupItem::Models => alien_platform_api::types::DeploymentSetupItemSelectionItem::Models,
-                        OnboardSetupItem::Keys => alien_platform_api::types::DeploymentSetupItemSelectionItem::Keys,
-                        OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Bucket,
-                        OnboardSetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
-                        OnboardSetupItem::Sandbox => alien_platform_api::types::DeploymentSetupItemSelectionItem::Sandbox,
+                        SetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::Deployment,
+                        SetupItem::Models => alien_platform_api::types::DeploymentSetupItemSelectionItem::Models,
+                        SetupItem::Keys => alien_platform_api::types::DeploymentSetupItemSelectionItem::Keys,
+                        SetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Bucket,
+                        SetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
+                        SetupItem::Sandbox => alien_platform_api::types::DeploymentSetupItemSelectionItem::Sandbox,
                     },
                     provider_allowlist: Vec::new(),
                     release_channel: None,
@@ -289,7 +280,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "name": name,
             "externalId": external_id,
             "deploymentLink": deployment_link,
-            "setupItems": args.setup_items.iter().map(onboard_setup_item_name).collect::<Vec<_>>(),
+            "setupItems": args.setup_items.iter().map(|item| item.cli_name()).collect::<Vec<_>>(),
             "readiness": "setup_pending",
             "nextAction": "Share deploymentLink with the customer's admin, then run `alien deployments ls` to check readiness.",
             "maxDeployments": args.max_deployments,
@@ -322,17 +313,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     Ok(())
 }
 
-fn onboard_setup_item_name(item: &OnboardSetupItem) -> &'static str {
-    match item {
-        OnboardSetupItem::Application => "application",
-        OnboardSetupItem::Models => "models",
-        OnboardSetupItem::Keys => "keys",
-        OnboardSetupItem::Storage => "storage",
-        OnboardSetupItem::Registry => "registry",
-        OnboardSetupItem::Sandbox => "sandbox",
-    }
-}
-
 struct ActiveReleaseStackInputs {
     supported_platforms: Vec<Platform>,
     inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
@@ -340,7 +320,7 @@ struct ActiveReleaseStackInputs {
 
 #[cfg(feature = "platform")]
 struct AvailableSetup {
-    items: Vec<OnboardSetupItem>,
+    items: Vec<SetupItem>,
     supported_platforms: Vec<Platform>,
 }
 
@@ -372,12 +352,12 @@ async fn fetch_available_setup(
         .setup_items
         .iter()
         .map(|item| match item {
-            DeploymentLinkSetupResponseSetupItemsItem::Deployment => OnboardSetupItem::Application,
-            DeploymentLinkSetupResponseSetupItemsItem::Models => OnboardSetupItem::Models,
-            DeploymentLinkSetupResponseSetupItemsItem::Keys => OnboardSetupItem::Keys,
-            DeploymentLinkSetupResponseSetupItemsItem::Bucket => OnboardSetupItem::Storage,
-            DeploymentLinkSetupResponseSetupItemsItem::Registry => OnboardSetupItem::Registry,
-            DeploymentLinkSetupResponseSetupItemsItem::Sandbox => OnboardSetupItem::Sandbox,
+            DeploymentLinkSetupResponseSetupItemsItem::Deployment => SetupItem::Application,
+            DeploymentLinkSetupResponseSetupItemsItem::Models => SetupItem::Models,
+            DeploymentLinkSetupResponseSetupItemsItem::Keys => SetupItem::Keys,
+            DeploymentLinkSetupResponseSetupItemsItem::Bucket => SetupItem::Storage,
+            DeploymentLinkSetupResponseSetupItemsItem::Registry => SetupItem::Registry,
+            DeploymentLinkSetupResponseSetupItemsItem::Sandbox => SetupItem::Sandbox,
         })
         .collect();
     let supported_platforms = setup
@@ -398,10 +378,7 @@ async fn fetch_available_setup(
 }
 
 #[cfg(feature = "platform")]
-fn validate_setup_items(
-    requested: &[OnboardSetupItem],
-    available: &[OnboardSetupItem],
-) -> Result<()> {
+fn validate_setup_items(requested: &[SetupItem], available: &[SetupItem]) -> Result<()> {
     if requested.is_empty() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "setup-items".to_string(),
@@ -415,9 +392,7 @@ fn validate_setup_items(
                 field: "setup-items".to_string(),
                 message: format!(
                     "{} is not configured for this Project. Configure it in the Dashboard before creating the setup link.",
-                    item.to_possible_value()
-                        .expect("ValueEnum variants have names")
-                        .get_name()
+                    item.cli_name()
                 ),
             }));
         }
@@ -1980,7 +1955,7 @@ mod tests {
     #[test]
     fn setup_items_default_to_application_and_accept_composition() {
         let default = OnboardArgs::try_parse_from(["onboard", "customer"]).unwrap();
-        assert_eq!(default.setup_items, vec![OnboardSetupItem::Application]);
+        assert_eq!(default.setup_items, vec![SetupItem::Application]);
 
         let composed = OnboardArgs::try_parse_from([
             "onboard",
@@ -1992,10 +1967,10 @@ mod tests {
         assert_eq!(
             composed.setup_items,
             vec![
-                OnboardSetupItem::Models,
-                OnboardSetupItem::Keys,
-                OnboardSetupItem::Storage,
-                OnboardSetupItem::Registry,
+                SetupItem::Models,
+                SetupItem::Keys,
+                SetupItem::Storage,
+                SetupItem::Registry,
             ]
         );
     }
@@ -2004,14 +1979,14 @@ mod tests {
     fn setup_item_names_are_stable_for_json_output() {
         assert_eq!(
             [
-                OnboardSetupItem::Application,
-                OnboardSetupItem::Models,
-                OnboardSetupItem::Keys,
-                OnboardSetupItem::Storage,
-                OnboardSetupItem::Registry,
+                SetupItem::Application,
+                SetupItem::Models,
+                SetupItem::Keys,
+                SetupItem::Storage,
+                SetupItem::Registry,
             ]
             .iter()
-            .map(onboard_setup_item_name)
+            .map(|item| item.cli_name())
             .collect::<Vec<_>>(),
             ["application", "models", "keys", "storage", "registry"]
         );
@@ -2081,11 +2056,8 @@ mod tests {
 
     #[test]
     fn setup_items_must_be_configured_for_the_project() {
-        let err = validate_setup_items(
-            &[OnboardSetupItem::Models, OnboardSetupItem::Keys],
-            &[OnboardSetupItem::Models],
-        )
-        .expect_err("an unavailable setup item must fail before link creation");
+        let err = validate_setup_items(&[SetupItem::Models, SetupItem::Keys], &[SetupItem::Models])
+            .expect_err("an unavailable setup item must fail before link creation");
 
         assert!(err.to_string().contains("keys is not configured"));
     }

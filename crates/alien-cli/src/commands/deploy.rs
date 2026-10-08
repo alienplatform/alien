@@ -20,7 +20,10 @@ use crate::deployment_tracking::{
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
+use alien_cli_common::{
+    network::{self, NetworkArgs, NetworkMode},
+    SetupItem,
+};
 use alien_core::{
     ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
 };
@@ -116,8 +119,8 @@ pub struct DeployArgs {
 
     /// Customer setup item to install, for a deployment-group token whose group
     /// offers more than one. The API rejects the request without it.
-    #[arg(long = "setup-item")]
-    pub setup_item: Option<String>,
+    #[arg(long = "setup-item", value_enum)]
+    pub setup_item: Option<SetupItem>,
 
     /// Public subdomain for deployments in your own environment.
     ///
@@ -954,8 +957,8 @@ fn deployment_create_request_body(
         "setupMethod": "cli",
     });
 
-    if let Some(setup_item) = args.setup_item.as_ref() {
-        body["setupItem"] = serde_json::Value::String(setup_item.clone());
+    if let Some(setup_item) = args.setup_item {
+        body["setupItem"] = serde_json::Value::String(setup_item.api_name().to_string());
     }
     if let Some(resource_prefix) = args.resource_prefix.as_ref() {
         body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
@@ -1515,14 +1518,19 @@ async fn deploy_task_with_environment(
                         public_endpoints: None,
                     };
 
-                        let parsed_setup_item = match args.setup_item.as_deref() {
+                        let parsed_setup_item = match args.setup_item {
                             Some(item) => Some(
-                                serde_json::from_value(serde_json::Value::String(item.to_string()))
-                                    .into_alien_error()
-                                    .context(ErrorData::ValidationError {
-                                        field: "setup-item".to_string(),
-                                        message: format!("Unknown setup item '{item}'"),
-                                    })?,
+                                serde_json::from_value(serde_json::Value::String(
+                                    item.api_name().to_string(),
+                                ))
+                                .into_alien_error()
+                                .context(ErrorData::ValidationError {
+                                    field: "setup-item".to_string(),
+                                    message: format!(
+                                        "The API does not accept setup item '{}'",
+                                        item.cli_name()
+                                    ),
+                                })?,
                             ),
                             None => None,
                         };
@@ -3849,8 +3857,9 @@ mod tests {
                 "test",
                 "--platform",
                 "aws",
+                // The documented name; the API calls this item `bucket`.
                 "--setup-item",
-                "bucket",
+                "storage",
                 "--channel",
                 "preview",
             ])
