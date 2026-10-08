@@ -1758,6 +1758,7 @@ mod gcp_project_consumer_tests {
         group_id: &str,
         name: &str,
         project_number: &str,
+        status: &str,
     ) -> String {
         store
             .create_with_state(
@@ -1776,7 +1777,7 @@ mod gcp_project_consumer_tests {
                         region: "us-central1".to_string(),
                     })),
                     runtime_metadata: RuntimeMetadata::default(),
-                    status: "running".to_string(),
+                    status: status.to_string(),
                     current_release_id: None,
                     desired_release_id: None,
                     import_source: None,
@@ -1817,18 +1818,20 @@ mod gcp_project_consumer_tests {
             .await
             .expect("create deployment group");
 
-        let deleting = create_gcp_deployment(&store, &group.id, "deleting", SHARED_PROJECT).await;
-        create_gcp_deployment(&store, &group.id, "elsewhere", "222222222222").await;
+        let deleting = create_gcp_deployment(&store, &group.id, "deleting", SHARED_PROJECT, "running").await;
+        create_gcp_deployment(&store, &group.id, "elsewhere", "222222222222", "running").await;
+        // A record a store keeps after deletion (status `deleted`) no longer pulls images.
+        create_gcp_deployment(&store, &group.id, "deleted", SHARED_PROJECT, "deleted").await;
 
         assert!(
             !store
                 .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
                 .await
                 .expect("consumer check"),
-            "neither the deployment itself nor one in another project shares the grant"
+            "neither the deployment itself, one in another project, nor a deleted one shares the grant"
         );
 
-        let sibling = create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT).await;
+        let sibling = create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT, "running").await;
         assert!(
             store
                 .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
