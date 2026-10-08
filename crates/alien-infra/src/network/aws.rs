@@ -792,9 +792,20 @@ mod tests {
         let credentials = AwsCredentialProvider::from_config(config).await.unwrap();
         let client = Ec2Client::new(reqwest::Client::new(), credentials);
         let response = client.describe_addresses().await.unwrap();
-        let reported = response.addresses_set.as_ref().unwrap().items.len();
+        let addresses = &response.addresses_set.as_ref().unwrap().items;
         assert!(
-            reported > expected,
+            addresses.iter().any(|address| {
+                address.domain.as_deref() == Some("vpc")
+                    && address
+                        .service_managed
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty())
+                    && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
+            }),
+            "test account must include a service-managed Amazon-pool VPC address"
+        );
+        assert!(
+            addresses.len() > expected,
             "test account must include excluded addresses"
         );
         assert_eq!(quota_consuming_eip_usage(response), Some(expected));
@@ -5366,8 +5377,7 @@ mod controller_state_tests {
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
-    use alien_aws_clients::AwsCredentialProvider;
-    use alien_core::{AwsClientConfig, AwsCredentials, Network, Platform};
+    use alien_core::{Network, Platform};
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
