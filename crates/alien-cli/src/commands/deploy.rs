@@ -2079,6 +2079,7 @@ async fn deploy_task_with_environment(
         Some(&on_progress),
     )
     .await;
+    drop(on_progress);
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
         (result.loop_result.outcome == LoopOutcome::Failure)
             .then(|| result.loop_result.final_status.clone())
@@ -2808,13 +2809,16 @@ async fn completed_after_acquisition_miss(
     deployment_token: &str,
     deployment_id: &str,
 ) -> Result<bool> {
+    let Some(error) = std::iter::successors(Some(error), |error| error.source.as_deref())
+        .find(|error| error.code == "DEPLOYMENT_ACQUIRE_UNAVAILABLE")
+    else {
+        return Ok(false);
+    };
     let reason = error
         .context
         .as_ref()
         .and_then(|context| context["reason"].as_str());
-    if error.code != "DEPLOYMENT_ACQUIRE_UNAVAILABLE"
-        || !matches!(reason, Some("statusMismatch" | "acquireModeMismatch"))
-    {
+    if !matches!(reason, Some("statusMismatch" | "acquireModeMismatch")) {
         return Ok(false);
     }
     let deployment = create_platform_client(deployment_token, base_url)?
@@ -2921,7 +2925,10 @@ async fn request_deployment_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::{Method::GET, MockServer};
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -2959,6 +2966,61 @@ mod tests {
             "desiredReleaseId": null,
             "updateState": {"active": null, "next": null, "latest": null},
         })
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_confirms_completion_through_acquisition_helpers() {
+        for setup in [false, true] {
+            let server = MockServer::start_async().await;
+            let acquisition = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(409).json_body(
+                        serde_json::to_value(acquisition_miss(if setup {
+                            "acquireModeMismatch"
+                        } else {
+                            "statusMismatch"
+                        }))
+                        .unwrap(),
+                    );
+                })
+                .await;
+            let completion = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/deployments/dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                    then.status(200).json_body(completed_deployment_response());
+                })
+                .await;
+            let client = alien_manager_api::Client::new(&server.base_url());
+            let id = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            let error = if setup {
+                acquire_setup_run_deployment(
+                    &client,
+                    id,
+                    "test-session",
+                    alien_core::DeploymentModel::Push,
+                )
+                .await
+            } else {
+                acquire_deployment_with_payload(
+                    &client,
+                    id,
+                    "test-session",
+                    alien_core::DeploymentModel::Push,
+                )
+                .await
+            }
+            .expect_err("manager rejects acquisition after completion");
+            assert_ne!(error.code, "DEPLOYMENT_ACQUIRE_UNAVAILABLE");
+            assert!(
+                completed_after_acquisition_miss(&error, &server.base_url(), "test-token", id)
+                    .await
+                    .unwrap()
+            );
+            acquisition.assert_hits_async(1).await;
+            completion.assert_hits_async(1).await;
+        }
     }
 
     #[tokio::test]
