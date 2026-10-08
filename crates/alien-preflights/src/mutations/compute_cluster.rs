@@ -2607,7 +2607,10 @@ mod tests {
         Autoscale(u32, u32),
     }
 
-    async fn prepare_release(stack: Stack, selection: &ComputePoolSelection) -> Result<CapacityGroup> {
+    async fn prepare_release(
+        stack: Stack,
+        selection: &ComputePoolSelection,
+    ) -> Result<CapacityGroup> {
         let stack_state = StackState {
             platform: Platform::Aws,
             resources: Default::default(),
@@ -2691,7 +2694,11 @@ mod tests {
             "{}",
             error.message
         );
-        assert!(error.message.contains("request 2.50 vCPU"), "{}", error.message);
+        assert!(
+            error.message.contains("request 2.50 vCPU"),
+            "{}",
+            error.message
+        );
     }
 
     #[tokio::test]
