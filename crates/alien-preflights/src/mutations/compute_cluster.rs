@@ -2456,10 +2456,9 @@ mod tests {
         );
     }
 
-    /// A stack whose source declares no pool: one fixed container and one that
-    /// autoscales to two replicas, so the planner recommends autoscale 1-2.
+    /// A stack whose source declares no pool: one container that autoscales from
+    /// one to two replicas, so the planner recommends autoscale 1-2.
     fn generated_pool_stack() -> Stack {
-        let app = test_container("app", "1", "2Gi");
         let mut gw = test_container("gw", "1", "2Gi");
         gw.autoscaling = Some(ContainerAutoscaling {
             min: 1,
@@ -2471,7 +2470,6 @@ mod tests {
             max_http_p95_latency_ms: None,
         });
         Stack::new("generated-pool".to_string())
-            .add(app, ResourceLifecycle::Live)
             .add(gw, ResourceLifecycle::Live)
             .build()
     }
