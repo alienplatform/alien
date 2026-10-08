@@ -282,6 +282,25 @@ pub enum ErrorData {
         action: String,
     },
 
+    /// A cloud provider limit refuses the step until a later time, which the message names.
+    ///
+    /// Not retryable: retrying before that time fails the same way.
+    #[error(
+        code = "CLOUD_LIMIT_REACHED",
+        message = "Cannot {operation} for resource '{resource_id}': {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 429
+    )]
+    CloudLimitReached {
+        /// The resource whose step was refused
+        resource_id: String,
+        /// What the step was doing, such as "grow EBS volume vol-1"
+        operation: String,
+        /// The provider's explanation, including when the step may run again
+        message: String,
+    },
+
     /// A workload update was accepted, but its rollout was not confirmed before the wait ended.
     ///
     /// The accepted configuration stays desired downstream, so the rollout can still complete
