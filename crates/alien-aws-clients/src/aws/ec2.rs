@@ -2888,6 +2888,9 @@ pub struct Address {
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
+    /// AWS service managing this address. Service-managed addresses do not
+    /// consume the customer's EC2-VPC Elastic IP allocation quota.
+    pub service_managed: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
 }
@@ -4666,7 +4669,7 @@ mod volume_operation_tests {
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
                     <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><associationId>eipassoc-1</associationId><networkInterfaceId>eni-1</networkInterfaceId><publicIpv4Pool>amazon</publicIpv4Pool></item>
-                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
+                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain><serviceManaged>alb</serviceManaged></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
             </DescribeAddressesResponse>"#,
@@ -4700,6 +4703,8 @@ mod volume_operation_tests {
             addresses.items[0].network_interface_id.as_deref(),
             Some("eni-1")
         );
+        assert_eq!(addresses.items[1].service_managed.as_deref(), Some("alb"));
+        assert_eq!(addresses.items[0].service_managed, None);
         assert_eq!(addresses.items[1].association_id, None);
         assert_eq!(addresses.items[1].network_interface_id, None);
     }

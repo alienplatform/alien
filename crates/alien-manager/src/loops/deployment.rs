@@ -865,6 +865,7 @@ impl DeploymentLoop {
             Ok(RunnerResult {
                 loop_result,
                 steps_executed,
+                ..
             }) => {
                 info!(
                     deployment_id = %deployment_id,

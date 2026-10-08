@@ -267,6 +267,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
     let RunnerResult {
         loop_result,
         steps_executed,
+        ..
     } = result;
 
     if loop_result.outcome == LoopOutcome::Neutral {

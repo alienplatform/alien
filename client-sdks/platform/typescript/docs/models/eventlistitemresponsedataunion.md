@@ -3,6 +3,22 @@
 
 ## Supported Types
 
+### `models.DeploymentGroupMovedEvent`
+
+```typescript
+const value: models.DeploymentGroupMovedEvent = {
+  type: "DeploymentGroupMoved",
+  actor: {
+    kind: "serviceAccount",
+    id: "<id>",
+  },
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  previousDeploymentGroupId: "<id>",
+  deploymentGroupId: "<id>",
+  membershipRevision: 67016,
+};
+```
+
 ### `models.EventListItemResponseDataLoadingConfiguration`
 
 ```typescript

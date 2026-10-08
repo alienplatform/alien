@@ -15,8 +15,9 @@ let value: ListEventsResponse = {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       data: {
-        strategyName: "<value>",
-        type: "PreparingEnvironment",
+        agentId: "<id>",
+        debugSessionId: "<id>",
+        type: "DebuggingAgent",
       },
       state: "none",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",

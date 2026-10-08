@@ -103,10 +103,12 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
             // execute policy may reference this service-account role; a direct
             // traversal here would therefore create a Terraform dependency
             // cycle between the two roles.
-            compute_role_arns.push(expr::template(format!(
-                "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{}-instances",
-                cluster.id
-            )));
+            for suffix in ["instances", "isolation-v1"] {
+                compute_role_arns.push(expr::template(format!(
+                    "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{}-{suffix}",
+                    cluster.id
+                )));
+            }
         }
     }
 
