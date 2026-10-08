@@ -191,8 +191,8 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
             print_json(&ReleaseJsonOutput {
                 success: true,
                 release_id: Some(declared.release_id.clone()),
-                project: declared.project,
-                workspace: declared.workspace,
+                project: declared.project_link.project_name,
+                workspace: declared.project_link.workspace,
                 platforms: Vec::new(),
                 channel: (!args.no_promote).then(|| args.channel.clone()),
             })?;
@@ -204,9 +204,10 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
                 println!(
                     "{} {}",
                     dim_label("Next"),
-                    command(&format!(
-                        "alien releases promote {} --channel production",
-                        declared.release_id
+                    command(&promote_command_hint(
+                        &ctx,
+                        &declared.project_link,
+                        &declared.release_id,
                     ))
                 );
             }
@@ -552,6 +553,7 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
 
     let platforms_label = format_platform_summary(&config.platforms);
     let onboard_hint = onboard_command_hint(&config);
+    let project_link = config.project_link.clone();
     println!(
         "{}",
         contextual_heading(
@@ -569,9 +571,7 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         println!(
             "{} {}",
             dim_label("Next"),
-            command(&format!(
-                "alien releases promote {release_id} --channel production"
-            ))
+            command(&promote_command_hint(&ctx, &project_link, &release_id))
         );
     } else if !is_dev {
         println!("{}", dim_label("Next create a deployment link:"));
@@ -905,8 +905,7 @@ async fn create_platform_release(
 /// Result of a stackless declare.
 struct DeclaredRelease {
     release_id: String,
-    project: String,
-    workspace: String,
+    project_link: crate::project_link::ProjectLink,
 }
 
 /// Declare a stackless release: record a `(project, version)` release with git
@@ -935,8 +934,6 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
     }
 
     let (_project_id, project_link) = ctx.resolve_project(args.project.as_deref(), false).await?;
-    let workspace_name = project_link.workspace.clone();
-
     let git_metadata = if args.no_git {
         None
     } else {
@@ -974,13 +971,12 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
         .await?;
         Ok(DeclaredRelease {
             release_id,
-            project: project_link.project_name,
-            workspace: workspace_name,
+            project_link,
         })
     }
     #[cfg(not(feature = "platform"))]
     {
-        let _ = (git_metadata, version, project_link, workspace_name);
+        let _ = (git_metadata, version, project_link);
         Err(AlienError::new(ErrorData::ConfigurationError {
             message: "Platform mode requires the 'platform' feature".to_string(),
         }))
@@ -1579,6 +1575,25 @@ fn display_platform_name(platform: &str) -> &str {
         "local" => "Local",
         other => other,
     }
+}
+
+fn promote_command_hint(
+    ctx: &ExecutionMode,
+    project_link: &crate::project_link::ProjectLink,
+    release_id: &str,
+) -> String {
+    let mut command_parts = vec![format!(
+        "alien --base-url '{}'",
+        ctx.base_url().replace('\'', "'\\''"),
+    )];
+    if !project_link.workspace.is_empty() {
+        command_parts.push(format!("--workspace {}", project_link.workspace));
+    }
+    command_parts.push(format!(
+        "releases promote {release_id} --project {} --channel production",
+        project_link.project_id,
+    ));
+    command_parts.join(" ")
 }
 
 fn onboard_command_hint(config: &ReleaseConfig) -> String {
