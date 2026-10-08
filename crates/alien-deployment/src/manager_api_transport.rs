@@ -1366,6 +1366,19 @@ mod tests {
             ]}}))
             .unwrap())
         });
+        // Lookups of objects a lost response could have hidden find none.
+        ec2.expect_describe_route_tables()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        ec2.expect_describe_internet_gateways()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        ec2.expect_describe_nat_gateways()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        ec2.expect_describe_security_groups()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        ec2.expect_describe_addresses()
+            .returning(|| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        ec2.expect_describe_vpcs()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
         ec2.expect_delete_vpc().times(0);
         let ec2 = Arc::new(ec2);
         let mut provider = alien_infra::MockPlatformServiceProvider::new();
