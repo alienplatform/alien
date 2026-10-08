@@ -2831,7 +2831,7 @@ async fn completed_after_acquisition_miss(
         })?
         .into_inner();
     Ok(
-        deployment.status == alien_platform_api::types::DeploymentStatus::Running
+        deployment.status == alien_platform_api::types::DeploymentDetailResponseStatus::Running
             && deployment.current_release_id.is_some()
             && deployment.desired_release_id.is_none()
             && deployment
