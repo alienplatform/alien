@@ -696,7 +696,8 @@ impl AwsServiceAccountController {
 
         // Check if any Container in the stack uses this profile — if so, the ComputeCluster VM
         // role needs to assume this SA role to vend per-container credentials via the IMDS proxy.
-        // The VM role ARN is deterministic: {prefix}-{clusterId}-role (set in compute_cluster/aws.rs).
+        // Keep both exact node identities trusted while existing nodes drain during
+        // an isolation rollout. A node still needs its own sts:AssumeRole grant.
         let has_container_using_profile = ctx.desired_stack.resources().any(|(_, entry)| {
             entry
                 .config
@@ -714,18 +715,20 @@ impl AwsServiceAccountController {
 
             for (cluster_id, entry) in ctx.desired_stack.resources() {
                 if entry.config.downcast_ref::<ComputeCluster>().is_some() {
-                    let vm_role_arn = format!(
-                        "arn:aws:iam::{}:role/{}-{}-role",
-                        account_id, ctx.resource_prefix, cluster_id,
-                    );
-                    if !role_arns.contains(&vm_role_arn) {
-                        info!(
-                            service_account = %service_account.id,
-                            cluster_id = %cluster_id,
-                            vm_role_arn = %vm_role_arn,
-                            "Adding ComputeCluster VM role to SA trust policy for IMDS credential vending"
+                    for suffix in ["role", "isolation-v1-role"] {
+                        let vm_role_arn = format!(
+                            "arn:aws:iam::{}:role/{}-{}-{}",
+                            account_id, ctx.resource_prefix, cluster_id, suffix,
                         );
-                        role_arns.push(vm_role_arn);
+                        if !role_arns.contains(&vm_role_arn) {
+                            info!(
+                                service_account = %service_account.id,
+                                cluster_id = %cluster_id,
+                                vm_role_arn = %vm_role_arn,
+                                "Adding ComputeCluster VM role to SA trust policy for IMDS credential vending"
+                            );
+                            role_arns.push(vm_role_arn);
+                        }
                     }
                 }
             }
