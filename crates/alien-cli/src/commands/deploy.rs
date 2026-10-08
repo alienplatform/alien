@@ -1736,8 +1736,8 @@ async fn deploy_task_with_environment(
 
     // Setup runs with setup authority for the deployment group; the
     // deployment token keeps configuring the runtime.
-    let setup_client = match plan {
-        ExistingDeploymentPlan::SetupUpdate { retry } => {
+    let (setup_client, setup_token) = match plan {
+        ExistingDeploymentPlan::SetupUpdate { .. } => {
             let deployment_group_id = deployment_group_id.as_deref().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "A setup update needs the deployment's group from the platform"
@@ -1773,20 +1773,13 @@ async fn deploy_task_with_environment(
                 &plan.setup_reason(&status),
             )
             .await?;
-            if retry {
-                request_deployment_retry(
-                    &base_url,
-                    &setup_token,
-                    &tracked_deployment.deployment_id,
-                )
-                .await?;
-            }
-            Some(alien_manager_api::Client::new_with_client(
+            let client = alien_manager_api::Client::new_with_client(
                 &manager_ctx.manager_url,
                 deployment_manager_http_client(&setup_token, manager_ctx.workspace.as_deref())?,
-            ))
+            );
+            (Some(client), Some(setup_token))
         }
-        _ => None,
+        _ => (None, None),
     };
     // The client that holds the lock: setup authority for a setup update.
     let lock_client = setup_client.as_ref().unwrap_or(&manager_client);
@@ -1850,10 +1843,6 @@ async fn deploy_task_with_environment(
         current.retry_requested = true;
     }
 
-    if let Some(stack_state) = current.stack_state.as_ref() {
-        steps.sync_deployment_resources(&stack_state.resources);
-    }
-
     // Build minimal deployment config
     let stack_settings: alien_core::StackSettings = deployment
         .stack_settings
@@ -1907,6 +1896,28 @@ async fn deploy_task_with_environment(
         plan,
         ExistingDeploymentPlan::InitialSetup | ExistingDeploymentPlan::SetupUpdate { .. }
     );
+
+    // A local retry flag does not make a failed platform operation claimable.
+    // Validate the resume configuration first, then requeue with the same
+    // authority that will acquire execution. The API rejects a live contender.
+    if ctx.is_platform()
+        && matches!(
+            current.status,
+            DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetupFailed
+                | DeploymentStatus::ProvisioningFailed
+                | DeploymentStatus::UpdateFailed
+                | DeploymentStatus::RefreshFailed
+        )
+    {
+        request_deployment_retry(
+            &base_url,
+            setup_token.as_deref().unwrap_or(deployment_token),
+            &tracked_deployment.deployment_id,
+        )
+        .await?;
+    }
+    steps.activate(2, Some("Waiting for execution ownership".to_string()));
 
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
@@ -2025,6 +2036,13 @@ async fn deploy_task_with_environment(
         current = prepared;
     }
 
+    steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
+    let progress_steps = steps.clone();
+    let on_progress: alien_deployment::runner::ProgressCallback = Box::new(move |progress| {
+        if let Some(stack_state) = progress.stack_state {
+            progress_steps.sync_deployment_resources(&stack_state.resources);
+        }
+    });
     let runner_result = alien_deployment::runner::run_step_loop(
         &mut current,
         &mut config,
@@ -2033,7 +2051,7 @@ async fn deploy_task_with_environment(
         &policy,
         &transport,
         None,
-        None,
+        Some(&on_progress),
     )
     .await;
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
