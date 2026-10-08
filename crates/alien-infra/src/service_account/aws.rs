@@ -1249,6 +1249,7 @@ mod tests {
             };
             let mut executor = SingleControllerExecutor::builder()
                 .resource(ServiceAccount::new("reader-sa".to_string()).build())
+                .previous_resource(ServiceAccount::new("reader-sa".to_string()).build())
                 .controller(controller)
                 .platform(Platform::Aws)
                 .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
