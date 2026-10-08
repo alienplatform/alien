@@ -9,13 +9,15 @@ import { GetAccessRequestCoordinatesResponse } from "@alienplatform/platform-api
 
 let value: GetAccessRequestCoordinatesResponse = {
   status: "revoked",
+  approvalChannels: [],
   kubectlApprove: "<value>",
 };
 ```
 
 ## Fields
 
-| Field                                                             | Type                                                              | Required                                                          | Description                                                       |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `status`                                                          | [models.AccessRequestStatus](../../models/accessrequeststatus.md) | :heavy_check_mark:                                                | N/A                                                               |
-| `kubectlApprove`                                                  | *string*                                                          | :heavy_check_mark:                                                | N/A                                                               |
+| Field                                                                                 | Type                                                                                  | Required                                                                              | Description                                                                           |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `status`                                                                              | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                     | :heavy_check_mark:                                                                    | N/A                                                                                   |
+| `approvalChannels`                                                                    | [models.AccessRequestApprovalChannel](../../models/accessrequestapprovalchannel.md)[] | :heavy_check_mark:                                                                    | N/A                                                                                   |
+| `kubectlApprove`                                                                      | *string*                                                                              | :heavy_check_mark:                                                                    | N/A                                                                                   |

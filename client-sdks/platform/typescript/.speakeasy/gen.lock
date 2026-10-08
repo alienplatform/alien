@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.30
 persistentEdits:
-  generation_id: 24536c90-baf2-46d7-9e17-52c456149c09
-  pristine_commit_hash: bfde4132d6c79bff980b591d919685f57d3aded9
-  pristine_tree_hash: e5c7bc0aa7c4a431c54dbacc72d2ee5cc52becaa
+  generation_id: c55ab34c-21e0-4031-99f6-3174c12e6847
+  pristine_commit_hash: dd127be56b146a33041417ca27323b776611b95c
+  pristine_tree_hash: af90c61e429df4535f37c51f925076679cd22d49
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -104,6 +104,10 @@ trackedFiles:
     id: 68990310abbc
     last_write_checksum: sha1:6abb76c97122b6d5d3ca38d522c71c756562a290
     pristine_git_object: 313f9ef35df6543a51078118c7fec42db391ec62
+  docs/models/accessrequestapprovalchannel.md:
+    id: f487749df7a2
+    last_write_checksum: sha1:b208ed49cf305a04ac529d09d070fdcf596aa167
+    pristine_git_object: 787a10da73746538ea98983914496215df2b3821
   docs/models/accessrequestdebuggrant.md:
     id: c30eb503bbd9
     last_write_checksum: sha1:fa142b4cfbae331985ad19a1d95fd7e6298d0974
@@ -18582,8 +18586,8 @@ trackedFiles:
     pristine_git_object: 2c7447bbb133aeed5dc934c229272fa5a161f9fa
   docs/models/operations/getaccessrequestcoordinatesresponse.md:
     id: 8412c3dc098c
-    last_write_checksum: sha1:41d2831695df5a524f52e675abe000082a0426fc
-    pristine_git_object: cf300a42f9021fc408344dbae557e562835edeae
+    last_write_checksum: sha1:2c5a58801f8e5168f8789c86c630b8a5e1ced42d
+    pristine_git_object: 69f80cb62d7225ad633b774194138655cf4378e8
   docs/models/operations/getaccessrequestdeniedby.md:
     id: 26071202c69e
     last_write_checksum: sha1:34e848dbe07391aaab0de24093193d7fbca79a81
@@ -36200,6 +36204,10 @@ trackedFiles:
     id: ae01d917e4f1
     last_write_checksum: sha1:3d3acfb8c210de28a3190964cb9fdf482bbbbc17
     pristine_git_object: 1831325e782a290582826384da650945b1442cb7
+  src/models/accessrequestapprovalchannel.ts:
+    id: 60135a380a6e
+    last_write_checksum: sha1:0ed5b4b8df14e043eff9731e482c4221bfa53846
+    pristine_git_object: 52e2847dd1eb7a039067d0b9acfbda55cb13524e
   src/models/accessrequestdebuggrant.ts:
     id: 479b0cb32f38
     last_write_checksum: sha1:42c61b6e5369c56679603f5a329cc549651c9756
@@ -36946,8 +36954,8 @@ trackedFiles:
     pristine_git_object: e3b1530ed0aec91afb64292a12d54ab58d11f60f
   src/models/index.ts:
     id: f93644b0f37e
-    last_write_checksum: sha1:ff5aa2d6ed352f7ea7e2b4b22fb7cbf3c7c00772
-    pristine_git_object: 39fcccf434562aeedf52a762f8a5b15c1f5166d8
+    last_write_checksum: sha1:a8fa96ab3dcaa0b5fd3537c80ff826e155d007fa
+    pristine_git_object: 3f3e5f0abd02938a17476a05ef073c23ed500eea
   src/models/invokeoperationrequest.ts:
     id: 6c71b281337d
     last_write_checksum: sha1:dd768b6fb85d2d1def973cd92d5603f00951130d
@@ -37394,8 +37402,8 @@ trackedFiles:
     pristine_git_object: 4381a815030edd7af20b8966cc6f27eb41790676
   src/models/operations/getaccessrequestcoordinates.ts:
     id: 4ff7b680114a
-    last_write_checksum: sha1:9d02bd1b1cb75c2a9b61c4f9276737a5d54f609a
-    pristine_git_object: 505d70bfc33ac1b86d24a1c278ce0fbdbfad71b6
+    last_write_checksum: sha1:eaca6cbc608047f6810065f598fbf1d5705d949c
+    pristine_git_object: 79e3630f357653aee2e9b5f1f5190465eef4d03e
   src/models/operations/getagentsession.ts:
     id: 818afbefed1b
     last_write_checksum: sha1:09cd28a048adf1bff678b3f05b3d6c0721de58ca
@@ -41948,7 +41956,7 @@ examples:
           workspace: "my-workspace"
       responses:
         "200":
-          application/json: {"status": "expired", "kubectlApprove": "<value>"}
+          application/json: {"status": "expired", "approvalChannels": ["dashboard"], "kubectlApprove": "<value>"}
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   getAgentSession:

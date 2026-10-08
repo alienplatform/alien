@@ -4,6 +4,7 @@
 
 export * from "./acceptworkspaceinvitationresponse.js";
 export * from "./accessrequestactivity.js";
+export * from "./accessrequestapprovalchannel.js";
 export * from "./accessrequestdebuggrant.js";
 export * from "./accessrequeststatus.js";
 export * from "./agentsessionapprovalgrantedevent.js";
