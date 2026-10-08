@@ -7,7 +7,7 @@
 
 mod setup_update;
 
-use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
+use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_cli_common::{
@@ -823,6 +823,106 @@ mod tests {
             deployment.assert_hits_async(1).await;
             lock_or_write.assert_hits_async(0).await;
         }
+    }
+
+    /// A manager may refuse the deployment's own key for setup changes. A tracked setup
+    /// update that fell back to the saved key must say which token to pass instead of only
+    /// nesting the 403. An explicitly passed token keeps the manager's error.
+    #[tokio::test]
+    async fn refused_saved_key_names_the_setup_token_and_rerun_command() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200)
+                    .json_body(installed_deployment("running", Some("rel_target")));
+            })
+            .await;
+        let refusal = serde_json::json!({
+            "code": "SETUP_AUTHORITY_REQUIRED",
+            "message": "Runtime credentials cannot authorize setup updates.",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 403
+        });
+        let saved_key_acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/acquire")
+                    .header("authorization", "Bearer saved-deployment-key");
+                then.status(403).json_body(refusal.clone());
+            })
+            .await;
+        let explicit_acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/acquire")
+                    .header("authorization", "Bearer explicit-token");
+                then.status(403).json_body(refusal.clone());
+            })
+            .await;
+        let tracked = TrackedDeployment {
+            name: "smoke 1".to_string(),
+            deployment_id: "dep_demo".to_string(),
+            token: "saved-deployment-key".to_string(),
+            manager_url: server.base_url(),
+            platform: "machines".to_string(),
+            local: None,
+            tracked_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let run = |args: UpArgs| {
+            let tracked = tracked.clone();
+            let manager_url = server.base_url();
+            async move {
+                run_tracked_setup_update(
+                    &args,
+                    None,
+                    &tracked,
+                    &manager_url,
+                    Platform::Machines,
+                    None,
+                )
+                .await
+            }
+        };
+
+        let saved = run(UpArgs::parse_from([
+            "alien-deploy",
+            "--name",
+            "smoke 1",
+            "--setup-update",
+        ]))
+        .await
+        .expect_err("the manager refused the saved key");
+        saved_key_acquire.assert_hits_async(1).await;
+        assert_eq!(saved.code, "VALIDATION_ERROR");
+        assert!(
+            saved.message.contains(
+                "alien-deploy deploy --name 'smoke 1' --setup-update --token-file <path-to-setup-token>"
+            ),
+            "{}",
+            saved.message
+        );
+        assert!(
+            saved.to_string().contains("SETUP_AUTHORITY_REQUIRED"),
+            "the manager's reason stays in the chain: {saved}"
+        );
+
+        let explicit = run(UpArgs::parse_from([
+            "alien-deploy",
+            "--name",
+            "smoke 1",
+            "--setup-update",
+            "--token",
+            "explicit-token",
+        ]))
+        .await
+        .expect_err("the manager refused the explicit token too");
+        explicit_acquire.assert_hits_async(1).await;
+        saved_key_acquire.assert_hits_async(1).await;
+        assert_eq!(explicit.code, "DEPLOYMENT_FAILED");
+        assert!(!explicit.to_string().contains("--token-file"), "{explicit}");
     }
 
     /// The pending update can finish while setup waits for the lock. The locked read then
@@ -2560,18 +2660,13 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .manager_url
             .as_deref()
             .unwrap_or(&tracked.manager_url);
-        let setup_client = create_manager_client(&token, manager_url)?;
-        let outcome = run_push_model(
-            &setup_client,
-            &tracked.deployment_id,
+        let outcome = run_tracked_setup_update(
+            &args,
+            embedded_config,
+            tracked,
+            manager_url,
             platform,
             base_platform,
-            manager_url,
-            &tracked.token,
-            None,
-            &args.network,
-            None,
-            embedded_config.and_then(|config| config.setup_revision.as_deref()),
         )
         .await?;
         if outcome == SetupRunOutcome::Applied {
@@ -3536,6 +3631,67 @@ fn load_public_endpoints(
             }))
         }
     }
+}
+
+/// Run setup for a tracked deployment's pending update.
+///
+/// Uses --token/--token-file (or an embedded token) when given, else the key saved when the
+/// deployment was tracked. A manager can refuse that saved key for setup changes; the error
+/// then names the token to pass instead.
+async fn run_tracked_setup_update(
+    args: &UpArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    tracked: &TrackedDeployment,
+    manager_url: &str,
+    platform: Platform,
+    base_platform: Option<Platform>,
+) -> Result<SetupRunOutcome> {
+    let explicit_token = resolve_token(args, embedded_config).ok();
+    let uses_saved_key = explicit_token.is_none();
+    let token = explicit_token.unwrap_or_else(|| tracked.token.clone());
+    let setup_client = create_manager_client(&token, manager_url)?;
+    run_push_model(
+        &setup_client,
+        &tracked.deployment_id,
+        platform,
+        base_platform,
+        manager_url,
+        &tracked.token,
+        None,
+        &args.network,
+        None,
+        embedded_config.and_then(|config| config.setup_revision.as_deref()),
+    )
+    .await
+    .map_err(|error| explain_refused_saved_key(error, &tracked.name, uses_saved_key))
+}
+
+/// A setup update run with a deployment's saved key can be refused (HTTP 403): that key
+/// runs the deployment, and a manager may require the setup token to change installed
+/// infrastructure. Replace the nested 403 with the token to use and the command to rerun.
+fn explain_refused_saved_key(
+    error: AlienError<ErrorData>,
+    name: &str,
+    uses_saved_key: bool,
+) -> AlienError<ErrorData> {
+    let mut refused = error.http_status_code == Some(403);
+    let mut source = error.source.as_deref();
+    while let Some(cause) = source {
+        refused |= cause.http_status_code == Some(403);
+        source = cause.source.as_deref();
+    }
+    if !(uses_saved_key && refused) {
+        return error;
+    }
+    error.context(ErrorData::ValidationError {
+        field: "token".to_string(),
+        message: format!(
+            "The key saved for '{name}' can run the deployment but cannot approve setup changes. \
+             Use the setup token from the deployment's setup link (the deployment group token, \
+             usually ax_dg_...): alien-deploy deploy --name {} --setup-update --token-file <path-to-setup-token>",
+            shell_single_quote(name)
+        ),
+    })
 }
 
 fn resolve_deployment_info(
