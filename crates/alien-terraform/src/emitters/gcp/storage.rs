@@ -176,7 +176,9 @@ fn lifecycle_rule_block(rule: &LifecycleRule) -> hcl::structure::Block {
         "age",
         Expression::Number(hcl::Number::from(i64::from(rule.days))),
     )];
-    if let Some(prefix) = &rule.prefix {
+    // Cloud Storage rejects an empty prefix. An empty prefix matches every object, which is
+    // what a condition without `matches_prefix` does.
+    if let Some(prefix) = rule.prefix.as_ref().filter(|prefix| !prefix.is_empty()) {
         condition_attrs.push(attr(
             "matches_prefix",
             Expression::Array(vec![Expression::String(prefix.clone())]),
