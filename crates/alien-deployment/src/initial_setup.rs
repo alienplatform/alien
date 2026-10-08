@@ -495,6 +495,27 @@ pub fn retry_failed_setup_resources(
     )
 }
 
+/// Whether a setup run has an update to apply to a deployment, judged from the
+/// status and release pointers its manager reports.
+///
+/// A setup run on an installed deployment re-enters `InitialSetup` and hands
+/// the deployment back at `Provisioning`, where the manager applies the
+/// desired release. An installed deployment that is running, or whose last
+/// refresh failed, with no desired release has nothing for that handoff to
+/// apply. A manager that runs only pending updates never takes it, so the
+/// deployment would stay in `Provisioning` with nothing driving it.
+pub fn setup_run_has_pending_update(
+    status: DeploymentStatus,
+    has_installed_release: bool,
+    desired_release_id: Option<&str>,
+) -> bool {
+    let settled = matches!(
+        status,
+        DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+    );
+    !(settled && has_installed_release && desired_release_id.is_none())
+}
+
 /// Handle InitialSetupFailed status - retry failed resources and transition back to InitialSetup
 ///
 /// This step:

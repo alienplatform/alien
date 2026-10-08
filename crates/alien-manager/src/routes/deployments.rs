@@ -973,15 +973,7 @@ async fn retry_deployment(
         return ErrorData::forbidden("Cannot retry deployment").into_response();
     }
 
-    let retryable_failed_statuses = [
-        "preflights-failed",
-        "initial-setup-failed",
-        "provisioning-failed",
-        "refresh-failed",
-        "update-failed",
-        "delete-failed",
-    ];
-    if !retryable_failed_statuses.contains(&deployment.status.as_str()) {
+    if !retry_accepted(&deployment) {
         return ErrorData::bad_request(format!(
             "Deployment '{}' is in status '{}' and cannot be retried",
             deployment.id, deployment.status
@@ -998,6 +990,28 @@ async fn retry_deployment(
     }
 
     Json(serde_json::json!({ "success": true })).into_response()
+}
+
+/// Whether a retry can move this deployment back to work.
+///
+/// Failed statuses retry their last operation. A deployment can also sit in
+/// `provisioning` with an installed release and no desired release: a setup
+/// run handed it back with no update to apply. A manager that runs only
+/// pending updates never takes that deployment, so a retry must reach the
+/// store, which repeats the installed release.
+fn retry_accepted(deployment: &DeploymentRecord) -> bool {
+    const RETRYABLE_FAILED_STATUSES: [&str; 6] = [
+        "preflights-failed",
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ];
+    let handed_off_without_update = deployment.status == "provisioning"
+        && deployment.current_release_id.is_some()
+        && deployment.desired_release_id.is_none();
+    RETRYABLE_FAILED_STATUSES.contains(&deployment.status.as_str()) || handed_off_without_update
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -1317,6 +1331,74 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["items"][0]["id"], "deployment-1");
         assert_eq!(json["items"][0]["deploymentGroupId"], "dg_generated");
+    }
+
+    async fn retry_route_response(
+        deployment: DeploymentRecord,
+        store_receives_retry: bool,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut deployment_store = MockDeploymentStore::new();
+        deployment_store
+            .expect_get_deployment()
+            .times(1)
+            .return_once(move |_, _| Ok(Some(deployment)));
+        deployment_store
+            .expect_set_retry_requested()
+            .withf(|_, id| id == "deployment-1")
+            .times(usize::from(store_receives_retry))
+            .returning(|_, _| Ok(()));
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/retry")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .body(Body::empty())
+            .expect("request should build");
+        send(deployment_store, request).await
+    }
+
+    /// A setup run that handed a running deployment back at `provisioning` with
+    /// nothing to apply leaves it with no driver; retry is how it recovers.
+    #[tokio::test]
+    async fn retry_reaches_the_store_for_a_handoff_without_an_update() {
+        let stranded = DeploymentRecord {
+            status: "provisioning".to_string(),
+            current_release_id: Some("rel_installed".to_string()),
+            desired_release_id: None,
+            ..deployment_record()
+        };
+
+        let (status, json) = retry_route_response(stranded, true).await;
+
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["success"], true);
+    }
+
+    #[tokio::test]
+    async fn retry_refuses_a_provisioning_deployment_that_has_work() {
+        for (current, desired) in [
+            // First installation: the manager is provisioning the desired release.
+            (None, Some("rel_first")),
+            // Update handoff: the manager is applying the desired release.
+            (Some("rel_installed"), Some("rel_target")),
+        ] {
+            let provisioning = DeploymentRecord {
+                status: "provisioning".to_string(),
+                current_release_id: current.map(str::to_string),
+                desired_release_id: desired.map(str::to_string),
+                ..deployment_record()
+            };
+
+            let (status, json) = retry_route_response(provisioning, false).await;
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+            assert!(
+                json["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("cannot be retried")),
+                "{json}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@ use super::{
     collect_deployer_input_values, create_manager_client, create_manager_http_client,
     deployment_info_url, load_public_endpoints, load_stack_settings, push_initial_setup_targeted,
     resolve_base_url, resolve_token, stack_input_matches_context, DeployConfigFile,
-    DeploymentInfoSetupConfig, UpArgs,
+    DeploymentInfoSetupConfig, SetupRunOutcome, UpArgs,
 };
 use crate::{
     error::{ErrorData, Result},
@@ -542,7 +542,7 @@ pub(super) async fn run(
         ));
     }
     let client = create_manager_client(&token, &original_manager)?;
-    push_initial_setup_targeted()
+    let outcome = push_initial_setup_targeted()
         .client(&client)
         .deployment_id(deployment_id)
         .platform(Platform::Machines)
@@ -554,7 +554,9 @@ pub(super) async fn run(
         .maybe_setup_revision(embedded.and_then(|config| config.setup_revision.as_deref()))
         .call()
         .await?;
-    output::success("Setup applied. The manager will continue the requested update; workload convergence is still pending.");
+    if outcome == SetupRunOutcome::Applied {
+        output::success("Setup applied. The manager will continue the requested update; workload convergence is still pending.");
+    }
     Ok(())
 }
 
