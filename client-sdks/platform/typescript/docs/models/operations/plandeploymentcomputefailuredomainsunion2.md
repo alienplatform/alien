@@ -16,4 +16,3 @@ const value: operations.PlanDeploymentComputeFailureDomains2 = {
 ```typescript
 const value: string = "<value>";
 ```
-

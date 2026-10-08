@@ -47,4 +47,3 @@ const value: operations.PlanDeploymentComputeCertificateNone1 = {
   mode: "none",
 };
 ```
-

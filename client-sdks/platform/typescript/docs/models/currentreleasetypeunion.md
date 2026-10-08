@@ -14,4 +14,3 @@ const value: models.CurrentReleaseTypeEnvEnum = "plain";
 ```typescript
 const value: string = "<value>";
 ```
-

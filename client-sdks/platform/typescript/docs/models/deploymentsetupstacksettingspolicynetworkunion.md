@@ -59,4 +59,3 @@ const value: models.DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure = {
 ```typescript
 const value: string = "<value>";
 ```
-

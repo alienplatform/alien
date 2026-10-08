@@ -54,4 +54,3 @@ const value: models.DataAzureKeyVault2 = {
   provider: "azure-key-vault",
 };
 ```
-

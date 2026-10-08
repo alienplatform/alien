@@ -45,4 +45,3 @@ const value: models.TargetReleaseManagement2 = {
 ```typescript
 const value: models.TargetReleaseManagementEnum = "auto";
 ```
-

@@ -23,4 +23,3 @@ const value: models.SyncListResponseRouteGateway1 = {
   routeApi: "gateway",
 };
 ```
-

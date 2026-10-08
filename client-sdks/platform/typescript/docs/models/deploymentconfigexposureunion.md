@@ -49,4 +49,3 @@ const value: models.DeploymentConfigExposureCustom = {
 ```typescript
 const value: string = "<value>";
 ```
-

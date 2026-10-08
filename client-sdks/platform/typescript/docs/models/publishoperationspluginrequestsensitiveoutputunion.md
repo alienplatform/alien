@@ -28,4 +28,3 @@ const value:
     kind: "requireConfirmation",
   };
 ```
-

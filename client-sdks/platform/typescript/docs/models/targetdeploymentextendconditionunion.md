@@ -17,4 +17,3 @@ const value: models.TargetDeploymentExtendCondition = {
 ```typescript
 const value: string = "<value>";
 ```
-

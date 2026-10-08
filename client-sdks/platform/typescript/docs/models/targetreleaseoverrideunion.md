@@ -20,4 +20,3 @@ const value: models.TargetReleaseOverride = {
 ```typescript
 const value: string = "<value>";
 ```
-

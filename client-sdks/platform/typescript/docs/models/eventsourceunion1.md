@@ -14,4 +14,3 @@ const value: models.SourceEvent1 = {};
 ```typescript
 const value: string = "<value>";
 ```
-

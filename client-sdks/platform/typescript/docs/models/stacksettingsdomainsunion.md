@@ -14,4 +14,3 @@ const value: models.StackSettingsDomains = {};
 ```typescript
 const value: string = "<value>";
 ```
-

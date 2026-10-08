@@ -22,4 +22,3 @@ const value: models.DeploymentDetailResponseSetupUpdateAuthorization = {
 ```typescript
 const value: string = "<value>";
 ```
-

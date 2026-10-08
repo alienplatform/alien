@@ -16,4 +16,3 @@ const value: models.ManagerRetryResponseFailureDomains4 = {
 ```typescript
 const value: string = "<value>";
 ```
-

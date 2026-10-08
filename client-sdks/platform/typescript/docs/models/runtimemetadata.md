@@ -14,4 +14,3 @@ const value: models.DeploymentStateRuntimeMetadata = {};
 ```typescript
 const value: string = "<value>";
 ```
-

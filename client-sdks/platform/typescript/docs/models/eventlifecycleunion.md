@@ -14,4 +14,3 @@ const value: models.EventLifecycleEnum = "live";
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -93,4 +93,3 @@ const value: operations.DataLocal1 = {
   backend: "local",
 };
 ```
-

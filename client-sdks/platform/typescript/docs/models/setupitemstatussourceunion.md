@@ -23,4 +23,3 @@ const value: models.SetupItemStatusSourceBuiltIn = {
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
 ```
-

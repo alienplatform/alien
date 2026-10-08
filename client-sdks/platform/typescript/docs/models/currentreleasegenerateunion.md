@@ -16,4 +16,3 @@ const value: models.CurrentReleaseGenerate = {
 ```typescript
 const value: string = "<value>";
 ```
-

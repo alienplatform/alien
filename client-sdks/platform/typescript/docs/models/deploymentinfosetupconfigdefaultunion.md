@@ -46,4 +46,3 @@ const value: models.DeploymentInfoSetupConfigDefaultStringList = {
 ```typescript
 const value: string = "<value>";
 ```
-

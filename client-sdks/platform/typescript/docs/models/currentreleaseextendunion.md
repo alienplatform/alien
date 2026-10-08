@@ -20,4 +20,3 @@ const value: models.CurrentReleaseExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

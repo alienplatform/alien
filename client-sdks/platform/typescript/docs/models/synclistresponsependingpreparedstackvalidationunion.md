@@ -14,4 +14,3 @@ const value: models.SyncListResponsePendingPreparedStackValidation = {};
 ```typescript
 const value: string = "<value>";
 ```
-

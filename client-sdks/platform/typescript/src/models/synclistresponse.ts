@@ -1202,6 +1202,8 @@ export type SyncListResponseDeployment = {
    * ID of deployment group this deployment belongs to
    */
   deploymentGroupId: string;
+  membershipRevision: number;
+  membershipProjectionRevision: number | null;
   /**
    * Operational purpose of this deployment within its customer environment.
    */
@@ -2789,6 +2791,8 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   region: z.nullable(z.string()).optional(),
   deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
+  membershipRevision: z.int().default(0),
+  membershipProjectionRevision: z.nullable(z.int()).default(null),
   purpose: DeploymentPurpose$inboundSchema,
   environmentInfo: z.nullable(
     SyncListResponseEnvironmentInfoUnion$inboundSchema,

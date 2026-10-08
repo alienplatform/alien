@@ -26,4 +26,3 @@ const value: models.TargetDeploymentDomainMetadata = {
 ```typescript
 const value: string = "<value>";
 ```
-

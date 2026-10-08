@@ -34,4 +34,3 @@ const value: models.DeploymentGroupRole = "deployment-group.deployer";
 ```typescript
 const value: models.ManagerRole = "manager.runtime";
 ```
-

@@ -56,4 +56,3 @@ const value: models.ExternalBindingLocalVault = {
   type: "vault",
 };
 ```
-

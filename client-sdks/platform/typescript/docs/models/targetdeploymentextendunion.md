@@ -20,4 +20,3 @@ const value: models.TargetDeploymentExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

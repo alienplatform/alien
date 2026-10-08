@@ -21,4 +21,3 @@ const value: models.PersistImportedDeploymentRequestPendingPreparedStackExtend =
 ```typescript
 const value: string = "<value>";
 ```
-

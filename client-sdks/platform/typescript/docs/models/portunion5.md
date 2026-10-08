@@ -34,4 +34,3 @@ const value: models.Port5 = {
 ```typescript
 const value: string = "<value>";
 ```
-

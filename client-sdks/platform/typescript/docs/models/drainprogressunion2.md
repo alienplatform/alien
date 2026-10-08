@@ -20,4 +20,3 @@ const value: models.DrainProgress2 = {
 ```typescript
 const value: string = "<value>";
 ```
-

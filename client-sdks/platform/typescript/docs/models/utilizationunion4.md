@@ -17,4 +17,3 @@ const value: models.Utilization4 = {
 ```typescript
 const value: string = "<value>";
 ```
-

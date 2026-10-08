@@ -20,4 +20,3 @@ const value: models.DeploymentDetailResponsePendingPreparedStackOverride = {
 ```typescript
 const value: string = "<value>";
 ```
-

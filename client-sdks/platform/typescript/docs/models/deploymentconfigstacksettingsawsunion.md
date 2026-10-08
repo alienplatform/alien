@@ -16,4 +16,3 @@ const value: models.DeploymentConfigAwsStackSettings = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -16,4 +16,3 @@ const value: models.DeploymentInputsResponseGenerate = {
 ```typescript
 const value: string = "<value>";
 ```
-

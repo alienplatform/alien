@@ -21,4 +21,3 @@ const value: models.SyncListResponsePreparedStackProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

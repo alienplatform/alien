@@ -16,4 +16,3 @@ const value: models.PersistImportedDeploymentRequestFailureDomains1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

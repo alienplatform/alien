@@ -54,4 +54,3 @@ const value: operations.DataAzureKeyVault2 = {
   provider: "azure-key-vault",
 };
 ```
-

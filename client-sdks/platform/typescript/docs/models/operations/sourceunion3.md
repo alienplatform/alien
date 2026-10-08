@@ -14,4 +14,3 @@ const value: operations.SourceEvent3 = {};
 ```typescript
 const value: string = "<value>";
 ```
-

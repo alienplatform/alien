@@ -17,4 +17,3 @@ const value: models.CpuPod1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

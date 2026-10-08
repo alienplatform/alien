@@ -21,4 +21,3 @@ const value: operations.Workload2 = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -64,4 +64,3 @@ const value: models.DataAzureVnet = {
   backend: "azureVnet",
 };
 ```
-

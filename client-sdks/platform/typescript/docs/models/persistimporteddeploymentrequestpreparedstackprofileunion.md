@@ -20,4 +20,3 @@ const value: models.PersistImportedDeploymentRequestPreparedStackProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

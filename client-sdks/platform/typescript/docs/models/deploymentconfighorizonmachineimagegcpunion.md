@@ -16,4 +16,3 @@ const value: models.DeploymentConfigHorizonMachineImageGcp = {
 ```typescript
 const value: string = "<value>";
 ```
-

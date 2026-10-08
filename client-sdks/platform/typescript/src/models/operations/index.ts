@@ -181,6 +181,7 @@ export * from "./listworkspaceinvitations.js";
 export * from "./listworkspacemembers.js";
 export * from "./listworkspaces.js";
 export * from "./memoryunit11.js";
+export * from "./movedeployment.js";
 export * from "./pindeploymentrelease.js";
 export * from "./plandeploymentcompute.js";
 export * from "./preparedeploymentcredentialrotation.js";

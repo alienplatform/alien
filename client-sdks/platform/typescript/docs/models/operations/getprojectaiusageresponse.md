@@ -43,4 +43,3 @@ const value: operations.GetProjectAiUsageAvailable = {
   modelsTruncated: false,
 };
 ```
-

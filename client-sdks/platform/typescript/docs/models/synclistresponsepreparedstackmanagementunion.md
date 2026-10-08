@@ -31,4 +31,3 @@ const value: models.SyncListResponsePreparedStackManagement2 = {
 ```typescript
 const value: models.SyncListResponsePreparedStackManagementEnum = "auto";
 ```
-

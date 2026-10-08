@@ -17,4 +17,3 @@ const value: models.SyncListResponsePendingPreparedStackExtendConditionStack = {
 ```typescript
 const value: string = "<value>";
 ```
-

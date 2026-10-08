@@ -56,4 +56,3 @@ const value: models.ExternalBindingLocal = {
   type: "artifact_registry",
 };
 ```
-

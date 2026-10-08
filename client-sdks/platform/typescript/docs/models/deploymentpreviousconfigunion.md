@@ -17,4 +17,3 @@ const value: models.DeploymentPreviousConfig = {
 ```typescript
 const value: string = "<value>";
 ```
-

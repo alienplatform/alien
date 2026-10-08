@@ -47,4 +47,3 @@ const value: models.DeploymentDetailResponseCertificateNone1 = {
   mode: "none",
 };
 ```
-

@@ -14,4 +14,3 @@ const value: models.DeploymentStateRegistryAccess = {};
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -16,4 +16,3 @@ const value: models.SyncListResponseAws = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -36,4 +36,3 @@ const value: models.StackSettingsProviderAzureApplicationGatewayForContainers3 =
 ```typescript
 const value: string = "<value>";
 ```
-

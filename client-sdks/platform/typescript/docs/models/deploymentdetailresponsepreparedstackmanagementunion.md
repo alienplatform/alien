@@ -41,4 +41,3 @@ const value: models.DeploymentDetailResponsePreparedStackManagement2 = {
 const value: models.DeploymentDetailResponsePreparedStackManagementEnum =
   "auto";
 ```
-

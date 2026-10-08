@@ -129,4 +129,3 @@ const value: models.AgentSessionEventsTruncatedEvent = {
   },
 };
 ```
-

@@ -14,4 +14,3 @@ const value: models.DeploymentStateControllerPlatformEnum = "test";
 ```typescript
 const value: string = "<value>";
 ```
-

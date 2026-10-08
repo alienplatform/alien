@@ -88,4 +88,3 @@ const value: models.DataLocal6 = {
   backend: "local",
 };
 ```
-

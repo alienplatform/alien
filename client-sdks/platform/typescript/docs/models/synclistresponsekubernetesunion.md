@@ -14,4 +14,3 @@ const value: models.SyncListResponseKubernetes = {};
 ```typescript
 const value: string = "<value>";
 ```
-

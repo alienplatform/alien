@@ -16,4 +16,3 @@ const value: models.CreateSetupRegistrationOperationRequestFailureDomains1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

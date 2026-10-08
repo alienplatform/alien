@@ -14,4 +14,3 @@ const value: models.EventListItemResponseViaEnum6 = "mcp";
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -16,4 +16,3 @@ const value: models.DeploymentStatePreparedStackGenerate = {
 ```typescript
 const value: string = "<value>";
 ```
-

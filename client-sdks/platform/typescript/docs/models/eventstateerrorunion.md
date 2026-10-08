@@ -18,4 +18,3 @@ const value: models.EventStateError = {
 ```typescript
 const value: string = "<value>";
 ```
-

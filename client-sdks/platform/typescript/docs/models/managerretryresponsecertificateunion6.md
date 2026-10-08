@@ -47,4 +47,3 @@ const value: models.ManagerRetryResponseCertificateNone6 = {
   mode: "none",
 };
 ```
-

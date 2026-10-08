@@ -17,4 +17,3 @@ const value: operations.Utilization1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

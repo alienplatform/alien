@@ -16,4 +16,3 @@ const value: models.SyncListResponseFailureDomains1 = {
 ```typescript
 const value: string = "<value>";
 ```
-

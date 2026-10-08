@@ -26,4 +26,3 @@ const value: operations.Availability4 = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -55,4 +55,3 @@ const value: models.ManagerScope = {
   role: "manager.runtime",
 };
 ```
-

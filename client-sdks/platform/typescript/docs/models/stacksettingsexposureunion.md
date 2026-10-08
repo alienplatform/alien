@@ -51,4 +51,3 @@ const value: models.StackSettingsExposureCustom = {
 ```typescript
 const value: string = "<value>";
 ```
-

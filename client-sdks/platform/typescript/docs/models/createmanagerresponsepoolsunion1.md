@@ -23,4 +23,3 @@ const value: models.CreateManagerResponsePoolsAutoscale1 = {
   mode: "autoscale",
 };
 ```
-

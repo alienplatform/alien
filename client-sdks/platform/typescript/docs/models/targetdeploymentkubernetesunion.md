@@ -14,4 +14,3 @@ const value: models.TargetDeploymentKubernetes = {};
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -37,4 +37,3 @@ const value: models.ServerCaCertificates = {
 ```typescript
 const value: string = "<value>";
 ```
-

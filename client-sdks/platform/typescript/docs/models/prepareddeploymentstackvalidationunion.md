@@ -14,4 +14,3 @@ const value: models.PreparedDeploymentStackValidation = {};
 ```typescript
 const value: string = "<value>";
 ```
-

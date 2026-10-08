@@ -47,4 +47,3 @@ const value: models.TargetDeploymentCertificateNone2 = {
   mode: "none",
 };
 ```
-

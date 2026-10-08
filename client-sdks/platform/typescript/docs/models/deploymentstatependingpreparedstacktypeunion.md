@@ -14,4 +14,3 @@ const value: models.DeploymentStatePendingPreparedStackTypeEnvEnum = "plain";
 ```typescript
 const value: string = "<value>";
 ```
-

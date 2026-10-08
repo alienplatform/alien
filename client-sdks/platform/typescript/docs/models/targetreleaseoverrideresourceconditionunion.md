@@ -17,4 +17,3 @@ const value: models.TargetReleaseOverrideConditionResource = {
 ```typescript
 const value: string = "<value>";
 ```
-

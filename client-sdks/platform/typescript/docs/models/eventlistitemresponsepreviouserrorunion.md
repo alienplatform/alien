@@ -18,4 +18,3 @@ const value: models.EventListItemResponsePreviousError = {
 ```typescript
 const value: string = "<value>";
 ```
-

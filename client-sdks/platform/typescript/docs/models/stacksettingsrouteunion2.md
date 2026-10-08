@@ -23,4 +23,3 @@ const value: models.StackSettingsRouteGateway2 = {
   routeApi: "gateway",
 };
 ```
-

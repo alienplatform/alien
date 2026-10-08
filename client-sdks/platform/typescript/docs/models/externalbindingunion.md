@@ -117,4 +117,3 @@ const value: models.ExternalBindingAi = {
   type: "ai",
 };
 ```
-

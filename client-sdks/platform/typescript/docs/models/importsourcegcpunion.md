@@ -16,4 +16,3 @@ const value: models.ImportSourceGcp = {
 ```typescript
 const value: string = "<value>";
 ```
-

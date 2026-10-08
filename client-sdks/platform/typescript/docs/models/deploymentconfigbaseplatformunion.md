@@ -14,4 +14,3 @@ const value: models.DeploymentConfigBasePlatformEnum = "azure";
 ```typescript
 const value: string = "<value>";
 ```
-

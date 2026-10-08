@@ -17,4 +17,3 @@ const value: models.TargetDeploymentOverrideCondition = {
 ```typescript
 const value: string = "<value>";
 ```
-

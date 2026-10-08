@@ -14,4 +14,3 @@ const value: models.DeploymentInfoCloud = {};
 ```typescript
 const value: string = "<value>";
 ```
-

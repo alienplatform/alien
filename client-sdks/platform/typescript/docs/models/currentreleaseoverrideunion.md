@@ -20,4 +20,3 @@ const value: models.CurrentReleaseOverride = {
 ```typescript
 const value: string = "<value>";
 ```
-

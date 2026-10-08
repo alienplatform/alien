@@ -34,4 +34,3 @@ const value: models.PutExternalAIBindingRequestDatabricks = {
   acknowledgeAlienCredentialAccess: true,
 };
 ```
-

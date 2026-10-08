@@ -17,4 +17,3 @@ const value: models.SyncReconcileRequestMemory10 = {
 ```typescript
 const value: string = "<value>";
 ```
-

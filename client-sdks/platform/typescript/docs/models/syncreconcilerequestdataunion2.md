@@ -131,4 +131,3 @@ const value: models.DataLocal2 = {
   backend: "local",
 };
 ```
-

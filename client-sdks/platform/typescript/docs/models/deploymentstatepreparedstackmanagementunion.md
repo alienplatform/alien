@@ -31,4 +31,3 @@ const value: models.DeploymentStatePreparedStackManagement2 = {
 ```typescript
 const value: models.DeploymentStatePreparedStackManagementEnum = "auto";
 ```
-

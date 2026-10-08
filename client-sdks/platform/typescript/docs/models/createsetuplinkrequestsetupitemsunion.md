@@ -21,4 +21,3 @@ const value: models.DeploymentSetupItemSelection[] = [
   },
 ];
 ```
-

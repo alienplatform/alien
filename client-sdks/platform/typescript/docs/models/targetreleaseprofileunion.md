@@ -20,4 +20,3 @@ const value: models.TargetReleaseProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

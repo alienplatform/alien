@@ -20,4 +20,3 @@ const value: models.SyncListResponsePreparedStackExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

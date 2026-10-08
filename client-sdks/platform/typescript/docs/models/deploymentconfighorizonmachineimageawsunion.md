@@ -16,4 +16,3 @@ const value: models.DeploymentConfigHorizonMachineImageAws = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -45,4 +45,3 @@ const value: models.DataAzureResourceProvider = {
   backend: "azureResourceProvider",
 };
 ```
-

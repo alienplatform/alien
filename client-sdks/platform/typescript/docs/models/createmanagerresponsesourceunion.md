@@ -23,4 +23,3 @@ const value: models.CreateManagerResponseSourceBuiltIn = {
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
 ```
-

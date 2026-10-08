@@ -17,4 +17,3 @@ const value: models.SyncListResponsePreparedStackOverrideConditionStack = {
 ```typescript
 const value: string = "<value>";
 ```
-

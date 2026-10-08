@@ -17,4 +17,3 @@ const value: models.CurrentReleaseProfileConditionResource = {
 ```typescript
 const value: string = "<value>";
 ```
-

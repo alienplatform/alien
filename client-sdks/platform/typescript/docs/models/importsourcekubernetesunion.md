@@ -14,4 +14,3 @@ const value: models.ImportSourceKubernetes = {};
 ```typescript
 const value: string = "<value>";
 ```
-

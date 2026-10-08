@@ -14,4 +14,3 @@ const value: models.CurrentReleaseValidation = {};
 ```typescript
 const value: string = "<value>";
 ```
-

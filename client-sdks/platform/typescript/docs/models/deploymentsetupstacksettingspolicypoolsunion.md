@@ -23,4 +23,3 @@ const value: models.DeploymentSetupStackSettingsPolicyPoolsAutoscale = {
   mode: "autoscale",
 };
 ```
-

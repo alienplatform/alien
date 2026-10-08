@@ -17,4 +17,3 @@ const value: models.SyncReconcileRequestCpu6 = {
 ```typescript
 const value: string = "<value>";
 ```
-

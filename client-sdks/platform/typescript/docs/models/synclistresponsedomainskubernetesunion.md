@@ -18,4 +18,3 @@ const value: models.SyncListResponseDomainsKubernetes = {
 ```typescript
 const value: string = "<value>";
 ```
-

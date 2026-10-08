@@ -48,4 +48,3 @@ const value: models.DeploymentStatePendingPreparedStackDefaultStringList = {
 ```typescript
 const value: string = "<value>";
 ```
-

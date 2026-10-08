@@ -14,4 +14,3 @@ const value: operations.InvolvedObject10 = {};
 ```typescript
 const value: string = "<value>";
 ```
-

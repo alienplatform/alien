@@ -16,4 +16,3 @@ const value: models.SyncListResponsePreparedStackGenerate = {
 ```typescript
 const value: string = "<value>";
 ```
-

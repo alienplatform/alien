@@ -16,4 +16,3 @@ const value: models.StackSettingsCluster = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -49,4 +49,3 @@ const value: operations.GetProjectEncryptionUsageAvailable = {
   ],
 };
 ```
-

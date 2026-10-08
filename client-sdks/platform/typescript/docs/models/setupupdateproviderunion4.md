@@ -35,4 +35,3 @@ const value: models.ProviderSetupUpdateAzureApplicationGatewayForContainers4 = {
 ```typescript
 const value: string = "<value>";
 ```
-

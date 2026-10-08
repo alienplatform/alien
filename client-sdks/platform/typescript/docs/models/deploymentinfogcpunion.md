@@ -16,4 +16,3 @@ const value: models.DeploymentInfoGcp = {
 ```typescript
 const value: string = "<value>";
 ```
-

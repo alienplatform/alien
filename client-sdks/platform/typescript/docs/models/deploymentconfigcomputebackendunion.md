@@ -23,4 +23,3 @@ const value: models.DeploymentConfigComputeBackendHorizon = {
 ```typescript
 const value: string = "<value>";
 ```
-

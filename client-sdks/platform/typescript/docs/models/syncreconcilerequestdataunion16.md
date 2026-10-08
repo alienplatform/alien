@@ -111,4 +111,3 @@ const value: models.DataExternal = {
   backend: "external",
 };
 ```
-

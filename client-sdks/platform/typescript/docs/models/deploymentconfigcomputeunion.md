@@ -14,4 +14,3 @@ const value: models.DeploymentConfigCompute = {};
 ```typescript
 const value: string = "<value>";
 ```
-

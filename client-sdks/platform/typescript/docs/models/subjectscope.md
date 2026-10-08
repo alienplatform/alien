@@ -50,4 +50,3 @@ const value: models.SubjectScopeManager = {
   managerId: "<id>",
 };
 ```
-

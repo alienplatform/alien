@@ -20,4 +20,3 @@ const value: models.TargetDeploymentProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -18,4 +18,3 @@ const value: models.DeploymentDetailResponsePreparedStackExtendConditionStack =
 ```typescript
 const value: string = "<value>";
 ```
-

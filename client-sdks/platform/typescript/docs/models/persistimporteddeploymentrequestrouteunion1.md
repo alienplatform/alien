@@ -23,4 +23,3 @@ const value: models.PersistImportedDeploymentRequestRouteGateway1 = {
   routeApi: "gateway",
 };
 ```
-

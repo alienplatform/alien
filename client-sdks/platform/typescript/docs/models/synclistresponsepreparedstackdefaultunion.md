@@ -48,4 +48,3 @@ const value: models.SyncListResponsePreparedStackDefaultStringList = {
 ```typescript
 const value: string = "<value>";
 ```
-

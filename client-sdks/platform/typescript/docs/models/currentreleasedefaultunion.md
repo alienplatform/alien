@@ -44,4 +44,3 @@ const value: models.CurrentReleaseDefaultStringList = {
 ```typescript
 const value: string = "<value>";
 ```
-
