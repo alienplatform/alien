@@ -530,8 +530,14 @@ mod permission_update_tests {
         mock
     }
 
+    /// Trust generated for a service account with no workload principals.
+    const DEFAULT_TRUST_POLICY: &str = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#;
+
     fn ready_service_account(state: &mut StackState, account: ServiceAccount, role: &str) {
-        let controller = AwsServiceAccountController::mock_ready(role);
+        let mut controller = AwsServiceAccountController::mock_ready(role);
+        // Model a role whose trust is already applied. A missing trust
+        // checkpoint would instead schedule legacy trust repair.
+        controller.assume_role_policy = Some(DEFAULT_TRUST_POLICY.to_string());
         let id = account.id.clone();
         let mut account_state = StackResourceState::new_pending(
             ServiceAccount::RESOURCE_TYPE.to_string(),
@@ -735,6 +741,9 @@ mod permission_update_tests {
         let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
             "state": "ready", "roleName": role_name, "roleArn": role_arn,
             "stackPermissionsApplied": true, "internalStayCount": null,
+            // The runner owns this role's trust; record it as applied so the
+            // update exercises only the vault grant.
+            "assumeRolePolicy": DEFAULT_TRUST_POLICY,
         }))
         .unwrap();
         let mut resource = StackResourceState::new_pending(
