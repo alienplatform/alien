@@ -127,6 +127,32 @@ impl AwsServiceAccountController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.apply_stack_permissions(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: ApplyingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        Self::apply_resource_permissions(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
+    }
+
+    /// Write the stack-level inline policy, or remove it when an update leaves
+    /// no stack permissions. Requires privileged setup.
+    async fn apply_stack_permissions(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
         if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
             return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
@@ -180,22 +206,11 @@ impl AwsServiceAccountController {
         }
 
         self.stack_permissions_applied = true;
-
-        Ok(HandlerAction::Continue {
-            state: ApplyingResourcePermissions,
-            suggested_delay: None,
-        })
+        Ok(())
     }
 
-    #[handler(
-        state = ApplyingResourcePermissions,
-        on_failure = CreateFailed,
-        status = ResourceStatus::Provisioning,
-    )]
-    async fn applying_resource_permissions(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
+    /// Attach the resource-scoped permissions this service account grants.
+    async fn apply_resource_permissions(ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
 
         info!(
@@ -221,11 +236,7 @@ impl AwsServiceAccountController {
             service_account_id = %config.id,
             "Successfully applied resource-scoped permissions for service account"
         );
-
-        Ok(HandlerAction::Continue {
-            state: Ready,
-            suggested_delay: None,
-        })
+        Ok(())
     }
 
     // ─────────────── READY STATE ──────────────────────────────
@@ -342,7 +353,41 @@ impl AwsServiceAccountController {
         )?;
         self.assume_role_policy = Some(policy);
         Ok(HandlerAction::Continue {
-            state: ApplyingStackPermissions,
+            state: UpdatingStackPermissions,
+            suggested_delay: None,
+        })
+    }
+
+    // Update-specific permission phases: a failure here is an UpdateFailed of a
+    // live role, never a failed create that could be replaced.
+    #[handler(
+        state = UpdatingStackPermissions,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn updating_stack_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.apply_stack_permissions(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdatingResourcePermissions,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn updating_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        Self::apply_resource_permissions(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: Ready,
             suggested_delay: None,
         })
     }
@@ -1196,7 +1241,11 @@ mod tests {
 
     #[tokio::test]
     async fn resumed_trust_and_policy_updates_reject_runtime_authority_before_iam() {
-        for state in [AwsServiceAccountState::UpdateStart, AwsServiceAccountState::ApplyingStackPermissions] {
+        for state in [
+            AwsServiceAccountState::UpdateStart,
+            AwsServiceAccountState::ApplyingStackPermissions,
+            AwsServiceAccountState::UpdatingStackPermissions,
+        ] {
             let controller = AwsServiceAccountController {
                 state,
                 role_name: Some("test-reader-sa".to_string()),
@@ -1269,11 +1318,30 @@ mod tests {
             assert_eq!(
                 executor.status(),
                 if direct_setup {
-                    ResourceStatus::Provisioning
+                    ResourceStatus::Updating
                 } else {
                     ResourceStatus::Running
                 }
             );
+        }
+    }
+
+    /// The executor replaces a ProvisionFailed resource whose config changed.
+    /// A failed update of a live role must stay UpdateFailed instead.
+    #[test]
+    fn update_permission_failures_never_look_like_failed_creates() {
+        for state in [
+            AwsServiceAccountState::UpdateStart,
+            AwsServiceAccountState::UpdatingStackPermissions,
+            AwsServiceAccountState::UpdatingResourcePermissions,
+        ] {
+            let mut controller = AwsServiceAccountController {
+                state,
+                ..AwsServiceAccountController::mock_ready("test-reader-sa")
+            };
+            assert_eq!(controller.get_status(), ResourceStatus::Updating);
+            controller.transition_to_failure();
+            assert_eq!(controller.get_status(), ResourceStatus::UpdateFailed);
         }
     }
 }

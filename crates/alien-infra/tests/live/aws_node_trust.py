@@ -26,7 +26,9 @@ def main():
     iam = session.client('iam')
     workload = prefix + '-execution-sa'
     destination = f'arn:aws:iam::{account}:role/{workload}'
-    created = []
+    # Every task-owned role name is known before any create, so cleanup covers
+    # a create whose response was lost.
+    node_roles = [prefix + '-' + suffix for suffix in ['compute-role', 'compute-isolation-v1-role', 'unrelated-role']]
     receipt = {'prefix': prefix, 'checks': [], 'cleanup': False}
     def check(message):
         receipt['checks'].append(message)
@@ -49,13 +51,11 @@ def main():
             assert error.response['Error']['Code'] == 'AccessDenied', error
         else: raise AssertionError('untrusted node unexpectedly assumed workload role')
     try:
-        for suffix in ['compute-role', 'compute-isolation-v1-role', 'unrelated-role']:
-            name = prefix + '-' + suffix
+        for name in node_roles:
             trust = {'Version': '2012-10-17', 'Statement': [{
                 'Effect': 'Allow', 'Principal': {'AWS': caller['Arn']}, 'Action': 'sts:AssumeRole'}]}
             iam.create_role(RoleName=name, AssumeRolePolicyDocument=json.dumps(trust),
                             Tags=[{'Key': 'alien.dev/test-run', 'Value': prefix}])
-            created.append(name)
             policy = {'Version': '2012-10-17', 'Statement': [{
                 'Effect': 'Allow', 'Action': 'sts:AssumeRole', 'Resource': destination}]}
             iam.put_role_policy(RoleName=name, PolicyName='test-chain', PolicyDocument=json.dumps(policy))
@@ -73,7 +73,7 @@ def main():
                         'live_create_service_account_for_compute_nodes', '--', '--ignored', '--nocapture'],
                        check=True, env=env)
         check('workload role reconciled through the actual Alien controller')
-        nodes = [assume(session.client('sts'), f'arn:aws:iam::{account}:role/{name}') for name in created]
+        nodes = [assume(session.client('sts'), f'arn:aws:iam::{account}:role/{name}') for name in node_roles]
         legacy = assume(nodes[0], destination)
         assert legacy.get_caller_identity()['Account'] == account
         check('legacy node successfully assumed workload role')
@@ -86,15 +86,14 @@ def main():
         denied(nodes[2]); check('unrelated same-account node denied despite caller-side grant')
     finally:
         errors = []
-        # Include the deterministic workload name even when create lost its response.
-        for name in [workload] + created:
+        for name in [workload] + node_roles:
             try:
                 for policy in iam.list_role_policies(RoleName=name)['PolicyNames']:
                     iam.delete_role_policy(RoleName=name, PolicyName=policy)
                 iam.delete_role(RoleName=name)
             except ClientError as error:
                 if error.response['Error']['Code'] != 'NoSuchEntity': errors.append(str(error))
-        for name in [workload] + created:
+        for name in [workload] + node_roles:
             try: iam.get_role(RoleName=name)
             except ClientError as error:
                 if error.response['Error']['Code'] != 'NoSuchEntity': errors.append(str(error))
