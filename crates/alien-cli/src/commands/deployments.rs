@@ -776,7 +776,9 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         }
         DeploymentsCmd::Move { id, deployment_group, dry_run, expected_membership_revision, json } => {
             crate::commands::deployment_move::run(
-                &ctx, &id, &deployment_group, dry_run, expected_membership_revision, json,
+                &ctx, &id, crate::commands::deployment_move::MoveOptions {
+                    destination: &deployment_group, dry_run, expected_revision: expected_membership_revision, json,
+                },
             ).await
         }
         DeploymentsCmd::Pin {

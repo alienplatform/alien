@@ -5,14 +5,15 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
 
-pub async fn run(
-    ctx: &ExecutionMode,
-    reference: &str,
-    destination: &str,
-    dry_run: bool,
-    expected_revision: Option<u64>,
-    json: bool,
-) -> Result<()> {
+pub struct MoveOptions<'a> {
+    pub destination: &'a str,
+    pub dry_run: bool,
+    pub expected_revision: Option<u64>,
+    pub json: bool,
+}
+
+pub async fn run(ctx: &ExecutionMode, reference: &str, options: MoveOptions<'_>) -> Result<()> {
+    let MoveOptions { destination, dry_run, expected_revision, json } = options;
     if !ctx.is_platform() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "command".to_string(),
