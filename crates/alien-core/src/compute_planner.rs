@@ -1252,7 +1252,10 @@ mod tests {
         assert!(!invalid_plan.pools[0].errors.is_empty());
     }
 
-    fn declared_pool_errors(scale: CapacityGroupScalePolicy, selection: ComputePoolSelection) -> Vec<String> {
+    fn declared_pool_errors(
+        scale: CapacityGroupScalePolicy,
+        selection: ComputePoolSelection,
+    ) -> Vec<String> {
         let mut stack = stack_with_container();
         let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
@@ -1316,11 +1319,14 @@ mod tests {
                 max: range(1, 10, 3),
             }
         );
-        assert_eq!((pool.recommended.min_size(), pool.recommended.max_size()), (1, 3));
+        assert_eq!(
+            (pool.recommended.min_size(), pool.recommended.max_size()),
+            (1, 3)
+        );
 
         // Workloads that never scale keep a fixed recommendation.
-        let plan = plan_compute(&stack_with_container(), Platform::Aws, None)
-            .expect("plan should build");
+        let plan =
+            plan_compute(&stack_with_container(), Platform::Aws, None).expect("plan should build");
         assert_eq!(
             plan.pools[0].scale,
             CapacityGroupScalePolicy::Fixed {

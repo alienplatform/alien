@@ -806,13 +806,8 @@ fn materialize_selection_within(
         })
     })?;
     let requirements = capacity_group_requirements(group);
-    let errors = validate_compute_pool_selection(
-        platform,
-        &group.group_id,
-        selection,
-        &requirements,
-        scale,
-    );
+    let errors =
+        validate_compute_pool_selection(platform, &group.group_id, selection, &requirements, scale);
     if !errors.is_empty() {
         return Err(AlienError::new(
             crate::error::ErrorData::StackMutationFailed {
@@ -1152,8 +1147,8 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec, VolumeBackups,
-        StackSettings,
+        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec,
+        StackSettings, VolumeBackups,
     };
     use indexmap::IndexMap;
 
@@ -2488,9 +2483,7 @@ mod tests {
             .build()
     }
 
-    async fn prepare_generated_pool(
-        selection: ComputePoolSelection,
-    ) -> Result<CapacityGroup> {
+    async fn prepare_generated_pool(selection: ComputePoolSelection) -> Result<CapacityGroup> {
         let stack_state = StackState {
             platform: Platform::Aws,
             resources: Default::default(),
