@@ -2163,10 +2163,9 @@ async fn deploy_task_with_environment(
     if handed_off {
         // Setup only gets the deployment to the handoff. Report what the manager
         // makes of it: running, failed, or blocked on the deployer.
-        println!(
-            "{}",
-            dim_label("Setup complete. Waiting for the manager to provision the deployment...")
-        );
+        steps.println(&dim_label(
+            "Setup complete. Waiting for the manager to provision the deployment...",
+        ));
         let deployment_id = tracked_deployment.deployment_id.clone();
         let activation = wait_for_handed_off_deployment(
             || async {
@@ -2183,14 +2182,14 @@ async fn deploy_task_with_environment(
                     observed.status,
                     DeploymentStatus::WaitingForSecrets | DeploymentStatus::WaitingForMachines
                 ) {
-                    println!(
+                    steps.println(&format!(
                         "{} {}",
                         dim_label("Blocked:"),
                         observed
                             .error_message
                             .as_deref()
                             .unwrap_or(describe_waiting_status(&observed.status))
-                    );
+                    ));
                 }
             },
         )
