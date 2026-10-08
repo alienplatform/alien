@@ -250,6 +250,7 @@ async fn sync_with_manager(
         capabilities: report_operator_capabilities(state, operations_command_address_v1),
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
+        operations_config: Some(reported_operations_config(state.config.operations.as_ref())),
     };
     let mut sync_input = SyncInput::builder(sync_request);
     if let Some(operator_image) = operator_image.cloned() {
@@ -589,6 +590,18 @@ fn report_operator_capabilities(
 /// Granted only when the chart bound the dynamic container Role: the manager
 /// sends container targets to Operators that report this, so a namespace-only
 /// install without that access must not claim it.
+/// The operations this Operator declares locally, without setting values. An
+/// Operator that declares none reports an empty declaration, so removing its
+/// last plugin clears what it reported before; only an Operator too old to
+/// report the field omits it.
+fn reported_operations_config(
+    local: Option<&alien_core::OperationsConfig>,
+) -> alien_core::OperationsConfig {
+    local
+        .map(alien_core::OperationsConfig::without_settings)
+        .unwrap_or_default()
+}
+
 fn dynamic_containers_capability(config: &OperatorConfig) -> OperatorCapabilityReport {
     let granted = config.platform == Platform::Kubernetes
         && config.namespace.is_some()
@@ -711,12 +724,36 @@ mod tests {
     use super::{
         accept_target_release, apply_manager_control_state, create_authenticated_client,
         dynamic_containers_capability, is_uninitialized_deployment_state,
-        operation_command_address_capability, sync_with_manager,
+        operation_command_address_capability, reported_operations_config, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// Removing an Operator's last local plugin must clear what it reported:
+    /// it sends an empty declaration (`{}` on the wire), which the platform
+    /// tells apart from an older Operator that omits the field.
+    #[test]
+    fn an_operator_without_local_operations_reports_an_empty_declaration() {
+        let declared: alien_core::OperationsConfig = serde_json::from_value(serde_json::json!({
+            "plugins": {
+                "postgres": {
+                    "settings": { "password": { "env": "PG_PASSWORD" } },
+                    "approval": { "*": "manual" }
+                }
+            }
+        }))
+        .expect("operations config");
+        assert_eq!(
+            serde_json::to_value(reported_operations_config(Some(&declared))).unwrap(),
+            serde_json::json!({ "plugins": { "postgres": { "approval": { "*": "manual" } } } })
+        );
+        assert_eq!(
+            serde_json::to_value(reported_operations_config(None)).unwrap(),
+            serde_json::json!({})
+        );
+    }
 
     #[test]
     fn same_release_target_reconciles_runtime_configuration() {

@@ -23,6 +23,9 @@ use chrono::{DateTime, Utc};
 /// The vault represents a namespace prefix for SecureString parameters in SSM.
 #[controller]
 pub struct AwsVaultController {
+    /// Revision of the vault grants successfully applied by setup.
+    #[serde(default)]
+    pub(crate) permissions_revision: Option<String>,
     /// AWS account ID for generating the Secrets Manager reference
     pub(crate) account_id: Option<String>,
     /// The AWS region for this vault
@@ -61,6 +64,13 @@ impl AwsVaultController {
             "vault",
         )
         .await?;
+        ResourcePermissionsHelper::remove_stale_aws_resource_scoped_permissions(
+            ctx, &config.id, "vault",
+        )
+        .await?;
+        if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
+            self.permissions_revision = Some(super::permissions_revision(ctx)?);
+        }
 
         // Store the vault prefix using resource_prefix-config.id pattern
         self.vault_prefix = Some(vault_prefix);
@@ -100,8 +110,10 @@ impl AwsVaultController {
         })?;
 
         // The namespace needs no update, but a new consumer or changed grant
-        // still needs its setup-owned policy. The helper enforces setup authority;
-        // IAM policy upserts make the whole permission phase safe to resume.
+        // still needs its setup-owned policy, and a dropped grant needs its
+        // policy removed. The helpers enforce setup authority; IAM policy
+        // upserts and deletes that tolerate NotFound make the whole permission
+        // phase safe to resume. The revision is recorded only after both.
         ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
             ctx,
             &config.id,
@@ -109,7 +121,14 @@ impl AwsVaultController {
             "vault",
         )
         .await?;
+        ResourcePermissionsHelper::remove_stale_aws_resource_scoped_permissions(
+            ctx, &config.id, "vault",
+        )
+        .await?;
 
+        if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
+            self.permissions_revision = Some(super::permissions_revision(ctx)?);
+        }
         info!(vault_id = %config.id, "AWS vault permissions reconciled");
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -228,6 +247,18 @@ impl AwsVaultController {
         status = ResourceStatus::RefreshFailed
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            || !ResourcePermissionsHelper::resource_is_setup_owned(ctx, ctx.desired_config.id())?
+        {
+            return Ok(false);
+        }
+        Ok(
+            self.permissions_revision.as_deref()
+                != Some(super::permissions_revision(ctx)?.as_str()),
+        )
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(account_id), Some(region)) = (&self.account_id, &self.region) {
@@ -359,7 +390,10 @@ mod permission_update_tests {
         MockPlatformServiceProvider, ResourceController, StackExecutor, StackResourceStateExt,
     };
     use crate::service_account::AwsServiceAccountController;
-    use alien_aws_clients::{AwsClientConfigExt as _, iam::MockIamApi};
+    use alien_aws_clients::{
+        iam::{ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames},
+        AwsClientConfigExt as _,
+    };
     use alien_client_core::ErrorData as CloudError;
     use alien_core::permissions::PermissionProfile;
     use alien_core::{
@@ -367,64 +401,201 @@ mod permission_update_tests {
         ExternalBindings, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef,
         ServiceAccount, Stack, StackResourceState, StackSettings, StackState,
     };
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
-    // Simulate IAM upsert semantics, including a write whose response is lost.
-    // Only the consumer's role is touched; unexpected provider calls fail the mock.
-    fn fixture(
-        lifecycle: ResourceLifecycle,
-        authority: InitialSetupAuthority,
-        writes: usize,
-        lose_first_response: bool,
-    ) -> (StackExecutor, StackState, Arc<Mutex<Vec<String>>>) {
-        let policies = Arc::new(Mutex::new(Vec::new()));
-        let saved = policies.clone();
-        let mut iam = MockIamApi::new();
-        iam.expect_put_role_policy()
-            .times(writes)
-            .returning(move |role, name, document| {
-                assert_eq!(role, "test-consumer-sa");
-                assert_eq!(name, "alien-secrets-vault-data-read");
-                let policy: serde_json::Value = serde_json::from_str(document).unwrap();
-                assert!(
-                    policy["Statement"]
+    const CONSUMER_ROLE: &str = "test-consumer-sa";
+    const FORMER_ROLE: &str = "test-former-sa";
+    const READ_POLICY: &str = "alien-secrets-vault-data-read";
+
+    /// Which IAM response the fake loses or refuses.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Fault {
+        None,
+        /// The first PutRolePolicy commits, then the response is lost.
+        LoseFirstPut,
+        /// The first DeleteRolePolicy commits, then the response is lost.
+        LoseFirstDelete,
+        /// Setup credentials cannot delete inline policies.
+        DenyDelete,
+    }
+
+    /// In-memory IAM inline policies (role -> name -> document) plus a call log.
+    #[derive(Default)]
+    struct Iam {
+        roles: BTreeMap<String, BTreeMap<String, String>>,
+        calls: Vec<String>,
+    }
+
+    impl Iam {
+        fn policies(&self, role: &str) -> Vec<String> {
+            self.roles
+                .get(role)
+                .map(|policies| policies.keys().cloned().collect())
+                .unwrap_or_default()
+        }
+
+        fn count(&self, prefix: &str) -> usize {
+            self.calls.iter().filter(|c| c.starts_with(prefix)).count()
+        }
+    }
+
+    fn assert_read_policy(document: &str) {
+        let policy: serde_json::Value = serde_json::from_str(document).unwrap();
+        assert!(policy["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|statement| {
+                statement["Action"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action == "ssm:GetParameter")
+                    && statement["Resource"]
                         .as_array()
                         .unwrap()
                         .iter()
-                        .any(|statement| {
-                            statement["Action"]
-                                .as_array()
+                        .any(|resource| {
+                            resource
+                                .as_str()
                                 .unwrap()
-                                .iter()
-                                .any(|action| action == "ssm:GetParameter")
-                                && statement["Resource"].as_array().unwrap().iter().any(
-                                    |resource| {
-                                        resource
-                                            .as_str()
-                                            .unwrap()
-                                            .ends_with(":parameter/test-secrets-*")
-                                    },
-                                )
+                                .ends_with(":parameter/test-secrets-*")
                         })
-                );
-                let mut saved = saved.lock().unwrap();
-                saved.push(document.to_string());
-                if lose_first_response && saved.len() == 1 {
+            }));
+    }
+
+    fn fake_iam(iam: Arc<Mutex<Iam>>, fault: Fault) -> MockIamApi {
+        let mut mock = MockIamApi::new();
+        let put = iam.clone();
+        mock.expect_put_role_policy()
+            .returning(move |role, name, document| {
+                assert_eq!(role, CONSUMER_ROLE);
+                assert_eq!(name, READ_POLICY);
+                assert_read_policy(document);
+                let mut iam = put.lock().unwrap();
+                iam.calls.push(format!("put {role} {name}"));
+                iam.roles
+                    .entry(role.to_string())
+                    .or_default()
+                    .insert(name.to_string(), document.to_string());
+                if fault == Fault::LoseFirstPut && iam.count("put ") == 1 {
                     return Err(AlienError::new(CloudError::HttpRequestFailed {
                         message: "Connection closed after the policy write".to_string(),
                     }));
                 }
                 Ok(())
             });
-        let iam = Arc::new(iam);
+        let list = iam.clone();
+        mock.expect_list_role_policies().returning(move |role| {
+            let mut iam = list.lock().unwrap();
+            iam.calls.push(format!("list {role}"));
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: iam.policies(role),
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        mock.expect_delete_role_policy()
+            .returning(move |role, name| {
+                let mut iam = iam.lock().unwrap();
+                iam.calls.push(format!("delete {role} {name}"));
+                if fault == Fault::DenyDelete {
+                    return Err(AlienError::new(CloudError::RemoteAccessDenied {
+                        resource_type: "IAM role policy".to_string(),
+                        resource_name: name.to_string(),
+                    }));
+                }
+                let removed = iam
+                    .roles
+                    .get_mut(role)
+                    .and_then(|policies| policies.remove(name));
+                if removed.is_none() {
+                    return Err(AlienError::new(CloudError::RemoteResourceNotFound {
+                        resource_type: "IAM role policy".to_string(),
+                        resource_name: name.to_string(),
+                    }));
+                }
+                if fault == Fault::LoseFirstDelete && iam.count("delete ") == 1 {
+                    return Err(AlienError::new(CloudError::HttpRequestFailed {
+                        message: "Connection closed after the policy delete".to_string(),
+                    }));
+                }
+                Ok(())
+            });
+        mock
+    }
+
+    /// Trust generated for a service account with no workload principals.
+    const DEFAULT_TRUST_POLICY: &str = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#;
+
+    fn ready_service_account(state: &mut StackState, account: ServiceAccount, role: &str) {
+        let mut controller = AwsServiceAccountController::mock_ready(role);
+        // Model a role whose trust is already applied. A missing trust
+        // checkpoint would instead schedule legacy trust repair.
+        controller.assume_role_policy = Some(DEFAULT_TRUST_POLICY.to_string());
+        let id = account.id.clone();
+        let mut account_state = StackResourceState::new_pending(
+            ServiceAccount::RESOURCE_TYPE.to_string(),
+            Resource::new(account),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        account_state.status = ResourceStatus::Running;
+        account_state.outputs = controller.get_outputs();
+        account_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert(id, account_state);
+    }
+
+    // `consumer` reads the vault. `former` is a profile with no vault grant,
+    // e.g. one whose grant a release removed. Roles start with `existing`.
+    fn fixture(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        fault: Fault,
+        existing: &[(&str, &str)],
+    ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
+        fixture_with_removed_profile()
+            .lifecycle(lifecycle)
+            .authority(authority)
+            .fault(fault)
+            .existing(existing)
+            .remove_consumer(false)
+            .call()
+    }
+
+    #[bon::builder]
+    fn fixture_with_removed_profile(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        fault: Fault,
+        existing: &[(&str, &str)],
+        remove_consumer: bool,
+    ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
+        let iam = Arc::new(Mutex::new(Iam::default()));
+        for (role, name) in existing {
+            iam.lock()
+                .unwrap()
+                .roles
+                .entry(role.to_string())
+                .or_default()
+                .insert(name.to_string(), "{}".to_string());
+        }
+        let mock = Arc::new(fake_iam(iam.clone(), fault));
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_iam_client()
-            .times(writes)
-            .returning(move |_| Ok(iam.clone()));
+            .returning(move |_| Ok(mock.clone()));
         let vault = Vault::new("secrets".to_string()).build();
-        let account = ServiceAccount::new("consumer-sa".to_string()).build();
-        let stack = Stack::new("test".to_string())
+        let consumer = ServiceAccount::new("consumer-sa".to_string()).build();
+        let former = ServiceAccount::new("former-sa".to_string()).build();
+        let mut stack = Stack::new("test".to_string())
             .add_with_dependencies(
                 vault.clone(),
                 lifecycle,
@@ -433,12 +604,17 @@ mod permission_update_tests {
                     "consumer-sa",
                 )],
             )
-            .add(account.clone(), ResourceLifecycle::Frozen)
+            .add(consumer.clone(), ResourceLifecycle::Frozen)
+            .add(former.clone(), ResourceLifecycle::Frozen)
             .permission(
                 "consumer",
                 PermissionProfile::new().resource("secrets", ["vault/data-read"]),
             )
+            .permission("former", PermissionProfile::new())
             .build();
+        if remove_consumer {
+            stack.permissions.profiles.remove("consumer");
+        }
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(EnvironmentVariablesSnapshot {
@@ -479,104 +655,404 @@ mod permission_update_tests {
         state.resources.insert("secrets".to_string(), vault_state);
         // The newly created role is ready, but the existing vault has not yet
         // recorded its new dependency or installed its read policy.
-        let controller = AwsServiceAccountController::mock_ready("test-consumer-sa");
-        let mut account_state = StackResourceState::new_pending(
+        ready_service_account(&mut state, consumer, CONSUMER_ROLE);
+        ready_service_account(&mut state, former, FORMER_ROLE);
+        (executor, state, iam)
+    }
+
+    fn set_revision(state: &mut StackState, revision: &str) {
+        let resource = state.resources.get_mut("secrets").unwrap();
+        let mut controller = resource
+            .get_internal_controller_typed::<AwsVaultController>()
+            .unwrap();
+        controller.permissions_revision = Some(revision.to_string());
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+    }
+
+    fn revision(state: &StackState) -> Option<String> {
+        state.resources["secrets"]
+            .get_internal_controller_typed::<AwsVaultController>()
+            .unwrap()
+            .permissions_revision
+    }
+
+    fn reload(state: &StackState) -> StackState {
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap()
+    }
+
+    /// Exercises the existing-vault update through the real executor and IAM
+    /// client. The cloud runner owns the isolated role and parameter fixtures
+    /// and verifies GetParameter using freshly assumed consumer credentials.
+    #[tokio::test]
+    #[ignore = "requires isolated AWS role fixtures from the live test runner"]
+    async fn live_permission_only_update_reconciles_existing_vault() {
+        let prefix = std::env::var("ALIEN_TEST_VAULT_PREFIX").unwrap();
+        assert!(prefix.starts_with("e2e-"), "use a task-owned test prefix");
+        let account_id = std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap();
+        let region = std::env::var("AWS_TARGET_REGION").unwrap();
+        let role_name = format!("{prefix}-consumer-sa");
+        let role_arn = format!("arn:aws:iam::{account_id}:role/{role_name}");
+        let vault = Vault::new("secrets".to_string()).build();
+        let account = ServiceAccount::new("consumer-sa".to_string()).build();
+        let dependencies = vec![ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            "consumer-sa",
+        )];
+        let stack = Stack::new("permission-update".to_string())
+            .add_with_dependencies(
+                vault.clone(),
+                ResourceLifecycle::Frozen,
+                dependencies.clone(),
+            )
+            .add(account.clone(), ResourceLifecycle::Frozen)
+            .permission(
+                "consumer",
+                PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .build();
+        let aws = AwsClientConfig {
+            account_id: account_id.clone(),
+            region: region.clone(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let executor = StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(aws)))
+            .deployment_config(&config)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .step_running_resources(false)
+            .build()
+            .unwrap();
+        let mut state = StackState::with_resource_prefix(Platform::Aws, prefix.clone());
+        let controller = AwsVaultController {
+            state: AwsVaultState::Ready,
+            account_id: Some(account_id),
+            region: Some(region),
+            vault_prefix: Some(format!("{prefix}-secrets")),
+            ..Default::default()
+        };
+        let mut resource = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(vault),
+            Some(ResourceLifecycle::Frozen),
+            dependencies,
+        );
+        resource.status = ResourceStatus::Running;
+        resource.outputs = controller.get_outputs();
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("secrets".to_string(), resource);
+        let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
+            "state": "ready", "roleName": role_name, "roleArn": role_arn,
+            "stackPermissionsApplied": true, "internalStayCount": null,
+            // The runner owns this role's trust; record it as applied so the
+            // update exercises only the vault grant.
+            "assumeRolePolicy": DEFAULT_TRUST_POLICY,
+        }))
+        .unwrap();
+        let mut resource = StackResourceState::new_pending(
             ServiceAccount::RESOURCE_TYPE.to_string(),
             Resource::new(account),
             Some(ResourceLifecycle::Frozen),
             vec![],
         );
-        account_state.status = ResourceStatus::Running;
-        account_state.outputs = controller.get_outputs();
-        account_state
+        resource.status = ResourceStatus::Running;
+        resource.outputs = controller.get_outputs();
+        resource
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
-        state
-            .resources
-            .insert("consumer-sa".to_string(), account_state);
-        (executor, state, policies)
+        state.resources.insert("consumer-sa".to_string(), resource);
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
     async fn setup_update_grants_existing_vault_access_to_consumer() {
-        let (executor, state, policies) = fixture(
+        let (executor, state, iam) = fixture(
             ResourceLifecycle::Frozen,
             InitialSetupAuthority::DirectSetup,
-            1,
-            false,
+            Fault::None,
+            &[],
         );
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert_eq!(policies.lock().unwrap().len(), 1);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.count("put "), 1);
+        assert_eq!(iam.policies(CONSUMER_ROLE), vec![READ_POLICY]);
+        assert_eq!(iam.count("delete "), 0);
         // Repeating setup does not schedule another update after convergence.
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn permission_only_update_reconciles_and_then_converges() {
+        let (executor, mut state, iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::None,
+            &[],
         );
+        state.resources.get_mut("secrets").unwrap().dependencies = vec![ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            "consumer-sa",
+        )];
+        set_revision(&mut state, "previous-grants");
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(iam.lock().unwrap().count("put "), 1);
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn removed_grants_delete_only_this_vaults_stale_policies() {
+        let (executor, mut state, iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::None,
+            &[
+                // `former` lost its read grant.
+                (FORMER_ROLE, READ_POLICY),
+                // `consumer` lost write but keeps read.
+                (CONSUMER_ROLE, READ_POLICY),
+                (CONSUMER_ROLE, "alien-secrets-vault-data-write"),
+                // Not owned by this vault: another vault, an unregistered set
+                // name, and a policy that only shares the prefix.
+                (FORMER_ROLE, "alien-other-vault-data-read"),
+                (FORMER_ROLE, "alien-secrets-custom"),
+                (FORMER_ROLE, "alien-secrets-vault-data-read-extra"),
+            ],
+        );
+        set_revision(&mut state, "previous-grants");
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        {
+            let iam = iam.lock().unwrap();
+            assert_eq!(
+                iam.policies(FORMER_ROLE),
+                vec![
+                    "alien-other-vault-data-read",
+                    "alien-secrets-custom",
+                    "alien-secrets-vault-data-read-extra",
+                ]
+            );
+            assert_eq!(iam.policies(CONSUMER_ROLE), vec![READ_POLICY]);
+            assert_eq!(iam.count("delete "), 2);
+        }
+        assert_ne!(revision(&state).as_deref(), Some("previous-grants"));
+        // The recorded revision is the converged one: nothing is rescheduled.
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn removed_profile_revokes_vault_grant_on_retained_service_account() {
+        let (executor, mut state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[
+                (CONSUMER_ROLE, READ_POLICY),
+                (CONSUMER_ROLE, "alien-other-vault-data-read"),
+            ])
+            .remove_consumer(true)
+            .call();
+        set_revision(&mut state, "previous-grants");
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(
+            iam.policies(CONSUMER_ROLE),
+            vec!["alien-other-vault-data-read"]
+        );
+        assert_eq!(iam.count("delete "), 1);
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn denied_delete_keeps_the_previous_revision_so_setup_retries() {
+        let (executor, mut state, iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::DenyDelete,
+            &[(FORMER_ROLE, READ_POLICY)],
+        );
+        set_revision(&mut state, "previous-grants");
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        let error = state.resources["secrets"]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("iam:DeleteRolePolicy"), "{error}");
+        assert_eq!(revision(&state).as_deref(), Some("previous-grants"));
+        assert_eq!(iam.lock().unwrap().policies(FORMER_ROLE), vec![READ_POLICY]);
+    }
+
+    #[tokio::test]
+    async fn lost_delete_response_resumes_and_records_the_revision_once_removed() {
+        let (executor, mut state, iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::LoseFirstDelete,
+            &[(FORMER_ROLE, READ_POLICY)],
+        );
+        set_revision(&mut state, "previous-grants");
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(state.resources["secrets"].error.is_some());
+        assert_eq!(revision(&state).as_deref(), Some("previous-grants"));
+        // Reload the durable checkpoint and drive the executor's actual retry.
+        let state = executor.step(reload(&state)).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert!(iam.policies(FORMER_ROLE).is_empty());
+        assert_eq!(
+            iam.count("delete "),
+            1,
+            "retry sees the committed delete and does not repeat it"
+        );
+        assert_ne!(revision(&state).as_deref(), Some("previous-grants"));
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn previous_checkpoint_without_revision_reconciles_once() {
+        let (executor, mut state, iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::None,
+            &[],
+        );
+        assert!(state
+            .resources
+            .get_mut("secrets")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("permissionsRevision")
+            .is_some());
+        let state = executor.step(reload(&state)).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert_eq!(iam.lock().unwrap().count("put "), 1);
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
     async fn imported_vault_update_refuses_permission_writes() {
-        let (executor, state, policies) = fixture(
+        let (executor, state, iam) = fixture(
             ResourceLifecycle::Frozen,
             InitialSetupAuthority::ImportedHandoff,
-            0,
-            false,
+            Fault::None,
+            &[(FORMER_ROLE, READ_POLICY)],
         );
         let state = executor.step(state).await.unwrap().next_state;
         assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(
-            state.resources["secrets"]
-                .error
-                .as_ref()
-                .unwrap()
-                .to_string()
-                .contains("rerun setup")
-        );
-        assert!(policies.lock().unwrap().is_empty());
+        assert!(state.resources["secrets"]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("rerun setup"));
+        assert!(iam.lock().unwrap().calls.is_empty());
     }
 
     #[tokio::test]
     async fn live_vault_update_leaves_setup_owned_iam_untouched() {
-        let (executor, state, policies) = fixture(
+        let (executor, state, iam) = fixture(
             ResourceLifecycle::Live,
             InitialSetupAuthority::ImportedHandoff,
-            0,
-            false,
+            Fault::None,
+            &[(FORMER_ROLE, READ_POLICY)],
         );
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(policies.lock().unwrap().is_empty());
+        assert!(iam.lock().unwrap().calls.is_empty());
     }
 
     #[tokio::test]
     async fn lost_response_resumes_the_saved_update_and_upserts_the_same_policy() {
-        let (executor, state, policies) = fixture(
+        let (executor, state, iam) = fixture(
             ResourceLifecycle::Frozen,
             InitialSetupAuthority::DirectSetup,
-            2,
-            true,
+            Fault::LoseFirstPut,
+            &[],
         );
         let state = executor.step(state).await.unwrap().next_state;
         assert_ne!(state.resources["secrets"].status, ResourceStatus::Running);
         assert!(state.resources["secrets"].error.is_some());
         // Reload the durable checkpoint and drive the executor's actual retry.
-        let state: StackState =
-            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
-        let state = executor.step(state).await.unwrap().next_state;
+        let state = executor.step(reload(&state)).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
-        let policies = policies.lock().unwrap();
-        assert_eq!(policies.len(), 2);
-        assert_eq!(policies[0], policies[1]);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.count("put "), 2);
+        assert_eq!(iam.policies(CONSUMER_ROLE), vec![READ_POLICY]);
     }
 }

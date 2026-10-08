@@ -19,10 +19,10 @@ use alien_core::{
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
-    acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
+    acquire_setup_delete_deployment, combine_operation_and_finalization, finalize_step_loop,
     release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
-use alien_deployment::runner::{preserve_semantic_failure, RunnerPolicy, RunnerResult};
+use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::SdkResultExt as _;
@@ -707,18 +707,15 @@ async fn destroy_tracked_deployment(
             .then(|| result.loop_result.final_status.clone())
     });
 
-    // Always reconcile + release
-    let runner_result = combine_operation_and_finalization(
-        preserve_semantic_failure(runner_result, &current),
-        final_reconcile(
-            &manager_client,
-            &tracked_deployment.deployment_id,
-            &session,
-            execution_claim.as_ref(),
-            &current,
-        )
-        .await,
-    );
+    let runner_result = finalize_step_loop(
+        &manager_client,
+        &tracked_deployment.deployment_id,
+        &session,
+        execution_claim.as_ref(),
+        &current,
+        runner_result,
+    )
+    .await;
 
     if let Some(status) = semantic_failure_status {
         steps.fail(2, Some(format!("{status:?}")));
@@ -727,6 +724,7 @@ async fn destroy_tracked_deployment(
     let RunnerResult {
         loop_result,
         steps_executed,
+        ..
     } = runner_result.context(ErrorData::GenericError {
         message: "deletion step loop failed".to_string(),
     })?;

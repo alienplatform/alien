@@ -19,6 +19,7 @@ import { deploymentsListFilterDeploymentGroups } from "../funcs/deploymentsListF
 import { deploymentsListFilterEnvironments } from "../funcs/deploymentsListFilterEnvironments.js";
 import { deploymentsListMachines } from "../funcs/deploymentsListMachines.js";
 import { deploymentsListVolumeRestores } from "../funcs/deploymentsListVolumeRestores.js";
+import { deploymentsMove } from "../funcs/deploymentsMove.js";
 import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRestoreVolume } from "../funcs/deploymentsRestoreVolume.js";
@@ -34,6 +35,20 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Deployments extends ClientSDK {
+  /**
+   * Reassign a deployment to another group within its project
+   */
+  async move(
+    request: operations.MoveDeploymentRequest,
+    options?: RequestOptions,
+  ): Promise<models.MoveDeploymentResponse> {
+    return unwrapAsync(deploymentsMove(
+      this,
+      request,
+      options,
+    ));
+  }
+
   /**
    * Retrieve all deployments.
    */

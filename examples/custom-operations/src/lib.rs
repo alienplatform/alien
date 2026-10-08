@@ -123,6 +123,7 @@ pub fn plugin_manifest() -> Result<CanonicalPluginManifest> {
             (Arch::Amd64, "custom-ops-linux-amd64".to_string()),
             (Arch::Arm64, "custom-ops-linux-arm64".to_string()),
         ]),
+        settings: Default::default(),
         operations: registry.manifests(),
     };
     manifest.validate()?;

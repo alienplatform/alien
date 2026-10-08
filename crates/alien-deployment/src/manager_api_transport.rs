@@ -15,7 +15,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
+use crate::{
+    error::ErrorData,
+    loop_contract::LoopStopReason,
+    transport::{DeploymentLoopTransport, StepReconcileResult},
+};
 
 /// Transport that reconciles deployment state via the Manager API after each step.
 ///
@@ -250,13 +254,14 @@ fn to_manager_api_observed_inventory_batches(
 }
 
 // ---------------------------------------------------------------------------
-// Shared helpers for the acquire / final-reconcile / release pattern.
+// Shared helpers for deployment acquisition and finalization.
 //
 // Every external caller (alien-deploy-cli, alien-cli, alien-terraform) follows
 // the same protocol:
 //   1. acquire_deployment()   — lock the deployment with a retry loop
 //   2. run_step_loop()        — step until terminal (uses ManagerApiTransport)
-//   3. final_reconcile()      — persist terminal state and always attempt unlock
+//   3. finalize_step_loop()   — release checkpointed terminal state, otherwise
+//                              persist final state and always attempt unlock
 // ---------------------------------------------------------------------------
 
 /// Maximum number of acquire attempts (60 × 2s = 2 minutes).
@@ -493,7 +498,8 @@ pub async fn acquire_setup_delete_deployment(
             }
         };
 
-        if let Some(acquired) = resp.into_inner().deployments.into_iter().next() {
+        let response = resp.into_inner();
+        if let Some(acquired) = response.deployments.into_iter().next() {
             return Ok(SetupDeleteAcquireOutcome::Acquired {
                 execution_claim: acquired.execution_claim.map(|claim| ExecutionClaim {
                     operation_id: claim.operation_id,
@@ -501,6 +507,8 @@ pub async fn acquire_setup_delete_deployment(
                 }),
             });
         }
+
+        reject_non_retryable_acquire_reason(deployment_id, &response.not_acquired, true)?;
 
         let status = match client.get_deployment().id(deployment_id).send().await {
             Ok(resp) => resp.into_inner().status,
@@ -573,12 +581,14 @@ async fn acquire_deployment_with_statuses(
             })
             .send()
             .await
-            .into_sdk_error()
+            .into_sdk_error_reading_body()
+            .await
             .context(alien_error::GenericError {
                 message: "Failed to acquire sync lock".to_string(),
             })?;
 
-        if let Some(acquired) = resp.into_inner().deployments.into_iter().next() {
+        let response = resp.into_inner();
+        if let Some(acquired) = response.deployments.into_iter().next() {
             return Ok(AcquiredDeploymentPayload {
                 deployment: acquired.deployment,
                 execution_claim: acquired.execution_claim.map(|claim| ExecutionClaim {
@@ -588,9 +598,11 @@ async fn acquire_deployment_with_statuses(
             });
         }
 
+        reject_non_retryable_acquire_reason(deployment_id, &response.not_acquired, false)?;
+
         if attempt == MAX_ACQUIRE_ATTEMPTS {
             return Err(AlienError::new(alien_error::GenericError {
-                message: "Timed out waiting for deployment lock".to_string(),
+                message: acquisition_timeout_message(deployment_id, &response.not_acquired),
             }));
         }
 
@@ -603,6 +615,84 @@ async fn acquire_deployment_with_statuses(
     }
 
     unreachable!()
+}
+
+fn acquisition_timeout_message(
+    deployment_id: &str,
+    unavailable: &[alien_manager_api::types::UnacquiredDeployment],
+) -> String {
+    use alien_manager_api::types::DeploymentAcquireUnavailableReason as Reason;
+    match unavailable.iter().find(|outcome| outcome.deployment_id == deployment_id) {
+        Some(outcome) if outcome.reason == Reason::Contended =>
+            "Timed out waiting for deployment lock: another operation still holds the deployment lease. Check the current deployment operation before retrying; this command did not acquire the lease.".to_string(),
+        Some(outcome) if outcome.reason == Reason::Deferred =>
+            "Timed out waiting for deployment lock: the manager deferred this deployment. Check its current operation and status before retrying; this command did not acquire the lease.".to_string(),
+        _ => "Timed out waiting for deployment lock; the manager did not provide an acquisition reason. Check the current deployment operation before retrying.".to_string(),
+    }
+}
+
+fn reject_non_retryable_acquire_reason(
+    deployment_id: &str,
+    unavailable: &[alien_manager_api::types::UnacquiredDeployment],
+    allow_status_transition: bool,
+) -> Result<(), AlienError> {
+    let Some(outcome) = unavailable
+        .iter()
+        .find(|outcome| outcome.deployment_id == deployment_id)
+    else {
+        // Older managers do not return acquisition reasons. Preserve the
+        // bounded retry behavior for compatibility with those servers.
+        return Ok(());
+    };
+
+    use alien_manager_api::types::DeploymentAcquireUnavailableReason as Reason;
+    match outcome.reason {
+        Reason::Contended | Reason::Deferred => Ok(()),
+        Reason::StatusMismatch if allow_status_transition => Ok(()),
+        reason => Err(AlienError::new(ErrorData::DeploymentAcquireUnavailable {
+            deployment_id: deployment_id.to_string(),
+            reason: reason.to_string(),
+        })
+        .into_generic()),
+    }
+}
+
+/// Finalize an unmodified step-loop result and release its manager lease.
+///
+/// A terminal `Ok` result whose state the manager recorded (the acquired state
+/// or an accepted checkpoint) only releases the claim: repeating that
+/// checkpoint can address a claim the server has already closed. Errors,
+/// nonterminal stops and terminal states the manager has not confirmed still
+/// persist final state.
+/// Callers that mutate state after the loop must use `final_reconcile` instead.
+pub async fn finalize_step_loop(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    execution_claim: Option<&ExecutionClaim>,
+    state: &DeploymentState,
+    result: crate::Result<crate::runner::RunnerResult>,
+) -> Result<crate::runner::RunnerResult, AlienError> {
+    let checkpointed_terminal = result.as_ref().is_ok_and(|result| {
+        result.state_persisted
+            && (result.loop_result.final_status.is_failed()
+                || matches!(
+                result.loop_result.stop_reason,
+                LoopStopReason::Synced
+                    | LoopStopReason::Failed
+                    | LoopStopReason::Deleted
+                    | LoopStopReason::Handoff
+                ))
+    });
+    let finalized = if checkpointed_terminal {
+        release_deployment(client, deployment_id, session, execution_claim).await
+    } else {
+        final_reconcile(client, deployment_id, session, execution_claim, state).await
+    };
+    combine_operation_and_finalization(
+        crate::runner::preserve_semantic_failure(result, state),
+        finalized,
+    )
 }
 
 /// Persist the final deployment state and release its manager lease.
@@ -685,6 +775,10 @@ fn deployment_model_wire(model: DeploymentModel) -> alien_manager_api::types::De
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        loop_contract::{LoopOutcome, LoopResult},
+        runner::RunnerResult,
+    };
     use alien_core::{
         ContainerHeartbeatData, GcpAgentPlatformSandboxHeartbeatData, HeartbeatBackend,
         HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
@@ -906,6 +1000,526 @@ mod tests {
         assert_eq!(error.http_status_code, Some(500));
     }
 
+    fn terminal_result(state: &DeploymentState) -> crate::Result<RunnerResult> {
+        Ok(RunnerResult {
+            loop_result: crate::loop_contract::classify_status(
+                &state.status,
+                crate::loop_contract::LoopOperation::Deploy,
+            )
+            .expect("test state must be terminal"),
+            steps_executed: 1,
+            state_persisted: true,
+        })
+    }
+
+    fn failed_resource_state() -> DeploymentState {
+        let mut state = running_state();
+        state.status = alien_core::DeploymentStatus::InitialSetupFailed;
+        let worker = alien_core::Worker::new("worker".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let resource = alien_core::Resource::new(worker);
+        let mut stack = alien_core::StackState::new(Platform::Test);
+        stack.resources.insert(
+            "worker".to_string(),
+            alien_core::StackResourceState {
+                resource_type: resource.resource_type().as_ref().to_string(),
+                config: resource,
+                status: alien_core::ResourceStatus::ProvisionFailed,
+                error: Some(AlienError::new(alien_error::GenericError {
+                    message: "execution profile is missing".to_string(),
+                })),
+                lifecycle: Some(alien_core::ResourceLifecycle::Frozen),
+                internal_state: None,
+                outputs: None,
+                previous_config: None,
+                retry_attempt: 0,
+                controller_platform: None,
+                dependencies: vec![],
+                last_failed_state: None,
+                remote_binding_params: None,
+            },
+        );
+        state.stack_state = Some(stack);
+        state
+    }
+
+    #[tokio::test]
+    async fn actual_setup_loop_checkpoints_handoff_once_before_release() {
+        let server = MockServer::start_async().await;
+        let mut state = running_state();
+        state.status = alien_core::DeploymentStatus::InitialSetup;
+        state.platform = Platform::Test;
+        let stack = alien_core::Stack::new("test".to_string()).build();
+        state.target_release = Some(alien_core::ReleaseInfo {
+            release_id: Some("release-1".to_string()),
+            version: None,
+            description: None,
+            stack: stack.clone(),
+        });
+        state.stack_state = Some(alien_core::StackState::new(Platform::Test));
+        state.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            prepared_stack: Some(stack),
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            ..Default::default()
+        });
+        let mut checkpointed = state.clone();
+        checkpointed.status = alien_core::DeploymentStatus::Provisioning;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"provisioning"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":checkpointed}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let mut config = deployment_config();
+        let claim = ExecutionClaim {
+            operation_id: "operation-1".to_string(),
+            attempt_id: "attempt-1".to_string(),
+        };
+        let transport = ManagerApiTransport::with_execution_claim(
+            client.clone(),
+            "session-1".to_string(),
+            Some(claim.clone()),
+        );
+        let result = crate::runner::run_step_loop(
+            &mut state,
+            &mut config,
+            &alien_core::ClientConfig::Test,
+            "deployment-1",
+            &crate::runner::RunnerPolicy {
+                max_steps: 2,
+                operation: crate::loop_contract::LoopOperation::InitialSetup,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+            },
+            &transport,
+            None,
+            None,
+        )
+        .await;
+        let result = finalize_step_loop(
+            &client,
+            "deployment-1",
+            "session-1",
+            Some(&claim),
+            &state,
+            result,
+        )
+        .await
+        .expect("checkpointed setup handoff should release");
+        assert_eq!(result.steps_executed, 1);
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::Handoff);
+        reconcile.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn acquired_terminal_state_releases_without_a_local_step() {
+        let server = MockServer::start_async().await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(409);
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let mut state = failed_resource_state();
+        state.target_release = Some(alien_core::ReleaseInfo {
+            release_id: Some("release-1".to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("test".to_string()).build(),
+        });
+        let result = crate::runner::run_step_loop(
+            &mut state,
+            &mut deployment_config(),
+            &alien_core::ClientConfig::Test,
+            "deployment-1",
+            &crate::runner::RunnerPolicy {
+                max_steps: 2,
+                operation: crate::loop_contract::LoopOperation::InitialSetup,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+            },
+            &ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            result
+                .as_ref()
+                .expect("terminal status should stop before stepping")
+                .steps_executed,
+            0
+        );
+        let error = finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+            .await
+            .expect_err("original controller error must survive release");
+        assert_eq!(error.code, "DEPLOYMENT_FAILED");
+        assert!(serde_json::to_string(&error)
+            .unwrap()
+            .contains("execution profile is missing"));
+        reconcile.assert_hits_async(0).await;
+        release.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn terminal_checkpoint_is_followed_only_by_exact_claim_release() {
+        for failed in [false, true] {
+            let server = MockServer::start_async().await;
+            let state = if failed {
+                failed_resource_state()
+            } else {
+                running_state()
+            };
+            let claim = ExecutionClaim {
+                operation_id: "operation-1".to_string(),
+                attempt_id: "attempt-1".to_string(),
+            };
+            let reconcile = server.mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"executionClaim":{"operationId":"operation-1","attemptId":"attempt-1"}}"#);
+                then.status(200).json_body(serde_json::json!({"success":true,"current":state}));
+            }).await;
+            let release = server.mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release")
+                    .json_body(serde_json::json!({"deploymentId":"deployment-1","session":"session-1","executionClaim":claim}));
+                then.status(200);
+            }).await;
+            let client = ManagerClient::new(&server.base_url());
+            let transport = ManagerApiTransport::with_execution_claim(
+                client.clone(),
+                "session-1".to_string(),
+                Some(claim.clone()),
+            );
+            let config = deployment_config();
+            transport
+                .reconcile_step("deployment-1", &state, &config, false, None, vec![], vec![])
+                .await
+                .expect("terminal checkpoint should persist");
+            let result = finalize_step_loop(
+                &client,
+                "deployment-1",
+                "session-1",
+                Some(&claim),
+                &state,
+                terminal_result(&state),
+            )
+            .await;
+            if failed {
+                let error = result.expect_err("controller failure must remain a failure");
+                assert_eq!(error.code, "DEPLOYMENT_FAILED");
+                assert!(serde_json::to_string(&error)
+                    .unwrap()
+                    .contains("execution profile is missing"));
+            } else {
+                assert_eq!(
+                    result
+                        .expect("successful terminal result should release")
+                        .loop_result
+                        .outcome,
+                    LoopOutcome::Success
+                );
+            }
+            reconcile.assert_hits_async(1).await;
+            release.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn uncheckpointed_errors_and_nonterminal_stops_persist_then_release() {
+        for stop in [
+            None,
+            Some(LoopStopReason::Delayed),
+            Some(LoopStopReason::BudgetExceeded),
+        ] {
+            let server = MockServer::start_async().await;
+            let state = running_state();
+            let reconcile = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"running"}}"#);
+                    then.status(200)
+                        .json_body(serde_json::json!({"success":true,"current":state}));
+                })
+                .await;
+            let release = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/release");
+                    then.status(200);
+                })
+                .await;
+            let result = match stop.clone() {
+                Some(stop_reason) => Ok(RunnerResult {
+                    loop_result: LoopResult {
+                        outcome: if stop_reason == LoopStopReason::BudgetExceeded {
+                            LoopOutcome::Failure
+                        } else {
+                            LoopOutcome::Neutral
+                        },
+                        stop_reason,
+                        final_status: state.status,
+                    },
+                    steps_executed: 1,
+                    state_persisted: true,
+                }),
+                None => Err(AlienError::new(
+                    crate::ErrorData::DeploymentCheckpointFailed {
+                        message: "checkpoint rejected".to_string(),
+                    },
+                )),
+            };
+            let result = finalize_step_loop(
+                &ManagerClient::new(&server.base_url()),
+                "deployment-1",
+                "session-1",
+                None,
+                &state,
+                result,
+            )
+            .await;
+            if stop.is_none() {
+                assert!(result
+                    .expect_err("runner error must survive finalization")
+                    .message
+                    .contains("checkpoint rejected"));
+            } else if stop == Some(LoopStopReason::BudgetExceeded) {
+                assert!(result
+                    .expect_err("exhausted budget remains a failure")
+                    .message
+                    .contains("deployment failed"));
+            } else {
+                result.expect("delayed result should finalize");
+            }
+            reconcile.assert_hits_async(1).await;
+            release.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpointed_teardown_budget_failure_releases_without_another_terminal_write() {
+        let server = MockServer::start_async().await;
+        let mut state = running_state();
+        state.platform = Platform::Test;
+        state.status = alien_core::DeploymentStatus::TeardownRequired;
+        state.stack_state = Some(alien_core::StackState::new(Platform::Test));
+        state.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+        let prepared = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":state}));
+            })
+            .await;
+        let mut failed = state.clone();
+        failed.status = alien_core::DeploymentStatus::TeardownFailed;
+        failed.error = Some(
+            AlienError::new(crate::ErrorData::StackExecutionFailed {
+                message: "Setup-owned resource teardown did not complete within 0 steps"
+                    .to_string(),
+            })
+            .into_generic(),
+        );
+        let terminal = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-failed"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":failed}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let result = crate::setup_teardown::run_setup_teardown_after_handoff(
+            &mut state,
+            &mut deployment_config(),
+            &alien_core::ClientConfig::Test,
+            "deployment-1",
+            &crate::runner::RunnerPolicy {
+                max_steps: 0,
+                operation: crate::loop_contract::LoopOperation::Delete,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+            },
+            &ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+            None,
+        )
+        .await
+        .map(|result| result.expect("teardown must run"));
+        assert_eq!(
+            result
+                .as_ref()
+                .expect("failure should be durably checkpointed")
+                .loop_result
+                .stop_reason,
+            LoopStopReason::BudgetExceeded
+        );
+        let error = finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+            .await
+            .expect_err("teardown exhaustion must remain a semantic failure");
+        assert!(error.message.contains("did not complete within 0 steps"));
+        prepared.assert_hits_async(2).await;
+        terminal.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
+    }
+
+    /// A deletion the manager confirmed only releases the claim; one whose
+    /// checkpoint failed is persisted by the final reconcile instead.
+    #[tokio::test]
+    async fn teardown_deletion_is_reconciled_again_only_when_its_checkpoint_failed() {
+        for accepted in [true, false] {
+            let server = MockServer::start_async().await;
+            let mut state = running_state();
+            state.platform = Platform::Test;
+            state.status = alien_core::DeploymentStatus::TeardownRequired;
+            state.stack_state = Some(alien_core::StackState::new(Platform::Test));
+            state.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+            let progress = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                    then.status(200)
+                        .json_body(serde_json::json!({"success":true,"current":null}));
+                })
+                .await;
+            let mut checkpoint = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                    if accepted {
+                        then.status(200)
+                            .json_body(serde_json::json!({"success":true,"current":null}));
+                    } else {
+                        then.status(500).json_body(serde_json::json!({
+                            "code": "INTERNAL_ERROR", "message": "Internal server error",
+                            "retryable": false, "internal": true
+                        }));
+                    }
+                })
+                .await;
+            let client = ManagerClient::new(&server.base_url());
+            let result = crate::setup_teardown::run_setup_teardown_after_handoff(
+                &mut state,
+                &mut deployment_config(),
+                &alien_core::ClientConfig::Test,
+                "deployment-1",
+                &crate::runner::RunnerPolicy {
+                    max_steps: 2,
+                    operation: crate::loop_contract::LoopOperation::Delete,
+                    delay_strategy: crate::runner::DelayStrategy::Inline,
+                },
+                &ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+                None,
+            )
+            .await
+            .map(|result| result.expect("teardown must run"));
+            let teardown = result.as_ref().expect("a finished teardown returns Ok");
+            assert_eq!(teardown.loop_result.stop_reason, LoopStopReason::Deleted);
+            assert_eq!(teardown.state_persisted, accepted);
+            assert!(progress.hits_async().await >= 1);
+            checkpoint.assert_hits_async(1).await;
+            checkpoint.delete_async().await;
+
+            let final_reconcile = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                    then.status(200)
+                        .json_body(serde_json::json!({"success":true,"current":null}));
+                })
+                .await;
+            let release = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/release");
+                    then.status(200);
+                })
+                .await;
+            let result =
+                finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+                    .await
+                    .expect("a completed teardown must succeed");
+            assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
+            final_reconcile
+                .assert_hits_async(usize::from(!accepted))
+                .await;
+            release.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_failure_remains_primary_when_terminal_release_fails() {
+        let server = MockServer::start_async().await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(409).body("attempt is no longer live");
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(500).body("release unavailable");
+            })
+            .await;
+        let state = failed_resource_state();
+        let error = finalize_step_loop(
+            &ManagerClient::new(&server.base_url()),
+            "deployment-1",
+            "session-1",
+            None,
+            &state,
+            terminal_result(&state),
+        )
+        .await
+        .expect_err("controller and release failures must be reported");
+        assert_eq!(error.code, "DEPLOYMENT_FAILED");
+        assert!(serde_json::to_string(&error)
+            .unwrap()
+            .contains("execution profile is missing"));
+        assert!(error
+            .context
+            .as_ref()
+            .unwrap()
+            .get("finalizationError")
+            .is_some());
+        assert!(error
+            .human_report()
+            .causes
+            .iter()
+            .any(|cause| cause.message.contains("release")));
+        reconcile.assert_hits_async(0).await;
+        release.assert_hits_async(1).await;
+    }
+
     #[tokio::test]
     async fn final_reconcile_releases_lease_after_reconcile_failure() {
         let server = MockServer::start_async().await;
@@ -990,6 +1604,58 @@ mod tests {
         assert!(statuses
             .iter()
             .any(|status| status == "provisioning-failed"));
+    }
+
+    #[tokio::test]
+    async fn explicit_acquire_mismatch_fails_without_retrying() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [],
+                    "notAcquired": [{
+                        "deploymentId": "deployment-1",
+                        "reason": "deploymentModelMismatch"
+                    }]
+                }));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+
+        let error = acquire_deployment(&client, "deployment-1", "session-1", DeploymentModel::Push)
+            .await
+            .expect_err("a permanent acquisition mismatch must fail immediately");
+
+        assert_eq!(error.code, "DEPLOYMENT_ACQUIRE_UNAVAILABLE");
+        assert!(!error.retryable);
+        assert!(error.message.contains("deploymentModelMismatch"));
+        acquire.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn contended_acquisition_reports_the_held_lease_after_bounded_wait() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [],
+                    "notAcquired": [{"deploymentId": "deployment-1", "reason": "contended"}]
+                }));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_deployment(&client, "deployment-1", "session-1", DeploymentModel::Push)
+            .await
+            .expect_err("a held lease must exhaust the bounded wait");
+        assert!(
+            error.message.contains("another operation still holds"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("did not acquire the lease"));
+        acquire.assert_hits_async(MAX_ACQUIRE_ATTEMPTS).await;
     }
 
     fn sample_heartbeat() -> ResourceHeartbeat {

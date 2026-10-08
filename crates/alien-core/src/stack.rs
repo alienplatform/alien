@@ -94,6 +94,11 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_container_image_resources: Vec<String>,
+    /// Operations this stack's deployments run: the plugins, their settings, and
+    /// which operations run without approval. Changing them takes a new release.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations: Option<crate::OperationsConfig>,
 }
 
 impl Stack {
@@ -323,6 +328,12 @@ impl StackBuilder {
     /// Sets stack input definitions.
     pub fn inputs(mut self, inputs: Vec<StackInputDefinition>) -> Self {
         self.inputs = inputs;
+        self
+    }
+
+    /// Declares the operations this stack's deployments run.
+    pub fn operations(mut self, operations: crate::OperationsConfig) -> Self {
+        self.operations = Some(operations);
         self
     }
 

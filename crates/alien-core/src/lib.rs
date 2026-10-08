@@ -6,6 +6,9 @@ mod stack_commands;
 mod stack_input;
 pub use stack_input::*;
 
+mod operations_config;
+pub use operations_config::*;
+
 mod deployer_secrets;
 pub use deployer_secrets::*;
 pub mod vault_naming;

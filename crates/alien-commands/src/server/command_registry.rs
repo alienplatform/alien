@@ -145,6 +145,29 @@ pub fn validate_command_name(command: &str) -> Result<()> {
 /// consulting the stack, since the operator is not a stack resource.
 pub const OPERATOR_COMMAND_TARGET_ID: &str = "operator";
 
+/// The reserved command-target id of a system-provisioned operations worker.
+///
+/// Unlike [`OPERATOR_COMMAND_TARGET_ID`], this is a real Worker in the
+/// deployment's stack, so it resolves like any other stack target and uses the
+/// Worker's push delivery. It runs operations, so the same access rules as the
+/// operator apply: only an operations capability may address it, and
+/// single-target shorthand never selects it.
+pub const OPERATIONS_WORKER_COMMAND_TARGET_ID: &str = "operations-worker";
+
+/// Whether `resource_id` names a reserved target that runs operations.
+pub fn is_operations_command_target(resource_id: &str) -> bool {
+    resource_id == OPERATOR_COMMAND_TARGET_ID || resource_id == OPERATIONS_WORKER_COMMAND_TARGET_ID
+}
+
+/// Whether `target` is a reserved operations target with its expected type:
+/// the operator is always a daemon, the operations worker always a Worker.
+pub fn is_operations_target(target: &CommandTarget) -> bool {
+    (target.resource_id == OPERATOR_COMMAND_TARGET_ID
+        && target.resource_type == CommandTargetType::Daemon)
+        || (target.resource_id == OPERATIONS_WORKER_COMMAND_TARGET_ID
+            && target.resource_type == CommandTargetType::Worker)
+}
+
 /// Target-selection rules shared by both the
 /// in-memory and SQLite registries route through.
 ///
@@ -155,9 +178,9 @@ pub const OPERATOR_COMMAND_TARGET_ID: &str = "operator";
 ///   target for the operator, independent of the stack.
 /// - `requested = None` (single-target shorthand): exactly one non-reserved
 ///   stack target must exist, else `COMMAND_TARGET_AMBIGUOUS` (more than one)
-///   or `NO_COMMAND_TARGETS` (none). A registered target named
-///   [`OPERATOR_COMMAND_TARGET_ID`] is excluded so shorthand can never address
-///   the operator.
+///   or `NO_COMMAND_TARGETS` (none). Reserved operations targets (see
+///   [`is_operations_command_target`]) are excluded so shorthand can never
+///   address them.
 ///
 /// The resolved target's own id is also validated, so a target registered with
 /// a `:`-bearing id can never resolve into the key grammar.
@@ -199,7 +222,7 @@ pub fn select_command_target(
         None => {
             let mut candidates = targets
                 .iter()
-                .filter(|target| target.resource_id != OPERATOR_COMMAND_TARGET_ID);
+                .filter(|target| !is_operations_command_target(&target.resource_id));
             let Some(single) = candidates.next() else {
                 return Err(AlienError::new(ErrorData::NoCommandTargets {
                     deployment_id: deployment_id.to_string(),
@@ -1007,6 +1030,48 @@ mod tests {
             delivery_mode_for(target.resource_type, CommandDeliveryMode::Push),
             CommandDeliveryMode::Pull
         );
+    }
+
+    #[test]
+    fn operations_worker_resolves_from_the_stack_as_a_push_worker() {
+        let targets = vec![CommandTarget::new(
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+            CommandTargetType::Worker,
+        )];
+        let target =
+            select_command_target("dep-1", &targets, Some(OPERATIONS_WORKER_COMMAND_TARGET_ID))
+                .unwrap();
+        assert!(is_operations_target(&target));
+        assert_eq!(
+            delivery_mode_for(target.resource_type, CommandDeliveryMode::Push),
+            CommandDeliveryMode::Push
+        );
+
+        // Without the worker in the stack, addressing it fails like any
+        // missing target instead of resolving to something else.
+        let err = select_command_target("dep-1", &[], Some(OPERATIONS_WORKER_COMMAND_TARGET_ID))
+            .unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+    }
+
+    #[test]
+    fn shorthand_never_selects_the_operations_worker() {
+        let only_worker = vec![CommandTarget::new(
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+            CommandTargetType::Worker,
+        )];
+        let err = select_command_target("dep-1", &only_worker, None).unwrap_err();
+        assert_eq!(err.code, "NO_COMMAND_TARGETS");
+
+        let with_app = vec![
+            CommandTarget::new(
+                OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                CommandTargetType::Worker,
+            ),
+            CommandTarget::new("api", CommandTargetType::Worker),
+        ];
+        let target = select_command_target("dep-1", &with_app, None).unwrap();
+        assert_eq!(target.resource_id, "api");
     }
 
     #[test]

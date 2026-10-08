@@ -8,6 +8,7 @@ import {
   StackSchema,
 } from "./generated/index.js"
 import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
+import { type OperationsInput, toOperationsConfig } from "./operations.js"
 import type { Resource } from "./resource.js"
 
 function isRepositoryName(repository: string): boolean {
@@ -127,6 +128,17 @@ export class Stack {
    */
   public inputs(inputs: StackInputCollection | readonly StackInputDefinition[]): this {
     this._config.inputs = getStackInputDefinitions(inputs)
+    return this
+  }
+
+  /**
+   * Declare the operations this stack's deployments run: built-in plugins by
+   * name with their settings and `approval` rules, and published custom
+   * plugins under `plugins`. Changing them takes a new release.
+   * @returns The Stack builder instance.
+   */
+  public operations(operations: OperationsInput): this {
+    this._config.operations = toOperationsConfig(operations)
     return this
   }
 
