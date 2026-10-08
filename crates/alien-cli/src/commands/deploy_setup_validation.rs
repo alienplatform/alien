@@ -26,8 +26,8 @@ pub(super) async fn validate_before_creation(
         "setupMethod": "cli",
         "stackSettings": deployment_stack_settings_json(resolved, args)?,
     });
-    if let Some(setup_item) = args.setup_item.as_ref() {
-        body["setupItem"] = serde_json::Value::String(setup_item.clone());
+    if let Some(setup_item) = args.setup_item {
+        body["setupItem"] = serde_json::Value::String(setup_item.api_name().to_string());
     }
     let response = client
         .post(api_url(

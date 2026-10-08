@@ -10,7 +10,10 @@ mod setup_update;
 use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
-use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
+use alien_cli_common::{
+    network::{self, NetworkArgs, NetworkMode},
+    SetupItem,
+};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     deployer_secret_value_refusal, is_deployer_secret_input, parse_public_endpoint_assignment,
@@ -106,9 +109,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Setup item captured by the deployment-group token.
-    #[arg(long = "setup-item")]
-    pub setup_item: Option<String>,
+    /// Setup item to install from the setup link (application, models, keys,
+    /// storage, registry or sandbox). Defaults to the link's only item.
+    #[arg(long = "setup-item", value_enum)]
+    pub setup_item: Option<SetupItem>,
 
     /// Encryption key for operator database (required for pull model)
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
@@ -2083,25 +2087,24 @@ machine = "m8i.xlarge"
         assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
+    /// `alien onboard` calls the application item `application`; the API calls it
+    /// `deployment`. Both spellings must select it, and the API name goes on the wire.
     #[test]
-    fn deploy_accepts_setup_item_selection() {
-        let args = UpArgs::parse_from([
-            "alien-deploy",
-            "--platform",
-            "aws",
-            "--setup-item",
-            "deployment",
-        ]);
-
-        assert_eq!(args.setup_item.as_deref(), Some("deployment"));
-    }
-
-    #[test]
-    fn deployment_info_url_includes_setup_item_selection() {
+    fn deployment_info_url_sends_the_api_name_for_the_onboard_name() {
+        for name in ["application", "deployment"] {
+            let args = UpArgs::parse_from([
+                "alien-deploy",
+                "--platform",
+                "aws",
+                "--setup-item",
+                name,
+            ]);
+            assert_eq!(args.setup_item, Some(SetupItem::Application), "{name}");
+        }
         let url = deployment_info_url(
             "https://api.example.test/",
             Platform::Aws,
-            Some("deployment"),
+            Some(SetupItem::Application),
         )
         .expect("deployment info URL should be valid");
         let query = url.query_pairs().collect::<HashMap<_, _>>();
@@ -2115,6 +2118,60 @@ machine = "m8i.xlarge"
             query.get("setupItem").map(|value| value.as_ref()),
             Some("deployment")
         );
+    }
+
+    fn info_with_setup_items(items: Option<&[&str]>) -> DeploymentInfoResponse {
+        serde_json::from_value(serde_json::json!({
+            "setupItems": items.map(|items| items
+                .iter()
+                .map(|item| serde_json::json!({"item": item, "status": "pending", "deploymentIds": []}))
+                .collect::<Vec<_>>()),
+        }))
+        .expect("deployment info should parse")
+    }
+
+    #[test]
+    fn a_single_item_link_needs_no_setup_item_flag() {
+        assert_eq!(
+            select_setup_item(None, &info_with_setup_items(Some(&["bucket"]))).unwrap(),
+            Some(SetupItem::Storage)
+        );
+        // Tokens and links without customer infrastructure send no item, as before.
+        assert_eq!(
+            select_setup_item(None, &info_with_setup_items(None)).unwrap(),
+            None
+        );
+        assert_eq!(
+            select_setup_item(None, &info_with_setup_items(Some(&[]))).unwrap(),
+            None
+        );
+        // An explicit choice wins.
+        assert_eq!(
+            select_setup_item(
+                Some(SetupItem::Models),
+                &info_with_setup_items(Some(&["deployment", "models"]))
+            )
+            .unwrap(),
+            Some(SetupItem::Models)
+        );
+    }
+
+    #[test]
+    fn a_multi_item_link_lists_the_names_the_flag_accepts() {
+        let error = select_setup_item(None, &info_with_setup_items(Some(&["deployment", "bucket"])))
+            .expect_err("several items need an explicit choice");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error
+                .message
+                .contains("This setup link includes application, storage. Choose one with --setup-item <application|storage>."),
+            "{}",
+            error.message
+        );
+
+        let error = select_setup_item(None, &info_with_setup_items(Some(&["future-item"])))
+            .expect_err("an item this CLI cannot name must not be guessed");
+        assert!(error.message.contains("'future-item'"), "{}", error.message);
     }
 
     fn stack_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
@@ -2524,27 +2581,29 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         return Ok(());
     }
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
-    let deployer_inputs = match fetch_deployment_info(
-        &resolved.base_url,
-        &token,
-        platform,
-        args.setup_item.as_deref(),
-    )
-    .await
-    {
-        Ok(info) => {
-            validate_deployment_readiness(&info, platform)?;
-            deployer_inputs_from_info(&info, platform)
-        }
-        Err(error) => {
-            if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
-                output::warn(&format!(
-                    "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
-                ));
+    let (deployer_inputs, setup_item) =
+        match fetch_deployment_info(&resolved.base_url, &token, platform, args.setup_item).await {
+            Ok(info) => {
+                let setup_item = select_setup_item(args.setup_item, &info)?;
+                // The link's only item was picked here: load that item's inputs and readiness.
+                let info = if setup_item == args.setup_item {
+                    info
+                } else {
+                    fetch_deployment_info(&resolved.base_url, &token, platform, setup_item)
+                        .await?
+                };
+                validate_deployment_readiness(&info, platform)?;
+                (deployer_inputs_from_info(&info, platform), setup_item)
             }
-            Vec::new()
-        }
-    };
+            Err(error) => {
+                if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
+                    output::warn(&format!(
+                        "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
+                    ));
+                }
+                (Vec::new(), args.setup_item)
+            }
+        };
     let stack_input_values = collect_deployer_input_values(
         &deployer_inputs,
         &args.input_values,
@@ -2638,7 +2697,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         &name,
         &stack_settings,
         stack_input_values,
-        args.setup_item.as_deref(),
+        setup_item,
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -3740,6 +3799,64 @@ fn load_stack_settings(
 struct DeploymentInfoResponse {
     setup_config: Option<DeploymentInfoSetupConfig>,
     readiness: Option<DeploymentReadiness>,
+    /// The items a deployment-group token's setup link includes. Absent for other tokens
+    /// and for links without customer infrastructure.
+    setup_items: Option<Vec<DeploymentInfoSetupItem>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoSetupItem {
+    /// The API's name for the item.
+    item: String,
+}
+
+/// The setup item to install: the one asked for, else the link's only item.
+///
+/// A link with several items needs an explicit choice, so this fails before anything is
+/// created and lists the names `--setup-item` accepts.
+fn select_setup_item(
+    requested: Option<SetupItem>,
+    info: &DeploymentInfoResponse,
+) -> Result<Option<SetupItem>> {
+    let items = match (requested, info.setup_items.as_deref()) {
+        (Some(item), _) => return Ok(Some(item)),
+        (None, None) | (None, Some([])) => return Ok(None),
+        (None, Some(items)) => items,
+    };
+    let items = items
+        .iter()
+        .map(|item| {
+            SetupItem::from_api_name(&item.item).ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "setup-item".to_string(),
+                    message: format!(
+                        "The setup link includes '{}', which this version of the CLI does not know. Update the CLI and try again.",
+                        item.item
+                    ),
+                })
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    match items.as_slice() {
+        [only] => Ok(Some(*only)),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "setup-item".to_string(),
+            message: format!(
+                "This setup link includes {}. Choose one with --setup-item <{}>.",
+                items
+                    .iter()
+                    .map(|item| item.cli_name())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                items
+                    .iter()
+                    .map(|item| item.cli_name())
+                    .collect::<Vec<_>>()
+                    .join("|"),
+            ),
+        })),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3767,7 +3884,7 @@ async fn fetch_deployment_info(
     base_url: &str,
     token: &str,
     platform: Platform,
-    setup_item: Option<&str>,
+    setup_item: Option<SetupItem>,
 ) -> Result<DeploymentInfoResponse> {
     let http_client = {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -3821,7 +3938,7 @@ async fn fetch_deployment_info(
 fn deployment_info_url(
     base_url: &str,
     platform: Platform,
-    setup_item: Option<&str>,
+    setup_item: Option<SetupItem>,
 ) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(&format!(
         "{}/v1/deployment-info",
@@ -3834,7 +3951,8 @@ fn deployment_info_url(
     url.query_pairs_mut()
         .append_pair("platform", platform.as_str());
     if let Some(setup_item) = setup_item {
-        url.query_pairs_mut().append_pair("setupItem", setup_item);
+        url.query_pairs_mut()
+            .append_pair("setupItem", setup_item.api_name());
     }
     Ok(url)
 }
@@ -4649,7 +4767,7 @@ async fn initialize_deployment(
     name: &str,
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
-    setup_item: Option<&str>,
+    setup_item: Option<SetupItem>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
@@ -4664,7 +4782,7 @@ async fn initialize_deployment(
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
-        setup_item: setup_item.map(ToString::to_string),
+        setup_item: setup_item.map(|item| item.api_name().to_string()),
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         input_values: input_values.into_iter().collect(),
         scope: None,
