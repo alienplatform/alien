@@ -262,6 +262,26 @@ pub enum ErrorData {
         blockers: String,
     },
 
+    /// The management identity lacks a grant that only rerunning the installation's setup adds.
+    ///
+    /// Not retryable: the grant cannot appear by itself. After setup grants it, an explicit
+    /// retry resumes the failed step.
+    #[error(
+        code = "MANAGEMENT_PERMISSION_MISSING",
+        message = "Cannot {operation} for resource '{resource_id}': the installation's management role is not allowed {action}. Rerun the installation's setup to grant it, then retry",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    ManagementPermissionMissing {
+        /// The resource whose step was denied
+        resource_id: String,
+        /// What the step was doing, such as "grow EBS volume vol-1"
+        operation: String,
+        /// The denied cloud action, such as "ec2:DescribeVolumesModifications"
+        action: String,
+    },
+
     /// A workload update was accepted, but its rollout was not confirmed before the wait ended.
     ///
     /// The accepted configuration stays desired downstream, so the rollout can still complete

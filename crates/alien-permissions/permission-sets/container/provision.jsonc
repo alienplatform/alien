@@ -569,6 +569,9 @@
         "grant": {
           "actions": [
             "ec2:DescribeVolumes",
+            // Growing a volume reads its latest modification first, so a retry never
+            // resends a resize that AWS already accepted.
+            "ec2:DescribeVolumesModifications",
             "ec2:DescribeSnapshots",
             "dlm:GetLifecyclePolicies",
             "elasticloadbalancing:DescribeLoadBalancers",

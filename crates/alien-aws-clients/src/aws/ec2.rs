@@ -582,6 +582,18 @@ impl Ec2Client {
                     resource_name: resource.into(),
                 }
             }
+            // DescribeVolumesModifications given the ID of a volume that was never
+            // modified. Asking with a `volume-id` filter returns an empty set instead.
+            "InvalidVolumeModification.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "VolumeModification".into(),
+                resource_name: resource.into(),
+            },
+            // ModifyVolume past the per-volume limit (four modifications in a rolling
+            // 24 hours). The message says when the next one is allowed. Keep the provider
+            // code: callers distinguish this from other quotas.
+            "VolumeModificationRateExceeded" => ErrorData::QuotaExceeded {
+                message: format!("{code}: {message}"),
+            },
             // ModifyVolume cannot start another change until the accepted one completes.
             // Keep the provider code: callers distinguish this wait from other conflicts.
             "IncorrectModificationState" => ErrorData::RemoteResourceConflict {
@@ -4821,6 +4833,74 @@ mod tests {
 
         assert_eq!(modify.hits_async().await, 4, "one send and three retries");
         assert_eq!(error.code, "RATE_LIMIT_EXCEEDED");
+    }
+
+    /// The body AWS returns when `VolumeId.N` names a volume that was never modified.
+    #[tokio::test]
+    async fn never_modified_volume_decodes_as_missing_modification() {
+        let server = MockServer::start_async().await;
+        let describe = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=DescribeVolumesModifications");
+                then.status(400).body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<Response><Errors><Error><Code>InvalidVolumeModification.NotFound</Code><Message>Modification for volume 'vol-1' does not exist.</Message></Error></Errors><RequestID>test</RequestID></Response>"#,
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .describe_volumes_modifications(
+                DescribeVolumesModificationsRequest::builder()
+                    .volume_ids(vec!["vol-1".to_string()])
+                    .build(),
+            )
+            .await
+            .expect_err("AWS has no modification for this volume");
+
+        assert!(
+            matches!(&error.error,
+                Some(ErrorData::RemoteResourceNotFound { resource_type, .. })
+                if resource_type == "VolumeModification"),
+            "{error:?}"
+        );
+        assert_eq!(describe.hits_async().await, 1);
+    }
+
+    /// The body AWS returns for a fifth modification within 24 hours. It is a
+    /// per-volume limit, not throttling, so it is not resent.
+    #[tokio::test]
+    async fn modification_rate_limit_is_a_quota_and_is_not_resent() {
+        let server = MockServer::start_async().await;
+        let modify = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=ModifyVolume");
+                then.status(400).body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<Response><Errors><Error><Code>VolumeModificationRateExceeded</Code><Message>You've reached the maximum modification rate per volume limit. Wait until 2026-10-09T18:11:57.403Z before you can issue the next modification request for this volume.</Message></Error></Errors><RequestID>test</RequestID></Response>"#,
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .modify_volume(
+                ModifyVolumeRequest::builder()
+                    .volume_id("vol-1".to_string())
+                    .size(20)
+                    .build(),
+            )
+            .await
+            .expect_err("AWS refuses the modification");
+
+        assert_eq!(modify.hits_async().await, 1);
+        assert!(
+            matches!(&error.error,
+                Some(ErrorData::QuotaExceeded { message })
+                if message.starts_with("VolumeModificationRateExceeded: ")
+                    && message.contains("Wait until 2026-10-09T18:11:57.403Z")),
+            "{error:?}"
+        );
     }
 
     fn client(server: &MockServer) -> Ec2Client {
