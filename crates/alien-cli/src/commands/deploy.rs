@@ -2067,6 +2067,15 @@ async fn deploy_task_with_environment(
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: "Setup acquisition did not return deploymentConfig".to_string(),
         }));
+    } else if let Some(input_values) = acquired_deployment.deployment.get("inputValues") {
+        // Standalone acquisition returns stored inputs on the record rather than
+        // a full config. Use that locked snapshot, including on resumes where
+        // the deployer does not repeat the original input flags.
+        config.input_values = serde_json::from_value(input_values.clone())
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stored deployment inputs".to_string(),
+            })?;
     }
     config.manager_url = Some(manager_ctx.manager_url.clone());
     config.deployment_token = Some(tracked_deployment.api_key.clone());
