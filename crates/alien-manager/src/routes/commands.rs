@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use alien_commands::server::command_registry::{CommandStatus, OPERATOR_COMMAND_TARGET_ID};
+use alien_commands::server::command_registry::{is_operations_command_target, CommandStatus};
 use alien_commands::server::{CommandPayloadResponse, StorePayloadRequest};
 use alien_commands::types::*;
 
@@ -28,7 +28,7 @@ async fn require_upload_complete_access(
     subject: &crate::auth::Subject,
     command: &CommandStatus,
 ) -> Result<(), Response> {
-    if command.target.resource_id == OPERATOR_COMMAND_TARGET_ID {
+    if is_operations_command_target(&command.target.resource_id) {
         return if crate::auth::command_capability::operator_upload_complete_allowed(
             subject, command,
         ) {
@@ -45,7 +45,7 @@ fn require_direct_payload_access(
     subject: &crate::auth::Subject,
     command: Option<&alien_commands::server::CommandAccessContext>,
 ) -> Result<(), &'static str> {
-    if command.is_some_and(|command| command.target.resource_id == OPERATOR_COMMAND_TARGET_ID) {
+    if command.is_some_and(|command| is_operations_command_target(&command.target.resource_id)) {
         return Err("Access denied");
     }
 
@@ -106,10 +106,10 @@ fn command_read_capability_decision(
         return Some(allowed);
     }
 
-    // Operator command responses require an exact status-read capability.
+    // Operations command responses require an exact status-read capability.
     // Broad user, API-key, and deployment credentials must not bypass the
     // caller's result policy by reading the manager directly.
-    (command.target.resource_id == OPERATOR_COMMAND_TARGET_ID).then_some(false)
+    is_operations_command_target(&command.target.resource_id).then_some(false)
 }
 
 async fn require_command_read_access(
@@ -117,7 +117,7 @@ async fn require_command_read_access(
     subject: &crate::auth::Subject,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
-    if command.target.resource_id == OPERATOR_COMMAND_TARGET_ID {
+    if is_operations_command_target(&command.target.resource_id) {
         return Err(ErrorData::forbidden("Access denied").into_response());
     }
 
@@ -162,7 +162,7 @@ async fn require_command_create_access(
         };
     }
 
-    if requested_target == Some(OPERATOR_COMMAND_TARGET_ID) {
+    if requested_target.is_some_and(is_operations_command_target) {
         return Err(ErrorData::forbidden("Access denied").into_response());
     }
 
@@ -688,6 +688,7 @@ async fn release_lease(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID;
     use alien_commands::test_utils::{
         test_storage_create_command, test_upload_complete_request, TestCommandServer,
     };

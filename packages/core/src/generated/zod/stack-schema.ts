@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { OperationsConfigSchema } from "./operations-config-schema.js";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
 import { ResourceEntrySchema } from "./resource-entry-schema.js";
@@ -18,6 +19,9 @@ export const StackSchema = z.object({
 "id": z.string().describe("Unique identifier for the stack"),
 get "inputs"(){
                 return z.array(StackInputDefinitionSchema.describe("Stack input definition serialized into a release stack.")).describe("Input definitions required before setup or deployment can proceed.").optional()
+              },
+get "operations"(){
+                return z.union([OperationsConfigSchema, z.null()]).optional()
               },
 get "permissions"(){
                 return PermissionsConfigSchema.describe("Combined permissions configuration that contains both profiles and management").optional()

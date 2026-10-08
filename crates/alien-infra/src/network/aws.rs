@@ -493,6 +493,7 @@ fn quota_consuming_eip_usage(response: DescribeAddressesResponse) -> Option<usiz
             .into_iter()
             .filter(|address| {
                 address.domain.as_deref() == Some("vpc")
+                    && address.service_managed.as_deref().is_none_or(str::is_empty)
                     && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
             })
             .count(),
@@ -564,12 +565,13 @@ mod tests {
     use std::sync::Arc;
 
     use alien_aws_clients::ec2::{
-        Address, AddressSet, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
+        Address, AddressSet, Ec2Api, Ec2Client, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
     };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
-    use alien_core::{Network, Platform};
+    use alien_aws_clients::AwsCredentialProvider;
+    use alien_core::{AwsClientConfig, AwsCredentials, Network, Platform};
 
     use super::*;
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
@@ -767,6 +769,71 @@ mod tests {
         ));
     }
 
+    /// Compare the real signed EC2 Query response with an independently counted
+    /// customer-owned usage supplied by the cloud test runner. Requires a test
+    /// account containing service-managed ALB addresses; performs only reads.
+    #[tokio::test]
+    #[ignore = "requires AWS test credentials and service-managed addresses"]
+    async fn live_eip_usage_matches_customer_owned_addresses() {
+        let expected: usize = std::env::var("ALIEN_TEST_EXPECTED_EIP_USAGE")
+            .expect("set independently measured customer-owned EIP usage")
+            .parse()
+            .expect("expected usage must be an integer");
+        let config = AwsClientConfig {
+            account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+            region: std::env::var("AWS_TARGET_REGION").unwrap(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let credentials = AwsCredentialProvider::from_config(config).await.unwrap();
+        let client = Ec2Client::new(reqwest::Client::new(), credentials);
+        let response = client.describe_addresses().await.unwrap();
+        let addresses = &response.addresses_set.as_ref().unwrap().items;
+        assert!(
+            addresses.iter().any(|address| {
+                address.domain.as_deref() == Some("vpc")
+                    && address
+                        .service_managed
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty())
+                    && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
+            }),
+            "test account must include a service-managed Amazon-pool VPC address"
+        );
+        assert!(
+            addresses.len() > expected,
+            "test account must include excluded addresses"
+        );
+        assert_eq!(quota_consuming_eip_usage(response), Some(expected));
+    }
+
+    #[test]
+    fn eip_usage_ignores_managed_addresses_but_counts_customer_nat_addresses() {
+        let response: DescribeAddressesResponse = serde_json::from_value(serde_json::json!({
+            "addressesSet": { "item": [
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "alb" },
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "future-service" },
+                { "domain": "vpc", "associationId": "eipassoc-nat", "networkInterfaceId": "eni-nat" },
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "" },
+                { "domain": "standard" },
+                { "domain": "vpc", "publicIpv4Pool": "ipv4pool-ec2-customer" }
+            ] }
+        })).unwrap();
+        let used = quota_consuming_eip_usage(response);
+        assert_eq!(used, Some(2));
+        assert_eq!(
+            assess_eip_quota(used, Some(5.0)),
+            EipQuotaPreflight::Available {
+                used: 2,
+                limit: 5.0
+            }
+        );
+    }
+
     #[test]
     fn eip_usage_excludes_byoip_addresses_from_the_vpc_quota() {
         let response = DescribeAddressesResponse {
@@ -779,6 +846,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: Some("amazon".to_string()),
+                        service_managed: None,
                         tag_set: None,
                     },
                     Address {
@@ -788,6 +856,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: None,
+                        service_managed: None,
                         tag_set: None,
                     },
                     Address {
@@ -797,6 +866,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                        service_managed: None,
                         tag_set: None,
                     },
                 ],
@@ -817,6 +887,7 @@ mod tests {
                     association_id: None,
                     network_interface_id: None,
                     public_ipv4_pool: None,
+                    service_managed: None,
                     tag_set: None,
                 }],
             }),
@@ -839,6 +910,7 @@ mod tests {
                             association_id: None,
                             network_interface_id: None,
                             public_ipv4_pool: Some("amazon".to_string()),
+                            service_managed: None,
                             tag_set: None,
                         },
                         Address {
@@ -848,6 +920,7 @@ mod tests {
                             association_id: None,
                             network_interface_id: None,
                             public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                            service_managed: None,
                             tag_set: None,
                         },
                     ],
@@ -985,6 +1058,10 @@ pub struct AwsNetworkController {
     /// step moves on, and by a manual retry.
     #[serde(default)]
     pub(crate) wait_for_delete_dependencies_iterations: u32,
+    /// Complete cleanup passes over children retained after a denied deletion. Manual retry
+    /// resets this separately from the per-child dependency waits.
+    #[serde(default)]
+    pub(crate) wait_for_retained_delete_iterations: u32,
 }
 
 /// Where creating one subnet got to.
@@ -5068,6 +5145,39 @@ impl AwsNetworkController {
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Network>()?;
 
+        // Older checkpoints can arrive here with children skipped after AccessDenied.
+        // Revisit them before deleting their parent, including on manual retry from this state.
+        let retained = self
+            .nat_gateway_id
+            .iter()
+            .chain(self.eip_allocation_id.iter())
+            .chain(self.extra_eip_allocation_ids.iter())
+            .chain(self.security_group_id.iter())
+            .chain(self.public_subnet_ids.iter())
+            .chain(self.private_subnet_ids.iter())
+            .chain(self.public_route_table_id.iter())
+            .chain(self.private_route_table_id.iter())
+            .chain(self.route_table_association_ids.iter())
+            .chain(self.internet_gateway_id.iter())
+            .chain(self.extra_internet_gateway_ids.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        if !retained.is_empty() {
+            self.wait_for_retained_delete_iterations += 1;
+            if self.wait_for_retained_delete_iterations >= DEPENDENCY_DRAIN_MAX_POLLS {
+                return Err(AlienError::new(ErrorData::ResourceDeleteBlocked {
+                    resource_id: config.id.clone(),
+                    object: format!("VPC '{}'", self.vpc_id.as_deref().unwrap_or("unknown")),
+                    blockers: format!("Network children still require deletion: {}. Restore their delete permissions and retry", retained.join(", ")),
+                }));
+            }
+            return Ok(HandlerAction::Continue {
+                state: DeletingNatGateway,
+                suggested_delay: Some(Duration::from_secs(15)),
+            });
+        }
+        self.wait_for_retained_delete_iterations = 0;
+
         if !self.delete_extra_vpcs(ctx, &config.id).await? {
             return Ok(HandlerAction::Stay {
                 max_times: Some(DEPENDENCY_DRAIN_MAX_POLLS),
@@ -5137,11 +5247,13 @@ impl AwsNetworkController {
                     "ec2:DeleteVpc",
                     error,
                 )?;
-                self.wait_for_delete_dependencies_iterations = 0;
-                return Ok(HandlerAction::Continue {
-                    state: Deleted,
-                    suggested_delay: None,
-                });
+                // A raw access-denied cause would make the executor mark the entire network
+                // deleted. Surface the retained parent as a domain failure instead.
+                return Err(AlienError::new(ErrorData::ResourceDeleteBlocked {
+                    resource_id: config.id.clone(),
+                    object: format!("VPC '{vpc_id}'"),
+                    blockers: "ec2:DeleteVpc was denied for a VPC that could not be proved absent; restore permissions and retry".into(),
+                }));
             }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
@@ -5234,6 +5346,7 @@ impl AwsNetworkController {
             extra_internet_gateway_ids: Vec::new(),
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
+            wait_for_retained_delete_iterations: 0,
             _internal_stay_count: None,
         }
     }
@@ -5284,6 +5397,7 @@ impl AwsNetworkController {
             extra_internet_gateway_ids: Vec::new(),
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
+            wait_for_retained_delete_iterations: 0,
             _internal_stay_count: None,
         }
     }
@@ -7680,7 +7794,7 @@ mod controller_state_tests {
     /// In a teardown, access denied on one object must not end the whole delete as "already
     /// gone": every later object is still deleted. Each denied object is logged and its ID kept.
     #[tokio::test]
-    async fn teardown_with_every_delete_denied_still_tries_every_object() {
+    async fn teardown_with_every_child_delete_denied_still_tries_remaining_children() {
         let mut ec2 = MockEc2Api::new();
         ec2.expect_delete_nat_gateway()
             .times(1)
@@ -7712,9 +7826,7 @@ mod controller_state_tests {
             .times(1)
             .returning(|_| Err(denied()));
         ec2.expect_delete_internet_gateway().times(0);
-        ec2.expect_delete_vpc()
-            .times(1)
-            .returning(|_| Err(denied()));
+        ec2.expect_delete_vpc().times(0);
 
         let mut executor = executor(
             ec2,
@@ -7723,12 +7835,138 @@ mod controller_state_tests {
         )
         .await;
         executor.delete().expect("teardown");
-        executor.run_until_terminal().await.expect("teardown runs");
-        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        for _ in 0..20 {
+            if controller(&executor).state == AwsNetworkState::DeletingVpc {
+                break;
+            }
+            executor.step().await.expect("attempt remaining children");
+        }
+        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingVpc);
+        executor
+            .step()
+            .await
+            .expect("retained children are revisited");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingNatGateway
+        );
+        assert_ne!(executor.status(), ResourceStatus::Deleted);
         let state = controller(&executor);
         assert_eq!(state.nat_gateway_id.as_deref(), Some("nat-1"));
         assert_eq!(state.vpc_id.as_deref(), Some("vpc-1"));
         assert_eq!(state.public_subnet_ids, ["subnet-a"]);
+    }
+
+    #[tokio::test]
+    async fn teardown_revisits_a_denied_child_after_permission_recovery() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_route_tables().returning(|_| Ok(parse(json!({}))));
+        ec2.expect_delete_security_group()
+            .times(2)
+            .returning(move |_| {
+                if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(denied())
+                } else {
+                    Ok(())
+                }
+            });
+        ec2.expect_describe_security_groups()
+            .times(1)
+            .returning(|_| {
+                Ok(parse(json!({
+                    "securityGroupInfo": { "item": [{ "groupId": "sg-retained" }] }
+                })))
+            });
+        ec2.expect_delete_subnet().times(1).returning(|_| Ok(()));
+        let before_parent = calls.clone();
+        ec2.expect_delete_vpc().times(1).returning(move |_| {
+            assert_eq!(
+                before_parent.load(Ordering::SeqCst),
+                2,
+                "parent must wait for retained child cleanup"
+            );
+            Ok(())
+        });
+        let saved = serde_json::to_value(AwsNetworkController {
+            state: AwsNetworkState::Ready,
+            vpc_id: Some("vpc-1".into()),
+            security_group_id: Some("sg-retained".into()),
+            public_subnet_ids: vec!["subnet-a".into()],
+            ..Default::default()
+        })
+        .unwrap();
+        let mut executor = executor(
+            ec2,
+            serde_json::from_value(saved).unwrap(),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("permission recovery must complete deletion");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(controller(&executor).security_group_id.is_none());
+        assert!(controller(&executor).public_subnet_ids.is_empty());
+        assert!(controller(&executor).vpc_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn retained_child_wait_is_bounded_and_manual_retry_resets_it() {
+        let ec2 = MockEc2Api::new();
+        let mut saved = serde_json::to_value(AwsNetworkController {
+            state: AwsNetworkState::DeletingVpc,
+            vpc_id: Some("vpc-1".into()),
+            security_group_id: Some("sg-retained".into()),
+            wait_for_retained_delete_iterations: DEPENDENCY_DRAIN_MAX_POLLS - 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut executor = executor(
+            ec2,
+            serde_json::from_value(saved.clone()).unwrap(),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let error = executor
+            .step()
+            .await
+            .expect_err("retained child cannot wait indefinitely");
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED");
+        assert!(error.message.contains("sg-retained"));
+        assert!(controller(&executor).security_group_id.is_some());
+        let mut restored: AwsNetworkController = serde_json::from_value(saved.clone()).unwrap();
+        restored.reset_stay_count();
+        assert_eq!(restored.wait_for_retained_delete_iterations, 0);
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("waitForRetainedDeleteIterations");
+        let old: AwsNetworkController = serde_json::from_value(saved).unwrap();
+        assert_eq!(old.wait_for_retained_delete_iterations, 0);
+    }
+
+    #[tokio::test]
+    async fn old_parent_delete_checkpoint_resumes_retained_child_cleanup() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
+        ec2.expect_delete_vpc().times(1).returning(|_| Ok(()));
+        let mut saved = serde_json::to_value(AwsNetworkController {
+            state: AwsNetworkState::DeletingVpc, vpc_id: Some("vpc-1".into()),
+            security_group_id: Some("sg-retained".into()), ..Default::default()
+        }).unwrap();
+        saved.as_object_mut().unwrap().remove("waitForRetainedDeleteIterations");
+        let mut executor = executor(ec2, serde_json::from_value(saved).unwrap(), Some("10.0.0.0/16")).await;
+        executor.step().await.expect("old failed parent resumes cleanup");
+        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingNatGateway);
+        executor.run_until_terminal().await.expect("retained child and parent deleted");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(controller(&executor).security_group_id.is_none());
+        assert!(controller(&executor).vpc_id.is_none());
     }
 
     /// In a replace (the network is still desired) access denied is returned, naming the object

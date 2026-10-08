@@ -2,6 +2,7 @@
 //! These checks run during stack updates to prevent breaking changes.
 
 pub mod frozen_resources_unchanged;
+pub mod narrowing;
 pub mod permission_profiles_unchanged;
 pub mod sandbox_setup_inputs_unchanged;
 

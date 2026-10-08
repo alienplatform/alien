@@ -168,6 +168,7 @@ fn metadata_json(name: &str) -> Result<String> {
             (Arch::Arm64, format!("{name}-linux-arm64")),
         ]
         .into(),
+        settings: Default::default(),
         operations: vec![
             OperationDefinition::<ScaffoldHealthParams, ScaffoldHealthOutput>::new(
                 "health",
@@ -266,6 +267,7 @@ pub fn plugin_manifest() -> Result<CanonicalPluginManifest> {{
             (Arch::Amd64, "{name}-linux-amd64".to_string()),
             (Arch::Arm64, "{name}-linux-arm64".to_string()),
         ]),
+        settings: BTreeMap::new(),
         operations: operations.manifests(),
     }};
     manifest.validate()?;

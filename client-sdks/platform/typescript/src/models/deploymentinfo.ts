@@ -1353,6 +1353,10 @@ export type ResourceCounts = {
 
 export type PublicEndpoint = {
   resourceId: string;
+  /**
+   * Type of the resource that declares the endpoint, e.g. container or worker
+   */
+  resourceType: string;
   endpointName: string;
   hostLabel: string;
   wildcardSubdomains: boolean;
@@ -4031,6 +4035,7 @@ export function resourceCountsFromJSON(
 export const PublicEndpoint$inboundSchema: z.ZodType<PublicEndpoint, unknown> =
   z.object({
     resourceId: z.string(),
+    resourceType: z.string(),
     endpointName: z.string(),
     hostLabel: z.string(),
     wildcardSubdomains: z.boolean(),

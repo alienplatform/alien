@@ -1,3 +1,4 @@
+use crate::compatibility::narrowing::service_account_narrowed;
 use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::is_same_architecture_aws_machine;
@@ -274,6 +275,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     )
+                    && !service_account_narrowed(new_stack, &old_entry.config, &new_entry.config)
                     && !unchanged_legacy_service_account_grants(
                         self.platform,
                         old_stack,
@@ -332,6 +334,33 @@ mod tests {
             .permissions(PermissionsConfig::new().with_profile("reader", profile))
             .add(account, ResourceLifecycle::Frozen)
             .build()
+    }
+
+    /// Dropping an account's last resource-scoped grant narrows it, while
+    /// dropping only the capture of grants its profile still holds is the
+    /// legacy format and still needs setup.
+    #[tokio::test]
+    async fn losing_the_last_resource_grant_is_narrowing() {
+        let with_grant = PermissionProfile::new().resource("objects", ["storage/data-read"]);
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+        let removed = check
+            .check(
+                &account_stack(with_grant.clone(), true),
+                &account_stack(PermissionProfile::new(), true),
+            )
+            .await
+            .unwrap();
+        assert!(removed.success, "{:?}", removed.errors);
+        let uncaptured = check
+            .check(
+                &account_stack(with_grant.clone(), true),
+                &account_stack(with_grant, false),
+            )
+            .await
+            .unwrap();
+        assert!(!uncaptured.success);
     }
 
     #[tokio::test]
@@ -448,6 +477,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -458,6 +488,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -515,6 +546,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -525,6 +557,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -578,6 +611,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -588,6 +622,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -636,6 +671,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -646,6 +682,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -684,6 +721,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: old_resources,
             permissions: PermissionsConfig::new(),
@@ -694,6 +732,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: new_resources,
             permissions: PermissionsConfig::new(),
@@ -725,6 +764,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig::new(),
@@ -808,6 +848,47 @@ mod tests {
         .unwrap();
         assert!(!result.success);
         assert!(!result.errors.is_empty());
+    }
+
+    /// A frozen service account that only lost permission sets keeps its
+    /// installed role until setup; one that gained any still needs setup.
+    #[tokio::test]
+    async fn a_service_account_may_lose_but_not_gain_permissions() {
+        let account = |sets: &[&str]| {
+            let profile = alien_core::PermissionProfile::new().global(sets.iter().copied());
+            alien_core::ServiceAccount::from_permission_profile(
+                "worker-sa".to_string(),
+                &profile,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .expect("service account")
+        };
+        let stack = |sets: &[&str]| {
+            Stack::new("s".to_string())
+                .add(account(sets), ResourceLifecycle::Frozen)
+                .build()
+        };
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        };
+
+        let narrowed = check
+            .check(
+                &stack(&["storage/data-read", "storage/data-write"]),
+                &stack(&["storage/data-read"]),
+            )
+            .await
+            .expect("check should run");
+        assert!(narrowed.success, "{:?}", narrowed.errors);
+
+        let widened = check
+            .check(
+                &stack(&["storage/data-read"]),
+                &stack(&["storage/data-read", "storage/data-write"]),
+            )
+            .await
+            .expect("check should run");
+        assert!(!widened.success);
     }
 
     #[tokio::test]

@@ -1144,6 +1144,7 @@ mod tests {
 
     fn deployment_record() -> DeploymentRecord {
         DeploymentRecord {
+            supplied_stacks: None,
             id: "deployment-1".to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),

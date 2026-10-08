@@ -116,6 +116,10 @@ pub struct OperatorConfig {
     /// Stack settings for deployment customization.
     pub stack_settings: Option<StackSettings>,
 
+    /// Operations declared through `OPERATOR_OPERATIONS`, for an Operator
+    /// installed without a release.
+    pub operations: Option<alien_core::OperationsConfig>,
+
     /// Accept tunnel requests from the manager for the stack's declared
     /// tunnel endpoints. The operator dials only when the manager advertises
     /// a tunnel URL and the stack declares at least one endpoint.

@@ -483,16 +483,24 @@ impl DeploymentLoop {
             })?;
 
         let system = crate::auth::Subject::system();
-        let release = self
-            .release_store
-            .get_release(&system, target_release_id)
-            .await?
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: format!("Release {} not found", target_release_id),
-                })
-            })?;
-        let deployment_stack = release.stacks.get(&deployment.platform).cloned();
+        // A control plane that supplies stacks may have added resources to
+        // the release's stack for this deployment; deploy what it supplied.
+        let (supplied_target, supplied_current) = supplied_release_stacks(&deployment);
+        let deployment_stack = match supplied_target {
+            Some(stack) => Some(stack),
+            None => {
+                let release = self
+                    .release_store
+                    .get_release(&system, target_release_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AlienError::new(GenericError {
+                            message: format!("Release {} not found", target_release_id),
+                        })
+                    })?;
+                release.stacks.get(&deployment.platform).cloned()
+            }
+        };
 
         let recorded_state = state_from_record(
             &deployment,
@@ -619,15 +627,23 @@ impl DeploymentLoop {
         // target, and carrying the target's stack here would make anything
         // that asks "what is deployed now?" compare the target against itself.
         // The pull path hydrates it the same way.
-        let current_release = match deployment.current_release_id.as_ref() {
-            None => None,
-            Some(id) if id == target_release_id => Some(ReleaseInfo {
+        // A supplied current stack can differ from the target even for the
+        // same release, when only the control plane's additions change.
+        let current_release = match (deployment.current_release_id.as_ref(), supplied_current) {
+            (None, _) => None,
+            (Some(id), Some(stack)) => Some(ReleaseInfo {
+                release_id: Some(id.clone()),
+                version: None,
+                description: None,
+                stack,
+            }),
+            (Some(id), None) if id == target_release_id => Some(ReleaseInfo {
                 release_id: Some(id.clone()),
                 version: None,
                 description: None,
                 stack: deployment_stack.clone(),
             }),
-            Some(id) => self
+            (Some(id), None) => self
                 .settled_stack(&system, &deployment_id, id, deployment.platform)
                 .await?
                 .map(|stack| ReleaseInfo {
@@ -865,6 +881,7 @@ impl DeploymentLoop {
             Ok(RunnerResult {
                 loop_result,
                 steps_executed,
+                ..
             }) => {
                 info!(
                     deployment_id = %deployment_id,
@@ -1196,6 +1213,21 @@ fn state_from_record(
 // active statuses, local bindings caching). Loop contract correctness is tested
 // in alien-deployment::loop_contract — not duplicated here.
 
+/// The stacks a control plane supplied for this step: the target (the
+/// desired release, or the current one when nothing is desired) and the
+/// installed current stack. `None` means read the release instead.
+fn supplied_release_stacks(deployment: &DeploymentRecord) -> (Option<Stack>, Option<Stack>) {
+    let Some(stacks) = deployment.supplied_stacks.as_ref() else {
+        return (None, None);
+    };
+    let target = if deployment.desired_release_id.is_some() {
+        stacks.desired.clone()
+    } else {
+        stacks.current.clone()
+    };
+    (target, stacks.current.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1203,7 +1235,7 @@ mod tests {
         gcp_credential_handoff_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff, with_environment_snapshot,
+        should_wait_for_credential_handoff, supplied_release_stacks, with_environment_snapshot,
         worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
@@ -1224,13 +1256,14 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::error::ErrorData;
-    use crate::traits::deployment_store::DeploymentRecord;
+    use crate::traits::deployment_store::{DeploymentRecord, SuppliedStacks};
 
     fn deployment_record(
         status: DeploymentStatus,
         stack_state: Option<StackState>,
     ) -> DeploymentRecord {
         DeploymentRecord {
+            supplied_stacks: None,
             id: "dep_test".to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),
@@ -1656,6 +1689,82 @@ mod tests {
                 let _ = (deploy_result, delete_result);
             }
         }
+    }
+
+    fn stack_with_workers(worker_ids: &[&str]) -> Stack {
+        worker_ids
+            .iter()
+            .fold(Stack::new("supplied".to_string()), |stack, id| {
+                stack.add(
+                    Worker::new((*id).to_string())
+                        .code(WorkerCode::Image {
+                            image: "worker:latest".to_string(),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+            })
+            .build()
+    }
+
+    fn resource_ids(stack: &Stack) -> Vec<String> {
+        let mut ids: Vec<String> = stack.resources().map(|(id, _)| id.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn supplied_stacks_can_add_resources_within_one_release() {
+        // Same release installed and desired; the control plane adds a
+        // resource to the target only. Both stacks must be kept apart so the
+        // update creates the new resource.
+        let installed = stack_with_workers(&["app"]);
+        let desired = stack_with_workers(&["app", "extra"]);
+        let mut record = deployment_record(DeploymentStatus::UpdatePending, None);
+        record.current_release_id = Some("rel_test".to_string());
+        record.supplied_stacks = Some(SuppliedStacks {
+            current: Some(installed.clone()),
+            desired: Some(desired.clone()),
+        });
+
+        let (target, current) = supplied_release_stacks(&record);
+
+        assert_eq!(
+            resource_ids(&target.expect("target supplied")),
+            vec!["app", "extra"]
+        );
+        assert_eq!(
+            resource_ids(&current.expect("current supplied")),
+            vec!["app"]
+        );
+    }
+
+    #[test]
+    fn supplied_current_stack_is_the_target_when_nothing_is_desired() {
+        let installed = stack_with_workers(&["app", "extra"]);
+        let mut record = deployment_record(DeploymentStatus::Running, None);
+        record.current_release_id = Some("rel_test".to_string());
+        record.desired_release_id = None;
+        record.supplied_stacks = Some(SuppliedStacks {
+            current: Some(installed.clone()),
+            desired: None,
+        });
+
+        let (target, _) = supplied_release_stacks(&record);
+
+        assert_eq!(
+            resource_ids(&target.expect("current used as target")),
+            vec!["app", "extra"]
+        );
+    }
+
+    #[test]
+    fn records_without_supplied_stacks_read_the_release() {
+        let record = deployment_record(DeploymentStatus::UpdatePending, None);
+        let (target, current) = supplied_release_stacks(&record);
+        assert!(target.is_none());
+        assert!(current.is_none());
     }
 
     #[tokio::test]

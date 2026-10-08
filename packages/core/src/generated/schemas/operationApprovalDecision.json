@@ -1,0 +1,1 @@
+{"type":"string","description":"Whether matching operations run without approval.","enum":["auto","manual"],"x-readme-ref-name":"OperationApprovalDecision"}

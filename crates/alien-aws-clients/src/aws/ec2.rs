@@ -582,6 +582,13 @@ impl Ec2Client {
                     resource_name: resource.into(),
                 }
             }
+            // ModifyVolume cannot start another change until the accepted one completes.
+            // Keep the provider code: callers distinguish this wait from other conflicts.
+            "IncorrectModificationState" => ErrorData::RemoteResourceConflict {
+                message: format!("{code}: {message}"),
+                resource_type: "Volume".into(),
+                resource_name: resource.into(),
+            },
             // Conflict / already exists errors
             "VpcLimitExceeded"
             | "SubnetLimitExceeded"
@@ -1817,8 +1824,15 @@ impl Ec2Api for Ec2Client {
 
     async fn modify_volume(&self, request: ModifyVolumeRequest) -> Result<ModifyVolumeResponse> {
         let form_data = Self::modify_volume_form_data(&request);
-        self.send_form(form_data, "ModifyVolume", &request.volume_id)
-            .await
+        // ModifyVolume has no idempotency token. After an ambiguous response, the
+        // controller must inspect the accepted modification before issuing another.
+        self.send_form_with(
+            Attempts::ThrottlingOnly,
+            form_data,
+            "ModifyVolume",
+            &request.volume_id,
+        )
+        .await
     }
 
     async fn describe_volumes_modifications(
@@ -2888,6 +2902,9 @@ pub struct Address {
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
+    /// AWS service managing this address. Service-managed addresses do not
+    /// consume the customer's EC2-VPC Elastic IP allocation quota.
+    pub service_managed: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
 }
@@ -4666,7 +4683,7 @@ mod volume_operation_tests {
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
                     <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><associationId>eipassoc-1</associationId><networkInterfaceId>eni-1</networkInterfaceId><publicIpv4Pool>amazon</publicIpv4Pool></item>
-                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
+                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain><serviceManaged>alb</serviceManaged></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
             </DescribeAddressesResponse>"#,
@@ -4700,6 +4717,8 @@ mod volume_operation_tests {
             addresses.items[0].network_interface_id.as_deref(),
             Some("eni-1")
         );
+        assert_eq!(addresses.items[1].service_managed.as_deref(), Some("alb"));
+        assert_eq!(addresses.items[0].service_managed, None);
         assert_eq!(addresses.items[1].association_id, None);
         assert_eq!(addresses.items[1].network_interface_id, None);
     }
@@ -4723,6 +4742,86 @@ mod tests {
     use crate::ServiceOverrides;
     use alien_core::{AwsClientConfig, AwsCredentials};
     use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn modify_volume_decodes_in_progress_conflict_from_aws_http_response() {
+        let server = MockServer::start();
+        let response = server.mock(|when, then| {
+            when.method(POST).body_contains("Action=ModifyVolume");
+            then.status(400).body(
+                r#"<Response><Errors><Error>
+                <Code>IncorrectModificationState</Code>
+                <Message>Volume cannot be modified in modification state OPTIMIZING</Message>
+                </Error></Errors><RequestID>test</RequestID></Response>"#,
+            );
+        });
+        let error = client(&server)
+            .modify_volume(
+                ModifyVolumeRequest::builder()
+                    .volume_id("vol-1".to_string())
+                    .size(20)
+                    .build(),
+            )
+            .await
+            .expect_err("the accepted modification is still active");
+        assert!(matches!(error.error,
+            Some(ErrorData::RemoteResourceConflict { message, resource_type, resource_name })
+            if message.contains("IncorrectModificationState") && resource_type == "Volume" && resource_name == "vol-1"
+        ));
+        response.assert_hits(1);
+    }
+
+    #[tokio::test]
+    async fn modify_volume_does_not_resend_an_ambiguous_failure() {
+        let server = MockServer::start_async().await;
+        let modify = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=ModifyVolume");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .modify_volume(
+                ModifyVolumeRequest::builder()
+                    .volume_id("vol-1".to_string())
+                    .size(20)
+                    .build(),
+            )
+            .await
+            .expect_err("inspect the volume before sending another resize");
+
+        assert_eq!(modify.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+    }
+
+    #[tokio::test]
+    async fn modify_volume_retries_an_explicit_throttling_response() {
+        let server = MockServer::start_async().await;
+        let modify = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=ModifyVolume");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>RequestLimitExceeded</Code><Message>Request limit exceeded.</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .modify_volume(
+                ModifyVolumeRequest::builder()
+                    .volume_id("vol-1".to_string())
+                    .size(20)
+                    .build(),
+            )
+            .await
+            .expect_err("AWS still rejects the resize before accepting it");
+
+        assert_eq!(modify.hits_async().await, 4, "one send and three retries");
+        assert_eq!(error.code, "RATE_LIMIT_EXCEEDED");
+    }
 
     fn client(server: &MockServer) -> Ec2Client {
         let config = AwsClientConfig {

@@ -1247,6 +1247,7 @@ impl SingleControllerExecutorBuilder {
             inputs: vec![],
             dynamic_container_repositories: vec![],
             dynamic_container_image_resources: vec![],
+            operations: None,
         };
 
         // Set resource prefix in stack state

@@ -17,7 +17,7 @@ use alien_infra::StackResourceStateExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
@@ -848,15 +848,26 @@ pub async fn sync_secrets_to_vault(
     // exception: it is a reserved, control-plane-owned key that pre-v2 sync wrote without an
     // ownership inventory. The sync-schema hash forces one idempotent cleanup after upgrade.
     // Never list or infer any other ownership from the shared vault.
+    //
+    // A delete the cloud denies is let go rather than failing the update: setup
+    // revokes the management role's vault access once no workload reads the
+    // vault, and the customer may run it before this update. The value stays
+    // in the customer's account, read by nothing.
     for name in &removed_secret_names {
-        vault
-            .delete_secret(name)
-            .await
-            .context(ErrorData::SecretSyncFailed {
-                vault_name: "secrets".to_string(),
-                reason: format!("Failed to delete removed secret '{name}'"),
-            })?;
-        debug!("Deleted removed deployment-owned secret '{name}' from vault");
+        match vault.delete_secret(name).await {
+            Ok(()) => debug!("Deleted removed deployment-owned secret '{name}' from vault"),
+            Err(error) if is_access_denied(&error) => warn!(
+                secret = %name,
+                error = %error,
+                "Management role can no longer delete a removed secret; leaving it in place"
+            ),
+            Err(error) => {
+                return Err(error).context(ErrorData::SecretSyncFailed {
+                    vault_name: "secrets".to_string(),
+                    reason: format!("Failed to delete removed secret '{name}'"),
+                })
+            }
+        }
     }
 
     // Record ownership only after every mutation succeeds. A partial failure
@@ -1091,6 +1102,27 @@ pub async fn delete_deployment_vault_secrets(
         "Deleted deployment-owned vault secrets"
     );
     Ok(true)
+}
+
+/// Whether an error, or any error it wraps, is the cloud refusing access.
+fn is_access_denied<T>(error: &AlienError<T>) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let denied = |code: &str, status: Option<u16>| {
+        code == "REMOTE_ACCESS_DENIED" || status == Some(403)
+    };
+    if denied(&error.code, error.http_status_code) {
+        return true;
+    }
+    let mut source = error.source.as_deref();
+    while let Some(error) = source {
+        if denied(&error.code, error.http_status_code) {
+            return true;
+        }
+        source = error.source.as_deref();
+    }
+    false
 }
 
 fn has_secrets_vault(stack_state: &StackState) -> bool {
@@ -1656,7 +1688,24 @@ mod tests {
             inputs: Vec::new(),
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
         }
+    }
+
+    /// A prepared stack: preflights add the `secrets` vault whenever a
+    /// workload reads secrets from it.
+    fn with_secrets_vault(mut stack: Stack) -> Stack {
+        stack.resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            ResourceEntry {
+                config: Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
     }
 
     fn make_worker_resource_state(id: &str, error: Option<AlienError>) -> StackResourceState {
@@ -2316,6 +2365,30 @@ mod tests {
         assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
     }
 
+    /// The AWS SSM vault reports a denied delete as a cloud-platform error
+    /// wrapping the denial. Only that lets a removed secret go; any other
+    /// failure still fails the sync.
+    #[test]
+    fn a_denied_delete_is_recognised_through_the_error_chain() {
+        let mut denied = AlienError::new(GenericError {
+            message: "Request failed with HTTP 400: Bad Request".to_string(),
+        });
+        denied.code = "REMOTE_ACCESS_DENIED".to_string();
+        let mut wrapped = AlienError::new(GenericError {
+            message: "Failed to delete parameter".to_string(),
+        });
+        wrapped.code = "CLOUD_PLATFORM_ERROR".to_string();
+        wrapped.source = Some(Box::new(denied));
+        assert!(is_access_denied(&wrapped));
+
+        let mut throttled = AlienError::new(GenericError {
+            message: "Rate exceeded".to_string(),
+        });
+        throttled.code = "CLOUD_PLATFORM_ERROR".to_string();
+        throttled.http_status_code = Some(429);
+        assert!(!is_access_denied(&throttled));
+    }
+
     #[tokio::test]
     async fn vault_sync_removes_stale_owned_values_and_preserves_unrelated_values() {
         let temp = tempfile::TempDir::new().expect("temp dir");
@@ -2363,7 +2436,7 @@ mod tests {
         first.environment_variables.hash = "first".to_string();
         first.monitoring = Some(make_monitoring_with_metrics());
         let mut metadata = RuntimeMetadata::default();
-        let stack = make_single_function_stack("worker");
+        let stack = with_secrets_vault(make_single_function_stack("worker"));
         // This is the real pre-inventory upgrade case: the old hash exists, but there is no list
         // of owned names. The reserved token still has to be deleted from the shared vault.
         metadata.last_synced_env_vars_hash = Some("legacy".to_string());

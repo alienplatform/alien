@@ -90,6 +90,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listProjects",
     "listReleaseChannels",
     "listReleases",
+    "moveDeployment",
     "pinDeploymentRelease",
     "promoteRelease",
     "redeployDeployment",

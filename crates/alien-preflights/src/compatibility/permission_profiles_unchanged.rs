@@ -1,3 +1,4 @@
+use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
 use crate::error::Result;
 use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXES;
 use crate::{CheckResult, StackCompatibilityCheck};
@@ -7,6 +8,9 @@ use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
+///
+/// Removing grants is allowed: the installed identities stay broader than the
+/// new stack until the next setup (see [`crate::compatibility::narrowing`]).
 ///
 /// Permission profiles define the security model of the stack and changing them
 /// during updates could lead to security vulnerabilities or privilege escalation.
@@ -255,7 +259,7 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
     }
 
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
-        check_permission_profiles(old_stack, new_stack, false)
+        check_permission_profiles(old_stack, new_stack, false, true)
     }
 
     async fn check_with_config(
@@ -268,7 +272,17 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
             old_stack,
             new_stack,
             config.stack_settings.heartbeats.is_enabled(),
+            true,
         )
+    }
+}
+
+impl PermissionProfilesUnchangedCheck {
+    /// Compares without the narrowing allowance: any change, including one
+    /// that only removes grants, fails. For callers deciding what setup
+    /// installs rather than whether an update may run with it.
+    pub fn check_exact(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+        check_permission_profiles(old_stack, new_stack, false, false)
     }
 }
 
@@ -276,6 +290,7 @@ fn check_permission_profiles(
     old_stack: &Stack,
     new_stack: &Stack,
     allow_email_heartbeat_migration: bool,
+    allow_narrowing: bool,
 ) -> Result<CheckResult> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -286,13 +301,22 @@ fn check_permission_profiles(
     let old_profiles = &old_stack.permissions.profiles;
     let new_profiles = &new_stack.permissions.profiles;
 
-    // Check for removed profiles
+    // A removed profile only narrows: its identity is setup-owned and stays
+    // installed until the next setup, so the update can still delete what it
+    // covered.
     for (profile_name, _) in old_profiles {
         if !new_profiles.contains_key(profile_name) {
-            errors.push(format!(
-                "Permission profile '{}' was removed from the stack",
-                profile_name
-            ));
+            if allow_narrowing {
+                warnings.push(format!(
+                    "Permission profile '{}' was removed; the next setup removes its identity",
+                    profile_name
+                ));
+            } else {
+                errors.push(format!(
+                    "Permission profile '{}' was removed from the stack",
+                    profile_name
+                ));
+            }
         }
     }
 
@@ -300,7 +324,9 @@ fn check_permission_profiles(
     for (profile_name, new_profile) in new_profiles {
         if let Some(old_profile) = old_profiles.get(profile_name) {
             // Profile exists in both - check if it was modified
-            if profiles_differ_outside_gates(old_profile, new_profile, &gated) {
+            if profiles_differ_outside_gates(old_profile, new_profile, &gated)
+                && !(allow_narrowing && profile_narrowed(old_profile, new_profile))
+            {
                 errors.push(format!(
                     "Permission profile '{}' was modified",
                     profile_name
@@ -323,7 +349,9 @@ fn check_permission_profiles(
         new_stack.management(),
         &gated,
         allow_email_heartbeat_migration,
-    ) {
+    ) && !(allow_narrowing
+        && management_narrowed(old_stack.management(), new_stack.management()))
+    {
         errors.push("Management permissions configuration was modified".to_string());
     }
 
@@ -769,7 +797,13 @@ mod tests {
             )
             .build();
         let new_stack = Stack::new("s".to_string())
-            .management(ManagementPermissions::Extend(PermissionProfile::new()))
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().resource("cache", ["kv/provision", "kv/data-write"]),
+            ))
+            .add(
+                Kv::new("cache".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
             .build();
 
         let result = PermissionProfilesUnchangedCheck
@@ -778,6 +812,46 @@ mod tests {
             .expect("check should run");
         assert!(!result.success);
         assert!(result.errors[0].contains("Management permissions"));
+    }
+
+    /// Removing grants defers to the next setup: the installed identities stay
+    /// broader, and the update still needs them to delete what they covered.
+    #[tokio::test]
+    async fn removing_grants_does_not_require_setup() {
+        let kv_stack = |grants: &[&str]| {
+            Stack::new("s".to_string())
+                .management(ManagementPermissions::Extend(
+                    PermissionProfile::new().resource("cache", grants.iter().copied()),
+                ))
+                .add(
+                    Kv::new("cache".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let narrowed = PermissionProfilesUnchangedCheck
+            .check(
+                &kv_stack(&["kv/provision", "kv/data-write"]),
+                &kv_stack(&["kv/provision"]),
+            )
+            .await
+            .expect("check should run");
+        assert!(narrowed.success, "{:?}", narrowed.errors);
+
+        let mut old_profiles = IndexMap::new();
+        old_profiles.insert(
+            "worker".to_string(),
+            PermissionProfile::new().global(["worker/execute"]),
+        );
+        let mut with_profile = Stack::new("s".to_string()).build();
+        with_profile.permissions.profiles = old_profiles;
+        let without_profile = Stack::new("s".to_string()).build();
+        let removed = PermissionProfilesUnchangedCheck
+            .check(&with_profile, &without_profile)
+            .await
+            .expect("check should run");
+        assert!(removed.success, "{:?}", removed.errors);
+        assert!(removed.warnings[0].contains("was removed"));
     }
 
     #[tokio::test]
@@ -796,16 +870,18 @@ mod tests {
         let old_stack = stack_with_management(&["storage/heartbeat"]);
         let new_stack = stack_with_management(&["email/heartbeat", "storage/heartbeat"]);
 
-        let migration =
-            check_permission_profiles(&old_stack, &new_stack, true).expect("check should run");
+        let migration = check_permission_profiles(&old_stack, &new_stack, true, true)
+            .expect("check should run");
         assert!(migration.success, "{:?}", migration.errors);
 
-        let removal =
-            check_permission_profiles(&new_stack, &old_stack, true).expect("check should run");
-        assert!(!removal.success);
+        // Dropping the grant only narrows, which never needs setup.
+        let removal = check_permission_profiles(&new_stack, &old_stack, true, true)
+            .expect("check should run");
+        assert!(removal.success, "{:?}", removal.errors);
 
         let explicit_grant_with_heartbeats_disabled =
-            check_permission_profiles(&old_stack, &new_stack, false).expect("check should run");
+            check_permission_profiles(&old_stack, &new_stack, false, true)
+                .expect("check should run");
         assert!(!explicit_grant_with_heartbeats_disabled.success);
     }
 
@@ -836,9 +912,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observe_removal_from_a_named_profile_is_rejected() {
-        let old_profile = PermissionProfile::new().global(["observe/observe", "worker/execute"]);
-        let new_profile = PermissionProfile::new().global(["worker/execute"]);
+    async fn observe_addition_to_a_named_profile_is_rejected() {
+        let old_profile = PermissionProfile::new().global(["worker/execute"]);
+        let new_profile = PermissionProfile::new().global(["observe/observe", "worker/execute"]);
 
         let mut old_profiles = IndexMap::new();
         old_profiles.insert("application".to_string(), old_profile);
@@ -848,6 +924,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -860,6 +937,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "s".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -902,6 +980,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config.clone(),
@@ -912,6 +991,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: permissions_config,
@@ -948,6 +1028,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -961,6 +1042,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -993,6 +1075,7 @@ mod tests {
         let old_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
@@ -1006,6 +1089,7 @@ mod tests {
         let new_stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: PermissionsConfig {
