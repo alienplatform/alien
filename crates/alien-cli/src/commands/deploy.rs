@@ -3706,6 +3706,80 @@ mod tests {
         assert!(!uses_push_deployment_model(Platform::Local));
     }
 
+    #[tokio::test]
+    async fn new_deployment_creation_fails_closed_on_invalid_preparation() {
+        for (status, body, should_create) in [
+            (200, serde_json::json!({}), false),
+            (
+                403,
+                serde_json::json!({"code":"FORBIDDEN", "message":"Not authorized"}),
+                false,
+            ),
+            (
+                503,
+                serde_json::json!({"code":"UNAVAILABLE", "message":"Preparation unavailable"}),
+                false,
+            ),
+            (
+                200,
+                serde_json::json!({
+                    "platform":"aws", "stack":{"id":"test", "resources":[]},
+                    "setup":{"target":"aws/us-east-2", "fingerprint":"test", "version":1}
+                }),
+                true,
+            ),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            let preparation = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/deployment-info/prepare-stack")
+                        .header("authorization", "Bearer test-group-token");
+                    then.status(status).json_body(body);
+                })
+                .await;
+            let plan = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/deployment-info/compute-plan");
+                    then.status(503)
+                        .json_body(serde_json::json!({"message":"Planner unavailable"}));
+                })
+                .await;
+            let create = server.mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/deployments");
+                // The deliberately rejected creation proves validation let a valid
+                // empty stack proceed without fabricating a deployment response.
+                then.status(409).json_body(serde_json::json!({"code":"CONFLICT", "message":"Synthetic creation rejection"}));
+            }).await;
+            let resolved = ResolvedDeployArgs {
+                name: "test".to_string(),
+                platform: "aws".to_string(),
+                platform_enum: Platform::Aws,
+                network_settings: None,
+                compute_settings: None,
+                domain_settings: None,
+                input_values: HashMap::new(),
+                public_subdomain: None,
+            };
+            let args =
+                DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+                    .expect("deploy args");
+            create_deployment_with_group_session(
+                &server.base_url(),
+                "test-group-token",
+                &resolved,
+                &args,
+                "test-project",
+            )
+            .await
+            .expect_err("preparation or synthetic creation must reject this request");
+            preparation.assert_hits_async(1).await;
+            create.assert_hits_async(usize::from(should_create)).await;
+            plan.assert_hits_async(usize::from(status != 200)).await;
+        }
+    }
+
     #[test]
     fn deploy_config_accepts_and_serializes_compute_selection() {
         let config: DeployConfigFile = toml::from_str(
