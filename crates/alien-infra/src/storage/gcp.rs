@@ -1858,6 +1858,7 @@ mod lifecycle_prefix_tests {
                 created_at: String::new(),
             })
             .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
             .build();
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let executor =
