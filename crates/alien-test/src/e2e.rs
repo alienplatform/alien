@@ -973,10 +973,13 @@ pub async fn deploy_test_app(
                 "default-container-env",
                 alien_core::ExternalBinding::ContainerAppsEnvironment(binding),
             );
-            // Serialize to JSON map for the SDK type
+            // Convert to the generated API binding type.
             let bindings_json = serde_json::to_value(&external_bindings)
                 .context("Failed to serialize external bindings")?;
-            stack_settings.external_bindings = bindings_json.as_object().cloned();
+            stack_settings.external_bindings = Some(
+                serde_json::from_value(bindings_json)
+                    .context("Failed to convert external bindings for the API")?,
+            );
             info!("Injected shared Container Apps Environment as external binding");
         }
     }

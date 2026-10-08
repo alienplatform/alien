@@ -134,6 +134,20 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// The manager rejected an explicit deployment acquisition request.
+    #[error(
+        code = "DEPLOYMENT_ACQUIRE_UNAVAILABLE",
+        message = "Deployment '{deployment_id}' cannot be acquired for this operation: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    DeploymentAcquireUnavailable {
+        /// Deployment requested by the caller.
+        deployment_id: String,
+        /// Bounded reason returned by the manager.
+        reason: String,
+    },
+
     /// Required deployer secrets are not in the customer's secret store yet;
     /// workloads wait for them.
     #[error(

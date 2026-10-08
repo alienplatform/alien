@@ -29,6 +29,12 @@ import {
 } from "./endpointaccess.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+  ExternalBindingUnion$Outbound,
+  ExternalBindingUnion$outboundSchema,
+} from "./externalbindingunion.js";
+import {
   HeartbeatsMode,
   HeartbeatsMode$inboundSchema,
   HeartbeatsMode$outboundSchema,
@@ -57,16 +63,6 @@ import {
 } from "./updatesmode.js";
 
 /**
- * External bindings for pre-existing infrastructure.
- *
- * @remarks
- * Allows using existing resources (MinIO, Redis, shared Container Apps
- * Environment, etc.) instead of having Alien provision them.
- * Required for Kubernetes platform, optional for cloud platforms.
- */
-export type ExternalBindings = {};
-
-/**
  * User-customizable deployment settings specified at deploy time.
  *
  * @remarks
@@ -89,15 +85,7 @@ export type StackSettings = {
    * Reachability of the deployment's public endpoints, fixed at setup.
    */
   endpointAccess?: EndpointAccess | undefined;
-  /**
-   * External bindings for pre-existing infrastructure.
-   *
-   * @remarks
-   * Allows using existing resources (MinIO, Redis, shared Container Apps
-   * Environment, etc.) instead of having Alien provision them.
-   * Required for Kubernetes platform, optional for cloud platforms.
-   */
-  externalBindings?: ExternalBindings | null | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
   /**
    * How heartbeat health checks are handled.
    */
@@ -125,45 +113,15 @@ export type StackSettings = {
 };
 
 /** @internal */
-export const ExternalBindings$inboundSchema: z.ZodType<
-  ExternalBindings,
-  unknown
-> = z.object({});
-/** @internal */
-export type ExternalBindings$Outbound = {};
-
-/** @internal */
-export const ExternalBindings$outboundSchema: z.ZodType<
-  ExternalBindings$Outbound,
-  ExternalBindings
-> = z.object({});
-
-export function externalBindingsToJSON(
-  externalBindings: ExternalBindings,
-): string {
-  return JSON.stringify(
-    ExternalBindings$outboundSchema.parse(externalBindings),
-  );
-}
-export function externalBindingsFromJSON(
-  jsonString: string,
-): SafeParseResult<ExternalBindings, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ExternalBindings$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindings' from JSON`,
-  );
-}
-
-/** @internal */
 export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
   .object({
     compute: z.nullable(ComputeSettings$inboundSchema).optional(),
     deploymentModel: DeploymentModel$inboundSchema.optional(),
     domains: z.nullable(DomainSettings$inboundSchema).optional(),
     endpointAccess: EndpointAccess$inboundSchema.optional(),
-    externalBindings: z.nullable(z.lazy(() => ExternalBindings$inboundSchema))
-      .optional(),
+    externalBindings: z.nullable(
+      z.record(z.string(), ExternalBindingUnion$inboundSchema),
+    ).optional(),
     heartbeats: HeartbeatsMode$inboundSchema.optional(),
     kubernetes: z.nullable(KubernetesSettings$inboundSchema).optional(),
     network: z.nullable(NetworkSettings$inboundSchema).optional(),
@@ -179,7 +137,10 @@ export type StackSettings$Outbound = {
   deploymentModel?: string | undefined;
   domains?: DomainSettings$Outbound | null | undefined;
   endpointAccess?: string | undefined;
-  externalBindings?: ExternalBindings$Outbound | null | undefined;
+  externalBindings?:
+    | { [k: string]: ExternalBindingUnion$Outbound }
+    | null
+    | undefined;
   heartbeats?: string | undefined;
   kubernetes?: KubernetesSettings$Outbound | null | undefined;
   network?: NetworkSettings$Outbound | null | undefined;
@@ -197,8 +158,9 @@ export const StackSettings$outboundSchema: z.ZodType<
   deploymentModel: DeploymentModel$outboundSchema.optional(),
   domains: z.nullable(DomainSettings$outboundSchema).optional(),
   endpointAccess: EndpointAccess$outboundSchema.optional(),
-  externalBindings: z.nullable(z.lazy(() => ExternalBindings$outboundSchema))
-    .optional(),
+  externalBindings: z.nullable(
+    z.record(z.string(), ExternalBindingUnion$outboundSchema),
+  ).optional(),
   heartbeats: HeartbeatsMode$outboundSchema.optional(),
   kubernetes: z.nullable(KubernetesSettings$outboundSchema).optional(),
   network: z.nullable(NetworkSettings$outboundSchema).optional(),
