@@ -493,6 +493,7 @@ fn quota_consuming_eip_usage(response: DescribeAddressesResponse) -> Option<usiz
             .into_iter()
             .filter(|address| {
                 address.domain.as_deref() == Some("vpc")
+                    && address.service_managed.as_deref().is_none_or(str::is_empty)
                     && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
             })
             .count(),
@@ -564,12 +565,13 @@ mod tests {
     use std::sync::Arc;
 
     use alien_aws_clients::ec2::{
-        Address, AddressSet, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
+        Address, AddressSet, Ec2Api, Ec2Client, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
     };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
-    use alien_core::{Network, Platform};
+    use alien_aws_clients::AwsCredentialProvider;
+    use alien_core::{AwsClientConfig, AwsCredentials, Network, Platform};
 
     use super::*;
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
@@ -767,6 +769,71 @@ mod tests {
         ));
     }
 
+    /// Compare the real signed EC2 Query response with an independently counted
+    /// customer-owned usage supplied by the cloud test runner. Requires a test
+    /// account containing service-managed ALB addresses; performs only reads.
+    #[tokio::test]
+    #[ignore = "requires AWS test credentials and service-managed addresses"]
+    async fn live_eip_usage_matches_customer_owned_addresses() {
+        let expected: usize = std::env::var("ALIEN_TEST_EXPECTED_EIP_USAGE")
+            .expect("set independently measured customer-owned EIP usage")
+            .parse()
+            .expect("expected usage must be an integer");
+        let config = AwsClientConfig {
+            account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+            region: std::env::var("AWS_TARGET_REGION").unwrap(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let credentials = AwsCredentialProvider::from_config(config).await.unwrap();
+        let client = Ec2Client::new(reqwest::Client::new(), credentials);
+        let response = client.describe_addresses().await.unwrap();
+        let addresses = &response.addresses_set.as_ref().unwrap().items;
+        assert!(
+            addresses.iter().any(|address| {
+                address.domain.as_deref() == Some("vpc")
+                    && address
+                        .service_managed
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty())
+                    && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
+            }),
+            "test account must include a service-managed Amazon-pool VPC address"
+        );
+        assert!(
+            addresses.len() > expected,
+            "test account must include excluded addresses"
+        );
+        assert_eq!(quota_consuming_eip_usage(response), Some(expected));
+    }
+
+    #[test]
+    fn eip_usage_ignores_managed_addresses_but_counts_customer_nat_addresses() {
+        let response: DescribeAddressesResponse = serde_json::from_value(serde_json::json!({
+            "addressesSet": { "item": [
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "alb" },
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "future-service" },
+                { "domain": "vpc", "associationId": "eipassoc-nat", "networkInterfaceId": "eni-nat" },
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "" },
+                { "domain": "standard" },
+                { "domain": "vpc", "publicIpv4Pool": "ipv4pool-ec2-customer" }
+            ] }
+        })).unwrap();
+        let used = quota_consuming_eip_usage(response);
+        assert_eq!(used, Some(2));
+        assert_eq!(
+            assess_eip_quota(used, Some(5.0)),
+            EipQuotaPreflight::Available {
+                used: 2,
+                limit: 5.0
+            }
+        );
+    }
+
     #[test]
     fn eip_usage_excludes_byoip_addresses_from_the_vpc_quota() {
         let response = DescribeAddressesResponse {
@@ -779,6 +846,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: Some("amazon".to_string()),
+                        service_managed: None,
                         tag_set: None,
                     },
                     Address {
@@ -788,6 +856,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: None,
+                        service_managed: None,
                         tag_set: None,
                     },
                     Address {
@@ -797,6 +866,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                        service_managed: None,
                         tag_set: None,
                     },
                 ],
@@ -817,6 +887,7 @@ mod tests {
                     association_id: None,
                     network_interface_id: None,
                     public_ipv4_pool: None,
+                    service_managed: None,
                     tag_set: None,
                 }],
             }),
@@ -839,6 +910,7 @@ mod tests {
                             association_id: None,
                             network_interface_id: None,
                             public_ipv4_pool: Some("amazon".to_string()),
+                            service_managed: None,
                             tag_set: None,
                         },
                         Address {
@@ -848,6 +920,7 @@ mod tests {
                             association_id: None,
                             network_interface_id: None,
                             public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                            service_managed: None,
                             tag_set: None,
                         },
                     ],

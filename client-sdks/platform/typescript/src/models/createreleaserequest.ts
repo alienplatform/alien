@@ -27,6 +27,10 @@ export type CreateReleaseRequest = {
   gitMetadata?: GitMetadata | null | undefined;
   stack?: StackByPlatform | undefined;
   rootDirectory?: string | null | undefined;
+  /**
+   * Advance the release channel and schedule deployment updates. Defaults to true. Set false to create a release without changing any channel or deployment.
+   */
+  promote?: boolean | undefined;
   channel?: string | undefined;
 };
 
@@ -38,6 +42,7 @@ export type CreateReleaseRequest$Outbound = {
   gitMetadata?: GitMetadata$Outbound | null | undefined;
   stack?: StackByPlatform$Outbound | undefined;
   rootDirectory?: string | null | undefined;
+  promote?: boolean | undefined;
   channel?: string | undefined;
 };
 
@@ -52,6 +57,7 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
   stack: StackByPlatform$outboundSchema.optional(),
   rootDirectory: z.nullable(z.string()).optional(),
+  promote: z.boolean().optional(),
   channel: z.string().optional(),
 });
 
