@@ -611,9 +611,11 @@ async fn acquire_deployment_with_statuses(
 
 /// Finalize an unmodified step-loop result and release its manager lease.
 ///
-/// A terminal `Ok` result either starts from the authoritative acquired state
-/// or follows a successfully checkpointed step. Repeating that checkpoint can address a claim the server
-/// has already closed. Errors and nonterminal stops still persist final state.
+/// A terminal `Ok` result whose state the manager recorded (the acquired state
+/// or an accepted checkpoint) only releases the claim: repeating that
+/// checkpoint can address a claim the server has already closed. Errors,
+/// nonterminal stops and terminal states the manager has not confirmed still
+/// persist final state.
 /// Callers that mutate state after the loop must use `final_reconcile` instead.
 pub async fn finalize_step_loop(
     client: &ManagerClient,
@@ -624,14 +626,15 @@ pub async fn finalize_step_loop(
     result: crate::Result<crate::runner::RunnerResult>,
 ) -> Result<crate::runner::RunnerResult, AlienError> {
     let checkpointed_terminal = result.as_ref().is_ok_and(|result| {
-        result.loop_result.final_status.is_failed()
-            || matches!(
+        result.state_persisted
+            && (result.loop_result.final_status.is_failed()
+                || matches!(
                 result.loop_result.stop_reason,
                 LoopStopReason::Synced
                     | LoopStopReason::Failed
                     | LoopStopReason::Deleted
                     | LoopStopReason::Handoff
-            )
+                ))
     });
     let finalized = if checkpointed_terminal {
         release_deployment(client, deployment_id, session, execution_claim).await
@@ -957,6 +960,7 @@ mod tests {
             )
             .expect("test state must be terminal"),
             steps_executed: 1,
+            state_persisted: true,
         })
     }
 
@@ -1228,6 +1232,7 @@ mod tests {
                         final_status: state.status,
                     },
                     steps_executed: 1,
+                    state_persisted: true,
                 }),
                 None => Err(AlienError::new(
                     crate::ErrorData::DeploymentCheckpointFailed {
@@ -1334,6 +1339,92 @@ mod tests {
         prepared.assert_hits_async(2).await;
         terminal.assert_hits_async(1).await;
         release.assert_hits_async(1).await;
+    }
+
+    /// A deletion the manager confirmed only releases the claim; one whose
+    /// checkpoint failed is persisted by the final reconcile instead.
+    #[tokio::test]
+    async fn teardown_deletion_is_reconciled_again_only_when_its_checkpoint_failed() {
+        for accepted in [true, false] {
+            let server = MockServer::start_async().await;
+            let mut state = running_state();
+            state.platform = Platform::Test;
+            state.status = alien_core::DeploymentStatus::TeardownRequired;
+            state.stack_state = Some(alien_core::StackState::new(Platform::Test));
+            state.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+            let progress = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                    then.status(200)
+                        .json_body(serde_json::json!({"success":true,"current":null}));
+                })
+                .await;
+            let mut checkpoint = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                    if accepted {
+                        then.status(200)
+                            .json_body(serde_json::json!({"success":true,"current":null}));
+                    } else {
+                        then.status(500).json_body(serde_json::json!({
+                            "code": "INTERNAL_ERROR", "message": "Internal server error",
+                            "retryable": false, "internal": true
+                        }));
+                    }
+                })
+                .await;
+            let client = ManagerClient::new(&server.base_url());
+            let result = crate::setup_teardown::run_setup_teardown_after_handoff(
+                &mut state,
+                &mut deployment_config(),
+                &alien_core::ClientConfig::Test,
+                "deployment-1",
+                &crate::runner::RunnerPolicy {
+                    max_steps: 2,
+                    operation: crate::loop_contract::LoopOperation::Delete,
+                    delay_strategy: crate::runner::DelayStrategy::Inline,
+                },
+                &ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+                None,
+            )
+            .await
+            .map(|result| result.expect("teardown must run"));
+            let teardown = result.as_ref().expect("a finished teardown returns Ok");
+            assert_eq!(teardown.loop_result.stop_reason, LoopStopReason::Deleted);
+            assert_eq!(teardown.state_persisted, accepted);
+            assert!(progress.hits_async().await >= 1);
+            checkpoint.assert_hits_async(1).await;
+            checkpoint.delete_async().await;
+
+            let final_reconcile = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                    then.status(200)
+                        .json_body(serde_json::json!({"success":true,"current":null}));
+                })
+                .await;
+            let release = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/release");
+                    then.status(200);
+                })
+                .await;
+            let result =
+                finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+                    .await
+                    .expect("a completed teardown must succeed");
+            assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
+            final_reconcile
+                .assert_hits_async(usize::from(!accepted))
+                .await;
+            release.assert_hits_async(1).await;
+        }
     }
 
     #[tokio::test]

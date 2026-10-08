@@ -2039,6 +2039,7 @@ async fn deploy_task_with_environment(
     let RunnerResult {
         loop_result,
         steps_executed,
+        ..
     } = runner_result.context(ErrorData::GenericError {
         message: "deployment step loop failed".to_string(),
     })?;

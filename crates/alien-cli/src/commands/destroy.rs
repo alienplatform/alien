@@ -724,6 +724,7 @@ async fn destroy_tracked_deployment(
     let RunnerResult {
         loop_result,
         steps_executed,
+        ..
     } = runner_result.context(ErrorData::GenericError {
         message: "deletion step loop failed".to_string(),
     })?;

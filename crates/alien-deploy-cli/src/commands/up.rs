@@ -1197,6 +1197,7 @@ mod tests {
                 )
                 .unwrap(),
                 steps_executed: 1,
+                state_persisted: true,
             });
             let result = finalize_step_loop(
                 &client,
@@ -6465,6 +6466,7 @@ async fn run_setup_deletion(
                 final_status: state.status,
             },
             steps_executed: 0,
+            state_persisted: true,
         })
     });
 
