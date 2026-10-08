@@ -278,6 +278,7 @@ run();
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
+* [move](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
 * [list](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 * [create](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
@@ -613,6 +614,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 - [`deploymentsListMachines`](docs/sdks/deployments/README.md#listmachines)
 - [`deploymentsListVolumeRestores`](docs/sdks/deployments/README.md#listvolumerestores) - List a deployment's volume restore requests, newest first.
+- [`deploymentsMove`](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
 - [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRestoreVolume`](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
@@ -895,6 +897,7 @@ To learn about this feature and how to get started, check
 - [`useDeploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 - [`useDeploymentsListMachines`](docs/sdks/deployments/README.md#listmachines)
 - [`useDeploymentsListVolumeRestores`](docs/sdks/deployments/README.md#listvolumerestores) - List a deployment's volume restore requests, newest first.
+- [`useDeploymentsMoveMutation`](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
 - [`useDeploymentsPinReleaseMutation`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`useDeploymentsRedeployMutation`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`useDeploymentsRestoreVolumeMutation`](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.

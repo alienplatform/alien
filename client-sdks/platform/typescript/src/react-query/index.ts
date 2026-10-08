@@ -87,6 +87,7 @@ export * from "./deploymentsListFilterDeploymentGroups.js";
 export * from "./deploymentsListFilterEnvironments.js";
 export * from "./deploymentsListMachines.js";
 export * from "./deploymentsListVolumeRestores.js";
+export * from "./deploymentsMove.js";
 export * from "./deploymentsPinRelease.js";
 export * from "./deploymentsRedeploy.js";
 export * from "./deploymentsRestoreVolume.js";
