@@ -11,13 +11,13 @@ let value: Event = {
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
   data: {
-    targetTriple: "<value>",
-    type: "DownloadingAlienRuntime",
-    url: "https://great-schedule.name",
+    platform: "<value>",
+    stack: "<value>",
+    type: "RunningPreflights",
   },
-  state: "none",
+  state: "started",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  createdAt: new Date("2025-08-08T10:57:41.473Z"),
+  createdAt: new Date("2025-01-03T01:01:38.642Z"),
   workspaceId: "ws_It13CUaGEhLLAB87simX0",
 };
 ```

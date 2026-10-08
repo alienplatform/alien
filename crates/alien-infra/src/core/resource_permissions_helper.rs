@@ -1287,21 +1287,7 @@ impl ResourcePermissionsHelper {
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            // Combine resource-specific permissions with matching wildcard permissions
-            let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
-
-            if let Some(permission_set_refs) = profile.0.get(resource_id) {
-                combined_refs.extend(permission_set_refs.iter().cloned());
-            }
-
-            if let Some(wildcard_refs) = profile.0.get("*") {
-                combined_refs.extend(
-                    wildcard_refs
-                        .iter()
-                        .filter(|r| r.id().starts_with(&type_prefix))
-                        .cloned(),
-                );
-            }
+            let combined_refs = Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix);
 
             if !combined_refs.is_empty() {
                 info!(
@@ -1425,7 +1411,219 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    fn resource_is_setup_owned(
+    /// Resource-specific permissions plus matching wildcard permissions.
+    fn aws_resource_scoped_refs(
+        profile: &PermissionProfile,
+        resource_id: &str,
+        type_prefix: &str,
+    ) -> Vec<PermissionSetReference> {
+        let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
+        if let Some(permission_set_refs) = profile.0.get(resource_id) {
+            combined_refs.extend(permission_set_refs.iter().cloned());
+        }
+        if let Some(wildcard_refs) = profile.0.get("*") {
+            combined_refs.extend(
+                wildcard_refs
+                    .iter()
+                    .filter(|r| r.id().starts_with(type_prefix))
+                    .cloned(),
+            );
+        }
+        combined_refs
+    }
+
+    /// Remove inline policies that `apply_aws_resource_scoped_permissions`
+    /// attached for grants the desired stack no longer has.
+    ///
+    /// The upsert path never deletes, so without this a dropped grant (or a
+    /// dropped permission set) stays on the role. Only exact owned names are
+    /// removed: `alien-<resource>-<set>` on service-account roles and
+    /// `alien-mgmt-<resource>-<set>` on the management role, for registered
+    /// `<resource_type>/` permission sets. A role that no longer exists has
+    /// nothing to remove.
+    pub async fn remove_stale_aws_resource_scoped_permissions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> Result<()> {
+        if !Self::resource_is_setup_owned(ctx, resource_id)? {
+            return Ok(());
+        }
+
+        let type_prefix = format!("{}/", resource_type);
+        let registered_sets: Vec<&str> = alien_permissions::list_permission_set_ids()
+            .into_iter()
+            .filter(|id| id.starts_with(&type_prefix))
+            .collect();
+
+        // (role, owned policy names, desired policy names)
+        let mut roles: Vec<(String, HashSet<String>, HashSet<String>)> = Vec::new();
+        for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
+            let Some(role_name) = Self::existing_aws_service_account_role_name(ctx, profile_name)?
+            else {
+                continue;
+            };
+            let owned = registered_sets
+                .iter()
+                .map(|id| aws_resource_policy_name(resource_id, id))
+                .collect();
+            let desired = Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix)
+                .iter()
+                .map(|r| aws_resource_policy_name(resource_id, r.id()))
+                .collect();
+            roles.push((role_name, owned, desired));
+        }
+        if let Some(role_name) = Self::existing_aws_management_role_name(ctx)? {
+            // Provision sets are granted by RemoteStackManagement, never per resource.
+            let owned = registered_sets
+                .iter()
+                .filter(|id| !id.ends_with("/provision"))
+                .map(|id| aws_management_resource_policy_name(resource_id, id))
+                .collect();
+            let desired = ctx
+                .desired_stack
+                .management()
+                .profile()
+                .map(|profile| Self::aws_management_resource_permission_refs(profile, resource_id))
+                .unwrap_or_default()
+                .iter()
+                .map(|r| aws_management_resource_policy_name(resource_id, r.id()))
+                .collect();
+            roles.push((role_name, owned, desired));
+        }
+        if roles.is_empty() {
+            return Ok(());
+        }
+
+        let iam = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
+        for (role_name, owned, desired) in roles {
+            let listed = match iam.list_role_policies(&role_name).await {
+                Ok(response) => response.list_role_policies_result,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to list inline policies of role '{role_name}' to remove previous '{resource_id}' grants"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }));
+                }
+            };
+            if listed.is_truncated == Some(true) {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Role '{role_name}' has more inline policies than one ListRolePolicies page; cannot prove previous '{resource_id}' grants were removed"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+            let stale = listed
+                .policy_names
+                .map(|names| names.member)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|name| owned.contains(name) && !desired.contains(name));
+            for policy_name in stale {
+                match iam.delete_role_policy(&role_name, &policy_name).await {
+                    Ok(()) => {}
+                    // Already removed, e.g. by an earlier attempt whose response was lost.
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteAccessDenied { .. })
+                        ) =>
+                    {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Setup credentials cannot delete inline policy '{policy_name}' from role '{role_name}' (iam:DeleteRolePolicy); grant it and rerun setup to remove the previous '{resource_id}' grant"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }));
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete inline policy '{policy_name}' from role '{role_name}'"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }));
+                    }
+                }
+                info!(
+                    role_name = %role_name,
+                    policy_name = %policy_name,
+                    resource_id = %resource_id,
+                    "Removed AWS resource-scoped permission that is no longer granted"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The role of a profile's service account, if setup has created it.
+    fn existing_aws_service_account_role_name(
+        ctx: &ResourceControllerContext<'_>,
+        profile_name: &str,
+    ) -> Result<Option<String>> {
+        let service_account_id = format!("{}-sa", profile_name);
+        let Some(resource) = ctx.desired_stack.resources.get(&service_account_id) else {
+            return Ok(None);
+        };
+        let has_controller_state = ctx
+            .state
+            .resources
+            .get(&service_account_id)
+            .is_some_and(|state| state.internal_state.is_some());
+        if !has_controller_state {
+            return Ok(None);
+        }
+        Ok(ctx
+            .require_dependency::<crate::service_account::AwsServiceAccountController>(
+                &(&resource.config).into(),
+            )?
+            .role_name)
+    }
+
+    /// The management role, if the stack has one and setup has created it.
+    fn existing_aws_management_role_name(
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Option<String>> {
+        let Some((id, entry)) = ctx.desired_stack.resources.iter().find(|(_, entry)| {
+            entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+        }) else {
+            return Ok(None);
+        };
+        let has_controller_state = ctx
+            .state
+            .resources
+            .get(id)
+            .is_some_and(|state| state.internal_state.is_some());
+        if !has_controller_state {
+            return Ok(None);
+        }
+        Ok(ctx
+            .require_dependency::<crate::remote_stack_management::AwsRemoteStackManagementController>(
+                &(&entry.config).into(),
+            )?
+            .role_name)
+    }
+
+    pub(crate) fn resource_is_setup_owned(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<bool> {
@@ -1495,11 +1693,7 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            let policy_name = format!(
-                "alien-{}-{}",
-                resource_id,
-                permission_set.id.replace('/', "-")
-            );
+            let policy_name = aws_resource_policy_name(resource_id, &permission_set.id);
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
@@ -1609,11 +1803,7 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            let policy_name = format!(
-                "alien-mgmt-{}-{}",
-                resource_id,
-                permission_set.id.replace('/', "-")
-            );
+            let policy_name = aws_management_resource_policy_name(resource_id, &permission_set.id);
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
@@ -1912,6 +2102,24 @@ impl ResourcePermissionsHelper {
 }
 
 /// The inline policy on the shared Remote Bindings role that carries one resource's remote grant.
+/// Inline policy a resource attaches to a profile's service-account role.
+fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
+    format!(
+        "alien-{}-{}",
+        resource_id,
+        permission_set_id.replace('/', "-")
+    )
+}
+
+/// Inline policy a resource attaches to the management role.
+fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
+    format!(
+        "alien-mgmt-{}-{}",
+        resource_id,
+        permission_set_id.replace('/', "-")
+    )
+}
+
 pub(crate) fn aws_remote_access_policy_name(resource_id: &str) -> String {
     format!("alien-{resource_id}-remote-access")
 }

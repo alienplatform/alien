@@ -28,6 +28,7 @@ impl ResourceImporter for GcpVaultImporter {
             // field is informational and stays unset at import time.
             location: None,
             vault_prefix: Some(data.secret_prefix),
+            permissions_revision: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
