@@ -1818,7 +1818,8 @@ mod gcp_project_consumer_tests {
             .await
             .expect("create deployment group");
 
-        let deleting = create_gcp_deployment(&store, &group.id, "deleting", SHARED_PROJECT, "running").await;
+        let deleting =
+            create_gcp_deployment(&store, &group.id, "deleting", SHARED_PROJECT, "running").await;
         create_gcp_deployment(&store, &group.id, "elsewhere", "222222222222", "running").await;
         // A record a store keeps after deletion (status `deleted`) no longer pulls images.
         create_gcp_deployment(&store, &group.id, "deleted", SHARED_PROJECT, "deleted").await;
@@ -1831,7 +1832,8 @@ mod gcp_project_consumer_tests {
             "neither the deployment itself, one in another project, nor a deleted one shares the grant"
         );
 
-        let sibling = create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT, "running").await;
+        let sibling =
+            create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT, "running").await;
         assert!(
             store
                 .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
