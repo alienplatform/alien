@@ -176,7 +176,9 @@ fn lifecycle_rule_block(rule: &LifecycleRule) -> hcl::structure::Block {
         "age",
         Expression::Number(hcl::Number::from(i64::from(rule.days))),
     )];
-    if let Some(prefix) = &rule.prefix {
+    // Cloud Storage rejects an empty prefix. An empty prefix matches every object, which is
+    // what a condition without `matches_prefix` does.
+    if let Some(prefix) = rule.prefix.as_ref().filter(|prefix| !prefix.is_empty()) {
         condition_attrs.push(attr(
             "matches_prefix",
             Expression::Array(vec![Expression::String(prefix.clone())]),
@@ -365,4 +367,63 @@ fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
             .then(|| ctx.name_for(id))
             .flatten()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `condition` attributes of an emitted `lifecycle_rule` block.
+    fn condition(rule: &LifecycleRule) -> Vec<(String, Expression)> {
+        let block = lifecycle_rule_block(rule);
+        let action = block
+            .body
+            .blocks()
+            .find(|nested| nested.identifier.as_str() == "action")
+            .expect("lifecycle_rule has an action block");
+        assert_eq!(
+            action
+                .body
+                .attributes()
+                .map(|attribute| (attribute.key.as_str(), attribute.expr.clone()))
+                .collect::<Vec<_>>(),
+            vec![("type", Expression::String("Delete".to_string()))]
+        );
+        block
+            .body
+            .blocks()
+            .find(|nested| nested.identifier.as_str() == "condition")
+            .expect("lifecycle_rule has a condition block")
+            .body
+            .attributes()
+            .map(|attribute| (attribute.key.to_string(), attribute.expr.clone()))
+            .collect()
+    }
+
+    /// Cloud Storage rejects `matches_prefix = [""]` with a 400, so an empty prefix (every
+    /// object) must render like no prefix.
+    #[test]
+    fn lifecycle_rule_matches_only_a_nonempty_prefix() {
+        let age = ("age".to_string(), Expression::Number(hcl::Number::from(7)));
+        for (prefix, expected) in [
+            (None, vec![age.clone()]),
+            (Some(""), vec![age.clone()]),
+            (
+                Some("logs/"),
+                vec![
+                    age.clone(),
+                    (
+                        "matches_prefix".to_string(),
+                        Expression::Array(vec![Expression::String("logs/".to_string())]),
+                    ),
+                ],
+            ),
+        ] {
+            let rule = LifecycleRule {
+                days: 7,
+                prefix: prefix.map(str::to_string),
+            };
+            assert_eq!(condition(&rule), expected, "prefix {prefix:?}");
+        }
+    }
 }

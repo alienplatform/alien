@@ -7,9 +7,10 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    GcpCloudStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+    GcpCloudStorageHeartbeatData, HeartbeatBackend, InitialSetupAuthority,
+    LifecycleRule as StorageLifecycleRule, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
+    Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_gcp_clients::gcs::{
     Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
@@ -18,6 +19,7 @@ use alien_gcp_clients::gcs::{
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_macros::controller;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -29,6 +31,13 @@ pub struct GcpStorageController {
     /// The actual bucket name (includes stack name prefix).
     /// This is None until the bucket is created or imported.
     pub(crate) bucket_name: Option<String>,
+
+    /// Revision of the lifecycle configuration that GCS last confirmed for the bucket from this
+    /// controller. `None` when an older version configured the bucket. Those versions sent each
+    /// rule without its prefix, so a prefixed rule expired the whole bucket, and their patch
+    /// for removing every rule left the old rules in place.
+    #[serde(default)]
+    pub(crate) lifecycle_revision: Option<String>,
 }
 
 #[controller]
@@ -67,30 +76,10 @@ impl GcpStorageController {
             bucket.versioning = Some(Versioning { enabled: true });
         }
 
-        // Configure lifecycle rules if any
+        let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
+        let lifecycle_revision = gcs_lifecycle_revision(&config.id, &lifecycle)?;
         if !config.lifecycle_rules.is_empty() {
-            let gcs_rules: Vec<LifecycleRule> = config
-                .lifecycle_rules
-                .iter()
-                .map(|rule| {
-                    let action = LifecycleAction {
-                        action_type: "Delete".to_string(),
-                        storage_class: None,
-                    };
-
-                    let mut condition = LifecycleCondition::default();
-                    condition.age = Some(rule.days as i32);
-
-                    LifecycleRule {
-                        action: Some(action),
-                        condition: Some(condition),
-                    }
-                })
-                .collect();
-
-            bucket.lifecycle = Some(Lifecycle {
-                rule: Some(gcs_rules),
-            });
+            bucket.lifecycle = Some(lifecycle.clone());
         }
 
         // Create the bucket with basic configuration only
@@ -104,7 +93,16 @@ impl GcpStorageController {
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
+        let lifecycle_confirmed =
+            gcs_lifecycle_matches(created_bucket.lifecycle.as_ref(), &lifecycle);
         self.bucket_name = Some(created_bucket.name.unwrap_or_else(|| bucket_name.clone()));
+        if lifecycle_confirmed {
+            self.lifecycle_revision = Some(lifecycle_revision);
+        } else {
+            // The bucket exists, so failing here would make the retry create it again. Leaving
+            // the revision unset makes the next update rewrite the rules and check them again.
+            warn!(bucket = %bucket_name, "GCS returned different lifecycle rules than requested; they will be rewritten on the next update");
+        }
 
         Ok(HandlerAction::Continue {
             state: CreateWaitForActive,
@@ -327,48 +325,41 @@ impl GcpStorageController {
             needs_update = true;
         }
 
-        // Check lifecycle rules changes
-        if config.lifecycle_rules != prev_config.lifecycle_rules {
+        // Rewrite the lifecycle when the rules changed, or when GCS has not confirmed the
+        // current rules from this controller (see `lifecycle_revision`). The patch replaces
+        // the bucket's whole lifecycle, so resending it is safe when a retry repeats this step.
+        let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
+        let lifecycle_revision = gcs_lifecycle_revision(&config.id, &lifecycle)?;
+        let write_lifecycle = config.lifecycle_rules != prev_config.lifecycle_rules
+            || (may_repair_lifecycle(ctx, &config.id)
+                && self.lifecycle_revision.as_deref() != Some(lifecycle_revision.as_str()));
+        if write_lifecycle {
             info!(bucket = %bucket_name, rules_count = %config.lifecycle_rules.len(), "Updating lifecycle rules");
-
-            if config.lifecycle_rules.is_empty() {
-                bucket_patch.lifecycle = Some(Lifecycle { rule: None });
-            } else {
-                let gcs_rules: Vec<LifecycleRule> = config
-                    .lifecycle_rules
-                    .iter()
-                    .map(|rule| {
-                        let action = LifecycleAction {
-                            action_type: "Delete".to_string(),
-                            storage_class: None,
-                        };
-
-                        let mut condition = LifecycleCondition::default();
-                        condition.age = Some(rule.days as i32);
-
-                        LifecycleRule {
-                            action: Some(action),
-                            condition: Some(condition),
-                        }
-                    })
-                    .collect();
-
-                bucket_patch.lifecycle = Some(Lifecycle {
-                    rule: Some(gcs_rules),
-                });
-            }
+            bucket_patch.lifecycle = Some(lifecycle.clone());
             needs_update = true;
         }
 
         // Apply bucket configuration changes if needed
         if needs_update {
-            client
+            let updated_bucket = client
                 .update_bucket(bucket_name.clone(), bucket_patch)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to update GCS bucket '{}'", bucket_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            if write_lifecycle {
+                if !gcs_lifecycle_matches(updated_bucket.lifecycle.as_ref(), &lifecycle) {
+                    return Err(AlienError::new(ErrorData::ResourceDrift {
+                        resource_id: config.id.clone(),
+                        message: format!(
+                            "GCS bucket '{}' returned different lifecycle rules than the update sent",
+                            bucket_name
+                        ),
+                    }));
+                }
+                self.lifecycle_revision = Some(lifecycle_revision);
+            }
             info!(bucket = %bucket_name, "Bucket configuration updated successfully");
         } else {
             info!(bucket = %bucket_name, "No bucket configuration changes needed");
@@ -725,6 +716,19 @@ impl GcpStorageController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    /// Schedules a lifecycle rewrite when GCS has not confirmed the desired rules from this
+    /// controller, such as on a bucket an older version configured (see `lifecycle_revision`).
+    /// The storage config of such a deployment is unchanged, so nothing else would rewrite it.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if !may_repair_lifecycle(ctx, &config.id) {
+            return Ok(false);
+        }
+        let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
+        let desired = gcs_lifecycle_revision(&config.id, &lifecycle)?;
+        Ok(self.lifecycle_revision.as_deref() != Some(desired.as_str()))
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         // Bucket name is always known from either bucket_name field or resource ID
         Some(ResourceOutputs::new(StorageOutputs {
@@ -752,6 +756,95 @@ impl GcpStorageController {
             Ok(None)
         }
     }
+}
+
+/// Whether this controller may rewrite a bucket's lifecycle that the storage config did not
+/// change. After handoff, setup owns a Frozen bucket: Terraform sent its rules, and the runtime
+/// must not replace them. Direct setup runs this controller with setup credentials, and this
+/// controller created the bucket, so it may repair it.
+fn may_repair_lifecycle(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
+    let setup_owned = ctx
+        .desired_stack
+        .resources
+        .get(resource_id)
+        .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
+    !setup_owned || ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+}
+
+/// Builds the Cloud Storage lifecycle configuration for a storage's rules. Each rule deletes
+/// objects older than `days`; a rule with a prefix applies only to object names starting with
+/// it. No rules gives an empty rule list: a patch with `lifecycle: {}` keeps the bucket's
+/// existing rules, while `rule: []` removes them.
+fn gcs_lifecycle(resource_id: &str, rules: &[StorageLifecycleRule]) -> Result<Lifecycle> {
+    let mut gcs_rules = Vec::with_capacity(rules.len());
+    for rule in rules {
+        let age = i32::try_from(rule.days).map_err(|_| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "lifecycle rule days {} exceeds the Cloud Storage maximum of {}",
+                    rule.days,
+                    i32::MAX
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })?;
+        gcs_rules.push(LifecycleRule {
+            action: Some(LifecycleAction {
+                action_type: "Delete".to_string(),
+                storage_class: None,
+            }),
+            condition: Some(LifecycleCondition {
+                age: Some(age),
+                // GCS rejects an empty prefix. An empty prefix matches every object, which is
+                // what a rule without `matchesPrefix` does.
+                matches_prefix: rule
+                    .prefix
+                    .as_deref()
+                    .filter(|prefix| !prefix.is_empty())
+                    .map(|prefix| vec![prefix.to_string()]),
+                ..Default::default()
+            }),
+        });
+    }
+    Ok(Lifecycle {
+        rule: Some(gcs_rules),
+    })
+}
+
+/// Identifies a lifecycle configuration by the request body that sends it.
+fn gcs_lifecycle_revision(resource_id: &str, lifecycle: &Lifecycle) -> Result<String> {
+    let body = serde_json::to_vec(lifecycle).into_alien_error().context(
+        ErrorData::ResourceStateSerializationFailed {
+            resource_id: resource_id.to_string(),
+            message: "Failed to serialize the bucket lifecycle configuration".to_string(),
+        },
+    )?;
+    Ok(format!("{:x}", Sha256::digest(body)))
+}
+
+/// Whether the lifecycle GCS returned for a bucket has the expected rules, in order. Compares
+/// only the fields this controller sends.
+fn gcs_lifecycle_matches(observed: Option<&Lifecycle>, expected: &Lifecycle) -> bool {
+    fn fields(
+        lifecycle: Option<&Lifecycle>,
+    ) -> Vec<(Option<&str>, Option<i32>, Option<&[String]>)> {
+        lifecycle
+            .and_then(|lifecycle| lifecycle.rule.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .map(|rule| {
+                let condition = rule.condition.as_ref();
+                (
+                    rule.action
+                        .as_ref()
+                        .map(|action| action.action_type.as_str()),
+                    condition.and_then(|condition| condition.age),
+                    condition.and_then(|condition| condition.matches_prefix.as_deref()),
+                )
+            })
+            .collect()
+    }
+    fields(observed) == fields(Some(expected))
 }
 
 fn emit_gcp_storage_heartbeat(
@@ -932,6 +1025,7 @@ impl GcpStorageController {
         Self {
             state: GcpStorageState::Ready,
             bucket_name: Some(get_gcp_bucket_name("test-stack", storage_name)),
+            lifecycle_revision: None,
             _internal_stay_count: None,
         }
     }
@@ -950,10 +1044,7 @@ mod tests {
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
-    use alien_gcp_clients::gcs::{
-        Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
-        ListObjectsResponse, MockGcsApi, Object, UniformBucketLevelAccess, Versioning,
-    };
+    use alien_gcp_clients::gcs::{Bucket, MockGcsApi};
     use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi};
     use rstest::{fixture, rstest};
 
@@ -1084,10 +1175,13 @@ mod tests {
             .expect_get_bucket()
             .returning(move |_| Ok(create_successful_bucket_response(&bucket_name)));
 
-        // Mock bucket updates for configuration changes
-        mock_gcs
-            .expect_update_bucket()
-            .returning(move |_, _| Ok(create_successful_bucket_response(&bucket_name_clone1)));
+        // GCS answers a patch with the updated bucket, including the lifecycle it stored.
+        mock_gcs.expect_update_bucket().returning(move |_, patch| {
+            Ok(Bucket {
+                lifecycle: patch.lifecycle,
+                ..create_successful_bucket_response(&bucket_name_clone1)
+            })
+        });
 
         // Mock IAM policy operations for public read changes
         mock_gcs.expect_set_bucket_iam_policy().returning(|_, _| {
@@ -1373,108 +1467,6 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
-    /// Test that verifies lifecycle rules are converted correctly to GCS format
-    #[tokio::test]
-    async fn test_lifecycle_rules_generation() {
-        let storage = Storage::new("lifecycle-test".to_string())
-            .lifecycle_rules(vec![
-                AlienLifecycleRule {
-                    prefix: Some("logs/".to_string()),
-                    days: 30,
-                },
-                AlienLifecycleRule {
-                    prefix: None, // No prefix rule
-                    days: 365,
-                },
-            ])
-            .build();
-
-        let mut mock_gcs = MockGcsApi::new();
-
-        // Validate that the generated lifecycle configuration contains expected rules
-        mock_gcs
-            .expect_create_bucket()
-            .withf(|_bucket_name, bucket| {
-                if let Some(lifecycle) = &bucket.lifecycle {
-                    if let Some(rules) = &lifecycle.rule {
-                        // Should have 2 rules
-                        if rules.len() != 2 {
-                            eprintln!("Expected 2 lifecycle rules, got {}", rules.len());
-                            return false;
-                        }
-
-                        // Check first rule (with prefix)
-                        let rule1 = &rules[0];
-                        if let Some(condition) = &rule1.condition {
-                            if condition.age != Some(30) {
-                                eprintln!("Expected 30 days for rule 1, got {:?}", condition.age);
-                                return false;
-                            }
-                        } else {
-                            eprintln!("Expected condition for rule 1");
-                            return false;
-                        }
-
-                        if let Some(action) = &rule1.action {
-                            if action.action_type != "Delete" {
-                                eprintln!("Expected Delete action, got {}", action.action_type);
-                                return false;
-                            }
-                        } else {
-                            eprintln!("Expected action for rule 1");
-                            return false;
-                        }
-
-                        // Check second rule (no prefix, different age)
-                        let rule2 = &rules[1];
-                        if let Some(condition) = &rule2.condition {
-                            if condition.age != Some(365) {
-                                eprintln!("Expected 365 days for rule 2, got {:?}", condition.age);
-                                return false;
-                            }
-                        } else {
-                            eprintln!("Expected condition for rule 2");
-                            return false;
-                        }
-
-                        true
-                    } else {
-                        eprintln!("Expected lifecycle rules");
-                        false
-                    }
-                } else {
-                    eprintln!("Expected lifecycle configuration");
-                    false
-                }
-            })
-            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
-
-        mock_gcs
-            .expect_get_bucket()
-            .returning(|_| Ok(create_successful_bucket_response("test-lifecycle-test")));
-        mock_gcs
-            .expect_update_bucket()
-            .returning(|_, _| Ok(create_successful_bucket_response("test-lifecycle-test")));
-        mock_gcs
-            .expect_set_bucket_iam_policy()
-            .returning(|_, _| Ok(IamPolicy::default()));
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_gcs));
-
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(storage)
-            .controller(GcpStorageController::default())
-            .platform(Platform::Gcp)
-            .service_provider(mock_provider)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
-    }
-
     /// Test that verifies versioning configuration is applied correctly
     #[tokio::test]
     async fn test_versioning_configuration() {
@@ -1639,5 +1631,396 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_prefix_tests {
+    //! The lifecycle rules this controller sends to Cloud Storage. A rule's prefix must reach
+    //! GCS as `condition.matchesPrefix`; without it the rule expires every object in the
+    //! bucket. These tests assert the exact JSON body sent to GCS.
+
+    use std::sync::{Arc, Mutex};
+
+    use alien_core::{
+        ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+        GcpClientConfig, InitialSetupAuthority, LifecycleRule, Platform, Resource,
+        ResourceDefinition, ResourceLifecycle, ResourceStatus, Stack, StackResourceState,
+        StackSettings, StackState, Storage,
+    };
+    use alien_gcp_clients::{
+        gcs::{Bucket, MockGcsApi},
+        iam::MockIamApi,
+        GcpClientConfigExt as _,
+    };
+    use serde_json::{json, Value};
+
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider,
+        PlatformServiceProvider, StackExecutor, StackResourceStateExt,
+    };
+    use crate::storage::{GcpStorageController, GcpStorageState};
+
+    const BUCKET: &str = "test-tmp-storage";
+
+    fn storage(rules: Vec<LifecycleRule>) -> Storage {
+        Storage::new("tmp-storage".to_string())
+            .lifecycle_rules(rules)
+            .build()
+    }
+
+    fn rule(days: u32, prefix: Option<&str>) -> LifecycleRule {
+        LifecycleRule {
+            days,
+            prefix: prefix.map(str::to_string),
+        }
+    }
+
+    fn delete_rule(age: u32, prefix: Option<&str>) -> Value {
+        let mut condition = json!({ "age": age });
+        if let Some(prefix) = prefix {
+            condition["matchesPrefix"] = json!([prefix]);
+        }
+        json!({ "action": { "type": "Delete" }, "condition": condition })
+    }
+
+    /// GCS answers a bucket insert or patch with the bucket, including the lifecycle it
+    /// stored. `respond` decides what the mock returns for a request.
+    fn gcs(
+        bodies: Arc<Mutex<Vec<Value>>>,
+        respond: fn(Bucket) -> Bucket,
+    ) -> Arc<dyn PlatformServiceProvider> {
+        let mut gcs = MockGcsApi::new();
+        let created = bodies.clone();
+        gcs.expect_create_bucket().returning(move |name, bucket| {
+            created
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&bucket).unwrap());
+            Ok(Bucket {
+                name: Some(name),
+                ..respond(bucket)
+            })
+        });
+        let patched = bodies;
+        gcs.expect_update_bucket().returning(move |name, bucket| {
+            patched
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&bucket).unwrap());
+            Ok(Bucket {
+                name: Some(name),
+                ..respond(bucket)
+            })
+        });
+        gcs.expect_get_bucket().returning(|name| {
+            Ok(Bucket {
+                name: Some(name),
+                ..Default::default()
+            })
+        });
+        let gcs = Arc::new(gcs);
+        let iam = Arc::new(MockIamApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_gcs_client()
+            .returning(move |_| Ok(gcs.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        Arc::new(provider)
+    }
+
+    fn echo(bucket: Bucket) -> Bucket {
+        bucket
+    }
+
+    /// The controller state an older version saved for a Ready bucket: no lifecycle revision.
+    fn previous_version_ready_controller() -> GcpStorageController {
+        let mut saved = serde_json::to_value(GcpStorageController {
+            state: GcpStorageState::Ready,
+            bucket_name: Some(BUCKET.to_string()),
+            lifecycle_revision: Some("unused".to_string()),
+            _internal_stay_count: None,
+        })
+        .unwrap();
+        saved.as_object_mut().unwrap().remove("lifecycleRevision");
+        serde_json::from_value(saved).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_sends_each_rule_prefix_as_matches_prefix() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage(vec![
+                rule(1, Some("tmp/")),
+                rule(365, None),
+                rule(5, Some("")),
+            ]))
+            .controller(GcpStorageController::default())
+            .platform(Platform::Gcp)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1, "create sends one request: {bodies:?}");
+        assert_eq!(
+            bodies[0]["lifecycle"],
+            json!({
+                "rule": [
+                    delete_rule(1, Some("tmp/")),
+                    delete_rule(365, None),
+                    // GCS rejects an empty matchesPrefix; an empty prefix means every object.
+                    delete_rule(5, None),
+                ]
+            })
+        );
+        assert!(executor
+            .internal_state::<GcpStorageController>()
+            .unwrap()
+            .lifecycle_revision
+            .is_some());
+        assert!(!executor.needs_update().unwrap());
+    }
+
+    #[tokio::test]
+    async fn update_sends_each_rule_prefix_as_matches_prefix() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage(vec![rule(30, Some("logs/"))]))
+            .controller(GcpStorageController::mock_ready("tmp-storage"))
+            .platform(Platform::Gcp)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor
+            .update(storage(vec![
+                rule(7, Some("cache/")),
+                rule(1, Some("tmp/")),
+            ]))
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *bodies.lock().unwrap(),
+            vec![json!({
+                "lifecycle": {
+                    "rule": [delete_rule(7, Some("cache/")), delete_rule(1, Some("tmp/"))]
+                }
+            })]
+        );
+        assert!(!executor.needs_update().unwrap());
+    }
+
+    #[tokio::test]
+    async fn update_removing_every_rule_sends_an_empty_rule_list() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage(vec![rule(30, Some("logs/"))]))
+            .controller(GcpStorageController::mock_ready("tmp-storage"))
+            .platform(Platform::Gcp)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.update(storage(vec![])).unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        // `lifecycle: {}` would leave the old rules on the bucket.
+        assert_eq!(
+            *bodies.lock().unwrap(),
+            vec![json!({ "lifecycle": { "rule": [] } })]
+        );
+        assert!(!executor.needs_update().unwrap());
+    }
+
+    /// A bucket an older version configured may carry wrong rules: prefixed rules without their
+    /// prefix, or rules the config removed long ago. The desired config has not changed, so
+    /// only `needs_update` can schedule the rewrite. This drives the executor's own plan and
+    /// step, as a deployment update does, and returns the bodies sent to GCS.
+    async fn repair_bucket_from_older_version(rules: Vec<LifecycleRule>) -> Vec<Value> {
+        let desired = storage(rules);
+        let stack = Stack::new("test".to_string())
+            .add(desired.clone(), ResourceLifecycle::Live)
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
+                .deployment_config(&config)
+                .service_provider(gcs(bodies.clone(), echo))
+                .build()
+                .unwrap();
+        let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
+        let mut resource = StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.to_string(),
+            Resource::new(desired),
+            Some(ResourceLifecycle::Live),
+            vec![],
+        );
+        resource.status = ResourceStatus::Running;
+        resource
+            .set_internal_controller(Some(Box::new(previous_version_ready_controller())))
+            .unwrap();
+        state.resources.insert("tmp-storage".to_string(), resource);
+
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("tmp-storage"));
+        for _ in 0..10 {
+            state = executor.step(state).await.unwrap().next_state;
+            if state.resources["tmp-storage"].status == ResourceStatus::Running {
+                break;
+            }
+        }
+
+        assert_eq!(
+            state.resources["tmp-storage"].status,
+            ResourceStatus::Running
+        );
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("tmp-storage"),
+            "the rewrite is not scheduled again once GCS confirmed the rules"
+        );
+        let bodies = bodies.lock().unwrap().clone();
+        bodies
+    }
+
+    #[tokio::test]
+    async fn unchanged_prefixed_rules_are_rewritten_on_buckets_from_older_versions() {
+        assert_eq!(
+            repair_bucket_from_older_version(vec![rule(1, Some("tmp/"))]).await,
+            vec![json!({ "lifecycle": { "rule": [delete_rule(1, Some("tmp/"))] } })]
+        );
+    }
+
+    #[tokio::test]
+    async fn rules_older_versions_failed_to_remove_are_removed() {
+        assert_eq!(
+            repair_bucket_from_older_version(vec![]).await,
+            vec![json!({ "lifecycle": { "rule": [] } })]
+        );
+    }
+
+    /// After handoff the runtime may not rewrite a setup-owned bucket, and Terraform sent the
+    /// prefixes itself. Direct setup created the bucket with this controller, so it repairs it.
+    #[tokio::test]
+    async fn frozen_buckets_are_repaired_only_under_direct_setup() {
+        for (authority, expected) in [
+            (InitialSetupAuthority::ImportedHandoff, false),
+            (InitialSetupAuthority::DirectSetup, true),
+        ] {
+            let executor = SingleControllerExecutor::builder()
+                .resource(storage(vec![rule(1, Some("tmp/"))]))
+                .controller(previous_version_ready_controller())
+                .platform(Platform::Gcp)
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .initial_setup_authority(authority)
+                .service_provider(gcs(Arc::default(), echo))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(executor.needs_update().unwrap(), expected, "{authority:?}");
+        }
+    }
+
+    /// An update scheduled for another reason (for example a dependency change) must not
+    /// rewrite a setup-owned bucket's rules either.
+    #[tokio::test]
+    async fn updates_after_handoff_leave_frozen_bucket_rules_alone() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage(vec![rule(1, Some("tmp/"))]))
+            .controller(previous_version_ready_controller())
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor
+            .update(storage(vec![rule(1, Some("tmp/"))]))
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(
+            bodies.lock().unwrap().is_empty(),
+            "{:?}",
+            bodies.lock().unwrap()
+        );
+    }
+
+    /// If GCS stores something other than what was sent, the update fails loudly instead of
+    /// recording the rules as applied.
+    #[tokio::test]
+    async fn update_fails_when_gcs_does_not_store_the_prefix() {
+        fn drop_prefixes(mut bucket: Bucket) -> Bucket {
+            for rule in bucket
+                .lifecycle
+                .iter_mut()
+                .flat_map(|lifecycle| lifecycle.rule.iter_mut().flatten())
+            {
+                rule.condition.as_mut().unwrap().matches_prefix = None;
+            }
+            bucket
+        }
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage(vec![rule(1, Some("tmp/"))]))
+            .controller(previous_version_ready_controller())
+            .platform(Platform::Gcp)
+            .service_provider(gcs(Arc::default(), drop_prefixes))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor
+            .update(storage(vec![rule(2, Some("tmp/"))]))
+            .unwrap();
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a lifecycle GCS did not store must fail the update");
+
+        assert_eq!(error.code, "RESOURCE_DRIFT");
+        assert!(executor
+            .internal_state::<GcpStorageController>()
+            .unwrap()
+            .lifecycle_revision
+            .is_none());
+        assert!(executor.needs_update().unwrap());
     }
 }
