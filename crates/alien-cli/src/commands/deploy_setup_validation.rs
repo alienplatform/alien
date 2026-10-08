@@ -21,11 +21,14 @@ pub(super) async fn validate_before_creation(
         return Ok(());
     }
     let client = create_platform_http_client(token)?;
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "platform": resolved.platform,
         "setupMethod": "cli",
         "stackSettings": deployment_stack_settings_json(resolved, args)?,
     });
+    if let Some(setup_item) = args.setup_item.as_ref() {
+        body["setupItem"] = serde_json::Value::String(setup_item.clone());
+    }
     let response = client
         .post(api_url(
             base_url,
