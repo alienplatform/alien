@@ -479,7 +479,12 @@ mod permission_update_tests {
         state.resources.insert("secrets".to_string(), vault_state);
         // The newly created role is ready, but the existing vault has not yet
         // recorded its new dependency or installed its read policy.
-        let controller = AwsServiceAccountController::mock_ready("test-consumer-sa");
+        let mut controller = AwsServiceAccountController::mock_ready("test-consumer-sa");
+        // The fixture models a newly created role with its trust already applied.
+        // A missing policy checkpoint would instead request legacy trust repair.
+        controller.assume_role_policy = Some(
+            r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#.to_string(),
+        );
         let mut account_state = StackResourceState::new_pending(
             ServiceAccount::RESOURCE_TYPE.to_string(),
             Resource::new(account),
