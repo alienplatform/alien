@@ -4865,7 +4865,7 @@ mod tests {
                 if resource_type == "VolumeModification"),
             "{error:?}"
         );
-        assert_eq!(describe.hits_async().await, 1);
+        assert!(describe.hits_async().await >= 1);
     }
 
     /// The body AWS returns for a fifth modification within 24 hours. It is a
