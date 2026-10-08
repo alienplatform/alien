@@ -1169,12 +1169,12 @@ mod tests {
         let existing = std::env::var("ALIEN_TEST_TRUST_EXISTING").as_deref() == Ok("1");
         let resource = ServiceAccount::new("execution-sa".to_string()).build();
         let controller = if existing {
-            AwsServiceAccountController {
-                state: AwsServiceAccountState::Ready,
-                role_name: Some(format!("{prefix}-execution-sa")),
-                role_arn: Some(format!("arn:aws:iam::{}:role/{prefix}-execution-sa", config.account_id)),
-                ..Default::default()
-            }
+            serde_json::from_value(serde_json::json!({
+                "state": "ready",
+                "roleName": format!("{prefix}-execution-sa"),
+                "roleArn": format!("arn:aws:iam::{}:role/{prefix}-execution-sa", config.account_id),
+                "stackPermissionsApplied": true
+            })).unwrap()
         } else { AwsServiceAccountController::default() };
         let mut executor = SingleControllerExecutor::builder()
             .resource(resource.clone())
