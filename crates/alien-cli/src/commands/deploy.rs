@@ -2065,7 +2065,7 @@ async fn deploy_task_with_environment(
     let progress_steps = steps.clone();
     let on_progress: alien_deployment::runner::ProgressCallback = Box::new(move |progress| {
         if let Some(stack_state) = progress.stack_state {
-            progress_steps.sync_deployment_resources(&stack_state.resources);
+            progress_steps.sync_deployment_resources(&stack_state.resources, progress.status);
         }
     });
     let runner_result = alien_deployment::runner::run_step_loop(
@@ -2146,7 +2146,7 @@ async fn deploy_task_with_environment(
             // Provisioning can still block after the handoff (for example on a
             // deployer secret that is not written yet), so do not report running.
             steps.complete(2, Some("Handed off to the manager".to_string()));
-            steps.skip(3, Some("The manager provisions the deployment".to_string()));
+            steps.activate(3, Some("Waiting for the manager".to_string()));
             true
         }
         LoopOutcome::Neutral => {
@@ -2159,18 +2159,22 @@ async fn deploy_task_with_environment(
             }));
         }
     };
-    drop(steps);
 
     if handed_off {
         // Setup only gets the deployment to the handoff. Report what the manager
         // makes of it: running, failed, or blocked on the deployer.
-        println!(
-            "{}",
-            dim_label("Setup complete. Waiting for the manager to provision the deployment...")
-        );
+        steps.println(&dim_label(
+            "Setup complete. Waiting for the manager to provision the deployment...",
+        ));
         let deployment_id = tracked_deployment.deployment_id.clone();
-        wait_for_handed_off_deployment(
-            || observe_deployment(&manager_client, &deployment_id),
+        let activation = wait_for_handed_off_deployment(
+            || async {
+                let observed = observe_deployment(&manager_client, &deployment_id).await?;
+                if let Some(stack_state) = &observed.stack_state {
+                    steps.sync_deployment_resources(&stack_state.resources, observed.status);
+                }
+                Ok(observed)
+            },
             HANDOFF_POLL_INTERVAL,
             HANDOFF_TIMEOUT,
             |observed| {
@@ -2178,20 +2182,26 @@ async fn deploy_task_with_environment(
                     observed.status,
                     DeploymentStatus::WaitingForSecrets | DeploymentStatus::WaitingForMachines
                 ) {
-                    println!(
+                    steps.println(&format!(
                         "{} {}",
                         dim_label("Blocked:"),
                         observed
                             .error_message
                             .as_deref()
                             .unwrap_or(describe_waiting_status(&observed.status))
-                    );
+                    ));
                 }
             },
         )
-        .await?;
+        .await;
+        if let Err(error) = activation {
+            steps.fail(3, Some(error.message.clone()));
+            return Err(error);
+        }
+        steps.complete(3, Some("Running".to_string()));
     }
 
+    drop(steps);
     println!("{}", success_line("Deployment is running."));
     println!(
         "{} {} ({})",
@@ -2222,6 +2232,7 @@ const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 *
 struct ObservedDeployment {
     status: DeploymentStatus,
     error_message: Option<String>,
+    stack_state: Option<alien_core::StackState>,
 }
 
 async fn observe_deployment(
@@ -2252,9 +2263,18 @@ async fn observe_deployment(
             message: format!("Failed to decode the error of deployment '{deployment_id}'"),
         })?
         .map(|error| error.message);
+    let stack_state = deployment
+        .stack_state
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to decode the resource state of deployment '{deployment_id}'"),
+        })?;
     Ok(ObservedDeployment {
         status,
         error_message,
+        stack_state,
     })
 }
 
@@ -3964,6 +3984,7 @@ max = 1
             std::future::ready(Ok(ObservedDeployment {
                 status,
                 error_message: error.map(str::to_string),
+                stack_state: None,
             }))
         }
     }
