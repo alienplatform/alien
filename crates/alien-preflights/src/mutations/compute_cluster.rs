@@ -2546,6 +2546,7 @@ mod tests {
             (autoscale(2, 2), (2, 2)),
             (autoscale(1, 2), (1, 2)),
             (autoscale(2, 10), (2, 10)),
+            (autoscale(1, 100), (1, 100)),
         ] {
             let group = prepare_generated_pool(selection.clone())
                 .await
@@ -2557,15 +2558,15 @@ mod tests {
         for (selection, message) in [
             (
                 autoscale(0, 2),
-                "autoscale minimum 0 is outside the allowed range 1-10",
+                "autoscale minimum 0 is outside the allowed range 1-100",
             ),
             (
-                autoscale(1, 11),
-                "autoscale maximum 11 is outside the allowed range 1-10",
+                autoscale(1, 101),
+                "autoscale maximum 101 is outside the allowed range 1-100",
             ),
             (
-                fixed(11),
-                "fixed machine count 11 is outside the allowed range 1-10",
+                fixed(101),
+                "fixed machine count 101 is outside the allowed range 1-100",
             ),
         ] {
             let error = prepare_generated_pool(selection.clone())
@@ -2674,6 +2675,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A saved choice above the old 10-machine sizing cap stays valid when a later release
+    /// lowers the replica count, and so does one above an earlier, larger recommendation.
+    #[tokio::test]
+    async fn large_saved_pool_survives_releases_that_change_replicas() {
+        let autoscale_one_twelve = ComputePoolSelection::Autoscale {
+            min: 1,
+            max: 12,
+            machine: Some("m7g.large".to_string()),
+            failure_domains: None,
+        };
+        for replicas in [12, 11, 3, 40] {
+            let group = prepare_release(
+                gw_release(ContainerReplicas::Autoscale(1, replicas)),
+                &autoscale_one_twelve,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{replicas} replicas: {error}"));
+            assert_eq!(
+                (group.min_size, group.max_size),
+                (1, 12),
+                "{replicas} replicas"
+            );
+        }
+
+        // A recommendation above the ceiling is clamped, so it stays a valid choice.
+        let plan = plan_compute(
+            &gw_release(ContainerReplicas::Autoscale(1, 250)),
+            Platform::Aws,
+            None,
+        )
+        .expect("compute plan should build");
+        assert_eq!(plan.pools[0].recommended.max_size(), 100);
+        assert!(
+            plan.pools[0].errors.is_empty(),
+            "{:?}",
+            plan.pools[0].errors
+        );
     }
 
     #[tokio::test]

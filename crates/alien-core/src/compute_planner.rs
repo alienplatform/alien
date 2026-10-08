@@ -152,7 +152,10 @@ struct PlannedGroup {
 }
 
 /// Highest machine count an installer may choose for a pool the source does not declare.
-pub const GENERATED_POOL_MAX_MACHINES: u32 = 10;
+///
+/// It does not depend on the release, so a saved choice never falls outside the allowed range
+/// when a later release changes replica counts. Recommendations above it are clamped to it.
+pub const GENERATED_POOL_MAX_MACHINES: u32 = 100;
 
 /// Allowed scale for a pool that no capacity group declares.
 ///
@@ -165,7 +168,8 @@ pub const GENERATED_POOL_MAX_MACHINES: u32 = 10;
 /// autoscale range N..N). Whether the choice can hold the workloads is
 /// [`check_pool_capacity`]'s question.
 pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> CapacityGroupScalePolicy {
-    let ceiling = GENERATED_POOL_MAX_MACHINES.max(default_max);
+    let ceiling = GENERATED_POOL_MAX_MACHINES;
+    let default_min = default_min.min(ceiling);
     CapacityGroupScalePolicy::Autoscale {
         min: ComputeChoiceRange {
             min: default_min,
@@ -175,7 +179,7 @@ pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> Capaci
         max: ComputeChoiceRange {
             min: default_min.max(1),
             max: ceiling,
-            default: default_max,
+            default: default_max.clamp(default_min.max(1), ceiling),
         },
     }
 }
@@ -1361,8 +1365,8 @@ mod tests {
         assert_eq!(
             pool.scale,
             CapacityGroupScalePolicy::Autoscale {
-                min: range(1, 10, 1),
-                max: range(1, 10, 3),
+                min: range(1, 100, 1),
+                max: range(1, 100, 3),
             }
         );
         assert_eq!(
@@ -1377,8 +1381,8 @@ mod tests {
         assert_eq!(
             plan.pools[0].scale,
             CapacityGroupScalePolicy::Autoscale {
-                min: range(1, 10, 1),
-                max: range(1, 10, 1),
+                min: range(1, 100, 1),
+                max: range(1, 100, 1),
             }
         );
         assert!(matches!(
