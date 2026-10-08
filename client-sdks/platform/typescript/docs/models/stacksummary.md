@@ -19,6 +19,7 @@ let value: StackSummary = {
   publicEndpoints: [
     {
       resourceId: "<id>",
+      resourceType: "<value>",
       endpointName: "<value>",
       hostLabel: "<value>",
       wildcardSubdomains: true,
