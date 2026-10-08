@@ -1315,6 +1315,145 @@ mod tests {
         }
     }
 
+    /// The setup network of a direct-setup deployment, recorded with one public and one private
+    /// subnet.
+    fn frozen_setup_network() -> alien_core::StackResourceState {
+        let network = alien_core::Network::new("default-network".to_string())
+            .settings(alien_core::NetworkSettings::Create {
+                cidr: Some("10.0.0.0/16".to_string()),
+                availability_zones: 2,
+            })
+            .build();
+        alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Network::RESOURCE_TYPE.to_string())
+            .status(alien_core::ResourceStatus::Running)
+            .config(alien_core::Resource::new(network))
+            .internal_state(serde_json::json!({
+                "_controllerStateVersion": 1,
+                "type": "AwsNetworkController",
+                "state": "ready",
+                "vpcId": "vpc-1",
+                "cidrBlock": "10.0.0.0/16",
+                "publicSubnetIds": ["subnet-a"],
+                "privateSubnetIds": ["subnet-b"],
+                "routeTableAssociationIds": [],
+                "availabilityZones": ["us-east-1a", "us-east-1b"],
+                "isByoVpc": false,
+                "internalStayCount": null
+            }))
+            .lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .controller_platform(Platform::Aws)
+            .build()
+    }
+
+    /// EC2 for a teardown whose role is denied `ec2:DeleteSubnet`. The subnets exist, so the
+    /// denial is real.
+    fn subnet_delete_denied_ec2() -> Arc<dyn alien_infra::PlatformServiceProvider> {
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        ec2.expect_delete_subnet().returning(|_| {
+            Err(AlienError::new(
+                alien_aws_clients::ErrorData::RemoteAccessDenied {
+                    resource_type: "EC2 Resource".to_string(),
+                    resource_name: "subnet".to_string(),
+                },
+            ))
+        });
+        ec2.expect_describe_subnets().returning(|request| {
+            let id = request.subnet_ids.unwrap()[0].clone();
+            Ok(serde_json::from_value(serde_json::json!({ "subnetSet": { "item": [
+                { "subnetId": id, "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "us-east-1a" }
+            ]}}))
+            .unwrap())
+        });
+        ec2.expect_delete_vpc().times(0);
+        let ec2 = Arc::new(ec2);
+        let mut provider = alien_infra::MockPlatformServiceProvider::new();
+        provider.expect_runtime_setup_authority().return_const(None);
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        Arc::new(provider)
+    }
+
+    /// Setup teardown as a denied subnet delete leaves it. The manager ends the execution attempt
+    /// when it records `teardown-failed`, so another reconcile is refused (the claim is gone) and
+    /// its refusal used to replace the cause. The caller now only releases the lease, and the
+    /// error it reports carries the network's own reason.
+    #[tokio::test]
+    async fn setup_teardown_failure_reports_the_resource_cause_without_another_reconcile() {
+        let server = MockServer::start_async().await;
+        let mut state = running_state();
+        state.status = alien_core::DeploymentStatus::TeardownRequired;
+        let mut stack_state = alien_core::StackState::new(Platform::Aws);
+        stack_state
+            .resources
+            .insert("default-network".to_string(), frozen_setup_network());
+        state.stack_state = Some(stack_state);
+        state.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+        let progress = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":null}));
+            })
+            .await;
+        let terminal = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-failed"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":null}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+
+        let result = crate::setup_teardown::run_setup_teardown_after_handoff(
+            &mut state,
+            &mut deployment_config(),
+            &alien_core::ClientConfig::Aws(Box::new(
+                <alien_aws_clients::AwsClientConfig as alien_aws_clients::AwsClientConfigExt>::mock(),
+            )),
+            "deployment-1",
+            &crate::runner::RunnerPolicy {
+                max_steps: 100,
+                operation: crate::loop_contract::LoopOperation::Delete,
+                delay_strategy: crate::runner::DelayStrategy::Inline,
+            },
+            &ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+            Some(subnet_delete_denied_ec2()),
+        )
+        .await
+        .map(|result| result.expect("teardown must run"));
+        let teardown = result.as_ref().expect("the failure is checkpointed");
+        assert_eq!(teardown.loop_result.outcome, LoopOutcome::Failure);
+        assert!(teardown.state_persisted);
+        assert_eq!(state.status, alien_core::DeploymentStatus::TeardownFailed);
+
+        let error = finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+            .await
+            .expect_err("the teardown failed");
+        let chain = format!("{error}");
+        assert!(
+            chain.contains("RESOURCE_DELETE_BLOCKED")
+                && chain.contains("subnet-a")
+                && chain.contains("subnet-b")
+                && chain.contains("'default-network'"),
+            "{chain}"
+        );
+        assert!(progress.hits_async().await >= 1);
+        terminal.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
+    }
+
     #[tokio::test]
     async fn checkpointed_teardown_budget_failure_releases_without_another_terminal_write() {
         let server = MockServer::start_async().await;

@@ -261,6 +261,7 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug, Clone, Copy)]
 enum Attempts {
+    /// Sent again on transient failures; an access denial is returned at once.
     Retried,
     /// Only a throttled request is sent again.
     ThrottlingOnly,
@@ -351,7 +352,12 @@ impl Ec2Client {
 
         let result = match attempts {
             Attempts::Retried => {
-                crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+                crate::aws::aws_request_utils::sign_send_xml_retrying_when(
+                    builder,
+                    &self.sign_config(),
+                    crate::aws::aws_request_utils::is_retryable_unless_denied,
+                )
+                .await
             }
             Attempts::ThrottlingOnly => {
                 crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
@@ -386,9 +392,12 @@ impl Ec2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+        let result = crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_retryable_unless_denied,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -4769,6 +4778,50 @@ mod tests {
             if message.contains("IncorrectModificationState") && resource_type == "Volume" && resource_name == "vol-1"
         ));
         response.assert_hits(1);
+    }
+
+    /// A denied delete does not pass on a resend. Sending it again three more times with backoff
+    /// made each denied call in a network teardown take seconds instead of milliseconds.
+    #[tokio::test]
+    async fn a_denied_delete_is_sent_once() {
+        let server = MockServer::start_async().await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=DeleteSubnet");
+                then.status(403).body(
+                    "<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>You are not authorized to perform this operation. User: arn:aws:sts::123456789012:assumed-role/restricted/session is not authorized to perform: ec2:DeleteSubnet with an explicit deny in an identity-based policy</Message></Error></Errors><RequestID>1</RequestID></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .delete_subnet("subnet-a")
+            .await
+            .expect_err("the delete is denied");
+
+        assert_eq!(delete.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_ACCESS_DENIED");
+    }
+
+    /// Transient failures are still sent again.
+    #[tokio::test]
+    async fn a_delete_that_hits_an_unavailable_service_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=DeleteSubnet");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        client(&server)
+            .delete_subnet("subnet-a")
+            .await
+            .expect_err("the service stays unavailable");
+
+        assert_eq!(delete.hits_async().await, 4);
     }
 
     #[tokio::test]

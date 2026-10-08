@@ -391,6 +391,49 @@ pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
         .await
 }
 
+/// Sign the request and deserialize an XML response into `T`, retrying only errors for which
+/// `retry_when` is true.
+pub async fn sign_send_xml_retrying_when<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+    retry_when: fn(&AlienError<ErrorData>) -> bool,
+) -> Result<T> {
+    builder
+        .sign_aws_request(config)?
+        .with_retry()
+        .retry_only_when(retry_when)
+        .send_xml::<T>()
+        .await
+}
+
+/// Sign the request and expect no body, retrying only errors for which `retry_when` is true.
+pub async fn sign_send_no_response_retrying_when(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+    retry_when: fn(&AlienError<ErrorData>) -> bool,
+) -> Result<()> {
+    builder
+        .sign_aws_request(config)?
+        .with_retry()
+        .retry_only_when(retry_when)
+        .send_no_response()
+        .await
+}
+
+/// Whether a failed call may succeed if it is sent again, except that an access denial is final.
+/// The caller's grants do not change between attempts, so resending a denied call only delays
+/// the denial, and callers that handle it (a delete that moves on and reports the object it
+/// could not delete) must see it at once.
+pub fn is_retryable_unless_denied(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError {
+            http_status: 401 | 403,
+            ..
+        }) => false,
+        _ => error.retryable,
+    }
+}
+
 /// Sign the request and deserialize an XML response into `T`, retrying only throttling.
 ///
 /// For a create the service cannot make idempotent: when a response is lost or a 5xx arrives

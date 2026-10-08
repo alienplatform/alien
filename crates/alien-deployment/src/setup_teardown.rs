@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, InitialSetupAuthority,
-    ResourceLifecycle, RuntimeMetadata, SetupScaffolding, StackState, StackStatus,
+    ResourceLifecycle, ResourceStatus, RuntimeMetadata, SetupScaffolding, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
@@ -100,9 +100,15 @@ async fn run_setup_teardown_after_handoff_inner(
             {
                 Ok(progress) => progress,
                 Err(error) => {
-                    fail_setup_teardown(deployment_id, state, config, transport, error.clone())
-                        .await?;
-                    return Err(error);
+                    return failed_setup_teardown(
+                        deployment_id,
+                        state,
+                        config,
+                        transport,
+                        error,
+                        scaffolding_steps,
+                    )
+                    .await;
                 }
             };
         if progress == ScaffoldingProgress::Done {
@@ -173,8 +179,7 @@ async fn run_setup_teardown_after_handoff_inner(
         Ok(prepared) => prepared,
         Err(error) => {
             state.stack_state = Some(stack_state);
-            fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
-            return Err(error);
+            return failed_setup_teardown(deployment_id, state, config, transport, error, 0).await;
         }
     };
     info!(
@@ -241,11 +246,16 @@ async fn run_setup_teardown_after_handoff_inner(
                 }));
             }
             StackStatus::Failure => {
-                let error = AlienError::new(ErrorData::StackExecutionFailed {
-                    message: "Setup-owned resource teardown failed".to_string(),
-                });
-                fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
-                return Err(error);
+                let error = setup_resource_teardown_error(state.stack_state.as_ref());
+                return failed_setup_teardown(
+                    deployment_id,
+                    state,
+                    config,
+                    transport,
+                    error,
+                    step_count - 1,
+                )
+                .await;
             }
             StackStatus::Pending | StackStatus::InProgress | StackStatus::Running => {}
         }
@@ -265,8 +275,15 @@ async fn run_setup_teardown_after_handoff_inner(
         ) {
             Ok(step_result) => step_result,
             Err(error) => {
-                fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
-                return Err(error);
+                return failed_setup_teardown(
+                    deployment_id,
+                    state,
+                    config,
+                    transport,
+                    error,
+                    step_count,
+                )
+                .await;
             }
         };
         let suggested_delay_ms = step_result.suggested_delay_ms;
@@ -425,6 +442,58 @@ async fn teardown_setup_scaffolding(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to delete setup scaffolding".to_string(),
         })
+}
+
+/// Records a failed setup teardown and reports the failure as persisted.
+///
+/// Persisting `TeardownFailed` ends the execution attempt on the manager. The caller must then
+/// only release its lease: a further reconcile addresses an attempt that no longer exists, is
+/// refused, and that refusal would be reported in place of `error`. With `state_persisted` set,
+/// the caller releases the lease and reports `state.error`.
+async fn failed_setup_teardown(
+    deployment_id: &str,
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    transport: &dyn DeploymentLoopTransport,
+    error: AlienError<ErrorData>,
+    steps_executed: usize,
+) -> Result<Option<RunnerResult>> {
+    fail_setup_teardown(deployment_id, state, config, transport, error).await?;
+    Ok(Some(RunnerResult {
+        loop_result: LoopResult {
+            stop_reason: LoopStopReason::Failed,
+            outcome: LoopOutcome::Failure,
+            final_status: state.status,
+        },
+        steps_executed,
+        state_persisted: true,
+    }))
+}
+
+/// The teardown error for setup-owned resources that failed to delete, caused by the first
+/// failed resource's own error, so the reason (for example a denied delete and the objects it
+/// left) reaches whoever ran the teardown.
+fn setup_resource_teardown_error(stack_state: Option<&StackState>) -> AlienError<ErrorData> {
+    let mut failed: Vec<_> = stack_state
+        .into_iter()
+        .flat_map(|stack_state| stack_state.resources.iter())
+        .filter(|(_, resource)| resource.status == ResourceStatus::DeleteFailed)
+        .filter_map(|(id, resource)| resource.error.as_ref().map(|error| (id, error)))
+        .collect();
+    failed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let Some((_, cause)) = failed.first() else {
+        return AlienError::new(ErrorData::StackExecutionFailed {
+            message: "Setup-owned resource teardown failed".to_string(),
+        });
+    };
+    let ids = failed
+        .iter()
+        .map(|(id, _)| format!("'{id}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (*cause).clone().context(ErrorData::StackExecutionFailed {
+        message: format!("Setup-owned resource teardown failed for {ids}"),
+    })
 }
 
 async fn fail_setup_teardown(

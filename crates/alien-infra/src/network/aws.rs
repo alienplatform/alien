@@ -156,6 +156,11 @@ const ELASTIC_IP_RELEASE_MAX_POLLS: u32 = 20;
 const NETWORK_INTERFACE_DRAIN_MAX_POLLS: u32 = 90;
 /// Polls of a route table, internet gateway or VPC that still has dependents (15 s apart).
 const DEPENDENCY_DRAIN_MAX_POLLS: u32 = 40;
+/// Cleanup passes over children kept after a denied delete before the VPC delete fails.
+/// A denied delete succeeds only once setup grants the permission, so waiting longer does not
+/// help. One pass revisits the children a checkpoint from older code skipped, and children whose
+/// permission was restored. After that the delete fails, naming them, and a retry starts over.
+const RETAINED_DELETE_MAX_PASSES: u32 = 1;
 
 /// Idempotency token for `CreateNatGateway`. EC2 allows up to 64 ASCII characters. The first
 /// gateway keeps the token earlier versions used; each replacement of a failed gateway gets
@@ -5164,7 +5169,7 @@ impl AwsNetworkController {
             .collect::<Vec<_>>();
         if !retained.is_empty() {
             self.wait_for_retained_delete_iterations += 1;
-            if self.wait_for_retained_delete_iterations >= DEPENDENCY_DRAIN_MAX_POLLS {
+            if self.wait_for_retained_delete_iterations > RETAINED_DELETE_MAX_PASSES {
                 return Err(AlienError::new(ErrorData::ResourceDeleteBlocked {
                     resource_id: config.id.clone(),
                     object: format!("VPC '{}'", self.vpc_id.as_deref().unwrap_or("unknown")),
@@ -7915,6 +7920,58 @@ mod controller_state_tests {
         assert!(controller(&executor).vpc_id.is_none());
     }
 
+    /// A denied delete is not a wait: only a setup change grants the permission. With
+    /// `ec2:DeleteSubnet` denied, a teardown deletes everything else, revisits the subnets once
+    /// and then fails naming them, instead of looping over them for dozens of passes.
+    #[tokio::test]
+    async fn teardown_with_a_denied_subnet_fails_after_one_revisit() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
+        // The first pass and the one revisit, for each of the two subnets.
+        ec2.expect_delete_subnet()
+            .times(4)
+            .returning(|_| Err(denied()));
+        ec2.expect_describe_subnets().times(4).returning(|request| {
+            let id = request.subnet_ids.unwrap()[0].clone();
+            Ok(parse(json!({ "subnetSet": { "item": [
+                { "subnetId": id, "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "eu-west-1a" }
+            ]}})))
+        });
+        ec2.expect_delete_vpc().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::Ready,
+                vpc_id: Some("vpc-1".into()),
+                security_group_id: Some("sg-1".into()),
+                public_subnet_ids: vec!["subnet-a".into()],
+                private_subnet_ids: vec!["subnet-b".into()],
+                ..Default::default()
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor.delete().expect("teardown");
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a denied subnet blocks the VPC delete");
+
+        assert_eq!(error.code, "RESOURCE_DELETE_BLOCKED");
+        assert!(!error.retryable, "only a permission change can unblock it");
+        assert!(
+            error.message.contains("subnet-a") && error.message.contains("subnet-b"),
+            "{}",
+            error.message
+        );
+        let state = controller(&executor);
+        assert_eq!(state.public_subnet_ids, ["subnet-a"]);
+        assert_eq!(state.private_subnet_ids, ["subnet-b"]);
+        assert_eq!(state.vpc_id.as_deref(), Some("vpc-1"));
+        assert!(state.security_group_id.is_none());
+    }
+
     #[tokio::test]
     async fn retained_child_wait_is_bounded_and_manual_retry_resets_it() {
         let ec2 = MockEc2Api::new();
@@ -7922,7 +7979,7 @@ mod controller_state_tests {
             state: AwsNetworkState::DeletingVpc,
             vpc_id: Some("vpc-1".into()),
             security_group_id: Some("sg-retained".into()),
-            wait_for_retained_delete_iterations: DEPENDENCY_DRAIN_MAX_POLLS - 1,
+            wait_for_retained_delete_iterations: RETAINED_DELETE_MAX_PASSES,
             ..Default::default()
         })
         .unwrap();
