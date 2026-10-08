@@ -14,6 +14,10 @@ export type OperationsBundleDownload = {
    * Presigned URL to GET the bundle ZIP from. Short-lived.
    */
   url: string;
+  /**
+   * Environment the plugin process runs with: its settings, which may hold secrets. Never persisted.
+   */
+  env?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -24,6 +28,7 @@ export const OperationsBundleDownload$inboundSchema: z.ZodType<
   plugin: z.string(),
   pluginVersion: z.string(),
   url: z.string(),
+  env: z.record(z.string(), z.string()).optional(),
 });
 
 export function operationsBundleDownloadFromJSON(

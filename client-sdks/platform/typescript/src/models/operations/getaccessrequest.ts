@@ -113,6 +113,7 @@ export type GetAccessRequestRevokedBy = {
  * The access request.
  */
 export type GetAccessRequestResponse = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: GetAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -298,6 +299,8 @@ export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   GetAccessRequestResponse,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(GetAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
