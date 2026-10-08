@@ -1134,6 +1134,44 @@ mod tests {
     use alien_core::permissions::PermissionProfile;
     use std::sync::Arc;
 
+    /// Creates the workload role through the real controller. The companion
+    /// cloud runner verifies role chaining from legacy, isolated and unrelated
+    /// task-owned node identities, and deletes all test resources.
+    #[tokio::test]
+    #[ignore = "requires isolated AWS node-role fixtures"]
+    async fn live_create_service_account_for_compute_nodes() {
+        let prefix = std::env::var("ALIEN_TEST_TRUST_PREFIX").unwrap();
+        assert!(prefix.starts_with("e2e-"));
+        let workload = Container::new("api".to_string())
+            .code(alien_core::ContainerCode::Image { image: "example.invalid/probe:1".to_string() })
+            .cpu(alien_core::ResourceSpec { min: "0.25".to_string(), desired: "0.25".to_string() })
+            .memory(alien_core::ResourceSpec { min: "256Mi".to_string(), desired: "256Mi".to_string() })
+            .port(8080)
+            .permissions("execution".to_string())
+            .build();
+        let config = alien_core::AwsClientConfig {
+            account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+            region: std::env::var("AWS_TARGET_REGION").unwrap(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(ServiceAccount::new("execution-sa".to_string()).build())
+            .controller(AwsServiceAccountController::default())
+            .platform(Platform::Aws)
+            .client_config(alien_core::ClientConfig::Aws(Box::new(config)))
+            .resource_prefix(prefix)
+            .with_stack_resource(workload, alien_core::ResourceLifecycle::Live)
+            .with_stack_resource(ComputeCluster::new("compute".to_string()).build(), alien_core::ResourceLifecycle::Frozen)
+            .real_delays()
+            .build().await.unwrap();
+        executor.run_until_status(ResourceStatus::Running).await.unwrap();
+    }
+
     #[tokio::test]
     async fn legacy_grant_capture_avoids_iam_only_for_imported_handoffs() {
         let profile = PermissionProfile::new().resource("objects", ["storage/data-read"]);
