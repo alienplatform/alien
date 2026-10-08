@@ -24,7 +24,7 @@ use alien_core::{
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment_with_payload, acquire_setup_run_deployment,
-    combine_operation_and_finalization, final_reconcile, ManagerApiTransport,
+    combine_operation_and_finalization, final_reconcile, release_deployment, ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -2019,9 +2019,19 @@ async fn deploy_task_with_environment(
             .then(|| result.loop_result.final_status.clone())
     });
 
-    // Always reconcile + release, even on error
-    let runner_result = combine_operation_and_finalization(
-        alien_deployment::runner::preserve_semantic_failure(runner_result, &current),
+    // An Ok runner result has passed the checkpoint durability barrier, even
+    // for semantic failure. Terminal reconciliation may have closed its claim;
+    // replaying that claim hides the resource error behind a lease error.
+    // A runner error still needs a final checkpoint attempt before release.
+    let finalized = if runner_result.is_ok() {
+        release_deployment(
+            lock_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            acquired_deployment.execution_claim.as_ref(),
+        )
+        .await
+    } else {
         final_reconcile(
             lock_client,
             &tracked_deployment.deployment_id,
@@ -2029,7 +2039,11 @@ async fn deploy_task_with_environment(
             acquired_deployment.execution_claim.as_ref(),
             &current,
         )
-        .await,
+        .await
+    };
+    let runner_result = combine_operation_and_finalization(
+        alien_deployment::runner::preserve_semantic_failure(runner_result, &current),
+        finalized,
     );
 
     // Semantic failures are checkpointed as a successful runner return. Mark

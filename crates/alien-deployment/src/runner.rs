@@ -109,16 +109,16 @@ pub fn preserve_semantic_failure(
     state: &DeploymentState,
 ) -> std::result::Result<RunnerResult, AlienError> {
     match result {
-        Ok(result) if result.loop_result.outcome == LoopOutcome::Failure => {
-            Err(state.error.clone().unwrap_or_else(|| {
+        Ok(result) if result.loop_result.outcome == LoopOutcome::Failure => Err(
+            crate::deployment_headline_error_from_state(state).unwrap_or_else(|| {
                 AlienError::new(alien_error::GenericError {
                     message: format!(
                         "deployment failed at status {:?}",
                         result.loop_result.final_status
                     ),
                 })
-            }))
-        }
+            }),
+        ),
         Ok(result) => Ok(result),
         Err(error) => Err(error.into_generic()),
     }
