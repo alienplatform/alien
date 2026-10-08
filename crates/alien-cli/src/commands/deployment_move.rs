@@ -44,7 +44,7 @@ mod tests {
             }).await;
             let preview = server.mock_async(|when, then| {
                 when.method(POST).path(format!("/v1/deployments/{id}/move"))
-                    .json_body_partial(json!({"deploymentGroupId": destination, "dryRun": true}));
+                    .json_body_partial(json!({"deploymentGroupId": destination, "dryRun": true}).to_string());
                 then.status(200).json_body(json!({
                     "deploymentId": id, "previousDeploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaa",
                     "deploymentGroupId": destination, "membershipRevision": 17,
@@ -58,7 +58,8 @@ mod tests {
                         .path(format!("/v1/deployments/{id}/move"))
                         .json_body_partial(
                             json!({"deploymentGroupId": destination, "dryRun": false,
-                        "expectedMembershipRevision": explicit_revision.unwrap_or(17)}),
+                        "expectedMembershipRevision": explicit_revision.unwrap_or(17)})
+                            .to_string(),
                         );
                     then.status(200).json_body(json!({
                     "deploymentId": id, "previousDeploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaa",
