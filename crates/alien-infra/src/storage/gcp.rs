@@ -331,7 +331,8 @@ impl GcpStorageController {
         let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
         let lifecycle_revision = gcs_lifecycle_revision(&config.id, &lifecycle)?;
         let write_lifecycle = config.lifecycle_rules != prev_config.lifecycle_rules
-            || self.lifecycle_revision.as_deref() != Some(lifecycle_revision.as_str());
+            || (may_repair_lifecycle(ctx, &config.id)
+                && self.lifecycle_revision.as_deref() != Some(lifecycle_revision.as_str()));
         if write_lifecycle {
             info!(bucket = %bucket_name, rules_count = %config.lifecycle_rules.len(), "Updating lifecycle rules");
             bucket_patch.lifecycle = Some(lifecycle.clone());
@@ -720,15 +721,7 @@ impl GcpStorageController {
     /// The storage config of such a deployment is unchanged, so nothing else would rewrite it.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let config = ctx.desired_resource_config::<Storage>()?;
-        // Setup owns a Frozen bucket after handoff: Terraform sent the prefixes itself, and the
-        // runtime may not rewrite the bucket. Direct setup runs this controller with setup
-        // credentials, so it can repair a bucket this controller created.
-        let setup_owned = ctx
-            .desired_stack
-            .resources
-            .get(&config.id)
-            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
-        if setup_owned && ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
+        if !may_repair_lifecycle(ctx, &config.id) {
             return Ok(false);
         }
         let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
@@ -763,6 +756,19 @@ impl GcpStorageController {
             Ok(None)
         }
     }
+}
+
+/// Whether this controller may rewrite a bucket's lifecycle that the storage config did not
+/// change. After handoff, setup owns a Frozen bucket: Terraform sent its rules, and the runtime
+/// must not replace them. Direct setup runs this controller with setup credentials, and this
+/// controller created the bucket, so it may repair it.
+fn may_repair_lifecycle(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
+    let setup_owned = ctx
+        .desired_stack
+        .resources
+        .get(resource_id)
+        .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
+    !setup_owned || ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
 }
 
 /// Builds the Cloud Storage lifecycle configuration for a storage's rules. Each rule deletes
@@ -1945,6 +1951,36 @@ mod lifecycle_prefix_tests {
                 .unwrap();
             assert_eq!(executor.needs_update().unwrap(), expected, "{authority:?}");
         }
+    }
+
+    /// An update scheduled for another reason (for example a dependency change) must not
+    /// rewrite a setup-owned bucket's rules either.
+    #[tokio::test]
+    async fn updates_after_handoff_leave_frozen_bucket_rules_alone() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage(vec![rule(1, Some("tmp/"))]))
+            .controller(previous_version_ready_controller())
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor
+            .update(storage(vec![rule(1, Some("tmp/"))]))
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(
+            bodies.lock().unwrap().is_empty(),
+            "{:?}",
+            bodies.lock().unwrap()
+        );
     }
 
     /// If GCS stores something other than what was sent, the update fails loudly instead of
