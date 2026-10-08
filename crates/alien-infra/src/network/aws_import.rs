@@ -78,6 +78,7 @@ impl ResourceImporter for AwsNetworkImporter {
             extra_internet_gateway_ids: Vec::new(),
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
+            wait_for_retained_delete_iterations: 0,
             _internal_stay_count: None,
         };
         if needs_default_vpc_discovery || needs_subnet_domain_discovery {
