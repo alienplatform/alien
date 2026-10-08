@@ -1082,20 +1082,25 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
-    use alien_aws_clients::s3::{
-        AccessControlList, DeleteObjectsOutput, GetBucketAclOutput, GetBucketLocationOutput,
-        GetBucketPolicyOutput, GetBucketVersioningOutput, LifecycleConfiguration,
-        LifecycleExpiration, LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus,
-        ListObjectsV2Output, ListVersionsOutput, MockS3Api, PublicAccessBlockConfiguration,
-        VersioningStatus,
+    use alien_aws_clients::{
+        s3::{
+            AccessControlList, DeleteObjectsOutput, GetBucketAclOutput, GetBucketLocationOutput,
+            GetBucketPolicyOutput, GetBucketVersioningOutput, LifecycleConfiguration,
+            LifecycleExpiration, LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus,
+            ListObjectsV2Output, ListVersionsOutput, MockS3Api, PublicAccessBlockConfiguration,
+            S3Api, S3Client, VersioningStatus,
+        },
+        AwsCredentialProvider,
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
-        LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
+        AwsClientConfig, AwsCredentials, AwsServiceOverrides, LifecycleRule as AlienLifecycleRule,
+        Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
+    use httpmock::{Method::PUT, MockServer};
     use rstest::{fixture, rstest};
 
     use crate::core::{
@@ -1875,5 +1880,99 @@ mod tests {
 
         // Verify outputs are not available for deleted resources (standard behavior)
         assert!(executor.outputs().is_none());
+    }
+
+    /// The error a deployment saves when S3 rejects the bucket's lifecycle rules. It is replayed
+    /// from a local server through the real S3 client, so it has the same layers a failed
+    /// deployment stores. The dashboard, the deploy view and the CLI show a layer only while no
+    /// internal layer sits above it; this pins S3's own message inside that visible part.
+    #[tokio::test]
+    async fn rejected_lifecycle_rules_keep_s3s_message_user_facing() {
+        let server = MockServer::start_async().await;
+        let lifecycle = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/test-lifecycle-storage")
+                    .query_param_exists("lifecycle");
+                then.status(400).body(
+                    "<Error><Code>InvalidArgument</Code><Message>'Days' for Expiration action must be a positive integer</Message><ArgumentName>Days</ArgumentName><ArgumentValue>0</ArgumentValue><RequestId>W18WKWW5VRW8J6NJ</RequestId></Error>",
+                );
+            })
+            .await;
+        let s3: Arc<dyn S3Api> = Arc::new(S3Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "eu-west-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-access".into(),
+                    secret_access_key: "test-secret".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("s3".into(), server.base_url())]),
+                }),
+            }),
+        ));
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(s3.clone()));
+        let storage = Storage::new("lifecycle-storage".to_string())
+            .lifecycle_rules(vec![AlienLifecycleRule {
+                prefix: None,
+                days: 0,
+            }])
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AwsStorageController {
+                state: AwsStorageState::ConfiguringLifecycle,
+                bucket_name: Some("test-lifecycle-storage".to_string()),
+                _internal_stay_count: None,
+            })
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        // The executor saves exactly this error, as `into_generic()`, on the resource.
+        let saved = executor
+            .step()
+            .await
+            .expect_err("S3 rejects the lifecycle rules")
+            .into_generic();
+        // The transport retries the 400 before giving up, so S3 may see it more than once.
+        assert!(lifecycle.hits_async().await >= 1);
+
+        assert_eq!(saved.code, "CLOUD_PLATFORM_ERROR");
+        assert_eq!(
+            saved.message,
+            "Cloud platform operation failed: Failed to configure lifecycle rules for S3 bucket 'test-lifecycle-storage'"
+        );
+        assert!(
+            !saved.internal,
+            "the controller's summary is shown: {saved:?}"
+        );
+        // Unchanged retry behavior: the rejection still goes through the retry budget.
+        assert!(saved.retryable);
+
+        let rejection = saved.source.as_deref().expect("S3 rejection layer");
+        assert_eq!(rejection.code, "REMOTE_REQUEST_REJECTED");
+        assert_eq!(
+            rejection.message,
+            "S3 rejected the request (InvalidArgument): 'Days' for Expiration action must be a positive integer"
+        );
+        assert!(!rejection.internal, "S3's message is shown: {rejection:?}");
+
+        let transport = rejection.source.as_deref().expect("transport layer");
+        assert_eq!(transport.code, "HTTP_RESPONSE_ERROR");
+        assert!(
+            transport.internal,
+            "the raw exchange stays hidden: {transport:?}"
+        );
+        assert!(transport.source.is_none());
     }
 }

@@ -195,7 +195,7 @@ impl S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(result, operation, resource, None)
+        Self::map_result(result, operation, resource)
     }
 
     async fn request_xml<T: DeserializeOwned + Send + 'static>(
@@ -208,7 +208,6 @@ impl S3Client {
         resource: &str,
     ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(method, &url)
@@ -220,7 +219,7 @@ impl S3Client {
         let result =
             crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
 
-        Self::map_result(result, operation, resource, Some(body_clone.as_str()))
+        Self::map_result(result, operation, resource)
     }
 
     async fn request_text(
@@ -251,7 +250,7 @@ impl S3Client {
         let body = response.text().await.unwrap_or_default();
 
         if !status.is_success() {
-            if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource, None) {
+            if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource) {
                 return Err(AlienError::new(ErrorData::HttpResponseError {
                     message: format!("{} failed: {}", operation, body),
                     url,
@@ -274,12 +273,7 @@ impl S3Client {
         Ok(body)
     }
 
-    fn map_result<T>(
-        result: Result<T>,
-        operation: &str,
-        resource_name: &str,
-        request_body: Option<&str>,
-    ) -> Result<T> {
+    fn map_result<T>(result: Result<T>, operation: &str, resource_name: &str) -> Result<T> {
         match result {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -291,8 +285,7 @@ impl S3Client {
                 {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    if let Some(mapped) =
-                        Self::map_s3_error(status, text, operation, resource_name, request_body)
+                    if let Some(mapped) = Self::map_s3_error(status, text, operation, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -311,7 +304,6 @@ impl S3Client {
         body: &str,
         _operation: &str,
         resource_name: &str,
-        request_body: Option<&str>,
     ) -> Option<ErrorData> {
         // Handle empty response bodies for specific status codes
         if body.trim().is_empty() {
@@ -422,12 +414,16 @@ impl S3Client {
                 StatusCode::SERVICE_UNAVAILABLE
                 | StatusCode::BAD_GATEWAY
                 | StatusCode::GATEWAY_TIMEOUT => ErrorData::RemoteServiceUnavailable { message },
-                _ => ErrorData::HttpResponseError {
-                    message: format!("S3 operation failed: {}", message),
-                    url: format!("s3.amazonaws.com"),
+                // Any other code is S3 rejecting the request (e.g. `InvalidArgument` for a
+                // lifecycle rule with `Days` 0). S3's `Message` describes the problem without
+                // echoing submitted values (those go in separate elements such as
+                // `ArgumentValue`), so it is shown to users. The raw request and response stay
+                // in the internal transport error this wraps.
+                _ => ErrorData::RemoteRequestRejected {
+                    service: "S3".into(),
                     http_status: status.as_u16(),
-                    http_request_text: request_body.map(|s| s.to_string()),
-                    http_response_text: Some(body.into()),
+                    provider_code: code.clone(),
+                    message,
                 },
             },
         })
@@ -481,11 +477,11 @@ impl S3Api for S3Client {
         let url = self.url(bucket, "");
         let mut builder = self.client.request(Method::PUT, &url).host(&host);
 
-        if let Some(ref body_xml) = body {
+        if let Some(body_xml) = body {
             builder = builder
                 .content_type_xml()
-                .content_sha256(body_xml)
-                .body(body_xml.clone());
+                .content_sha256(&body_xml)
+                .body(body_xml);
         } else {
             // Even when the body is empty we still set the SHA-256 of an empty string.
             builder = builder.content_sha256("");
@@ -495,7 +491,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(result, "CreateBucket", bucket, body.as_deref())
+        Self::map_result(result, "CreateBucket", bucket)
     }
 
     async fn put_bucket_abac_tags(
@@ -514,13 +510,13 @@ impl S3Api for S3Client {
             .content_type_xml()
             .header("content-md5", &content_md5)
             .content_sha256(&body)
-            .body(body.clone());
+            .body(body);
 
         let result =
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(result, "PutBucketTagging", bucket, Some(&body))
+        Self::map_result(result, "PutBucketTagging", bucket)
     }
 
     async fn head_bucket(&self, bucket: &str) -> Result<()> {
@@ -635,7 +631,6 @@ impl S3Api for S3Client {
             })?;
 
         let url = self.url(bucket, "?versioning");
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(Method::PUT, &url)
@@ -648,12 +643,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutBucketVersioning",
-            bucket,
-            Some(body_clone.as_str()),
-        )
+        Self::map_result(result, "PutBucketVersioning", bucket)
     }
 
     async fn put_public_access_block(
@@ -672,7 +662,6 @@ impl S3Api for S3Client {
                     ),
                 })?;
 
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(Method::PUT, &self.url(bucket, "?publicAccessBlock"))
@@ -685,19 +674,13 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutPublicAccessBlock",
-            bucket,
-            Some(body_clone.as_str()),
-        )
+        Self::map_result(result, "PutPublicAccessBlock", bucket)
     }
 
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<()> {
         let host = self.host(bucket);
         let body = policy.to_string();
 
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(Method::PUT, &self.url(bucket, "?policy"))
@@ -710,7 +693,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(result, "PutBucketPolicy", bucket, Some(body_clone.as_str()))
+        Self::map_result(result, "PutBucketPolicy", bucket)
     }
 
     async fn delete_bucket_policy(&self, bucket: &str) -> Result<()> {
@@ -744,7 +727,6 @@ impl S3Api for S3Client {
         let digest = md5::compute(body.as_bytes());
         let content_md5 = STANDARD.encode(digest.0);
 
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(Method::PUT, &self.url(bucket, "?lifecycle"))
@@ -758,12 +740,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutBucketLifecycleConfiguration",
-            bucket,
-            Some(body_clone.as_str()),
-        )
+        Self::map_result(result, "PutBucketLifecycleConfiguration", bucket)
     }
 
     async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()> {
@@ -827,7 +804,6 @@ impl S3Api for S3Client {
             })?;
         let digest = md5::compute(body.as_bytes());
         let content_md5 = STANDARD.encode(digest.0);
-        let body_clone = body.clone();
         let result = self
             .client
             .post(&self.url(bucket, "?delete"))
@@ -840,7 +816,7 @@ impl S3Api for S3Client {
             .with_retry()
             .send_xml::<DeleteObjectsOutput>()
             .await;
-        Self::map_result(result, "DeleteObjects", bucket, Some(body_clone.as_str()))
+        Self::map_result(result, "DeleteObjects", bucket)
     }
 
     async fn empty_bucket(&self, bucket: &str) -> Result<()> {
@@ -894,11 +870,20 @@ impl S3Api for S3Client {
                     // If the bucket is *not* versioned, AWS S3 will respond with a 400
                     // InvalidArgument error. When that happens, fall back to the
                     // non-versioned deletion path below.
-                    if let Some(ErrorData::HttpResponseError { http_status, .. }) = &e.error {
-                        if *http_status == 400 {
-                            // Non-versioned bucket – break out of the versions loop
-                            break;
-                        }
+                    // A parsed S3 error arrives as `RemoteRequestRejected`; a body that isn't
+                    // S3 error XML stays the raw `HttpResponseError`.
+                    if matches!(
+                        e.error,
+                        Some(ErrorData::RemoteRequestRejected {
+                            http_status: 400,
+                            ..
+                        }) | Some(ErrorData::HttpResponseError {
+                            http_status: 400,
+                            ..
+                        })
+                    ) {
+                        // Non-versioned bucket – break out of the versions loop
+                        break;
                     }
 
                     // If the bucket itself does not exist – treat as already empty.
@@ -1078,8 +1063,7 @@ impl S3Api for S3Client {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
 
-            if let Some(mapped) = Self::map_s3_error(status, &body, "PutObject", &request.key, None)
-            {
+            if let Some(mapped) = Self::map_s3_error(status, &body, "PutObject", &request.key) {
                 return Err(AlienError::new(ErrorData::HttpResponseError {
                     message: format!("PutObject failed: {}", body),
                     url: url.clone(),
@@ -1168,8 +1152,7 @@ impl S3Api for S3Client {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
 
-            if let Some(mapped) = Self::map_s3_error(status, &body, "GetObject", &request.key, None)
-            {
+            if let Some(mapped) = Self::map_s3_error(status, &body, "GetObject", &request.key) {
                 return Err(AlienError::new(ErrorData::HttpResponseError {
                     message: format!("GetObject failed: {}", body),
                     url: url.clone(),
@@ -1296,7 +1279,7 @@ impl S3Api for S3Client {
             let status = response.status();
             // HEAD responses don't have a body, so we can't parse S3 error XML
 
-            if let Some(mapped) = Self::map_s3_error(status, "", "HeadObject", &request.key, None) {
+            if let Some(mapped) = Self::map_s3_error(status, "", "HeadObject", &request.key) {
                 return Err(AlienError::new(ErrorData::HttpResponseError {
                     message: format!("HeadObject failed with status: {}", status),
                     url: url.clone(),
@@ -1371,7 +1354,6 @@ impl S3Api for S3Client {
                 ),
             })?;
 
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(Method::PUT, &self.url(bucket, "?notification"))
@@ -1384,12 +1366,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutBucketNotificationConfiguration",
-            bucket,
-            Some(body_clone.as_str()),
-        )
+        Self::map_result(result, "PutBucketNotificationConfiguration", bucket)
     }
 
     async fn get_bucket_notification_configuration(
@@ -1825,4 +1802,138 @@ pub struct FilterRule {
     pub name: String,
     /// Filter value
     pub value: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::{
+        Method::{GET, PUT},
+        MockServer,
+    };
+
+    /// The body S3 returns when a lifecycle rule expires objects after 0 days.
+    const INVALID_LIFECYCLE_RESPONSE: &str = "<Error><Code>InvalidArgument</Code><Message>'Days' for Expiration action must be a positive integer</Message><ArgumentName>Days</ArgumentName><ArgumentValue>0</ArgumentValue><RequestId>W18WKWW5VRW8J6NJ</RequestId><HostId>26je0Ya8JRBFH47AeqfSept7BLgPa</HostId></Error>";
+
+    fn client(server: &MockServer) -> S3Client {
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "eu-west-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".into(),
+                secret_access_key: "test-secret".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("s3".into(), server.base_url())]),
+            }),
+        });
+        S3Client::new(Client::new(), credentials)
+    }
+
+    fn zero_day_expiration() -> LifecycleConfiguration {
+        LifecycleConfiguration::builder()
+            .rules(vec![LifecycleRule::builder()
+                .id("Rule1".to_string())
+                .status(LifecycleRuleStatus::Enabled)
+                .filter(LifecycleRuleFilter::builder().build())
+                .expiration(LifecycleExpiration::builder().days(0).build())
+                .build()])
+            .build()
+    }
+
+    #[tokio::test]
+    async fn s3_rejection_is_shown_to_users_with_s3s_own_message() {
+        let server = MockServer::start_async().await;
+        let lifecycle = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(400)
+                    .header("content-type", "application/xml")
+                    .body(INVALID_LIFECYCLE_RESPONSE);
+            })
+            .await;
+
+        let error = client(&server)
+            .put_bucket_lifecycle_configuration("bucket-st", &zero_day_expiration())
+            .await
+            .expect_err("S3 rejects a 0-day expiration");
+        // The transport retries the 400 before giving up, so S3 may see it more than once.
+        assert!(lifecycle.hits_async().await >= 1);
+
+        assert_eq!(error.code, "REMOTE_REQUEST_REJECTED");
+        assert_eq!(
+            error.message,
+            "S3 rejected the request (InvalidArgument): 'Days' for Expiration action must be a positive integer"
+        );
+        assert!(!error.internal, "S3's message is safe to show: {error:?}");
+        // Retryability is inherited from the transport error, so retry behavior is unchanged.
+        assert!(error.retryable);
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteRequestRejected {
+                http_status: 400,
+                ref provider_code,
+                ..
+            }) if provider_code == "InvalidArgument"
+        ));
+
+        // The user-facing layer carries none of the raw exchange.
+        let mut shown = serde_json::to_value(&error).expect("serialize error");
+        shown
+            .as_object_mut()
+            .expect("error is an object")
+            .remove("source");
+        let shown = shown.to_string();
+        assert!(!shown.contains("LifecycleConfiguration"), "{shown}");
+        assert!(!shown.contains("ArgumentValue"), "{shown}");
+
+        // The raw request and response stay in the internal transport error underneath.
+        let transport = error.source.as_deref().expect("transport error is kept");
+        assert_eq!(transport.code, "HTTP_RESPONSE_ERROR");
+        assert!(transport.internal);
+        let context = transport.context.as_ref().expect("transport context");
+        assert_eq!(context["http_status"], 400);
+        assert_eq!(context["http_response_text"], INVALID_LIFECYCLE_RESPONSE);
+        assert!(context["http_request_text"]
+            .as_str()
+            .expect("request body is kept for debugging")
+            .contains("<Days>0</Days>"));
+    }
+
+    #[tokio::test]
+    async fn emptying_a_bucket_falls_back_when_s3_rejects_listing_versions() {
+        let server = MockServer::start_async().await;
+        let versions = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/bucket-st")
+                    .query_param_exists("versions");
+                then.status(400).body(
+                    "<Error><Code>InvalidArgument</Code><Message>Versioning is not enabled</Message></Error>",
+                );
+            })
+            .await;
+        let objects = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/bucket-st")
+                    .query_param("list-type", "2");
+                then.status(200).body(
+                    "<ListBucketResult><Name>bucket-st</Name><MaxKeys>1000</MaxKeys><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>",
+                );
+            })
+            .await;
+
+        client(&server)
+            .empty_bucket("bucket-st")
+            .await
+            .expect("a rejected version listing falls back to listing objects");
+
+        assert!(versions.hits_async().await >= 1);
+        objects.assert_hits_async(1).await;
+    }
 }

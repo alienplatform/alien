@@ -169,6 +169,31 @@ pub enum ErrorData {
         http_response_text: Option<String>,
     },
 
+    /// The cloud service rejected the request and returned its own error code and message.
+    ///
+    /// Unlike [`ErrorData::HttpResponseError`], this is safe to show to users: it holds only the
+    /// service's code and message, never the request body or the raw response. Wrap the internal
+    /// `HttpResponseError` with it so those stay available for debugging. Retryability comes from
+    /// that source, because some rejections are transient (for example, an S3 bucket notification
+    /// whose target permission has not propagated yet). Only use it for a service whose error
+    /// messages don't echo submitted values; some APIs repeat request fields, including secrets.
+    #[error(
+        code = "REMOTE_REQUEST_REJECTED",
+        message = "{service} rejected the request ({provider_code}): {message}",
+        retryable = "inherit",
+        internal = "false"
+    )]
+    RemoteRequestRejected {
+        /// Cloud service that rejected the request (e.g. "S3")
+        service: String,
+        /// HTTP status code the service returned
+        http_status: u16,
+        /// The service's error code (e.g. "InvalidArgument")
+        provider_code: String,
+        /// The service's error message
+        message: String,
+    },
+
     /// Failure during signing of an HTTP request (e.g., AWS SigV4).
     #[error(
         code = "REQUEST_SIGN_ERROR",

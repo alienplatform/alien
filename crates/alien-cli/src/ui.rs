@@ -400,7 +400,15 @@ pub(crate) fn root_cause_message(error: &Value) -> Option<String> {
 #[cfg(test)]
 mod event_tests {
     use super::*;
+    use alien_aws_clients::{
+        s3::{
+            LifecycleConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleFilter,
+            LifecycleRuleStatus, S3Api, S3Client,
+        },
+        AwsCredentialProvider,
+    };
     use alien_error::Context;
+    use std::collections::HashMap;
 
     /// `deployments get` renders the stored deployment error. A deployment failure's own
     /// message only counts the failed resources, so each one is listed with its root cause.
@@ -441,6 +449,85 @@ mod event_tests {
             .unwrap_err();
         let rendered = render_human_error(&deploy_error);
         assert!(rendered.contains(listed), "{rendered}");
+    }
+
+    /// A resource that failed because S3 rejected the request is listed with S3's own reason,
+    /// not the generic HTTP status of the transport error underneath it. The error is produced
+    /// by the real S3 client from the response S3 returns for a lifecycle rule with `Days` 0,
+    /// and wrapped the way the storage controller wraps it.
+    #[tokio::test]
+    async fn render_human_error_lists_s3s_reason_for_a_rejected_resource() {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT)
+                    .path("/bucket-st")
+                    .query_param_exists("lifecycle");
+                then.status(400).body(
+                    "<Error><Code>InvalidArgument</Code><Message>'Days' for Expiration action must be a positive integer</Message><ArgumentName>Days</ArgumentName><ArgumentValue>0</ArgumentValue></Error>",
+                );
+            })
+            .await;
+        let s3 = S3Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(alien_core::AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "eu-west-1".into(),
+                credentials: alien_core::AwsCredentials::AccessKeys {
+                    access_key_id: "test-access".into(),
+                    secret_access_key: "test-secret".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(alien_core::AwsServiceOverrides {
+                    endpoints: HashMap::from([("s3".into(), server.base_url())]),
+                }),
+            }),
+        );
+        let lifecycle = LifecycleConfiguration::builder()
+            .rules(vec![LifecycleRule::builder()
+                .id("Rule1".to_string())
+                .status(LifecycleRuleStatus::Enabled)
+                .filter(LifecycleRuleFilter::builder().build())
+                .expiration(LifecycleExpiration::builder().days(0).build())
+                .build()])
+            .build();
+        let resource_error = s3
+            .put_bucket_lifecycle_configuration("bucket-st", &lifecycle)
+            .await
+            .context(alien_infra::ErrorData::CloudPlatformError {
+                message: "Failed to configure lifecycle rules for S3 bucket 'bucket-st'"
+                    .to_string(),
+                resource_id: Some("st".to_string()),
+            })
+            .expect_err("S3 rejects a 0-day expiration")
+            .into_generic();
+        let stored = serde_json::to_value(
+            AlienError::new(alien_deployment::ErrorData::DeploymentFailed {
+                resource_errors: vec![alien_deployment::ResourceError {
+                    resource_id: "st".to_string(),
+                    resource_type: "storage".to_string(),
+                    error: Some(resource_error),
+                }],
+                total_resources: 7,
+                failed_resources: 1,
+                interrupted_resources: 0,
+            })
+            .into_generic(),
+        )
+        .expect("serialize the deployment error");
+        let error: AlienError =
+            serde_json::from_value(stored).expect("deserialize the stored deployment error");
+
+        let rendered = render_human_error(&error);
+
+        assert!(
+            rendered.contains("Failed resources:\n  - st: S3 rejected the request (InvalidArgument): 'Days' for Expiration action must be a positive integer"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("Request failed with HTTP 400"),
+            "{rendered}"
+        );
     }
 
     #[test]

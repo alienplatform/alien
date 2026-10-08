@@ -97,6 +97,7 @@ toml = "0.9"
 crossterm = { workspace = true }
 
 [dev-dependencies]
+alien-aws-clients = { workspace = true }
 httpmock = { workspace = true }
 http = { workspace = true }
 snapbox = "0.6.0"
