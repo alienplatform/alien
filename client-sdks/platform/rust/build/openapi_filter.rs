@@ -44,6 +44,8 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "createAPIKey",
     "createAccessRequest",
     "createDeployment",
+    "planDeploymentCompute",
+    "prepareDeploymentStack",
     "createDeploymentGroup",
     "createDeploymentGroupToken",
     "createDeploymentToken",

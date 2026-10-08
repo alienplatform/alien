@@ -5,6 +5,9 @@
 //! 2. Discover manager URL (resolve_manager for OAuth, DG endpoint for DG tokens)
 //! 3. Run step loop via manager (acquire → step → reconcile → release)
 
+#[path = "deploy_setup_validation.rs"]
+mod setup_validation;
+
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 
 use crate::commands::{
@@ -696,16 +699,15 @@ async fn create_self_deployment(
     )
     .await?;
 
-    if !resolved_args.input_values.is_empty() {
-        set_first_party_deployment_inputs(
-            &base_url,
-            &session.token,
-            &resolved_args.platform,
-            &resolved_args.input_values,
-            &args.channel,
-        )
-        .await?;
-    }
+    // Bind the preparation request to this exact channel even without inputs.
+    set_first_party_deployment_inputs(
+        &base_url,
+        &session.token,
+        &resolved_args.platform,
+        &resolved_args.input_values,
+        &args.channel,
+    )
+    .await?;
 
     let create_response = create_deployment_with_group_session(
         &base_url,
@@ -907,6 +909,8 @@ async fn create_deployment_with_group_session(
     args: &DeployArgs,
     project_id: &str,
 ) -> Result<CreateDeploymentApiResponse> {
+    setup_validation::validate_before_creation(base_url, session_token, resolved_args, args)
+        .await?;
     let http_client = create_platform_http_client(session_token)?;
     let body = deployment_create_request_body(resolved_args, args, project_id)?;
 
@@ -950,6 +954,9 @@ fn deployment_create_request_body(
         "setupMethod": "cli",
     });
 
+    if let Some(setup_item) = args.setup_item.as_ref() {
+        body["setupItem"] = serde_json::Value::String(setup_item.clone());
+    }
     if let Some(resource_prefix) = args.resource_prefix.as_ref() {
         body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
     }
@@ -1180,6 +1187,60 @@ fn api_url(base_url: &str, path: &str, workspace: Option<&str>) -> Result<reqwes
         url.query_pairs_mut().append_pair("workspace", workspace);
     }
     Ok(url)
+}
+
+async fn create_standalone_deployment(
+    token: &str,
+    base_url: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    stack_settings: alien_platform_api::types::NewDeploymentRequestStackSettings,
+) -> Result<serde_json::Value> {
+    let settings = serde_json::to_value(stack_settings)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize deployment settings".to_string(),
+        })?;
+    let settings: alien_manager_api::types::StackSettings = serde_json::from_value(settings)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to convert deployment settings for the manager".to_string(),
+        })?;
+    let platform: alien_manager_api::types::Platform =
+        serde_json::from_value(serde_json::json!(resolved_args.platform.as_str()))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to convert deployment platform for the manager".to_string(),
+            })?;
+    let client =
+        alien_manager_api::Client::new_with_client(base_url, create_platform_http_client(token)?);
+    let response = client
+        .create_deployment()
+        .body_map(|body| {
+            let mut body = body
+                .name(resolved_args.name.clone())
+                .platform(platform)
+                .stack_settings(settings)
+                .input_values(
+                    resolved_args.input_values.clone().into_iter().collect::<serde_json::Map<String, serde_json::Value>>(),
+                );
+            if let Some(prefix) = &args.resource_prefix {
+                body = body.resource_prefix(prefix.clone());
+            }
+            body
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create deployment with deployment group token".to_string(),
+        })?
+        .into_inner();
+    serde_json::to_value(response)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize deployment response".to_string(),
+        })
 }
 
 fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
@@ -1466,7 +1527,18 @@ async fn deploy_task_with_environment(
                             None => None,
                         };
 
-                        let create_response = sdk_client
+                        if ctx.is_platform() {
+                            setup_validation::validate_before_creation(
+                                &base_url,
+                                token,
+                                &resolved_args,
+                                &args,
+                            )
+                            .await?;
+                        }
+
+                        let response_json = if ctx.is_platform() {
+                            let create_response = sdk_client
                             .create_deployment()
                             .workspace(&workspace_name)
                             .body(alien_platform_api::types::NewDeploymentRequest {
@@ -1537,11 +1609,21 @@ async fn deploy_task_with_environment(
                             })?
                             .into_inner();
 
-                        let response_json = serde_json::to_value(&create_response)
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to serialize response".to_string(),
-                            })?;
+                            serde_json::to_value(&create_response)
+                                .into_alien_error()
+                                .context(ErrorData::ConfigurationError {
+                                    message: "Failed to serialize response".to_string(),
+                                })?
+                        } else {
+                            create_standalone_deployment(
+                                token,
+                                &base_url,
+                                &resolved_args,
+                                &args,
+                                stack_settings,
+                            )
+                            .await?
+                        };
 
                         let deployment_id = response_json
                             .get("deployment")
@@ -3694,6 +3776,91 @@ mod tests {
         assert!(!uses_push_deployment_model(Platform::Local));
     }
 
+    #[tokio::test]
+    async fn new_deployment_creation_fails_closed_on_invalid_preparation() {
+        for (status, body, should_create) in [
+            (200, serde_json::json!({}), false),
+            (
+                403,
+                serde_json::json!({"code":"FORBIDDEN", "message":"Not authorized"}),
+                false,
+            ),
+            (
+                503,
+                serde_json::json!({"code":"UNAVAILABLE", "message":"Preparation unavailable"}),
+                false,
+            ),
+            (
+                200,
+                serde_json::json!({
+                    "platform":"aws", "stack":{"id":"test", "resources":{}},
+                    "setup":{"target":"aws/us-east-2", "fingerprint":"test", "version":1}
+                }),
+                true,
+            ),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            let preparation = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/deployment-info/prepare-stack")
+                        .header("authorization", "Bearer test-group-token")
+                        .json_body_partial(r#"{"setupItem":"bucket"}"#);
+                    then.status(status).json_body(body);
+                })
+                .await;
+            let plan = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/deployment-info/compute-plan");
+                    then.status(503)
+                        .json_body(serde_json::json!({"message":"Planner unavailable"}));
+                })
+                .await;
+            let create = server.mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/deployments")
+                    .json_body_partial(r#"{"setupItem":"bucket","releaseChannel":"preview"}"#);
+                // The deliberately rejected creation proves validation let a valid
+                // empty stack proceed without fabricating a deployment response.
+                then.status(409).json_body(serde_json::json!({"code":"CONFLICT", "message":"Synthetic creation rejection"}));
+            }).await;
+            let resolved = ResolvedDeployArgs {
+                name: "test".to_string(),
+                platform: "aws".to_string(),
+                platform_enum: Platform::Aws,
+                network_settings: None,
+                compute_settings: None,
+                domain_settings: None,
+                input_values: HashMap::new(),
+                public_subdomain: None,
+            };
+            let args = DeployArgs::try_parse_from([
+                "deploy",
+                "--name",
+                "test",
+                "--platform",
+                "aws",
+                "--setup-item",
+                "bucket",
+                "--channel",
+                "preview",
+            ])
+            .expect("deploy args");
+            create_deployment_with_group_session(
+                &server.base_url(),
+                "test-group-token",
+                &resolved,
+                &args,
+                "test-project",
+            )
+            .await
+            .expect_err("preparation or synthetic creation must reject this request");
+            create.assert_hits_async(usize::from(should_create)).await;
+            preparation.assert_hits_async(1).await;
+            plan.assert_hits_async(usize::from(status != 200)).await;
+        }
+    }
+
     #[test]
     fn deploy_config_accepts_and_serializes_compute_selection() {
         let config: DeployConfigFile = toml::from_str(
@@ -3816,6 +3983,55 @@ max = 1
         assert_eq!(json["pools"]["fixed"]["machines"], 2);
         assert_eq!(json["pools"]["elastic"]["min"], 1);
         assert_eq!(json["pools"]["elastic"]["max"], 4);
+    }
+
+    #[tokio::test]
+    async fn standalone_creation_forwards_resolved_inputs() {
+        let server = httpmock::MockServer::start_async().await;
+        let values = HashMap::from([
+            ("plain".to_string(), serde_json::json!("configured-value")),
+            (
+                "secret".to_string(),
+                serde_json::json!("synthetic-test-secret"),
+            ),
+            ("count".to_string(), serde_json::json!(3)),
+            ("enabled".to_string(), serde_json::json!(false)),
+            ("labels".to_string(), serde_json::json!(["one", "two"])),
+        ]);
+        let create = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/deployments")
+                    .header("authorization", "Bearer test-group-token")
+                    .json_body_partial(serde_json::json!({"inputValues": values}).to_string());
+                then.status(409)
+                    .json_body(serde_json::json!({"message":"Synthetic creation rejection"}));
+            })
+            .await;
+        let resolved = ResolvedDeployArgs {
+            name: "test".to_string(),
+            platform: "aws".to_string(),
+            platform_enum: Platform::Aws,
+            network_settings: None,
+            compute_settings: None,
+            domain_settings: None,
+            input_values: values,
+            public_subdomain: None,
+        };
+        let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+            .expect("valid standalone arguments");
+        let settings = serde_json::from_value(serde_json::json!({})).expect("valid empty settings");
+        let error = create_standalone_deployment(
+            "test-group-token",
+            &server.base_url(),
+            &resolved,
+            &args,
+            settings,
+        )
+        .await
+        .expect_err("manager rejects the correctly formed request");
+        assert!(error.to_string().contains("409"), "{error}");
+        create.assert_hits_async(1).await;
     }
 
     #[test]
