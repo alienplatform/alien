@@ -10,7 +10,65 @@ use alien_aws_clients::sqs::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
-use std::fmt::{Debug, Formatter};
+#[cfg(not(target_arch = "wasm32"))]
+use hickory_resolver::{config::LookupIpStrategy, TokioResolver};
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+use reqwest::Client;
+use std::{
+    fmt::{Debug, Formatter},
+    time::Duration,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{net::SocketAddr, sync::Arc};
+
+/// Reuses concurrent SQS acknowledgement connections without blocking on DNS.
+pub(crate) fn create_http_client() -> Result<Client> {
+    let builder = Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        // Four idle connections discard almost every connection after an ack burst.
+        // Keep a bounded burst-sized pool and release unused sockets after 30 seconds.
+        .pool_max_idle_per_host(512)
+        .pool_idle_timeout(Some(Duration::from_secs(30)));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder = {
+        let mut resolver = TokioResolver::builder_tokio().into_alien_error().context(
+            ErrorData::BindingSetupFailed {
+                binding_type: "queue.sqs".to_string(),
+                reason: "Failed to read system DNS configuration".to_string(),
+            },
+        )?;
+        resolver.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+        builder.dns_resolver(Arc::new(SqsDnsResolver(resolver.build())))
+    };
+
+    builder
+        .build()
+        .into_alien_error()
+        .context(ErrorData::BindingSetupFailed {
+            binding_type: "queue.sqs".to_string(),
+            reason: "Failed to create HTTP client".to_string(),
+        })
+}
+
+// A per-client resolver avoids changing reqwest's default DNS behavior for other bindings.
+// Hickory caches answers according to DNS TTL and uses Tokio I/O instead of getaddrinfo workers.
+#[cfg(not(target_arch = "wasm32"))]
+struct SqsDnsResolver(TokioResolver);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Resolve for SqsDnsResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let resolver = self.0.clone();
+        Box::pin(async move {
+            let lookup = resolver.lookup_ip(name.as_str()).await?;
+            let addresses: Addrs = Box::new(lookup.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+            Ok(addresses)
+        })
+    }
+}
 
 pub struct AwsSqsQueue {
     queue_url: String,
@@ -248,7 +306,28 @@ fn receive_count(message: &Message) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use alien_aws_clients::{
+        AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider, ServiceOverrides,
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    use axum::{
+        body::Body,
+        extract::{ConnectInfo, State},
+        routing::post,
+        Router,
+    };
     use std::collections::HashMap;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::{
+        collections::HashSet,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Mutex,
+        },
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    use tokio::{net::TcpListener, runtime::Builder, sync::Barrier, task::JoinSet};
 
     fn message(count: Option<&str>) -> Message {
         Message {
@@ -285,5 +364,96 @@ mod tests {
                 Some(ErrorData::QueueProviderResponseInvalid { .. })
             ));
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn sqs_reuses_ack_burst_connections_without_dns_blocking_threads() {
+        const BURST: usize = 64;
+        let threads = Arc::new(AtomicUsize::new(0));
+        let started = threads.clone();
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .on_thread_start(move || {
+                started.fetch_add(1, Ordering::SeqCst);
+            })
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let peers = Arc::new(Mutex::new(HashSet::new()));
+            let state = (Arc::new(Barrier::new(BURST)), peers.clone());
+            let app = Router::new()
+                .route(
+                    "/",
+                    post(
+                        |State((barrier, peers)): State<(
+                            Arc<Barrier>,
+                            Arc<Mutex<HashSet<SocketAddr>>>,
+                        )>,
+                         ConnectInfo(peer): ConnectInfo<SocketAddr>| async move {
+                            peers.lock().expect("peers").insert(peer);
+                            // Headers reach the client before this streamed metadata body.
+                            axum::response::Response::new(Body::from_stream(futures::stream::once(
+                                async move {
+                                    barrier.wait().await;
+                                    Ok::<_, std::convert::Infallible>("<DeleteMessageResponse/>")
+                                },
+                            )))
+                        },
+                    ),
+                )
+                .with_state(state);
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+            let port = listener.local_addr().expect("address").port();
+            let server = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+                .expect("serve");
+            });
+            let endpoint = format!("http://localhost:{port}");
+            let config = AwsClientConfig::mock().with_service_overrides(ServiceOverrides {
+                endpoints: HashMap::from([("sqs".to_string(), endpoint.clone())]),
+            });
+            let credentials = AwsCredentialProvider::from_config(config)
+                .await
+                .expect("credentials");
+            let queue = Arc::new(AwsSqsQueue::new(
+                endpoint,
+                SqsClient::new(create_http_client().expect("SQS HTTP client"), credentials),
+            ));
+            tokio::time::timeout(Duration::from_secs(10), async {
+                for _ in 0..2 {
+                    let mut requests = JoinSet::new();
+                    for _ in 0..BURST {
+                        let queue = queue.clone();
+                        requests.spawn(async move {
+                            queue
+                                .ack("pushes", "receipt")
+                                .await
+                                .expect("acknowledgement");
+                        });
+                    }
+                    while let Some(request) = requests.join_next().await {
+                        request.expect("request task");
+                    }
+                }
+            })
+            .await
+            .expect("bursts must complete");
+            assert_eq!(peers.lock().expect("peers").len(), BURST);
+            let spawned = threads.load(Ordering::SeqCst);
+            assert!(
+                spawned <= 2,
+                "DNS spawned {} blocking threads",
+                spawned.saturating_sub(2)
+            );
+            server.abort();
+            assert!(server.await.expect_err("server stopped").is_cancelled());
+        });
     }
 }

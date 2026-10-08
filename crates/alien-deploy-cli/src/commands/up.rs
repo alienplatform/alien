@@ -32,6 +32,7 @@ use alien_deployment::{
         preserve_semantic_failure, run_step_loop as shared_run_step_loop, RunnerPolicy,
         RunnerResult,
     },
+    setup_run_has_pending_update,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
@@ -753,6 +754,235 @@ mod tests {
         ] {
             assert!(!requires_direct_setup_preparation(&status), "{status:?}");
         }
+    }
+
+    fn installed_deployment(status: &str, desired_release_id: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "id": "dep_demo", "name": "demo", "platform": "machines", "status": status,
+            "deploymentGroupId": "dg_demo", "deploymentProtocolVersion": 1,
+            "projectId": "prj_demo", "workspaceId": "ws_demo", "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z", "currentReleaseId": "rel_installed",
+            "desiredReleaseId": desired_release_id, "stackSettings": {},
+            "stackState": alien_core::StackState::new(Platform::Machines),
+            "runtimeMetadata": alien_core::RuntimeMetadata::default(),
+        })
+    }
+
+    async fn run_machines_setup(server: &MockServer) -> Result<SetupRunOutcome> {
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        push_initial_setup(
+            &client,
+            "dep_demo",
+            Platform::Machines,
+            None,
+            ClientConfig::Machines,
+            None,
+            &server.base_url(),
+            "deployment-token",
+            None,
+            None,
+            Some("setup-revision-2"),
+        )
+        .await
+    }
+
+    /// A setup run on a running deployment with no pending update used to re-enter initial
+    /// setup and hand the deployment back at `provisioning`, where nothing drives it. It must
+    /// leave the deployment alone: no lock, no reconcile, no status change.
+    #[tokio::test]
+    async fn setup_with_no_pending_update_leaves_an_installed_deployment_untouched() {
+        for status in ["running", "refresh-failed"] {
+            let server = MockServer::start_async().await;
+            let deployment = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200)
+                        .json_body(installed_deployment(status, None));
+                })
+                .await;
+            let lock_or_write = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path_contains("/v1/sync/");
+                    then.status(500);
+                })
+                .await;
+
+            let outcome = run_machines_setup(&server)
+                .await
+                .expect("a settled deployment needs no setup");
+
+            assert_eq!(outcome, SetupRunOutcome::NothingPending, "{status}");
+            deployment.assert_hits_async(1).await;
+            lock_or_write.assert_hits_async(0).await;
+        }
+    }
+
+    /// The pending update can finish while setup waits for the lock. The locked read then
+    /// shows nothing to apply, so setup releases the lock without writing any state.
+    #[tokio::test]
+    async fn setup_releases_the_lock_when_the_update_finished_while_it_waited() {
+        let server = MockServer::start_async().await;
+        let pending = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200)
+                    .json_body(installed_deployment("running", Some("rel_target")));
+            })
+            .await;
+        let settled = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200)
+                    .json_body(installed_deployment("running", None));
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                // Long enough for the update to finish (the pending read to go) meanwhile.
+                then.status(200)
+                    .delay(std::time::Duration::from_millis(300))
+                    .json_body(serde_json::json!({"deployments": [{
+                        "deployment": {"id": "dep_demo"},
+                        "executionClaim": {"operationId": "op_applied", "attemptId": "attempt_1"}
+                    }]}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/release")
+                    .json_body_partial(
+                        serde_json::json!({
+                            "deploymentId": "dep_demo",
+                            "executionClaim": {"operationId": "op_applied", "attemptId": "attempt_1"}
+                        })
+                        .to_string(),
+                    );
+                then.status(200);
+            })
+            .await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile");
+                then.status(500);
+            })
+            .await;
+
+        let (outcome, ()) = tokio::join!(run_machines_setup(&server), async {
+            while acquire.hits_async().await == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            pending.delete_async().await;
+        });
+
+        assert_eq!(
+            outcome.expect("setup should release the lock and return"),
+            SetupRunOutcome::NothingPending
+        );
+        settled.assert_hits_async(1).await;
+        acquire.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
+        reconcile.assert_hits_async(0).await;
+    }
+
+    /// A manager can remove the record on the `Deleted` checkpoint and still answer 500 (work
+    /// after its commit failed). The final reconcile then finds the record gone, so the
+    /// teardown that finished is reported as finished.
+    #[tokio::test]
+    async fn destroy_succeeds_when_the_manager_removed_the_record_but_failed_the_checkpoint() {
+        let server = MockServer::start_async().await;
+        let mut teardown_required = installed_deployment("teardown-required", None);
+        teardown_required["currentReleaseId"] = serde_json::Value::Null;
+        let deployment = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(teardown_required);
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/acquire")
+                    .json_body_partial(r#"{"acquireMode":"setup-teardown"}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"deployments": [{
+                        "deployment": {"id": "dep_demo"}, "executionClaim": null
+                    }]}));
+            })
+            .await;
+        let progress = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success": true, "current": null}));
+            })
+            .await;
+        let failed_commit = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                // Long enough for the record to go before the error arrives.
+                then.status(500)
+                    .delay(std::time::Duration::from_millis(300))
+                    .json_body(serde_json::json!({
+                        "code": "INTERNAL_ERROR", "message": "Internal server error",
+                        "retryable": true, "internal": true
+                    }));
+            })
+            .await;
+        let record_gone = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                then.status(404).json_body(serde_json::json!({
+                    "code": "NOT_FOUND", "message": "Deployment not found",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(404).json_body(serde_json::json!({
+                    "code": "NOT_FOUND", "message": "Deployment not found",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+
+        let (result, ()) = tokio::join!(
+            push_deletion(
+                &client,
+                "dep_demo",
+                Platform::Machines,
+                ClientConfig::Machines
+            ),
+            async {
+                while failed_commit.hits_async().await == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                failed_commit.delete_async().await;
+            }
+        );
+
+        result.expect("a finished teardown whose record is gone must succeed");
+        deployment.assert_hits_async(2).await;
+        acquire.assert_hits_async(1).await;
+        assert!(progress.hits_async().await >= 1);
+        record_gone.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
     }
 
     #[test]
@@ -2039,7 +2269,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .as_deref()
             .unwrap_or(&tracked.manager_url);
         let setup_client = create_manager_client(&token, manager_url)?;
-        run_push_model(
+        let outcome = run_push_model(
             &setup_client,
             &tracked.deployment_id,
             platform,
@@ -2052,7 +2282,11 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             embedded_config.and_then(|config| config.setup_revision.as_deref()),
         )
         .await?;
-        output::success("Setup applied. The existing runtime will continue the requested update.");
+        if outcome == SetupRunOutcome::Applied {
+            output::success(
+                "Setup applied. The existing runtime will continue the requested update.",
+            );
+        }
         return Ok(());
     }
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
@@ -2254,6 +2488,11 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             &current_deployment.status,
             setup_revision,
             applied_setup_revision.as_deref(),
+        )
+        && setup_run_has_pending_update(
+            parse_deployment_status(&current_deployment.status)?,
+            current_deployment.current_release_id.is_some(),
+            current_deployment.desired_release_id.as_deref(),
         )
     {
         output::info("Refreshing setup-owned infrastructure for this CLI revision...");
@@ -5000,7 +5239,7 @@ async fn run_push_model(
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
-) -> Result<()> {
+) -> Result<SetupRunOutcome> {
     let client_config = setup_client_config(base_platform.unwrap_or(platform)).await?;
 
     push_initial_setup(
@@ -5041,11 +5280,22 @@ fn apply_external_bindings_from_stack_settings(
     }
 }
 
+/// What a push-model setup run did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupRunOutcome {
+    /// Setup ran and handed the deployment to the manager (or finished it).
+    Applied,
+    /// The deployment is installed and settled with no update pending, so
+    /// setup did not run and its status was left unchanged.
+    NothingPending,
+}
+
 /// Run the push-model initial setup flow for a deployment.
 ///
 /// Fetches deployment and release state from the manager, acquires a sync lock,
 /// steps the deployment through InitialSetup until it reaches Provisioning (or a
 /// terminal state), reconciles state back to the manager, and releases the lock.
+/// An installed deployment with no pending update is left untouched.
 ///
 /// This is used by both `alien-deploy deploy` (push model) and `alien-test` (e2e setup).
 pub async fn push_initial_setup(
@@ -5060,7 +5310,7 @@ pub async fn push_initial_setup(
     network_args: Option<&NetworkArgs>,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
-) -> Result<()> {
+) -> Result<SetupRunOutcome> {
     push_initial_setup_targeted()
         .client(client)
         .deployment_id(deployment_id)
@@ -5091,7 +5341,7 @@ async fn push_initial_setup_targeted(
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
     expected_target: Option<&setup_update::SetupUpdateTarget>,
-) -> Result<()> {
+) -> Result<SetupRunOutcome> {
     let setup_management_config = management_config.clone();
 
     // Get deployment from manager
@@ -5108,6 +5358,14 @@ async fn push_initial_setup_targeted(
 
     // Reconstruct DeploymentState from flat API response
     let status = parse_deployment_status(&deployment.status)?;
+    if !setup_run_has_pending_update(
+        status,
+        deployment.current_release_id.is_some(),
+        deployment.desired_release_id.as_deref(),
+    ) {
+        report_nothing_pending(status);
+        return Ok(SetupRunOutcome::NothingPending);
+    }
 
     let stack_state = deployment
         .stack_state
@@ -5300,6 +5558,15 @@ async fn push_initial_setup_targeted(
         }
 
         let status = parse_deployment_status(&deployment.status)?;
+        // The pending update can complete between the first read and the lock.
+        if !setup_run_has_pending_update(
+            status,
+            deployment.current_release_id.is_some(),
+            deployment.desired_release_id.as_deref(),
+        ) {
+            state.status = status;
+            return Ok(None);
+        }
 
         // Apply the choice only after acquiring the lock and refreshing status,
         // so a setup that completed while we waited cannot change reachability.
@@ -5407,7 +5674,7 @@ async fn push_initial_setup_targeted(
             delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
         };
 
-        Ok::<_, AlienError<ErrorData>>(
+        Ok::<_, AlienError<ErrorData>>(Some(
             shared_run_step_loop(
                 &mut state,
                 &mut config,
@@ -5419,12 +5686,27 @@ async fn push_initial_setup_targeted(
                 on_progress.as_ref(),
             )
             .await,
-        )
+        ))
     }
     .await;
 
     let runner_result = match setup_attempt {
-        Ok(runner_result) => runner_result,
+        Ok(Some(runner_result)) => runner_result,
+        Ok(None) => {
+            // Nothing was stepped, so there is no state to reconcile.
+            release_deployment(
+                client,
+                deployment_id,
+                &session,
+                acquired_deployment.execution_claim.as_ref(),
+            )
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "release sync lock".to_string(),
+            })?;
+            report_nothing_pending(state.status);
+            return Ok(SetupRunOutcome::NothingPending);
+        }
         Err(error) => {
             if let Err(release_error) = release_deployment(
                 client,
@@ -5476,7 +5758,7 @@ async fn push_initial_setup_targeted(
     match result.loop_result.outcome {
         LoopOutcome::Success => {
             output::success("Deployment is running.");
-            Ok(())
+            Ok(SetupRunOutcome::Applied)
         }
         LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
             operation: format!(
@@ -5490,9 +5772,21 @@ async fn push_initial_setup_targeted(
                     "Setup complete. Your deployment is being provisioned and will be ready shortly.",
                 );
             }
-            Ok(())
+            Ok(SetupRunOutcome::Applied)
         }
     }
+}
+
+fn report_nothing_pending(status: DeploymentStatus) {
+    let next = if status == DeploymentStatus::RefreshFailed {
+        " Retry the deployment to repeat its installed release."
+    } else {
+        ""
+    };
+    output::success(&format!(
+        "Nothing to update: the deployment is {} with no pending update.{next}",
+        deployment_status_str(status)
+    ));
 }
 
 fn apply_endpoint_access_override(

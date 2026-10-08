@@ -8,10 +8,11 @@ use alien_core::{
     public_url_host, render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
     worker_runtime_environment_contract, Container, Daemon, EnvironmentVariable,
-    EnvironmentVariableType, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
+    EnvironmentVariableType, Resource, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
     RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
     ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
-    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON, ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_PUBLIC_ENDPOINTS_JSON, ENV_ALIEN_SECRETS,
+    ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
 };
 #[cfg(feature = "local")]
 use alien_error::ContextError;
@@ -21,6 +22,41 @@ use std::collections::{BTreeMap, HashMap};
 
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
+
+/// Whether a failed resource's recorded config and its desired config describe the same create
+/// or update, so a retry may resume the saved checkpoint instead of re-planning it.
+///
+/// Deployer-secret metadata injected into workload environments (`ALIEN_DEPLOYER_SECRETS` and
+/// the `deployerSecrets` list inside `ALIEN_SECRETS`) is ignored: it follows the secret store
+/// (a slot filled, a value rewritten under a new version), not a release. A resumed flow keeps
+/// running on the recorded metadata, and once it is Running the planner's exact diff applies
+/// the new metadata with an update. Every retry path uses this one comparison.
+pub fn retry_config_unchanged(recorded: &Resource, desired: &Resource) -> bool {
+    without_deployer_secret_metadata(recorded) == without_deployer_secret_metadata(desired)
+}
+
+fn without_deployer_secret_metadata(resource: &Resource) -> Resource {
+    fn strip(environment: &mut HashMap<String, String>) {
+        environment.remove(ENV_ALIEN_DEPLOYER_SECRETS);
+        if let Some(secrets) = environment.get_mut(ENV_ALIEN_SECRETS) {
+            if let Ok(serde_json::Value::Object(mut config)) =
+                serde_json::from_str::<serde_json::Value>(secrets)
+            {
+                config.remove("deployerSecrets");
+                *secrets = serde_json::Value::Object(config).to_string();
+            }
+        }
+    }
+    let mut resource = resource.clone();
+    if let Some(worker) = resource.downcast_mut::<Worker>() {
+        strip(&mut worker.environment);
+    } else if let Some(container) = resource.downcast_mut::<Container>() {
+        strip(&mut container.environment);
+    } else if let Some(daemon) = resource.downcast_mut::<Daemon>() {
+        strip(&mut daemon.environment);
+    }
+    resource
+}
 
 pub(crate) fn applicable_secret_environment_variables<'a>(
     resource_id: &str,

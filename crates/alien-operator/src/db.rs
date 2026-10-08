@@ -2339,4 +2339,41 @@ mod tests {
             Some(target)
         );
     }
+
+    #[tokio::test]
+    async fn telemetry_churn_keeps_encrypted_wal_bounded() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let path = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(path, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        let entry = vec![7u8; 64 * 1024];
+
+        for _ in 0..250 {
+            db.store_telemetry("logs", &entry)
+                .await
+                .expect("queue telemetry");
+            let pushed: Vec<i64> = db
+                .get_pending_telemetry(100)
+                .await
+                .expect("read pending telemetry")
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .collect();
+            assert_eq!(pushed.len(), 1);
+            db.delete_telemetry(&pushed)
+                .await
+                .expect("delete pushed telemetry");
+        }
+
+        // About 16 MiB passes through the WAL. Auto-checkpoints must let it
+        // restart, so it never holds much more than the 1000-frame threshold.
+        let wal_bytes = std::fs::metadata(data_dir.path().join("operator.db-wal"))
+            .expect("WAL file exists")
+            .len();
+        assert!(
+            wal_bytes < 8 * 1024 * 1024,
+            "WAL grew to {wal_bytes} bytes; checkpoints are not restarting it"
+        );
+    }
 }

@@ -63,6 +63,7 @@ impl ResourceImporter for AwsWorkerImporter {
             domain_name: None,
             domain_confirmed: false,
             domain_create_token: None,
+            certificate_import_token: None,
             load_balancer: None,
             certificate_issued_at: None,
             uses_custom_domain: false,

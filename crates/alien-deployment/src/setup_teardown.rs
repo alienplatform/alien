@@ -23,6 +23,9 @@ use crate::{
 /// This is intentionally separate from the normal deployment step machine:
 /// managers and agents stop at `TeardownRequired`, while setup-authority
 /// callers such as the CLI can continue with their own credentials.
+///
+/// Callers must finish with a final reconcile of `state`; that reconcile
+/// records a completed teardown when the `Deleted` checkpoint did not.
 pub async fn run_setup_teardown_after_handoff(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
@@ -202,7 +205,12 @@ async fn run_setup_teardown_after_handoff_inner(
             StackStatus::Deleted => {
                 state.status = DeploymentStatus::Deleted;
                 state.error = None;
-                checkpoint_setup_teardown_state(
+                // Every setup-authority caller finishes with a final reconcile of this same
+                // state, which decides whether the deletion was recorded: it succeeds when the
+                // manager persists it and treats a record that is already gone as deleted. A
+                // failure here must not decide the outcome on its own, because a manager can
+                // remove the record and then fail work it does after that commit.
+                if let Err(error) = checkpoint_setup_teardown_state(
                     deployment_id,
                     state,
                     config,
@@ -210,7 +218,14 @@ async fn run_setup_teardown_after_handoff_inner(
                     None,
                     Vec::new(),
                 )
-                .await?;
+                .await
+                {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        error = %error,
+                        "Deleted checkpoint failed; the final reconcile retries it"
+                    );
+                }
                 return Ok(Some(RunnerResult {
                     loop_result: LoopResult {
                         stop_reason: LoopStopReason::Deleted,
@@ -529,6 +544,114 @@ mod tests {
                 config: None,
             })
         }
+    }
+
+    /// Records every checkpoint and fails the ones reporting `fail_status`.
+    struct FailingTransport {
+        fail_status: DeploymentStatus,
+        checkpoints: Mutex<Vec<DeploymentStatus>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DeploymentLoopTransport for FailingTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, AlienError> {
+            self.checkpoints.lock().unwrap().push(state.status);
+            if state.status == self.fail_status {
+                // What a manager answers when work after its commit fails.
+                return Err(AlienError::new(alien_error::GenericError {
+                    message: "Internal server error".to_string(),
+                }));
+            }
+            Ok(StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+
+    /// Setup teardown with nothing left to delete: no scaffolding, no setup-owned resources.
+    async fn teardown_of_empty_setup(
+        fail_status: DeploymentStatus,
+    ) -> (
+        DeploymentState,
+        Result<Option<RunnerResult>>,
+        Vec<DeploymentStatus>,
+    ) {
+        let transport = FailingTransport {
+            fail_status,
+            checkpoints: Mutex::new(Vec::new()),
+        };
+        let mut state = DeploymentState {
+            runtime_metadata: None,
+            ..teardown_required(InitialSetupAuthority::DirectSetup)
+        };
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let result = run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            "dep_test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                delay_strategy: DelayStrategy::Inline,
+                ..Default::default()
+            },
+            &transport,
+            Some(Arc::new(MockPlatformServiceProvider::new())),
+        )
+        .await;
+        let checkpoints = transport.checkpoints.into_inner().unwrap();
+        (state, result, checkpoints)
+    }
+
+    /// The manager can remove the record on the `Deleted` checkpoint and still answer with an
+    /// error. Teardown is done; the caller's final reconcile of the same state decides.
+    #[tokio::test]
+    async fn a_failed_deleted_checkpoint_leaves_the_outcome_to_the_final_reconcile() {
+        let (state, result, checkpoints) = teardown_of_empty_setup(DeploymentStatus::Deleted).await;
+
+        let result = result
+            .expect("teardown that deleted everything must not fail on its last checkpoint")
+            .expect("teardown ran");
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::Deleted);
+        assert_eq!(result.loop_result.final_status, DeploymentStatus::Deleted);
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state.error.is_none());
+        assert_eq!(
+            checkpoints.last(),
+            Some(&DeploymentStatus::Deleted),
+            "the deleted state was sent before teardown returned"
+        );
+    }
+
+    /// An earlier checkpoint still fails teardown: the record remains, and the next run resumes it.
+    #[tokio::test]
+    async fn a_failed_checkpoint_before_deletion_fails_teardown() {
+        let (state, result, checkpoints) =
+            teardown_of_empty_setup(DeploymentStatus::TeardownRequired).await;
+
+        result.expect_err("a lost progress checkpoint must fail teardown");
+        assert_eq!(checkpoints, vec![DeploymentStatus::TeardownRequired]);
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
     }
 
     fn teardown_required(authority: InitialSetupAuthority) -> DeploymentState {

@@ -9,7 +9,7 @@ pub use deleting::destroy_without_runtime;
 mod error;
 mod helpers;
 mod initial_setup;
-pub use initial_setup::retry_failed_setup_resources;
+pub use initial_setup::{retry_failed_setup_resources, setup_run_has_pending_update};
 pub mod loop_contract;
 pub mod manager_api_transport;
 mod observe;

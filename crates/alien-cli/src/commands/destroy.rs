@@ -216,33 +216,45 @@ async fn resolve_destroy_target(
     } else {
         None
     };
+    // Only the platform knows which project a deployment belongs to. A manager
+    // serves one project and reports a placeholder `projectId` for every
+    // deployment, so its record cannot be compared with the selected project.
     #[cfg(feature = "platform")]
-    let (manager, reference) = if let Some(target) = platform_target {
-        (target.manager, String::from(target.detail.id))
+    let (manager, reference, owning_project_id) = if let Some(target) = platform_target {
+        (
+            target.manager,
+            String::from(target.detail.id),
+            Some(String::from(target.detail.project_id)),
+        )
     } else {
         (
             ctx.resolve_manager_metadata_only(&project_id, platform)
                 .await?,
             args.name.clone(),
+            None,
         )
     };
     #[cfg(not(feature = "platform"))]
-    let (manager, reference) = (
+    let (manager, reference, owning_project_id) = (
         ctx.resolve_manager_metadata_only(&project_id, platform)
             .await?,
         args.name.clone(),
+        None::<String>,
     );
+    if owning_project_id.is_some_and(|owner| owner != project_id) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "project".to_string(),
+            message: format!(
+                "Deployment '{}' belongs to a different project. Select its project with --project",
+                args.name
+            ),
+        }));
+    }
     let deployment = if reference.starts_with("dep_") || reference.contains('/') {
         crate::deployment_resolver::resolve(&manager.client, &reference, ctx.is_dev()).await?
     } else {
-        resolve_untracked_name(ctx, &manager.client, &reference, &project_id).await?
+        resolve_untracked_name(ctx, &manager.client, &reference).await?
     };
-    if deployment.project_id.as_str() != project_id {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "project".to_string(),
-            message: "The deployment belongs to a different project".to_string(),
-        }));
-    }
     if deployment.platform.to_string() != platform {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -353,75 +365,41 @@ async fn resolve_platform_name(
     Ok(ids.remove(0))
 }
 
-/// Legacy `--name` remains usable, but only for an exact, unique match in the project.
+/// Legacy `--name` against a standalone or local manager remains usable, but
+/// only for an exact, unique match. Such a manager serves a single project.
 async fn resolve_untracked_name(
     ctx: &ExecutionMode,
     manager: &alien_manager_api::Client,
     name: &str,
-    project_id: &str,
 ) -> Result<alien_manager_api::types::DeploymentResponse> {
-    let mut ids: Vec<String> = Vec::new();
-    #[cfg(feature = "platform")]
-    if ctx.is_platform() {
-        let client = ctx.sdk_client().await?;
-        let workspace = ctx.resolve_workspace_query_with_bootstrap(true).await?;
-        let mut cursor: Option<String> = None;
-        loop {
-            let mut request = client.list_deployments().project(project_id);
-            if let Some(workspace) = workspace.as_deref() {
-                request = request.workspace(workspace);
-            }
-            if let Some(cursor) = cursor.as_deref() {
-                request = request.cursor(cursor);
-            }
-            let page = request
-                .send()
-                .await
-                .into_sdk_error()
-                .context(ErrorData::ConfigurationError {
-                    message: format!("Failed to resolve deployment '{name}'"),
-                })?
-                .into_inner();
-            ids.extend(
-                page.items
-                    .into_iter()
-                    .filter(|d| d.name.as_str() == name)
-                    .map(|d| d.id.to_string()),
-            );
-            cursor = page.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
+    // The manager only accepts a name filter together with a deployment group, so list
+    // without one and match the exact name here.
+    let page = manager
+        .list_deployments()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to resolve deployment '{name}'"),
+        })?
+        .into_inner();
+    if page.next_cursor.is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: "This manager returned an incomplete list. Supply a deployment ID or <group>/<name> instead".to_string(),
+        }));
     }
-    if !ctx.is_platform() {
-        let page = manager
-            .list_deployments()
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to resolve deployment '{name}'"),
-            })?
-            .into_inner();
-        ids.extend(
-            page.items
-                .into_iter()
-                .filter(|d| d.name.as_str() == name && d.project_id == project_id)
-                .map(|d| d.id.to_string()),
-        );
-        if page.next_cursor.is_some() {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "name".to_string(),
-                message: "This manager returned an incomplete list. Supply a deployment ID or <group>/<name> instead".to_string(),
-            }));
-        }
-    }
+    let ids: Vec<String> = page
+        .items
+        .into_iter()
+        .filter(|d| d.name.as_str() == name)
+        .map(|d| d.id.to_string())
+        .collect();
     if ids.len() != 1 {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
             message: if ids.is_empty() {
-                format!("Deployment '{name}' was not found in the selected project. Check `alien deployments ls`")
+                format!("Deployment '{name}' was not found. Check `alien deployments ls`")
             } else {
                 format!("Multiple deployments are named '{name}'. Supply a deployment ID or <group>/<name> instead")
             },
@@ -1120,19 +1098,46 @@ mod tests {
         );
     }
 
+    /// The project ID a manager reports for every deployment, as its
+    /// `/v1/deployments` routes serialize it.
+    const MANAGER_PLACEHOLDER_PROJECT: &str = "prj_standalone000000000000000000";
+
+    fn manager_record(id: &str, name: &str) -> serde_json::Value {
+        serde_json::json!({ "id": id, "name": name, "platform": "test", "status": "running", "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": MANAGER_PLACEHOLDER_PROJECT, "workspaceId": "ws_standalone00000000000000", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" })
+    }
+
     #[tokio::test]
-    async fn remote_names_are_project_scoped_and_ambiguity_is_rejected() {
-        async fn list() -> Json<serde_json::Value> {
-            let item = |id: &str, project: &str, name: &str| serde_json::json!({ "id": id, "name": name, "platform": "test", "status": "running", "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": project, "workspaceId": "ws_test", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" });
-            Json(
-                serde_json::json!({ "items": [item("dep_test", "proj_test", "test"), item("dep_other", "proj_other", "test"), item("dep_a", "proj_test", "duplicate"), item("dep_b", "proj_test", "duplicate")] }),
-            )
+    async fn standalone_names_resolve_by_exact_unique_name() {
+        // Like the manager, refuse a name filter without a deployment group.
+        async fn list(
+            axum::extract::Query(query): axum::extract::Query<
+                std::collections::HashMap<String, String>,
+            >,
+        ) -> axum::response::Response {
+            use axum::response::IntoResponse;
+            if query.contains_key("name") && !query.contains_key("deploymentGroupId") {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "name filter requires deploymentGroupId",
+                )
+                    .into_response();
+            }
+            Json(serde_json::json!({ "items": [
+                manager_record("dep_test", "test"),
+                manager_record("dep_testing", "testing"),
+                manager_record("dep_a", "duplicate"),
+                manager_record("dep_b", "duplicate"),
+            ] }))
+            .into_response()
         }
-        let state = Shared::default();
+        async fn get_one(
+            axum::extract::Path(id): axum::extract::Path<String>,
+        ) -> Json<serde_json::Value> {
+            Json(manager_record(&id, "test"))
+        }
         let app = Router::new()
             .route("/v1/deployments", get(list))
-            .route("/v1/deployments/{id}", get(get_deployment))
-            .with_state(state);
+            .route("/v1/deployments/{id}", get(get_one));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -1141,19 +1146,52 @@ mod tests {
             server_url,
             api_key: "operator".to_string(),
         };
-        let target = resolve_untracked_name(&ctx, &manager, "test", "proj_test")
+
+        let target = resolve_untracked_name(&ctx, &manager, "test")
             .await
-            .unwrap();
+            .expect("a unique name resolves although the manager reports a placeholder project");
         assert_eq!(target.id, "dep_test");
-        let error = resolve_untracked_name(&ctx, &manager, "duplicate", "proj_test")
+        let error = resolve_untracked_name(&ctx, &manager, "duplicate")
             .await
             .unwrap_err();
+        assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("Multiple deployments"));
-        assert!(
-            resolve_untracked_name(&ctx, &manager, "test", "missing-project")
-                .await
-                .is_err()
-        );
+        let error = resolve_untracked_name(&ctx, &manager, "missing")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("was not found"));
+    }
+
+    /// `alien destroy --name dep_...` against a standalone manager, whose
+    /// records carry the placeholder project rather than the CLI's `default`.
+    #[tokio::test]
+    async fn standalone_destroy_by_id_resolves_despite_the_placeholder_project() {
+        async fn get_one(
+            axum::extract::Path(id): axum::extract::Path<String>,
+        ) -> Json<serde_json::Value> {
+            Json(manager_record(&id, "test"))
+        }
+        let app = Router::new().route("/v1/deployments/{id}", get(get_one));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ctx = ExecutionMode::Standalone {
+            server_url,
+            api_key: "operator".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "dep_test".to_string(),
+            platform: Some("test".to_string()),
+            force: true,
+        };
+        let (target, _) = resolve_destroy_target(&args, &ctx, "test", None)
+            .await
+            .expect("a deployment ID on a single-project manager resolves");
+        assert_eq!(target.deployment_id, "dep_test");
+        assert_eq!(target.name, "test");
+        assert_eq!(target.project_id, "default");
     }
 
     #[tokio::test]
@@ -1237,35 +1275,110 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "platform")]
+    const PLATFORM_DEPLOYMENT: &str = "dep_0000000000000000000000000000";
+    #[cfg(feature = "platform")]
+    const PLATFORM_PROJECT: &str = "prj_0000000000000000000000000000";
+
+    /// A platform API and a separate manager, as `alien destroy` sees them
+    /// when logged in. The platform records the deployment in
+    /// `owning_project`; the manager reports its placeholder project.
+    #[cfg(feature = "platform")]
+    async fn platform_with_manager(owning_project: &'static str) -> ExecutionMode {
+        let deployment_json = move || serde_json::json!({ "id": PLATFORM_DEPLOYMENT, "name": "prod", "platform": "test", "status": "running", "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": owning_project, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" });
+
+        let manager_app = Router::new().route(
+            "/v1/deployments/{id}",
+            get(|| async { Json(manager_record(PLATFORM_DEPLOYMENT, "prod")) }),
+        );
+        let manager_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager_url = format!("http://{}", manager_listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(manager_listener, manager_app).await.unwrap() });
+
+        let platform_app = Router::new()
+            .route("/v1/projects/{id}", get(|| async {
+                Json(serde_json::json!({ "id": PLATFORM_PROJECT, "name": "example", "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z" }))
+            }))
+            .route("/v1/managers/{id}", get(move || async move {
+                Json(serde_json::json!({
+                    "id":"mgr_0000000000000000000000000000", "name":"original", "url":manager_url,
+                    "workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z",
+                    "defaultProjectCount":0, "managedDeploymentCount":1, "managementConfigs":{},
+                    "isSystem":false, "status":"healthy", "targets":["test"]
+                }))
+            }))
+            .route("/v1/deployment-groups", get(|| async {
+                Json(serde_json::json!({ "items": [{ "id": "dg_0000000000000000000000000000", "name": "fleet", "externalId": null, "projectId": PLATFORM_PROJECT, "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z" }], "nextCursor": null }))
+            }))
+            .route("/v1/deployments", get(move || async move {
+                Json(serde_json::json!({ "items": [deployment_json()], "nextCursor": null }))
+            }))
+            .route("/v1/deployments/{id}", get(move || async move { Json(deployment_json()) }))
+            .route("/v1/deployments/{id}/token", post(|| async {
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({ "deploymentId": PLATFORM_DEPLOYMENT, "token": DEPLOYMENT_TOKEN })),
+                )
+            }));
+        let platform_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", platform_listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(platform_listener, platform_app).await.unwrap() });
+
+        ExecutionMode::Platform {
+            base_url,
+            api_key: Some("user-session".to_string()),
+            workspace: Some("example".to_string()),
+            project: Some("example".to_string()),
+            no_browser: true,
+        }
+    }
+
+    /// `alien destroy --name dep_...` and `--name <group>/<name> --project`
+    /// failed with "The deployment belongs to a different project": the
+    /// manager's placeholder project was compared with the selected one.
+    #[cfg(feature = "platform")]
     #[tokio::test]
-    async fn force_target_rejects_deployment_outside_selected_project() {
-        let state = Shared::default();
-        let app = Router::new()
-            .route("/v1/deployments/{id}", get(get_deployment))
-            .with_state(state.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let server_url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let ctx = ExecutionMode::Standalone {
-            server_url,
-            api_key: "operator".to_string(),
-        };
-        let args = DestroyArgs {
-            token: None,
-            name: "dep_test".to_string(),
-            platform: Some("test".to_string()),
-            force: true,
-        };
-        let error = resolve_destroy_target(&args, &ctx, "test", None)
-            .await
-            .err()
-            .expect("cross-project force target must be rejected before mutation");
-        assert_eq!(error.code, "VALIDATION_ERROR");
-        assert!(error.message.contains("project"));
-        let state = state.lock().unwrap();
-        assert!(!state.deleted);
-        assert!(state.delete_authorizations.is_empty());
-        assert!(state.acquire_authorizations.is_empty());
+    async fn platform_destroy_by_id_or_group_name_checks_the_platform_project() {
+        let ctx = platform_with_manager(PLATFORM_PROJECT).await;
+        for name in [PLATFORM_DEPLOYMENT, "fleet/prod"] {
+            let args = DestroyArgs {
+                token: None,
+                name: name.to_string(),
+                platform: Some("test".to_string()),
+                force: false,
+            };
+            let (target, _) = resolve_destroy_target(&args, &ctx, "test", None)
+                .await
+                .unwrap_or_else(|error| panic!("{name} must resolve: {error}"));
+            assert_eq!(target.deployment_id, PLATFORM_DEPLOYMENT, "{name}");
+            assert_eq!(target.name, "prod", "{name}");
+            assert_eq!(target.project_id, PLATFORM_PROJECT, "{name}");
+            assert_eq!(target.api_key, DEPLOYMENT_TOKEN, "{name}");
+        }
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn platform_destroy_rejects_a_deployment_of_another_project() {
+        let ctx = platform_with_manager("prj_1111111111111111111111111111").await;
+        for force in [true, false] {
+            let args = DestroyArgs {
+                token: None,
+                name: PLATFORM_DEPLOYMENT.to_string(),
+                platform: Some("test".to_string()),
+                force,
+            };
+            let error = resolve_destroy_target(&args, &ctx, "test", None)
+                .await
+                .err()
+                .expect("a deployment of another project must be rejected before any mutation");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert!(
+                error.message.contains("belongs to a different project"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     #[tokio::test]

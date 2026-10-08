@@ -10,6 +10,8 @@ use crate::{
 };
 
 use crate::credential_source::{MintingCredentialSource, MintingResolver};
+#[cfg(feature = "aws")]
+use crate::providers::queue::aws_sqs::{create_http_client as create_sqs_http_client, AwsSqsQueue};
 use alien_client_config::ClientConfigExt;
 use alien_core::bindings::PostgresBinding;
 use alien_core::{ClientConfig, Platform, StackState, ENV_OPERATOR_BASE_PLATFORM};
@@ -1533,8 +1535,6 @@ impl BindingsProviderApi for BindingsProvider {
         let result: Arc<dyn Queue> = match binding {
             #[cfg(feature = "aws")]
             QueueBinding::Sqs(config) => {
-                use crate::providers::queue::aws_sqs::AwsSqsQueue;
-
                 let queue_url = config
                     .queue_url
                     .into_value(binding_name, "queue_url")
@@ -1556,10 +1556,8 @@ impl BindingsProviderApi for BindingsProvider {
                             platform: Platform::Aws,
                             message: "Failed to create AWS credential provider".to_string(),
                         })?;
-                let client = alien_aws_clients::sqs::SqsClient::new(
-                    crate::http_client::create_http_client(),
-                    credentials,
-                );
+                let client =
+                    alien_aws_clients::sqs::SqsClient::new(create_sqs_http_client()?, credentials);
                 let q: Arc<dyn Queue> = Arc::new(AwsSqsQueue::new(queue_url, client));
                 Ok(q)
             }

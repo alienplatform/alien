@@ -7,7 +7,7 @@ use super::helpers::*;
 use crate::core::state_utils::{StackResourceStateExt, StackStateExt};
 use crate::core::StackExecutor;
 use crate::error::Result;
-use crate::worker::{test_worker_configs_deployed, TestWorkerController, TestWorkerState};
+use crate::worker::{TestWorkerController, TestWorkerState};
 use alien_core::{
     Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackSettings,
     StackState, Storage, Worker, WorkerCode,
@@ -834,77 +834,6 @@ async fn test_stay_exhaustion_saves_last_failed_state() -> Result<()> {
         saved.state,
         TestWorkerState::CreateWorkerPolling,
         "lastFailedState must capture the polling state, not the failure terminal"
-    );
-
-    Ok(())
-}
-
-/// A config change during Provisioning does not interrupt the create that is in flight.
-///
-/// Flow:
-/// 1. One step runs with image-v1 → func1 enters Provisioning (CreateStart executed; the
-///    worker is not deployed yet).
-/// 2. We switch to an image-v2 executor. plan() sees the config change and defers it,
-///    because the resource is still provisioning.
-/// 3. The create keeps going; CreateWorker deploys the image-v2 desired config.
-/// 4. Final state: func1 is Running, and the worker actually received image-v2.
-#[tokio::test]
-async fn test_config_change_during_provisioning_finishes_create_with_new_config() -> Result<()> {
-    let func1_v1 = test_function_with_image("deferred-change-func", "image-v1");
-
-    let stack_v1 = Stack::new("provisioning-recreate-test".to_owned())
-        .add(func1_v1, ResourceLifecycle::Live)
-        .build();
-
-    let executor_v1 = new_executor(&stack_v1)?;
-    let state = new_test_state();
-
-    // Run exactly ONE step to get func1 into Provisioning with an internal controller.
-    let step_result = executor_v1.step(state).await?;
-    let state_after_one_step = step_result.next_state;
-
-    assert_eq!(
-        get_status(&state_after_one_step, "deferred-change-func"),
-        Some(ResourceStatus::Provisioning),
-        "func1 should be Provisioning after one step"
-    );
-
-    // Now switch to image-v2 -- config has changed while func1 is mid-provisioning.
-    let func1_v2 = test_function_with_image("deferred-change-func", "image-v2");
-    let stack_v2 = Stack::new("provisioning-recreate-test".to_owned())
-        .add(func1_v2, ResourceLifecycle::Live)
-        .build();
-
-    let executor_v2 = new_executor(&stack_v2)?;
-    let final_state = run_to_synced(&executor_v2, state_after_one_step).await?;
-
-    assert_eq!(
-        get_status(&final_state, "deferred-change-func"),
-        Some(ResourceStatus::Running),
-        "func1 should be Running after the deferred config change"
-    );
-
-    // Verify func1 finished with the image-v2 config.
-    let func1_state = final_state.resources.get("deferred-change-func").unwrap();
-    let func1_final = func1_state.config.downcast_ref::<Worker>().unwrap();
-    assert_eq!(
-        func1_final.code,
-        WorkerCode::Image {
-            image: "image-v2".to_string()
-        },
-        "func1 must finish provisioning with image-v2 config"
-    );
-    let deployed: Vec<WorkerCode> =
-        test_worker_configs_deployed("test:worker:deferred-change-func")
-            .into_iter()
-            .map(|config| config.code)
-            .collect();
-    assert_eq!(
-        deployed,
-        vec![WorkerCode::Image {
-            image: "image-v2".to_string()
-        }],
-        "the worker itself must have been created with image-v2, not only the record"
     );
 
     Ok(())

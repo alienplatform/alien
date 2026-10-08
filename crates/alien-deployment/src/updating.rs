@@ -65,7 +65,7 @@ fn compute_update_status(
 /// Scoped to `reconciled` because a resource the executor's lifecycle filter excluded is never
 /// planned: a setup-owned resource whose recorded config differs from the declared one would
 /// otherwise hold the update open forever. A resource missing from state has not converged.
-fn stack_has_converged(
+pub(crate) fn stack_has_converged(
     stack_state: &StackState,
     target_stack: &Stack,
     reconciled: &HashSet<&str>,
