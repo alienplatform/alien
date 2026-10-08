@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.30
 persistentEdits:
-  generation_id: c5110964-05cc-4d15-81d6-059c3161321f
-  pristine_commit_hash: 4616c88ff4e6d8c8c50f89b8ad2b69c0a903430e
-  pristine_tree_hash: e52be3396b4f51897b1d50c6fe8c8b60b84aa71e
+  generation_id: d5af36aa-391e-4641-b328-1cdff4031d86
+  pristine_commit_hash: 4fe2851fe9db9e1a3a900c77ddf0622dfc7dc4f5
+  pristine_tree_hash: 7ffbb95563a84c77f5aed0240f721bdc22651e32
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -35130,8 +35130,8 @@ trackedFiles:
     pristine_git_object: 41d8df3b2df646f27843b906aecc1d3c0be2f01f
   docs/sdks/sync/README.md:
     id: a2e09f86bd16
-    last_write_checksum: sha1:5cac5625e36d42edccfa5605e68ad5eb27c326ae
-    pristine_git_object: a8689131aa4fdd27c8dab0ce31bfa4318bea3710
+    last_write_checksum: sha1:c25dc9d129ef9cec7c4d7881e8dd69053498ac03
+    pristine_git_object: d5cc5d9690e3d047a6d7ab3803909d48e6aaae4e
   docs/sdks/user/README.md:
     id: 437dd7dc6e30
     last_write_checksum: sha1:7c4493667a82f628a87510a275e06162b27ec04a
@@ -35166,8 +35166,8 @@ trackedFiles:
     pristine_git_object: ce7dcf274b1a5376e24888c121593e8803674646
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:5d490baf06eb0a6373215b8a314a77c3974efa38
-    pristine_git_object: 1e63bf0adea1aa3a150c7d6f1bd4efcbcf10afc2
+    last_write_checksum: sha1:e16a5cda17a3f1bff881c37fffcd7b2da5b00c3f
+    pristine_git_object: 6764360d8e91d3914351fb557506b44c6cf85f09
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:c634ddf4882f77c6dba4422d8b4ba7cb5a3a23d4
@@ -36110,8 +36110,8 @@ trackedFiles:
     pristine_git_object: 0e2bddfa1582cbb960e65864c41933c1ecd23a45
   src/funcs/syncReconcile.ts:
     id: ed27d270d53e
-    last_write_checksum: sha1:37356c35cb0448497f882b7314cb6266e6d509c9
-    pristine_git_object: 181fbb5157d53a6373ffa9d3a1340cfbaa57866b
+    last_write_checksum: sha1:4552b0f330a266156b76d64f034702bd978c57e8
+    pristine_git_object: c284f2fb8eb2dc63c150e289375e176ad0640b8b
   src/funcs/syncRelease.ts:
     id: 85c91cd44f53
     last_write_checksum: sha1:d7ca1e7ebebbc65056ed6ea62202f0a9931a1c00
