@@ -18,13 +18,13 @@ export type MoveDeploymentRequest = {
    * Unique identifier for the deployment.
    */
   id: string;
-  moveDeploymentRequest?: models.MoveDeploymentRequest | undefined;
+  moveDeploymentRequest: models.MoveDeploymentRequest;
 };
 
 /** @internal */
 export type MoveDeploymentRequest$Outbound = {
   id: string;
-  MoveDeploymentRequest?: models.MoveDeploymentRequest$Outbound | undefined;
+  MoveDeploymentRequest: models.MoveDeploymentRequest$Outbound;
 };
 
 /** @internal */
@@ -33,7 +33,7 @@ export const MoveDeploymentRequest$outboundSchema: z.ZodType<
   MoveDeploymentRequest
 > = z.object({
   id: z.string(),
-  moveDeploymentRequest: models.MoveDeploymentRequest$outboundSchema.optional(),
+  moveDeploymentRequest: models.MoveDeploymentRequest$outboundSchema,
 }).transform((v) => {
   return remap$(v, {
     moveDeploymentRequest: "MoveDeploymentRequest",
