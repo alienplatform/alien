@@ -2147,7 +2147,7 @@ async fn deploy_task_with_environment(
             // Provisioning can still block after the handoff (for example on a
             // deployer secret that is not written yet), so do not report running.
             steps.complete(2, Some("Handed off to the manager".to_string()));
-            steps.skip(3, Some("The manager provisions the deployment".to_string()));
+            steps.activate(3, Some("Waiting for the manager".to_string()));
             true
         }
         LoopOutcome::Neutral => {
@@ -2169,7 +2169,7 @@ async fn deploy_task_with_environment(
             dim_label("Setup complete. Waiting for the manager to provision the deployment...")
         );
         let deployment_id = tracked_deployment.deployment_id.clone();
-        wait_for_handed_off_deployment(
+        let activation = wait_for_handed_off_deployment(
             || async {
                 let observed = observe_deployment(&manager_client, &deployment_id).await?;
                 if let Some(stack_state) = &observed.stack_state {
@@ -2195,7 +2195,12 @@ async fn deploy_task_with_environment(
                 }
             },
         )
-        .await?;
+        .await;
+        if let Err(error) = activation {
+            steps.fail(3, Some(error.message.clone()));
+            return Err(error);
+        }
+        steps.complete(3, Some("Running".to_string()));
     }
 
     drop(steps);
