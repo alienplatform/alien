@@ -128,6 +128,12 @@ impl AwsServiceAccountController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: "service-account policy changes require privileged setup; regenerate and rerun setup".to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -157,6 +163,15 @@ impl AwsServiceAccountController {
                 role_name = %role_name,
                 "Stack-level permissions applied successfully"
             );
+        } else if ctx.state.resources.get(&config.id).is_some_and(|state| state.previous_config.is_some()) {
+            match client.delete_role_policy(role_name, MANAGED_POLICY_NAME).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })) => {},
+                Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to remove empty stack permissions from IAM role '{role_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })),
+            }
         } else {
             info!(
                 role_name = %role_name,
@@ -327,66 +342,7 @@ impl AwsServiceAccountController {
         )?;
         self.assume_role_policy = Some(policy);
         Ok(HandlerAction::Continue {
-            state: UpdatingStackPermissions,
-            suggested_delay: None,
-        })
-    }
-
-    #[handler(state = UpdatingStackPermissions, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
-    async fn updating_stack_permissions(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<ServiceAccount>()?;
-        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
-            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
-                message: "service-account policy changes require privileged setup; regenerate and rerun setup".to_string(),
-                resource_id: Some(config.id.clone()),
-            }));
-        }
-        let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-        let role_name = self.role_name.as_ref().unwrap();
-
-        info!(
-            role_name = %role_name,
-            "Updating IAM role policies"
-        );
-
-        // Re-generate and apply stack-level permissions
-        let policy_document = self.generate_stack_policy_document(config, ctx)?;
-
-        if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update stack permissions for IAM role '{}'",
-                        role_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(
-                role_name = %role_name,
-                "IAM role policies updated successfully"
-            );
-        } else {
-            // Remove policy if no permissions are needed
-            match client
-                .delete_role_policy(role_name, MANAGED_POLICY_NAME)
-                .await
-            {
-                Ok(_) => {
-                    info!(role_name = %role_name, "Removed empty policy from IAM role");
-                }
-                Err(e) => {
-                    // Policy might not exist, which is fine
-                    warn!(role_name = %role_name, error = %e, "Failed to delete policy during update (policy might not exist)");
-                }
-            }
-        }
-
-        Ok(HandlerAction::Continue {
-            state: ApplyingResourcePermissions,
+            state: ApplyingStackPermissions,
             suggested_delay: None,
         })
     }
@@ -1240,7 +1196,7 @@ mod tests {
 
     #[tokio::test]
     async fn resumed_trust_and_policy_updates_reject_runtime_authority_before_iam() {
-        for state in [AwsServiceAccountState::UpdateStart, AwsServiceAccountState::UpdatingStackPermissions] {
+        for state in [AwsServiceAccountState::UpdateStart, AwsServiceAccountState::ApplyingStackPermissions] {
             let controller = AwsServiceAccountController {
                 state,
                 role_name: Some("test-reader-sa".to_string()),
