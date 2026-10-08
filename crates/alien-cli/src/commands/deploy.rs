@@ -1934,7 +1934,7 @@ async fn deploy_task_with_environment(
     }
 
     // Build minimal deployment config
-    let stack_settings: alien_core::StackSettings = deployment
+    let mut stack_settings: alien_core::StackSettings = deployment
         .stack_settings
         .map(serde_json::from_value)
         .transpose()
@@ -1944,13 +1944,21 @@ async fn deploy_task_with_environment(
         })?
         .unwrap_or_default();
 
-    if let Some(requested_compute) = resolved_args.compute_settings.as_ref() {
-        if stack_settings.compute.as_ref() != Some(requested_compute) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "compute".to_string(),
-                message: "Compute settings cannot be changed while resuming an existing deployment. Use the deployment setup flow to change compute, or retry with the deployment's current compute settings.".to_string(),
-            }));
-        }
+    if let Some(compute) = reconcile_resume_compute(
+        ResumeCompute {
+            status: &current.status,
+            has_installed_release,
+            platform_mode: ctx.is_platform(),
+            current: stack_settings.compute.as_ref(),
+            requested: resolved_args.compute_settings.as_ref(),
+        },
+        &base_url,
+        deployment_token,
+        &tracked_deployment.deployment_id,
+    )
+    .await?
+    {
+        stack_settings.compute = Some(compute);
     }
 
     if let Some(requested_domains) = resolved_args.domain_settings.as_ref() {
@@ -3020,6 +3028,74 @@ async fn prepare_setup_update(
     Ok(())
 }
 
+/// What `alien deploy` knows about compute when it resumes a deployment.
+struct ResumeCompute<'a> {
+    status: &'a DeploymentStatus,
+    has_installed_release: bool,
+    platform_mode: bool,
+    current: Option<&'a ComputeSettings>,
+    requested: Option<&'a ComputeSettings>,
+}
+
+/// Applies requested compute to a resumed deployment, or refuses it.
+///
+/// A resume must never drop requested compute silently. A deployment whose
+/// preflights failed before anything was installed can still take new
+/// compute: the platform saves it on the deployment's next apply, and the
+/// retry runs preflights against it. Anything installed keeps its compute
+/// until a compute update or setup changes it. Returns the compute to run
+/// with when it changed.
+async fn reconcile_resume_compute(
+    resume: ResumeCompute<'_>,
+    base_url: &str,
+    deployment_token: &str,
+    deployment_id: &str,
+) -> Result<Option<ComputeSettings>> {
+    let Some(requested) = resume.requested else {
+        return Ok(None);
+    };
+    if resume.current == Some(requested) {
+        return Ok(None);
+    }
+    let never_installed =
+        *resume.status == DeploymentStatus::PreflightsFailed && !resume.has_installed_release;
+    if !(resume.platform_mode && never_installed) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "compute".to_string(),
+            message: format!(
+                "Compute settings cannot be changed while resuming a deployment that is {status:?}. Retry with the deployment's current compute settings, or change compute with the deployment's compute update or setup flow.",
+                status = resume.status
+            ),
+        }));
+    }
+
+    let url = api_url(
+        base_url,
+        &format!(
+            "/v1/deployments/{}/compute",
+            urlencoding::encode(deployment_id)
+        ),
+        None,
+    )?;
+    let response = create_platform_http_client(deployment_token)?
+        .patch(url)
+        .json(&serde_json::json!({ "compute": requested }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("saving compute settings for deployment {deployment_id}"),
+            url: None,
+        })?;
+    parse_api_response::<serde_json::Value>(
+        response,
+        "Failed to save the corrected compute settings before retrying preflights",
+    )
+    .await?;
+    info!("Saved corrected compute settings for deployment {deployment_id}");
+    Ok(Some(requested.clone()))
+}
+
 /// Moves a failed deployment's operation back to ready so setup can take it.
 async fn request_deployment_retry(
     base_url: &str,
@@ -3775,6 +3851,147 @@ mod tests {
         let (target, current, loaded) = run_releases(None, Some("rel_installed"), false).await;
         assert_eq!((target, current), (None, None));
         assert!(loaded.is_empty());
+    }
+
+    fn compute(mode: &str, machines: u32) -> ComputeSettings {
+        serde_json::from_value(serde_json::json!({
+            "pools": {
+                "general": if mode == "fixed" {
+                    serde_json::json!({ "mode": "fixed", "machines": machines, "machine": "t4g.small" })
+                } else {
+                    serde_json::json!({ "mode": "autoscale", "min": 1, "max": machines, "machine": "t4g.small" })
+                }
+            }
+        }))
+        .expect("compute settings should parse")
+    }
+
+    #[tokio::test]
+    async fn resuming_a_failed_preflight_saves_corrected_compute_before_retrying() {
+        let server = MockServer::start_async().await;
+        let current = compute("fixed", 1);
+        let requested = compute("autoscale", 2);
+        let saved = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH)
+                    .path("/v1/deployments/dep_retry/compute")
+                    .header("authorization", "Bearer ax_dep_token")
+                    .json_body(serde_json::json!({ "compute": requested }));
+                then.status(200)
+                    .json_body(serde_json::json!({ "outcome": "accepted", "operation": null }));
+            })
+            .await;
+
+        let applied = reconcile_resume_compute(
+            ResumeCompute {
+                status: &DeploymentStatus::PreflightsFailed,
+                has_installed_release: false,
+                platform_mode: true,
+                current: Some(&current),
+                requested: Some(&requested),
+            },
+            &server.base_url(),
+            "ax_dep_token",
+            "dep_retry",
+        )
+        .await
+        .expect("a never-installed deployment should accept corrected compute");
+
+        assert_eq!(applied, Some(requested));
+        saved.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn resume_keeps_compute_of_anything_installed_or_already_matching() {
+        let server = MockServer::start_async().await;
+        let any_patch = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH);
+                then.status(200).json_body(serde_json::json!({}));
+            })
+            .await;
+        let current = compute("fixed", 1);
+        let requested = compute("autoscale", 2);
+
+        let unchanged = reconcile_resume_compute(
+            ResumeCompute {
+                status: &DeploymentStatus::PreflightsFailed,
+                has_installed_release: false,
+                platform_mode: true,
+                current: Some(&current),
+                requested: Some(&current),
+            },
+            &server.base_url(),
+            "ax_dep_token",
+            "dep_retry",
+        )
+        .await
+        .expect("matching compute needs no change");
+        assert_eq!(unchanged, None);
+
+        for (status, has_installed_release, platform_mode) in [
+            (DeploymentStatus::ProvisioningFailed, false, true),
+            (DeploymentStatus::InitialSetupFailed, false, true),
+            (DeploymentStatus::PreflightsFailed, true, true),
+            (DeploymentStatus::PreflightsFailed, false, false),
+        ] {
+            let error = reconcile_resume_compute(
+                ResumeCompute {
+                    status: &status,
+                    has_installed_release,
+                    platform_mode,
+                    current: Some(&current),
+                    requested: Some(&requested),
+                },
+                &server.base_url(),
+                "ax_dep_token",
+                "dep_retry",
+            )
+            .await
+            .expect_err("installed or standalone deployments keep their compute");
+            assert_eq!(error.code, "VALIDATION_ERROR", "{status:?}");
+            assert!(
+                error.message.contains("cannot be changed while resuming"),
+                "{status:?}: {}",
+                error.message
+            );
+        }
+        any_patch.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn resume_surfaces_a_platform_refusal_to_change_compute() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH)
+                    .path("/v1/deployments/dep_retry/compute");
+                then.status(400).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_NOT_READY_FOR_OPERATION",
+                    "message": "Deployment is not ready for update-compute"
+                }));
+            })
+            .await;
+
+        let error = reconcile_resume_compute(
+            ResumeCompute {
+                status: &DeploymentStatus::PreflightsFailed,
+                has_installed_release: false,
+                platform_mode: true,
+                current: None,
+                requested: Some(&compute("fixed", 1)),
+            },
+            &server.base_url(),
+            "ax_dep_token",
+            "dep_retry",
+        )
+        .await
+        .expect_err("a refused save must stop the resume");
+        assert!(
+            error.message.contains("DEPLOYMENT_NOT_READY_FOR_OPERATION"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
