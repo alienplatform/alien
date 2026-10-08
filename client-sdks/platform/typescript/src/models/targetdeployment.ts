@@ -265,6 +265,244 @@ export type TargetDeploymentInput = {
   validation?: TargetDeploymentValidation | string | null | undefined;
 };
 
+/**
+ * Whether matching operations run without approval.
+ */
+export const TargetDeploymentCustomDecision = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type TargetDeploymentCustomDecision = ClosedEnum<
+  typeof TargetDeploymentCustomDecision
+>;
+
+export type TargetDeploymentApprovalCustom = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: TargetDeploymentCustomDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const TargetDeploymentApprovalCustomEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type TargetDeploymentApprovalCustomEnum = ClosedEnum<
+  typeof TargetDeploymentApprovalCustomEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type TargetDeploymentCustomApprovalUnion =
+  | TargetDeploymentApprovalCustom
+  | TargetDeploymentApprovalCustomEnum;
+
+export type TargetDeploymentSettingsCustom3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type TargetDeploymentSettingsCustom2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type TargetDeploymentSettingsCustom1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type TargetDeploymentCustomSettingsUnion =
+  | TargetDeploymentSettingsCustom1
+  | TargetDeploymentSettingsCustom2
+  | TargetDeploymentSettingsCustom3
+  | string;
+
+/**
+ * A published custom plugin at an exact version.
+ */
+export type TargetDeploymentCustom = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | TargetDeploymentApprovalCustom
+      | TargetDeploymentApprovalCustomEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | TargetDeploymentSettingsCustom1
+      | TargetDeploymentSettingsCustom2
+      | TargetDeploymentSettingsCustom3
+      | string;
+  } | undefined;
+  /**
+   * Plugin name as published.
+   */
+  name: string;
+  /**
+   * Exact published version.
+   */
+  version: string;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const TargetDeploymentPluginsDecision = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type TargetDeploymentPluginsDecision = ClosedEnum<
+  typeof TargetDeploymentPluginsDecision
+>;
+
+export type TargetDeploymentApprovalPlugins = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: TargetDeploymentPluginsDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const TargetDeploymentApprovalPluginsEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type TargetDeploymentApprovalPluginsEnum = ClosedEnum<
+  typeof TargetDeploymentApprovalPluginsEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type TargetDeploymentPluginsApprovalUnion =
+  | TargetDeploymentApprovalPlugins
+  | TargetDeploymentApprovalPluginsEnum;
+
+export type TargetDeploymentSettingsPlugins3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type TargetDeploymentSettingsPlugins2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type TargetDeploymentSettingsPlugins1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type TargetDeploymentPluginsSettingsUnion =
+  | TargetDeploymentSettingsPlugins1
+  | TargetDeploymentSettingsPlugins2
+  | TargetDeploymentSettingsPlugins3
+  | string;
+
+/**
+ * Settings and approval rules for one plugin.
+ */
+export type TargetDeploymentPlugins = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | TargetDeploymentApprovalPlugins
+      | TargetDeploymentApprovalPluginsEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | TargetDeploymentSettingsPlugins1
+      | TargetDeploymentSettingsPlugins2
+      | TargetDeploymentSettingsPlugins3
+      | string;
+  } | undefined;
+};
+
+/**
+ * Operations declared by a stack, or by an Operator installed on its own.
+ */
+export type TargetDeploymentOperations = {
+  /**
+   * Published custom plugins, pinned to exact versions.
+   */
+  custom?: Array<TargetDeploymentCustom> | undefined;
+  /**
+   * Built-in plugins, by plugin name.
+   */
+  plugins?: { [k: string]: TargetDeploymentPlugins } | undefined;
+};
+
+export type TargetDeploymentOperationsUnion =
+  | TargetDeploymentOperations
+  | string;
+
 export const TargetDeploymentManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1522,6 +1760,7 @@ export type TargetDeploymentStack = {
    * Input definitions required before setup or deployment can proceed.
    */
   inputs?: Array<TargetDeploymentInput> | undefined;
+  operations?: TargetDeploymentOperations | string | null | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -1885,6 +2124,366 @@ export function targetDeploymentInputFromJSON(
     jsonString,
     (x) => TargetDeploymentInput$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'TargetDeploymentInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentCustomDecision$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentCustomDecision
+> = z.enum(TargetDeploymentCustomDecision);
+
+/** @internal */
+export const TargetDeploymentApprovalCustom$inboundSchema: z.ZodType<
+  TargetDeploymentApprovalCustom,
+  unknown
+> = z.object({
+  decision: TargetDeploymentCustomDecision$inboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function targetDeploymentApprovalCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentApprovalCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentApprovalCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentApprovalCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentApprovalCustomEnum$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentApprovalCustomEnum
+> = z.enum(TargetDeploymentApprovalCustomEnum);
+
+/** @internal */
+export const TargetDeploymentCustomApprovalUnion$inboundSchema: z.ZodType<
+  TargetDeploymentCustomApprovalUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentApprovalCustom$inboundSchema),
+  TargetDeploymentApprovalCustomEnum$inboundSchema,
+]);
+
+export function targetDeploymentCustomApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentCustomApprovalUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentCustomApprovalUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentCustomApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentSettingsCustom3$inboundSchema: z.ZodType<
+  TargetDeploymentSettingsCustom3,
+  unknown
+> = z.object({
+  env: z.string(),
+});
+
+export function targetDeploymentSettingsCustom3FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentSettingsCustom3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentSettingsCustom3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentSettingsCustom3' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentSettingsCustom2$inboundSchema: z.ZodType<
+  TargetDeploymentSettingsCustom2,
+  unknown
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function targetDeploymentSettingsCustom2FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentSettingsCustom2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentSettingsCustom2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentSettingsCustom2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentSettingsCustom1$inboundSchema: z.ZodType<
+  TargetDeploymentSettingsCustom1,
+  unknown
+> = z.object({
+  input: z.string(),
+});
+
+export function targetDeploymentSettingsCustom1FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentSettingsCustom1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentSettingsCustom1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentSettingsCustom1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentCustomSettingsUnion$inboundSchema: z.ZodType<
+  TargetDeploymentCustomSettingsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentSettingsCustom1$inboundSchema),
+  z.lazy(() => TargetDeploymentSettingsCustom2$inboundSchema),
+  z.lazy(() => TargetDeploymentSettingsCustom3$inboundSchema),
+  z.string(),
+]);
+
+export function targetDeploymentCustomSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentCustomSettingsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentCustomSettingsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentCustomSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentCustom$inboundSchema: z.ZodType<
+  TargetDeploymentCustom,
+  unknown
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => TargetDeploymentApprovalCustom$inboundSchema),
+      TargetDeploymentApprovalCustomEnum$inboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => TargetDeploymentSettingsCustom1$inboundSchema),
+      z.lazy(() => TargetDeploymentSettingsCustom2$inboundSchema),
+      z.lazy(() => TargetDeploymentSettingsCustom3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  name: z.string(),
+  version: z.string(),
+});
+
+export function targetDeploymentCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentPluginsDecision$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentPluginsDecision
+> = z.enum(TargetDeploymentPluginsDecision);
+
+/** @internal */
+export const TargetDeploymentApprovalPlugins$inboundSchema: z.ZodType<
+  TargetDeploymentApprovalPlugins,
+  unknown
+> = z.object({
+  decision: TargetDeploymentPluginsDecision$inboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function targetDeploymentApprovalPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentApprovalPlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentApprovalPlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentApprovalPlugins' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentApprovalPluginsEnum$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentApprovalPluginsEnum
+> = z.enum(TargetDeploymentApprovalPluginsEnum);
+
+/** @internal */
+export const TargetDeploymentPluginsApprovalUnion$inboundSchema: z.ZodType<
+  TargetDeploymentPluginsApprovalUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentApprovalPlugins$inboundSchema),
+  TargetDeploymentApprovalPluginsEnum$inboundSchema,
+]);
+
+export function targetDeploymentPluginsApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentPluginsApprovalUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentPluginsApprovalUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentPluginsApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentSettingsPlugins3$inboundSchema: z.ZodType<
+  TargetDeploymentSettingsPlugins3,
+  unknown
+> = z.object({
+  env: z.string(),
+});
+
+export function targetDeploymentSettingsPlugins3FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentSettingsPlugins3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentSettingsPlugins3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentSettingsPlugins3' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentSettingsPlugins2$inboundSchema: z.ZodType<
+  TargetDeploymentSettingsPlugins2,
+  unknown
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function targetDeploymentSettingsPlugins2FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentSettingsPlugins2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentSettingsPlugins2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentSettingsPlugins2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentSettingsPlugins1$inboundSchema: z.ZodType<
+  TargetDeploymentSettingsPlugins1,
+  unknown
+> = z.object({
+  input: z.string(),
+});
+
+export function targetDeploymentSettingsPlugins1FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentSettingsPlugins1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentSettingsPlugins1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentSettingsPlugins1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentPluginsSettingsUnion$inboundSchema: z.ZodType<
+  TargetDeploymentPluginsSettingsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentSettingsPlugins1$inboundSchema),
+  z.lazy(() => TargetDeploymentSettingsPlugins2$inboundSchema),
+  z.lazy(() => TargetDeploymentSettingsPlugins3$inboundSchema),
+  z.string(),
+]);
+
+export function targetDeploymentPluginsSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentPluginsSettingsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetDeploymentPluginsSettingsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentPluginsSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentPlugins$inboundSchema: z.ZodType<
+  TargetDeploymentPlugins,
+  unknown
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => TargetDeploymentApprovalPlugins$inboundSchema),
+      TargetDeploymentApprovalPluginsEnum$inboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => TargetDeploymentSettingsPlugins1$inboundSchema),
+      z.lazy(() => TargetDeploymentSettingsPlugins2$inboundSchema),
+      z.lazy(() => TargetDeploymentSettingsPlugins3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function targetDeploymentPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentPlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentPlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentPlugins' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOperations$inboundSchema: z.ZodType<
+  TargetDeploymentOperations,
+  unknown
+> = z.object({
+  custom: z.array(z.lazy(() => TargetDeploymentCustom$inboundSchema))
+    .optional(),
+  plugins: z.record(
+    z.string(),
+    z.lazy(() => TargetDeploymentPlugins$inboundSchema),
+  ).optional(),
+});
+
+export function targetDeploymentOperationsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOperations, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentOperations$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOperations' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentOperationsUnion$inboundSchema: z.ZodType<
+  TargetDeploymentOperationsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetDeploymentOperations$inboundSchema),
+  z.string(),
+]);
+
+export function targetDeploymentOperationsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentOperationsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentOperationsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentOperationsUnion' from JSON`,
   );
 }
 
@@ -3498,6 +4097,12 @@ export const TargetDeploymentStack$inboundSchema: z.ZodType<
   dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(z.lazy(() => TargetDeploymentInput$inboundSchema)).optional(),
+  operations: z.nullable(
+    z.union([
+      z.lazy(() => TargetDeploymentOperations$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   permissions: z.lazy(() => TargetDeploymentPermissions$inboundSchema)
     .optional(),
   resources: z.record(

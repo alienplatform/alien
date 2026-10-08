@@ -296,6 +296,244 @@ export type PreparedDeploymentStackInput = {
   validation?: PreparedDeploymentStackValidation | string | null | undefined;
 };
 
+/**
+ * Whether matching operations run without approval.
+ */
+export const PreparedDeploymentStackCustomDecision = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type PreparedDeploymentStackCustomDecision = ClosedEnum<
+  typeof PreparedDeploymentStackCustomDecision
+>;
+
+export type PreparedDeploymentStackApprovalCustom = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: PreparedDeploymentStackCustomDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const PreparedDeploymentStackApprovalCustomEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type PreparedDeploymentStackApprovalCustomEnum = ClosedEnum<
+  typeof PreparedDeploymentStackApprovalCustomEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type PreparedDeploymentStackCustomApprovalUnion =
+  | PreparedDeploymentStackApprovalCustom
+  | PreparedDeploymentStackApprovalCustomEnum;
+
+export type PreparedDeploymentStackSettingsCustom3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type PreparedDeploymentStackSettingsCustom2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type PreparedDeploymentStackSettingsCustom1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type PreparedDeploymentStackCustomSettingsUnion =
+  | PreparedDeploymentStackSettingsCustom1
+  | PreparedDeploymentStackSettingsCustom2
+  | PreparedDeploymentStackSettingsCustom3
+  | string;
+
+/**
+ * A published custom plugin at an exact version.
+ */
+export type PreparedDeploymentStackCustom = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | PreparedDeploymentStackApprovalCustom
+      | PreparedDeploymentStackApprovalCustomEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | PreparedDeploymentStackSettingsCustom1
+      | PreparedDeploymentStackSettingsCustom2
+      | PreparedDeploymentStackSettingsCustom3
+      | string;
+  } | undefined;
+  /**
+   * Plugin name as published.
+   */
+  name: string;
+  /**
+   * Exact published version.
+   */
+  version: string;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const PreparedDeploymentStackPluginsDecision = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type PreparedDeploymentStackPluginsDecision = ClosedEnum<
+  typeof PreparedDeploymentStackPluginsDecision
+>;
+
+export type PreparedDeploymentStackApprovalPlugins = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: PreparedDeploymentStackPluginsDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const PreparedDeploymentStackApprovalPluginsEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type PreparedDeploymentStackApprovalPluginsEnum = ClosedEnum<
+  typeof PreparedDeploymentStackApprovalPluginsEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type PreparedDeploymentStackPluginsApprovalUnion =
+  | PreparedDeploymentStackApprovalPlugins
+  | PreparedDeploymentStackApprovalPluginsEnum;
+
+export type PreparedDeploymentStackSettingsPlugins3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type PreparedDeploymentStackSettingsPlugins2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type PreparedDeploymentStackSettingsPlugins1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type PreparedDeploymentStackPluginsSettingsUnion =
+  | PreparedDeploymentStackSettingsPlugins1
+  | PreparedDeploymentStackSettingsPlugins2
+  | PreparedDeploymentStackSettingsPlugins3
+  | string;
+
+/**
+ * Settings and approval rules for one plugin.
+ */
+export type PreparedDeploymentStackPlugins = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | PreparedDeploymentStackApprovalPlugins
+      | PreparedDeploymentStackApprovalPluginsEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | PreparedDeploymentStackSettingsPlugins1
+      | PreparedDeploymentStackSettingsPlugins2
+      | PreparedDeploymentStackSettingsPlugins3
+      | string;
+  } | undefined;
+};
+
+/**
+ * Operations declared by a stack, or by an Operator installed on its own.
+ */
+export type PreparedDeploymentStackOperations = {
+  /**
+   * Published custom plugins, pinned to exact versions.
+   */
+  custom?: Array<PreparedDeploymentStackCustom> | undefined;
+  /**
+   * Built-in plugins, by plugin name.
+   */
+  plugins?: { [k: string]: PreparedDeploymentStackPlugins } | undefined;
+};
+
+export type PreparedDeploymentStackOperationsUnion =
+  | PreparedDeploymentStackOperations
+  | string;
+
 export const PreparedDeploymentStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1573,6 +1811,7 @@ export type PreparedDeploymentStackStack = {
    * Input definitions required before setup or deployment can proceed.
    */
   inputs?: Array<PreparedDeploymentStackInput> | undefined;
+  operations?: PreparedDeploymentStackOperations | string | null | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -1922,6 +2161,403 @@ export function preparedDeploymentStackInputFromJSON(
     jsonString,
     (x) => PreparedDeploymentStackInput$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'PreparedDeploymentStackInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackCustomDecision$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackCustomDecision
+> = z.enum(PreparedDeploymentStackCustomDecision);
+
+/** @internal */
+export const PreparedDeploymentStackApprovalCustom$inboundSchema: z.ZodType<
+  PreparedDeploymentStackApprovalCustom,
+  unknown
+> = z.object({
+  decision: PreparedDeploymentStackCustomDecision$inboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function preparedDeploymentStackApprovalCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackApprovalCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackApprovalCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackApprovalCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackApprovalCustomEnum$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackApprovalCustomEnum
+> = z.enum(PreparedDeploymentStackApprovalCustomEnum);
+
+/** @internal */
+export const PreparedDeploymentStackCustomApprovalUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackCustomApprovalUnion, unknown> = z.union([
+    z.lazy(() => PreparedDeploymentStackApprovalCustom$inboundSchema),
+    PreparedDeploymentStackApprovalCustomEnum$inboundSchema,
+  ]);
+
+export function preparedDeploymentStackCustomApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackCustomApprovalUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackCustomApprovalUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackCustomApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackSettingsCustom3$inboundSchema: z.ZodType<
+  PreparedDeploymentStackSettingsCustom3,
+  unknown
+> = z.object({
+  env: z.string(),
+});
+
+export function preparedDeploymentStackSettingsCustom3FromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackSettingsCustom3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackSettingsCustom3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackSettingsCustom3' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackSettingsCustom2$inboundSchema: z.ZodType<
+  PreparedDeploymentStackSettingsCustom2,
+  unknown
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function preparedDeploymentStackSettingsCustom2FromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackSettingsCustom2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackSettingsCustom2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackSettingsCustom2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackSettingsCustom1$inboundSchema: z.ZodType<
+  PreparedDeploymentStackSettingsCustom1,
+  unknown
+> = z.object({
+  input: z.string(),
+});
+
+export function preparedDeploymentStackSettingsCustom1FromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackSettingsCustom1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackSettingsCustom1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackSettingsCustom1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackCustomSettingsUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackCustomSettingsUnion, unknown> = z.union([
+    z.lazy(() => PreparedDeploymentStackSettingsCustom1$inboundSchema),
+    z.lazy(() => PreparedDeploymentStackSettingsCustom2$inboundSchema),
+    z.lazy(() => PreparedDeploymentStackSettingsCustom3$inboundSchema),
+    z.string(),
+  ]);
+
+export function preparedDeploymentStackCustomSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackCustomSettingsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackCustomSettingsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackCustomSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackCustom$inboundSchema: z.ZodType<
+  PreparedDeploymentStackCustom,
+  unknown
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PreparedDeploymentStackApprovalCustom$inboundSchema),
+      PreparedDeploymentStackApprovalCustomEnum$inboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PreparedDeploymentStackSettingsCustom1$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackSettingsCustom2$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackSettingsCustom3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  name: z.string(),
+  version: z.string(),
+});
+
+export function preparedDeploymentStackCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackPluginsDecision$inboundSchema: z.ZodEnum<
+  typeof PreparedDeploymentStackPluginsDecision
+> = z.enum(PreparedDeploymentStackPluginsDecision);
+
+/** @internal */
+export const PreparedDeploymentStackApprovalPlugins$inboundSchema: z.ZodType<
+  PreparedDeploymentStackApprovalPlugins,
+  unknown
+> = z.object({
+  decision: PreparedDeploymentStackPluginsDecision$inboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function preparedDeploymentStackApprovalPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackApprovalPlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackApprovalPlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackApprovalPlugins' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackApprovalPluginsEnum$inboundSchema:
+  z.ZodEnum<typeof PreparedDeploymentStackApprovalPluginsEnum> = z.enum(
+    PreparedDeploymentStackApprovalPluginsEnum,
+  );
+
+/** @internal */
+export const PreparedDeploymentStackPluginsApprovalUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackPluginsApprovalUnion, unknown> = z.union([
+    z.lazy(() => PreparedDeploymentStackApprovalPlugins$inboundSchema),
+    PreparedDeploymentStackApprovalPluginsEnum$inboundSchema,
+  ]);
+
+export function preparedDeploymentStackPluginsApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackPluginsApprovalUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackPluginsApprovalUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackPluginsApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackSettingsPlugins3$inboundSchema: z.ZodType<
+  PreparedDeploymentStackSettingsPlugins3,
+  unknown
+> = z.object({
+  env: z.string(),
+});
+
+export function preparedDeploymentStackSettingsPlugins3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackSettingsPlugins3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackSettingsPlugins3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackSettingsPlugins3' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackSettingsPlugins2$inboundSchema: z.ZodType<
+  PreparedDeploymentStackSettingsPlugins2,
+  unknown
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function preparedDeploymentStackSettingsPlugins2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackSettingsPlugins2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackSettingsPlugins2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackSettingsPlugins2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackSettingsPlugins1$inboundSchema: z.ZodType<
+  PreparedDeploymentStackSettingsPlugins1,
+  unknown
+> = z.object({
+  input: z.string(),
+});
+
+export function preparedDeploymentStackSettingsPlugins1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackSettingsPlugins1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackSettingsPlugins1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackSettingsPlugins1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackPluginsSettingsUnion$inboundSchema:
+  z.ZodType<PreparedDeploymentStackPluginsSettingsUnion, unknown> = z.union([
+    z.lazy(() => PreparedDeploymentStackSettingsPlugins1$inboundSchema),
+    z.lazy(() => PreparedDeploymentStackSettingsPlugins2$inboundSchema),
+    z.lazy(() => PreparedDeploymentStackSettingsPlugins3$inboundSchema),
+    z.string(),
+  ]);
+
+export function preparedDeploymentStackPluginsSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  PreparedDeploymentStackPluginsSettingsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackPluginsSettingsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'PreparedDeploymentStackPluginsSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackPlugins$inboundSchema: z.ZodType<
+  PreparedDeploymentStackPlugins,
+  unknown
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PreparedDeploymentStackApprovalPlugins$inboundSchema),
+      PreparedDeploymentStackApprovalPluginsEnum$inboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => PreparedDeploymentStackSettingsPlugins1$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackSettingsPlugins2$inboundSchema),
+      z.lazy(() => PreparedDeploymentStackSettingsPlugins3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function preparedDeploymentStackPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackPlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackPlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackPlugins' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackOperations$inboundSchema: z.ZodType<
+  PreparedDeploymentStackOperations,
+  unknown
+> = z.object({
+  custom: z.array(z.lazy(() => PreparedDeploymentStackCustom$inboundSchema))
+    .optional(),
+  plugins: z.record(
+    z.string(),
+    z.lazy(() => PreparedDeploymentStackPlugins$inboundSchema),
+  ).optional(),
+});
+
+export function preparedDeploymentStackOperationsFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackOperations, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreparedDeploymentStackOperations$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackOperations' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreparedDeploymentStackOperationsUnion$inboundSchema: z.ZodType<
+  PreparedDeploymentStackOperationsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PreparedDeploymentStackOperations$inboundSchema),
+  z.string(),
+]);
+
+export function preparedDeploymentStackOperationsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PreparedDeploymentStackOperationsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PreparedDeploymentStackOperationsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreparedDeploymentStackOperationsUnion' from JSON`,
   );
 }
 
@@ -3772,6 +4408,12 @@ export const PreparedDeploymentStackStack$inboundSchema: z.ZodType<
   id: z.string(),
   inputs: z.array(z.lazy(() => PreparedDeploymentStackInput$inboundSchema))
     .optional(),
+  operations: z.nullable(
+    z.union([
+      z.lazy(() => PreparedDeploymentStackOperations$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   permissions: z.lazy(() => PreparedDeploymentStackPermissions$inboundSchema)
     .optional(),
   resources: z.record(
