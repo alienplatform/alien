@@ -1921,7 +1921,7 @@ async fn deploy_task_with_environment(
 
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
-    let acquired_deployment = if setup_owned_status {
+    let acquisition = if setup_owned_status {
         acquire_setup_run_deployment(
             lock_client,
             &tracked_deployment.deployment_id,
@@ -1929,9 +1929,6 @@ async fn deploy_task_with_environment(
             stack_settings.deployment_model,
         )
         .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire setup deployment lock".to_string(),
-        })?
     } else {
         acquire_deployment_with_payload(
             &manager_client,
@@ -1940,9 +1937,37 @@ async fn deploy_task_with_environment(
             stack_settings.deployment_model,
         )
         .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire deployment lock".to_string(),
-        })?
+    };
+    let acquired_deployment = match acquisition {
+        Ok(deployment) => deployment,
+        Err(error) => {
+            if ctx.is_platform()
+                && completed_after_acquisition_miss(
+                    &error,
+                    &base_url,
+                    deployment_token,
+                    &tracked_deployment.deployment_id,
+                )
+                .await?
+            {
+                steps.complete(2, Some("Completed by manager".to_string()));
+                steps.skip(3, Some("Already running".to_string()));
+                drop(steps);
+                println!(
+                    "{}",
+                    success_line("Deployment completed while waiting for execution ownership.")
+                );
+                return Ok(());
+            }
+            return Err(error).context(ErrorData::ConfigurationError {
+                message: if setup_owned_status {
+                    "Failed to acquire setup deployment lock"
+                } else {
+                    "Failed to acquire deployment lock"
+                }
+                .to_string(),
+            });
+        }
     };
 
     if let Some(acquired_config) = acquired_deployment
@@ -2774,6 +2799,48 @@ async fn platform_deployment_progress(
     Ok((deployment.deployment_group_id.to_string(), active_update))
 }
 
+/// A status rejection can mean the manager completed between our read and
+/// acquisition. Confirm convergence from one authoritative snapshot. Other
+/// rejection reasons and transport errors must retain their original failure.
+async fn completed_after_acquisition_miss(
+    error: &AlienError,
+    base_url: &str,
+    deployment_token: &str,
+    deployment_id: &str,
+) -> Result<bool> {
+    let reason = error
+        .context
+        .as_ref()
+        .and_then(|context| context["reason"].as_str());
+    if error.code != "DEPLOYMENT_ACQUIRE_UNAVAILABLE"
+        || !matches!(reason, Some("statusMismatch" | "acquireModeMismatch"))
+    {
+        return Ok(false);
+    }
+    let deployment = create_platform_client(deployment_token, base_url)?
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!(
+                "checking whether deployment {deployment_id} completed during acquisition"
+            ),
+            url: None,
+        })?
+        .into_inner();
+    Ok(
+        deployment.status == alien_platform_api::types::DeploymentStatus::Running
+            && deployment.current_release_id.is_some()
+            && deployment.desired_release_id.is_none()
+            && deployment
+                .update_state
+                .as_ref()
+                .is_some_and(|state| state.active.0.is_none() && state.next.0.is_none()),
+    )
+}
+
 /// Prepares an installed deployment for a setup run: the target release's
 /// setup-owned (frozen) resources become the prepared stack, failed frozen
 /// resources are retried, and the deployment re-enters initial setup, which
@@ -2854,10 +2921,150 @@ async fn request_deployment_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::{Method::GET, MockServer};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::time::{timeout, Duration};
+
+    fn acquisition_miss(reason: &str) -> AlienError {
+        serde_json::from_value(serde_json::json!({
+            "code": "DEPLOYMENT_ACQUIRE_UNAVAILABLE",
+            "message": "The deployment cannot be acquired",
+            "context": {"reason": reason},
+            "retryable": false,
+            "internal": false,
+        }))
+        .expect("wire acquisition error")
+    }
+
+    fn completed_deployment_response() -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("dep_{}", "a".repeat(28)),
+            "name": "test-deployment",
+            "status": "running",
+            "projectId": format!("prj_{}", "a".repeat(28)),
+            "platform": "aws",
+            "deploymentProtocolVersion": 1,
+            "deploymentGroupId": format!("dg_{}", "a".repeat(28)),
+            "purpose": "application",
+            "stackSettings": {},
+            "releaseChannel": "production",
+            "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "managerId": format!("mgr_{}", "a".repeat(28)),
+            "workspaceId": format!("ws_{}", "a".repeat(24)),
+            "currentReleaseId": format!("rel_{}", "a".repeat(28)),
+            "desiredReleaseId": null,
+            "updateState": {"active": null, "next": null, "latest": null},
+        })
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_confirms_completion_without_hiding_pending_work() {
+        let operation = serde_json::json!({
+            "id": format!("duop_{}", "a".repeat(28)),
+            "status": "queued",
+            "reasons": [],
+            "targetReleaseId": format!("rel_{}", "b".repeat(28)),
+            "changedKeys": [],
+            "requestedAt": "2026-01-01T00:00:00Z",
+        });
+        let mut cases = vec![("completed", completed_deployment_response(), true)];
+        for status in ["updating", "update-failed", "deleted"] {
+            let mut body = completed_deployment_response();
+            body["status"] = serde_json::json!(status);
+            cases.push((status, body, false));
+        }
+        for field in ["active", "next"] {
+            let mut body = completed_deployment_response();
+            body["updateState"][field] = operation.clone();
+            cases.push((field, body, false));
+        }
+        let mut desired = completed_deployment_response();
+        desired["desiredReleaseId"] = serde_json::json!(format!("rel_{}", "b".repeat(28)));
+        cases.push(("desired release", desired, false));
+        let mut uninstalled = completed_deployment_response();
+        uninstalled["currentReleaseId"] = serde_json::Value::Null;
+        cases.push(("uninstalled", uninstalled, false));
+        let mut incomplete = completed_deployment_response();
+        incomplete.as_object_mut().unwrap().remove("updateState");
+        cases.push(("old response without update state", incomplete, false));
+        for reason in ["statusMismatch", "acquireModeMismatch"] {
+            for (label, body, expected) in &cases {
+                let server = MockServer::start_async().await;
+                let response = server
+                    .mock_async(|when, then| {
+                        when.method(GET).path("/v1/deployments/dep_test");
+                        then.status(200).json_body(body.clone());
+                    })
+                    .await;
+                let completed = completed_after_acquisition_miss(
+                    &acquisition_miss(reason),
+                    &server.base_url(),
+                    "test-token",
+                    "dep_test",
+                )
+                .await
+                .expect("authoritative completion read");
+                assert_eq!(completed, *expected, "{reason}: {label}");
+                response.assert_hits_async(1).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_preserves_other_rejections_and_transport_errors() {
+        let server = MockServer::start_async().await;
+        let response = server
+            .mock_async(|when, then| {
+                when.method(GET);
+                then.status(200).json_body(completed_deployment_response());
+            })
+            .await;
+        for reason in ["notFound", "platformMismatch", "contended", "deferred"] {
+            assert!(!completed_after_acquisition_miss(
+                &acquisition_miss(reason),
+                &server.base_url(),
+                "test-token",
+                "dep_test",
+            )
+            .await
+            .unwrap());
+        }
+        let mut transport = acquisition_miss("statusMismatch");
+        transport.code = "HTTP_RESPONSE_ERROR".to_string();
+        assert!(!completed_after_acquisition_miss(
+            &transport,
+            &server.base_url(),
+            "test-token",
+            "dep_test",
+        )
+        .await
+        .unwrap());
+        response.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_requires_a_successful_completion_read() {
+        let server = MockServer::start_async().await;
+        let response = server
+            .mock_async(|when, then| {
+                when.method(GET);
+                then.status(503);
+            })
+            .await;
+        completed_after_acquisition_miss(
+            &acquisition_miss("statusMismatch"),
+            &server.base_url(),
+            "test-token",
+            "dep_test",
+        )
+        .await
+        .expect_err("failed read cannot establish successful deployment");
+        response.assert_hits_async(1).await;
+    }
 
     #[test]
     fn an_existing_public_subdomain_can_be_repeated_but_not_changed() {
