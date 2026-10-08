@@ -1,23 +1,37 @@
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpSecretManagerVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
 };
-use alien_gcp_clients::iam::IamPolicy;
+use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::resource_manager::GetPolicyOptions;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     PermissionContext,
 };
 use chrono::Utc;
+
+/// Attempts at the project IAM read-modify-write when another writer (another
+/// vault, or the management identity) commits between our read and write.
+const PROJECT_POLICY_WRITE_MAX_ATTEMPTS: u32 = 5;
+const PROJECT_POLICY_WRITE_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// Outcome of one project IAM read-modify-write.
+enum ProjectPolicyWrite {
+    /// The policy holds this vault's grants.
+    Reconciled,
+    /// The etag was stale: another writer committed after our read.
+    ConcurrentChange(AlienError<CloudClientErrorData>),
+}
 
 /// GCP Vault controller.
 ///
@@ -60,8 +74,16 @@ impl GcpVaultController {
 
         let vault_prefix = format!("{}-{}", ctx.resource_prefix, config.id);
 
-        self.apply_management_permissions(ctx, &config.id, &vault_prefix)
-            .await?;
+        if let ProjectPolicyWrite::ConcurrentChange(error) = self
+            .apply_management_permissions(ctx, &config.id, &vault_prefix)
+            .await?
+        {
+            self.check_policy_write_attempts(&config.id, error)?;
+            return Ok(HandlerAction::Stay {
+                max_times: Some(PROJECT_POLICY_WRITE_MAX_ATTEMPTS),
+                suggested_delay: Some(PROJECT_POLICY_WRITE_RETRY_DELAY),
+            });
+        }
         if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
             self.permissions_revision = Some(super::permissions_revision(ctx)?);
         }
@@ -107,8 +129,16 @@ impl GcpVaultController {
                 resource_id: Some(config.id.clone()),
             })
         })?;
-        self.apply_management_permissions(ctx, &config.id, vault_prefix)
-            .await?;
+        if let ProjectPolicyWrite::ConcurrentChange(error) = self
+            .apply_management_permissions(ctx, &config.id, vault_prefix)
+            .await?
+        {
+            self.check_policy_write_attempts(&config.id, error)?;
+            return Ok(HandlerAction::Stay {
+                max_times: Some(PROJECT_POLICY_WRITE_MAX_ATTEMPTS),
+                suggested_delay: Some(PROJECT_POLICY_WRITE_RETRY_DELAY),
+            });
+        }
         if ResourcePermissionsHelper::resource_is_setup_owned(ctx, &config.id)? {
             self.permissions_revision = Some(super::permissions_revision(ctx)?);
         }
@@ -292,6 +322,48 @@ fn emit_gcp_secret_manager_vault_heartbeat(
     });
 }
 
+/// The condition fragment that scopes a project IAM binding to one vault's
+/// secrets. Vault controllers own the management identity's bindings whose
+/// condition contains it; other project-policy writers must leave them alone.
+fn gcp_vault_namespace_condition(project_number: &str, vault_prefix: &str) -> String {
+    format!("resource.name.startsWith(\"projects/{project_number}/secrets/{vault_prefix}-\")")
+}
+
+/// Namespace conditions of every vault in this stack, desired or still in state.
+pub(crate) fn gcp_stack_vault_namespace_conditions(
+    ctx: &ResourceControllerContext<'_>,
+    project_number: &str,
+) -> Vec<String> {
+    let desired = ctx
+        .desired_stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| entry.config.resource_type() == Vault::RESOURCE_TYPE)
+        .map(|(id, _)| id.as_str());
+    let saved = ctx
+        .state
+        .resources
+        .iter()
+        .filter(|(_, state)| state.resource_type == Vault::RESOURCE_TYPE.as_ref())
+        .map(|(id, _)| id.as_str());
+    let mut ids: Vec<&str> = desired.chain(saved).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.into_iter()
+        .map(|id| {
+            gcp_vault_namespace_condition(project_number, &format!("{}-{id}", ctx.resource_prefix))
+        })
+        .collect()
+}
+
+pub(crate) fn binding_targets_vault_namespace(binding: &Binding, namespaces: &[String]) -> bool {
+    binding.condition.as_ref().is_some_and(|condition| {
+        namespaces
+            .iter()
+            .any(|namespace| condition.expression.contains(namespace))
+    })
+}
+
 // IAM bindings and members are sets; provider ordering does not change access.
 fn normalized_bindings(
     bindings: &[alien_gcp_clients::iam::Binding],
@@ -309,15 +381,42 @@ fn normalized_bindings(
 }
 
 impl GcpVaultController {
+    /// A stale etag means another writer committed between our read and
+    /// write. Re-reading and re-merging is the only correct response, so the
+    /// handler stays in its state for a bounded number of attempts instead of
+    /// failing the step. Any other error fails the step as usual.
+    fn check_policy_write_attempts(
+        &self,
+        vault_id: &str,
+        error: AlienError<CloudClientErrorData>,
+    ) -> Result<()> {
+        let attempt = self._internal_stay_count.unwrap_or_default() + 1;
+        if attempt >= PROJECT_POLICY_WRITE_MAX_ATTEMPTS {
+            return Err(error.context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Project IAM policy kept changing concurrently; gave up binding vault management roles after {attempt} attempts"
+                ),
+                resource_id: Some(vault_id.to_string()),
+            }));
+        }
+        warn!(
+            vault_id = %vault_id,
+            attempt,
+            error = %error,
+            "Project IAM policy changed concurrently; re-reading before binding vault management roles"
+        );
+        Ok(())
+    }
+
     async fn apply_management_permissions(
         &self,
         ctx: &ResourceControllerContext<'_>,
         vault_id: &str,
         vault_prefix: &str,
-    ) -> Result<()> {
+    ) -> Result<ProjectPolicyWrite> {
         // Project IAM grants are setup-owned, even when the vault is Live.
         if !ResourcePermissionsHelper::resource_is_setup_owned(ctx, vault_id)? {
-            return Ok(());
+            return Ok(ProjectPolicyWrite::Reconciled);
         }
 
         let mut seen_ids = std::collections::HashSet::new();
@@ -349,7 +448,7 @@ impl GcpVaultController {
                 || self.state == GcpVaultState::CreateStart
             {
                 // A new or unchanged empty profile has no namespace IAM work.
-                return Ok(());
+                return Ok(ProjectPolicyWrite::Reconciled);
             }
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "GCP project number is required to remove previous vault grants"
@@ -398,7 +497,7 @@ impl GcpVaultController {
         let Some(management_sa_email) =
             ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx)?
         else {
-            return Ok(());
+            return Ok(ProjectPolicyWrite::Reconciled);
         };
 
         let rm_client = ctx
@@ -440,8 +539,7 @@ impl GcpVaultController {
         }
         // Different vaults share predefined roles and the management identity.
         // Reconcile only bindings whose condition targets this vault namespace.
-        let namespace = format!(
-            "resource.name.startsWith(\"projects/{}/secrets/{vault_prefix}-\")",
+        let namespace = [gcp_vault_namespace_condition(
             gcp_config.project_number.as_deref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message:
@@ -450,7 +548,8 @@ impl GcpVaultController {
                     resource_id: Some(vault_id.to_string()),
                 })
             })?,
-        );
+            vault_prefix,
+        )];
         let current_bindings = normalized_bindings(&current_policy.bindings).context(
             ErrorData::InfrastructureError {
                 message: "Failed to serialize current vault IAM bindings".to_string(),
@@ -458,13 +557,10 @@ impl GcpVaultController {
                 resource_id: Some(vault_id.to_string()),
             },
         )?;
-        let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) =
-            current_policy.bindings.into_iter().partition(|binding| {
-                binding
-                    .condition
-                    .as_ref()
-                    .is_some_and(|condition| condition.expression.contains(&namespace))
-            });
+        let (mut vault_bindings, mut all_bindings): (Vec<_>, Vec<_>) = current_policy
+            .bindings
+            .into_iter()
+            .partition(|binding| binding_targets_vault_namespace(binding, &namespace));
         ResourcePermissionsHelper::remove_gcp_project_member_bindings(
             &mut vault_bindings,
             &member,
@@ -489,7 +585,7 @@ impl GcpVaultController {
             })?;
         if proposed_bindings == current_bindings {
             info!(vault_id = %vault_id, "GCP vault management permissions already reconciled");
-            return Ok(());
+            return Ok(ProjectPolicyWrite::Reconciled);
         }
 
         let new_policy = IamPolicy::builder()
@@ -500,13 +596,27 @@ impl GcpVaultController {
             .maybe_resource_id(current_policy.resource_id)
             .build();
 
-        rm_client
+        match rm_client
             .set_project_iam_policy(gcp_config.project_id.clone(), new_policy, None)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to bind vault management roles at project level".to_string(),
-                resource_id: Some(vault_id.to_string()),
-            })?;
+        {
+            Ok(_) => {}
+            // GCP rejects a stale etag with 409 ABORTED.
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                return Ok(ProjectPolicyWrite::ConcurrentChange(error));
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to bind vault management roles at project level".to_string(),
+                    resource_id: Some(vault_id.to_string()),
+                }));
+            }
+        }
 
         info!(
             vault_id = %vault_id,
@@ -514,7 +624,7 @@ impl GcpVaultController {
             "GCP vault management permissions applied"
         );
 
-        Ok(())
+        Ok(ProjectPolicyWrite::Reconciled)
     }
 }
 
@@ -1002,5 +1112,433 @@ mod permission_update_tests {
             1,
             "retry adopts the committed policy without a second write"
         );
+    }
+}
+
+/// Vaults and the management identity all read-modify-write the same project
+/// IAM policy during one setup run. These tests drive the real controllers
+/// against an in-memory policy with GCP's etag semantics.
+#[cfg(test)]
+mod project_policy_writer_tests {
+    use super::*;
+    use crate::core::{
+        MockPlatformServiceProvider, ResourceController, StackExecutor, StackResourceStateExt,
+    };
+    use crate::remote_stack_management::GcpRemoteStackManagementController;
+    use alien_core::permissions::PermissionProfile;
+    use alien_core::{
+        ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+        GcpClientConfig, GcpManagementConfig, InitialSetupAuthority, ManagementConfig,
+        RemoteStackManagement, Resource, ResourceLifecycle, ResourceRef, Stack, StackResourceState,
+        StackSettings, StackState,
+    };
+    use alien_gcp_clients::iam::{Expr, MockIamApi};
+    use alien_gcp_clients::{resource_manager::MockResourceManagerApi, GcpClientConfigExt as _};
+    use std::sync::{Arc, Mutex};
+
+    const PROJECT_NUMBER: &str = "123456789012";
+    const MANAGER: &str = "serviceAccount:manager@test-project-123.iam.gserviceaccount.com";
+    const OTHER_WRITER: &str = "serviceAccount:other@mock-project.iam.gserviceaccount.com";
+
+    /// Project IAM policy with etags. `conflicts` makes that many writes lose
+    /// a race: another writer commits a binding first, so the write's etag is
+    /// stale and GCP answers 409.
+    #[derive(Default)]
+    struct Project {
+        bindings: Vec<Binding>,
+        version: u64,
+        conflicts: usize,
+        writes: usize,
+    }
+
+    impl Project {
+        fn etag(&self) -> String {
+            format!("etag-{}", self.version)
+        }
+
+        fn has(&self, role: &str, member: &str, condition: Option<&str>) -> bool {
+            self.bindings.iter().any(|binding| {
+                binding.role == role
+                    && binding.members.iter().any(|m| m == member)
+                    && match (condition, &binding.condition) {
+                        (None, None) => true,
+                        (Some(fragment), Some(expr)) => expr.expression.contains(fragment),
+                        _ => false,
+                    }
+            })
+        }
+
+        /// The management member's bindings scoped to `vault_prefix`'s secrets.
+        fn vault_grants(&self, vault_prefix: &str) -> Vec<String> {
+            let namespace = gcp_vault_namespace_condition(PROJECT_NUMBER, vault_prefix);
+            let mut grants: Vec<String> = self
+                .bindings
+                .iter()
+                .filter(|binding| binding.members.iter().any(|m| m == MANAGER))
+                .filter_map(|binding| {
+                    let condition = binding.condition.as_ref()?;
+                    condition.expression.contains(&namespace).then(|| {
+                        format!(
+                            "{} {}",
+                            binding.role,
+                            condition.title.clone().unwrap_or_default()
+                        )
+                    })
+                })
+                .collect();
+            grants.sort();
+            grants
+        }
+    }
+
+    fn other_vault_binding() -> Binding {
+        Binding {
+            role: "roles/secretmanager.secretAccessor".to_string(),
+            members: vec![OTHER_WRITER.to_string()],
+            condition: Some(Expr {
+                expression: gcp_vault_namespace_condition(PROJECT_NUMBER, "test-other"),
+                title: Some("ResourceVaultSecretsRead".to_string()),
+                description: None,
+                location: None,
+            }),
+        }
+    }
+
+    fn resource_manager(project: Arc<Mutex<Project>>) -> MockResourceManagerApi {
+        let mut manager = MockResourceManagerApi::new();
+        let read = project.clone();
+        manager
+            .expect_get_project_iam_policy()
+            .returning(move |_, _| {
+                let project = read.lock().unwrap();
+                Ok(IamPolicy::builder()
+                    .version(3)
+                    .bindings(project.bindings.clone())
+                    .etag(project.etag())
+                    .build())
+            });
+        manager
+            .expect_set_project_iam_policy()
+            .returning(move |_, policy, _| {
+                let mut project = project.lock().unwrap();
+                project.writes += 1;
+                if project.conflicts > 0 {
+                    project.conflicts -= 1;
+                    project.bindings.push(other_vault_binding());
+                    project.version += 1;
+                }
+                if policy.etag.as_deref() != Some(project.etag().as_str()) {
+                    return Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceConflict {
+                            resource_type: "Project IAM policy".to_string(),
+                            resource_name: "mock-project".to_string(),
+                            message: "There were concurrent policy changes".to_string(),
+                        },
+                    ));
+                }
+                project.bindings = policy.bindings.clone();
+                project.version += 1;
+                Ok(IamPolicy {
+                    etag: Some(project.etag()),
+                    ..policy
+                })
+            });
+        manager
+    }
+
+    fn fixture(project: Arc<Mutex<Project>>) -> (StackExecutor, StackState) {
+        let manager = Arc::new(resource_manager(project));
+        let mut iam = MockIamApi::new();
+        iam.expect_get_service_account_iam_policy()
+            .returning(|_| Ok(IamPolicy::builder().etag("sa-etag".to_string()).build()));
+        iam.expect_set_service_account_iam_policy()
+            .returning(|_, policy| Ok(policy));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        // Ids sort the vault before the management identity, so in a step
+        // that runs both, the identity's policy write lands last, as in the
+        // setup run where this was found.
+        let vault = Vault::new("app-secrets".to_string()).build();
+        let account = RemoteStackManagement::new("manager".to_string()).build();
+        // `vault/heartbeat` on `*` makes the management identity hold
+        // `roles/secretmanager.viewer` both project-wide (its own grant) and
+        // on this vault's namespace (the vault's grant).
+        let stack = Stack::new("test".to_string())
+            .add_with_dependencies(
+                vault.clone(),
+                ResourceLifecycle::Frozen,
+                vec![ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    "manager",
+                )],
+            )
+            .add(account.clone(), ResourceLifecycle::Frozen)
+            .management(alien_core::ManagementPermissions::Extend(
+                PermissionProfile::new()
+                    .global(["vault/heartbeat"])
+                    .resource("app-secrets", ["vault/data-read"]),
+            ))
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .management_config(ManagementConfig::Gcp(GcpManagementConfig {
+                service_account_email: "control-plane@vendor.iam.gserviceaccount.com".to_string(),
+            }))
+            .build();
+        let mut client = GcpClientConfig::mock();
+        client.project_number = Some(PROJECT_NUMBER.to_string());
+        let provider: Arc<dyn crate::core::PlatformServiceProvider> = Arc::new(provider);
+        let executor = StackExecutor::builder(&stack, ClientConfig::Gcp(Box::new(client.clone())))
+            .deployment_config(&config)
+            .service_provider(provider.clone())
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .step_running_resources(false)
+            .build()
+            .unwrap();
+        let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
+        let controller = GcpVaultController {
+            state: GcpVaultState::Ready,
+            project_id: Some("mock-project".to_string()),
+            location: Some("us-central1".to_string()),
+            vault_prefix: Some("test-app-secrets".to_string()),
+            ..Default::default()
+        };
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(vault),
+            Some(ResourceLifecycle::Frozen),
+            vec![ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "manager",
+            )],
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.outputs = controller.get_outputs();
+        vault_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state
+            .resources
+            .insert("app-secrets".to_string(), vault_state);
+        // The management identity starts converged with the desired stack.
+        let mut controller = GcpRemoteStackManagementController::mock_ready("manager");
+        // The identity's own grants name it by the mock client's project.
+        controller.service_account_email =
+            Some("manager@test-project-123.iam.gserviceaccount.com".to_string());
+        let registry = Arc::new(crate::core::ResourceRegistry::default());
+        let desired_config = Resource::new(account.clone());
+        controller.management_permissions_revision =
+            crate::remote_stack_management::management_permissions_revision(
+                &ResourceControllerContext {
+                    desired_config: &desired_config,
+                    platform: Platform::Gcp,
+                    client_config: ClientConfig::Gcp(Box::new(client)),
+                    state: &state,
+                    resource_prefix: "test",
+                    registry: &registry,
+                    desired_stack: &stack,
+                    service_provider: &provider,
+                    deployment_config: &config,
+                    initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                    heartbeat_collector: crate::core::HeartbeatCollector::default(),
+                },
+            )
+            .unwrap();
+        let mut account_state = StackResourceState::new_pending(
+            RemoteStackManagement::RESOURCE_TYPE.to_string(),
+            Resource::new(account),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        account_state.status = ResourceStatus::Running;
+        account_state.outputs = controller.get_outputs();
+        account_state
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("manager".to_string(), account_state);
+        (executor, state)
+    }
+
+    /// Saved grants that differ from the desired stack, so setup schedules
+    /// the management identity's update.
+    fn force_management_update(state: &mut StackState) {
+        let resource = state.resources.get_mut("manager").unwrap();
+        let mut controller = resource
+            .get_internal_controller_typed::<GcpRemoteStackManagementController>()
+            .unwrap();
+        controller.management_permissions_revision = Some("previous-grants".to_string());
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+    }
+
+    async fn step_until_settled(executor: &StackExecutor, mut state: StackState) -> StackState {
+        for _ in 0..10 {
+            let plan = executor.plan(&state).unwrap();
+            let busy = state.resources.values().any(|resource| {
+                !matches!(
+                    resource.status,
+                    ResourceStatus::Running
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::ProvisionFailed
+                )
+            });
+            if !busy && plan.updates.is_empty() {
+                return state;
+            }
+            state = executor.step(state).await.unwrap().next_state;
+        }
+        panic!("stack did not settle in 10 steps");
+    }
+
+    #[tokio::test]
+    async fn concurrent_policy_change_rereads_and_keeps_the_other_writers_grant() {
+        let project = Arc::new(Mutex::new(Project {
+            conflicts: 1,
+            ..Default::default()
+        }));
+        let (executor, state) = fixture(project.clone());
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("app-secrets"));
+
+        // The first write loses the race. The step stays in its state instead
+        // of failing, and records nothing.
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Updating
+        );
+        assert!(state.resources["app-secrets"].error.is_none());
+        let controller = state.resources["app-secrets"]
+            .get_internal_controller_typed::<GcpVaultController>()
+            .unwrap();
+        assert_eq!(controller.state, GcpVaultState::UpdateStart);
+        assert!(controller.permissions_revision.is_none());
+
+        // The checkpoint resumes: it re-reads, merges, and writes once more.
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Running
+        );
+        let project = project.lock().unwrap();
+        assert_eq!(project.writes, 2);
+        assert!(
+            project
+                .bindings
+                .iter()
+                .any(|b| b.members.contains(&OTHER_WRITER.to_string())),
+            "the concurrent writer's binding survives the retry"
+        );
+        assert!(project.has(
+            "roles/secretmanager.secretAccessor",
+            MANAGER,
+            Some(&gcp_vault_namespace_condition(
+                PROJECT_NUMBER,
+                "test-app-secrets"
+            )),
+        ));
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("app-secrets"));
+    }
+
+    #[tokio::test]
+    async fn policy_that_keeps_changing_fails_the_step_after_bounded_attempts() {
+        let project = Arc::new(Mutex::new(Project {
+            conflicts: usize::MAX,
+            ..Default::default()
+        }));
+        let (executor, mut state) = fixture(project.clone());
+        for attempt in 1..PROJECT_POLICY_WRITE_MAX_ATTEMPTS {
+            state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(
+                state.resources["app-secrets"].status,
+                ResourceStatus::Updating,
+                "attempt {attempt} stays"
+            );
+        }
+        // The last attempt fails the step; the executor's own retry policy
+        // takes over from here.
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_ne!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Running
+        );
+        let error = state.resources["app-secrets"]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("kept changing concurrently"), "{error}");
+        assert_eq!(
+            project.lock().unwrap().writes,
+            PROJECT_POLICY_WRITE_MAX_ATTEMPTS as usize
+        );
+        let controller = state.resources["app-secrets"]
+            .get_internal_controller_typed::<GcpVaultController>()
+            .unwrap();
+        assert!(controller.permissions_revision.is_none());
+    }
+
+    #[tokio::test]
+    async fn management_update_after_the_vault_keeps_the_vaults_grants() {
+        let project = Arc::new(Mutex::new(Project::default()));
+        let (executor, state) = fixture(project.clone());
+
+        // The vault reconciles first, as in a setup run where its update
+        // finishes before the management identity's.
+        let state = step_until_settled(&executor, state).await;
+        assert_eq!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Running
+        );
+        let vault_grants = project.lock().unwrap().vault_grants("test-app-secrets");
+        // The conditional viewer is the binding a management reconcile would
+        // strip, because the identity also holds viewer project-wide.
+        assert!(
+            vault_grants
+                .iter()
+                .any(|grant| grant.starts_with("roles/secretmanager.viewer ")),
+            "{vault_grants:?}"
+        );
+
+        // Then the management identity's update commits last.
+        let mut state = state;
+        force_management_update(&mut state);
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("manager"));
+        let state = step_until_settled(&executor, state).await;
+        assert_eq!(state.resources["manager"].status, ResourceStatus::Running);
+
+        let project = project.lock().unwrap();
+        assert!(project.has("roles/secretmanager.viewer", MANAGER, None));
+        assert_eq!(project.vault_grants("test-app-secrets"), vault_grants);
+        // Both writers' revisions are truthful: nothing is rescheduled.
+        let plan = executor.plan(&state).unwrap();
+        assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
     }
 }
