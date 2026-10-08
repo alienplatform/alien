@@ -88,6 +88,10 @@ pub struct ReleaseArgs {
     #[arg(long, default_value = "production")]
     pub channel: String,
 
+    /// Create the release without advancing a channel or scheduling deployment updates (platform mode).
+    #[arg(long, conflicts_with = "channel")]
+    pub no_promote: bool,
+
     /// Human-readable title for this release (platform mode).
     #[arg(long)]
     pub title: Option<String>,
@@ -152,12 +156,20 @@ struct ReleaseJsonOutput {
     project: String,
     workspace: String,
     platforms: Vec<String>,
+    /// Channel advanced by this command, or null for a create-only release.
+    channel: Option<String>,
 }
 
 type ReleaseResult = String;
 
 /// Main entry point for the release command.
 pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
+    if args.no_promote && !ctx.is_platform() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "--no-promote requires platform mode; omit it when releasing to a manager"
+                .to_string(),
+        }));
+    }
     validate_release_channel(&args.channel, &ctx)?;
     if let Some(title) = args.title.as_deref() {
         if !ctx.is_platform() {
@@ -178,10 +190,22 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
                 project: declared.project,
                 workspace: declared.workspace,
                 platforms: Vec::new(),
+                channel: (!args.no_promote).then(|| args.channel.clone()),
             })?;
         } else {
             println!("{}", success_line("Release declared."));
             println!("{} {}", dim_label("Release"), declared.release_id);
+            if args.no_promote {
+                println!("No channel changed. No deployment updates scheduled.");
+                println!(
+                    "{} {}",
+                    dim_label("Next"),
+                    command(&format!(
+                        "alien releases promote {} --channel production",
+                        declared.release_id
+                    ))
+                );
+            }
         }
         return Ok(());
     }
@@ -280,6 +304,7 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
     let project_name = config.project_link.project_name.clone();
     let workspace_name = config.workspace_name.clone();
     let platforms = config.platforms.clone();
+    let channel = (!args.no_promote).then(|| args.channel.clone());
 
     match release_task_core(args, config, &ctx).await {
         Ok(release_id) => Ok(ReleaseJsonOutput {
@@ -288,6 +313,7 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
             project: project_name,
             workspace: workspace_name,
             platforms,
+            channel,
         }),
         Err(err) => Err(err),
     }
@@ -349,7 +375,7 @@ async fn load_release_config(
     // A release is created only after every image is pushed, which can take many minutes, so a
     // channel the project doesn't have is refused before any of that work.
     #[cfg(feature = "platform")]
-    if ctx.is_platform() {
+    if ctx.is_platform() && !args.no_promote {
         let workspace = ctx.resolve_workspace_query_with_bootstrap(false).await?;
         ensure_release_channel_exists(
             &ctx.auth_http().await?,
@@ -515,6 +541,7 @@ async fn load_release_config(
 /// Core release logic for console mode.
 async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseResult> {
     let is_dev = ctx.is_dev();
+    let no_promote = args.no_promote;
     let config = AlienEvent::LoadingConfiguration
         .in_scope(|_| async { load_release_config(&args, &ctx, true, true).await })
         .await?;
@@ -533,7 +560,16 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
     let release_id = release_task_core(args, config, &ctx).await?;
     println!("{}", success_line("Release created."));
     println!("{} {}", dim_label("Release"), release_id);
-    if !is_dev {
+    if no_promote {
+        println!("No channel changed. No deployment updates scheduled.");
+        println!(
+            "{} {}",
+            dim_label("Next"),
+            command(&format!(
+                "alien releases promote {release_id} --channel production"
+            ))
+        );
+    } else if !is_dev {
         println!("{}", dim_label("Next create a deployment link:"));
         println!("  {}", command(&onboard_hint));
         println!("{} {}", dim_label("Then"), command("alien deployments ls"));
@@ -683,7 +719,7 @@ async fn release_task_core(
                 workspace_query.as_deref(),
                 stack_by_platform,
                 git_metadata,
-                &args.channel,
+                (!args.no_promote).then_some(args.channel.as_str()),
                 args.title.as_deref(),
             )
             .await?
@@ -787,7 +823,7 @@ async fn create_platform_release(
     workspace: Option<&str>,
     stack: ManagerStackByPlatform,
     git_metadata: Option<GitMetadata>,
-    channel: &str,
+    channel: Option<&str>,
     title: Option<&str>,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
@@ -813,11 +849,13 @@ async fn create_platform_release(
                 url: None,
             })?;
 
-    let channel = parse_release_channel_name(channel)?;
+    let channel = channel.map(parse_release_channel_name).transpose()?;
+    let promote = channel.is_some();
     let body = alien_platform_api::types::CreateReleaseRequest::builder()
         .project(project_id.to_string())
         .stack(platform_stack)
         .channel(channel)
+        .promote(promote)
         .git_metadata(git_metadata)
         .title(parse_release_title(title)?);
 
@@ -911,20 +949,22 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
     #[cfg(feature = "platform")]
     {
         let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
-        ensure_release_channel_exists(
-            &ctx.auth_http().await?,
-            workspace_query.as_deref(),
-            &project_link.project_id,
-            &args.channel,
-        )
-        .await?;
+        if !args.no_promote {
+            ensure_release_channel_exists(
+                &ctx.auth_http().await?,
+                workspace_query.as_deref(),
+                &project_link.project_id,
+                &args.channel,
+            )
+            .await?;
+        }
         let release_id = declare_platform_release(
             ctx,
             &project_link.project_id,
             workspace_query.as_deref(),
             &version,
             git_metadata,
-            &args.channel,
+            (!args.no_promote).then_some(args.channel.as_str()),
             args.title.as_deref(),
         )
         .await?;
@@ -951,7 +991,7 @@ async fn declare_platform_release(
     workspace: Option<&str>,
     version: &str,
     git_metadata: Option<GitMetadata>,
-    channel: &str,
+    channel: Option<&str>,
     title: Option<&str>,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
@@ -962,7 +1002,8 @@ async fn declare_platform_release(
     let platform_client = http.sdk_client();
 
     // No `.stack(...)` — a stackless release is a version identity only.
-    let channel = parse_release_channel_name(channel)?;
+    let channel = channel.map(parse_release_channel_name).transpose()?;
+    let promote = channel.is_some();
     let version = alien_platform_api::types::CreateReleaseRequestVersion::try_from(version)
         .map_err(|error| {
             AlienError::new(ErrorData::ValidationError {
@@ -974,6 +1015,7 @@ async fn declare_platform_release(
         .project(project_id.to_string())
         .version(version)
         .channel(channel)
+        .promote(promote)
         .git_metadata(git_metadata)
         .title(parse_release_title(title)?);
 
@@ -2222,6 +2264,138 @@ fn collect_push_cache_entries(
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+
+    #[test]
+    fn no_promote_accepts_the_default_channel_but_rejects_an_explicit_channel() {
+        let args = ReleaseArgs::try_parse_from(["release", "--no-promote", "--prebuilt", "--json"])
+            .expect("create-only works without changing any defaults");
+        assert!(args.no_promote);
+        assert!(args.prebuilt);
+        assert_eq!(args.channel, "production");
+        assert!(ReleaseArgs::try_parse_from([
+            "release",
+            "--no-promote",
+            "--channel",
+            "production"
+        ])
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn no_promote_rejects_manager_modes_before_configuration_or_network_access() {
+        for ctx in [
+            ExecutionMode::Dev { port: 9 },
+            ExecutionMode::Standalone {
+                server_url: "http://127.0.0.1:9".to_string(),
+                api_key: "test-key".to_string(),
+            },
+        ] {
+            let args = ReleaseArgs::try_parse_from(["release", "--no-promote"]).unwrap();
+            let error = release_command(args, ctx)
+                .await
+                .expect_err("platform mode is required");
+            assert_eq!(error.code, "CONFIGURATION_ERROR");
+            assert!(error
+                .message
+                .contains("--no-promote requires platform mode"));
+        }
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn create_only_reuses_prebuilt_stack_and_omits_channel_in_both_release_requests() {
+        let server = httpmock::MockServer::start_async().await;
+        let project_id = "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let release_id = "rel_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let response = serde_json::json!({
+            "id": release_id, "projectId": project_id,
+            "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "version": release_id, "createdAt": "2026-01-01T00:00:00Z",
+            "setupFingerprints": {},
+        });
+        let stack = Stack::new("prebuilt-app".to_string())
+            .add(test_container("writer", "registry.example.com/writer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()), ResourceLifecycle::Live)
+            .build();
+        let expected_stack = serde_json::to_value(&stack).unwrap();
+        let built = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/v1/releases")
+                    .query_param("workspace", "sample-workspace")
+                    .json_body(serde_json::json!({
+                        "project": project_id, "promote": false,
+                        "title": "Fix checkout", "stack": { "test": expected_stack },
+                    }));
+                then.status(201).json_body(response.clone());
+            })
+            .await;
+        let declared = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .path("/v1/releases")
+                    .query_param("workspace", "sample-workspace")
+                    .json_body(serde_json::json!({
+                        "project": project_id, "promote": false, "version": "hotfix",
+                    }));
+                then.status(201).json_body(response.clone());
+            })
+            .await;
+        let ctx = ExecutionMode::Platform {
+            base_url: server.base_url(),
+            api_key: Some("test-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().join(".alien");
+        let build_dir = output_dir.join("build/test");
+        fs::create_dir_all(&build_dir).unwrap();
+        let stack_bytes = serde_json::to_vec(&stack).unwrap();
+        fs::write(build_dir.join("stack.json"), &stack_bytes).unwrap();
+        let args = ReleaseArgs::try_parse_from([
+            "release",
+            "--prebuilt",
+            "--no-promote",
+            "--title",
+            "Fix checkout",
+        ])
+        .unwrap();
+        let config = ReleaseConfig {
+            output_dir,
+            manager: None,
+            workspace_name: "sample-workspace".to_string(),
+            project_link: crate::project_link::ProjectLink::new(
+                "sample-workspace".to_string(),
+                project_id.to_string(),
+                "sample".to_string(),
+            ),
+            git_metadata: None,
+            platforms: vec!["test".to_string()],
+            onboarding_inputs: vec![],
+        };
+        assert_eq!(
+            release_task_core(args, config, &ctx).await.unwrap(),
+            release_id
+        );
+        assert_eq!(fs::read(build_dir.join("stack.json")).unwrap(), stack_bytes);
+        assert_eq!(
+            declare_platform_release(
+                &ctx,
+                project_id,
+                Some("sample-workspace"),
+                "hotfix",
+                None,
+                None,
+                None
+            )
+            .await
+            .unwrap(),
+            release_id
+        );
+        built.assert_async().await;
+        declared.assert_async().await;
+    }
 
     #[tokio::test]
     async fn cached_aws_worker_still_validates_its_local_archive_before_registry_access() {
