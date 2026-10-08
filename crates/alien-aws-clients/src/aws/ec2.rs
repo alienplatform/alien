@@ -4771,6 +4771,58 @@ mod tests {
         response.assert_hits(1);
     }
 
+    #[tokio::test]
+    async fn modify_volume_does_not_resend_an_ambiguous_failure() {
+        let server = MockServer::start_async().await;
+        let modify = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=ModifyVolume");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .modify_volume(
+                ModifyVolumeRequest::builder()
+                    .volume_id("vol-1".to_string())
+                    .size(20)
+                    .build(),
+            )
+            .await
+            .expect_err("inspect the volume before sending another resize");
+
+        assert_eq!(modify.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+    }
+
+    #[tokio::test]
+    async fn modify_volume_retries_an_explicit_throttling_response() {
+        let server = MockServer::start_async().await;
+        let modify = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=ModifyVolume");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>RequestLimitExceeded</Code><Message>Request limit exceeded.</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .modify_volume(
+                ModifyVolumeRequest::builder()
+                    .volume_id("vol-1".to_string())
+                    .size(20)
+                    .build(),
+            )
+            .await
+            .expect_err("AWS still rejects the resize before accepting it");
+
+        assert_eq!(modify.hits_async().await, 4, "one send and three retries");
+        assert_eq!(error.code, "RATE_LIMIT_EXCEEDED");
+    }
+
     fn client(server: &MockServer) -> Ec2Client {
         let config = AwsClientConfig {
             account_id: "123456789012".to_string(),
