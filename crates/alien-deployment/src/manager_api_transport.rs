@@ -597,7 +597,7 @@ async fn acquire_deployment_with_statuses(
 
         if attempt == MAX_ACQUIRE_ATTEMPTS {
             return Err(AlienError::new(alien_error::GenericError {
-                message: "Timed out waiting for deployment lock".to_string(),
+                message: acquisition_timeout_message(deployment_id, &response.not_acquired),
             }));
         }
 
@@ -610,6 +610,20 @@ async fn acquire_deployment_with_statuses(
     }
 
     unreachable!()
+}
+
+fn acquisition_timeout_message(
+    deployment_id: &str,
+    unavailable: &[alien_manager_api::types::UnacquiredDeployment],
+) -> String {
+    use alien_manager_api::types::DeploymentAcquireUnavailableReason as Reason;
+    match unavailable.iter().find(|outcome| outcome.deployment_id == deployment_id) {
+        Some(outcome) if outcome.reason == Reason::Contended =>
+            "Timed out waiting for deployment lock: another operation still holds the deployment lease. Check the current deployment operation before retrying; this command did not acquire the lease.".to_string(),
+        Some(outcome) if outcome.reason == Reason::Deferred =>
+            "Timed out waiting for deployment lock: the manager deferred this deployment. Check its current operation and status before retrying; this command did not acquire the lease.".to_string(),
+        _ => "Timed out waiting for deployment lock; the manager did not provide an acquisition reason. Check the current deployment operation before retrying.".to_string(),
+    }
 }
 
 fn reject_non_retryable_acquire_reason(
@@ -1050,6 +1064,31 @@ mod tests {
         assert!(!error.retryable);
         assert!(error.message.contains("deploymentModelMismatch"));
         acquire.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn contended_acquisition_reports_the_held_lease_after_bounded_wait() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [],
+                    "notAcquired": [{"deploymentId": "deployment-1", "reason": "contended"}]
+                }));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let error = acquire_deployment(&client, "deployment-1", "session-1", DeploymentModel::Push)
+            .await
+            .expect_err("a held lease must exhaust the bounded wait");
+        assert!(
+            error.message.contains("another operation still holds"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("did not acquire the lease"));
+        acquire.assert_hits_async(MAX_ACQUIRE_ATTEMPTS).await;
     }
 
     fn sample_heartbeat() -> ResourceHeartbeat {
