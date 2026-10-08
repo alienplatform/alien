@@ -136,6 +136,47 @@ struct PlannedGroup {
     requirements: WorkloadRequirements,
     scale: CapacityGroupScalePolicy,
     requires_failure_domain: bool,
+    /// No capacity group in the source declares this pool. Its scale is the
+    /// planner's recommendation, not a bound the developer chose.
+    generated: bool,
+}
+
+/// Highest machine count an installer may choose for a pool the source does not declare.
+pub const GENERATED_POOL_MAX_MACHINES: u32 = 10;
+
+/// Allowed scale for a pool that no capacity group declares.
+///
+/// The planner derives `default_min`/`default_max` from workload replicas, assuming one
+/// container per machine. They are a recommendation: the developer did not bound the pool,
+/// and a larger machine fits more containers. The installer may choose any count from the
+/// workload minimum (one machine when any workload runs) up to
+/// [`GENERATED_POOL_MAX_MACHINES`]. The recommendation stays the default, and its mode
+/// stays the policy's mode: a pool whose workloads never scale is fixed.
+pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> CapacityGroupScalePolicy {
+    let ceiling = GENERATED_POOL_MAX_MACHINES.max(default_max);
+    let lowest_max = default_min.max(1);
+    if default_min == default_max {
+        CapacityGroupScalePolicy::Fixed {
+            machines: ComputeChoiceRange {
+                min: lowest_max,
+                max: ceiling,
+                default: default_min,
+            },
+        }
+    } else {
+        CapacityGroupScalePolicy::Autoscale {
+            min: ComputeChoiceRange {
+                min: default_min,
+                max: ceiling,
+                default: default_min,
+            },
+            max: ComputeChoiceRange {
+                min: lowest_max,
+                max: ceiling,
+                default: default_max,
+            },
+        }
+    }
 }
 
 fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup>, ErrorData> {
@@ -175,9 +216,11 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             pool_id,
             PlannedGroup {
                 workloads: workloads.into_iter().map(|w| w.id).collect(),
+                // Merged with any declared group below, then widened if none declares it.
                 scale: CapacityGroupScalePolicy::from_selected_bounds(min_size, max_size),
                 requirements,
                 requires_failure_domain,
+                generated: true,
             },
         );
     }
@@ -219,14 +262,22 @@ fn merge_explicit_compute_groups(
                         planned.requirements.nested_virt |= explicit_requirements.nested_virt;
                     }
                     planned.scale = merge_scale_policy(&planned.scale, &scale);
+                    planned.generated = false;
                 })
                 .or_insert_with(|| PlannedGroup {
                     workloads: Vec::new(),
                     scale,
                     requirements: explicit_requirements,
                     requires_failure_domain: false,
+                    generated: false,
                 });
         }
+    }
+    for planned in groups.values_mut().filter(|planned| planned.generated) {
+        planned.scale = generated_pool_scale_policy(
+            planned.scale.default_min_size(),
+            planned.scale.default_max_size(),
+        );
     }
     Ok(())
 }
@@ -638,20 +689,13 @@ fn validate_selection_against_scale(
     selection: &ComputePoolSelection,
     scale: &CapacityGroupScalePolicy,
 ) -> std::result::Result<(), String> {
+    // A fixed pool of N machines and an autoscaling pool bounded to N..N run the same
+    // fleet, so either form is accepted wherever the other one is.
     match (selection, scale) {
         (
             ComputePoolSelection::Fixed { machines, .. },
             CapacityGroupScalePolicy::Fixed { machines: allowed },
-        ) => {
-            if allowed.contains(*machines) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "fixed machine count {machines} is outside the allowed range {}-{}",
-                    allowed.min, allowed.max
-                ))
-            }
-        }
+        ) => check_machine_count("fixed machine count", *machines, allowed.min, allowed.max),
         (
             ComputePoolSelection::Autoscale { min, max, .. },
             CapacityGroupScalePolicy::Autoscale {
@@ -659,26 +703,53 @@ fn validate_selection_against_scale(
                 max: allowed_max,
             },
         ) => {
-            if !allowed_min.contains(*min) {
+            check_machine_count("autoscale minimum", *min, allowed_min.min, allowed_min.max)?;
+            check_machine_count("autoscale maximum", *max, allowed_max.min, allowed_max.max)
+        }
+        (
+            ComputePoolSelection::Fixed { machines, .. },
+            CapacityGroupScalePolicy::Autoscale {
+                min: allowed_min,
+                max: allowed_max,
+            },
+        ) => {
+            let lowest = allowed_min.min.max(allowed_max.min);
+            let highest = allowed_min.max.min(allowed_max.max);
+            if lowest > highest {
                 return Err(format!(
-                    "autoscale minimum {min} is outside the allowed range {}-{}",
-                    allowed_min.min, allowed_min.max
+                    "must use autoscale mode (minimum {}-{}, maximum {}-{})",
+                    allowed_min.min, allowed_min.max, allowed_max.min, allowed_max.max
                 ));
             }
-            if !allowed_max.contains(*max) {
+            check_machine_count("fixed machine count", *machines, lowest, highest)
+        }
+        (
+            ComputePoolSelection::Autoscale { min, max, .. },
+            CapacityGroupScalePolicy::Fixed { machines: allowed },
+        ) => {
+            if min != max {
                 return Err(format!(
-                    "autoscale maximum {max} is outside the allowed range {}-{}",
-                    allowed_max.min, allowed_max.max
+                    "must use fixed mode with {}-{} machines; autoscale {min}-{max} is not allowed",
+                    allowed.min, allowed.max
                 ));
             }
-            Ok(())
+            check_machine_count("machine count", *min, allowed.min, allowed.max)
         }
-        (ComputePoolSelection::Fixed { .. }, CapacityGroupScalePolicy::Autoscale { .. }) => {
-            Err("must use autoscale mode".to_string())
-        }
-        (ComputePoolSelection::Autoscale { .. }, CapacityGroupScalePolicy::Fixed { .. }) => {
-            Err("must use fixed mode".to_string())
-        }
+    }
+}
+
+fn check_machine_count(
+    label: &str,
+    value: u32,
+    lowest: u32,
+    highest: u32,
+) -> std::result::Result<(), String> {
+    if (lowest..=highest).contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} {value} is outside the allowed range {lowest}-{highest}"
+        ))
     }
 }
 
@@ -1179,6 +1250,136 @@ mod tests {
         let invalid_plan = plan_compute(&stack, Platform::Aws, Some(&invalid_settings))
             .expect("plan should build");
         assert!(!invalid_plan.pools[0].errors.is_empty());
+    }
+
+    fn declared_pool_errors(scale: CapacityGroupScalePolicy, selection: ComputePoolSelection) -> Vec<String> {
+        let mut stack = stack_with_container();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: None,
+                profile: None,
+                min_size: scale.default_min_size(),
+                max_size: scale.default_max_size(),
+                scale_policy: Some(scale),
+                nested_virtualization: None,
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let settings = ComputeSettings {
+            pools: [("general".to_string(), selection)].into_iter().collect(),
+        };
+        plan_compute(&stack, Platform::Aws, Some(&settings))
+            .expect("plan should build")
+            .pools
+            .remove(0)
+            .errors
+    }
+
+    fn range(min: u32, max: u32, default: u32) -> ComputeChoiceRange {
+        ComputeChoiceRange { min, max, default }
+    }
+
+    #[test]
+    fn generated_pool_offers_the_recommendation_as_a_default_not_a_bound() {
+        let mut stack = stack_with_container();
+        let api = stack
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container");
+        api.autoscaling = Some(crate::ContainerAutoscaling {
+            min: 1,
+            desired: 1,
+            max: 3,
+            target_cpu_percent: Some(70.0),
+            target_memory_percent: None,
+            target_http_in_flight_per_replica: None,
+            max_http_p95_latency_ms: None,
+        });
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let pool = &plan.pools[0];
+        assert_eq!(
+            pool.scale,
+            CapacityGroupScalePolicy::Autoscale {
+                min: range(1, 10, 1),
+                max: range(1, 10, 3),
+            }
+        );
+        assert_eq!((pool.recommended.min_size(), pool.recommended.max_size()), (1, 3));
+
+        // Workloads that never scale keep a fixed recommendation.
+        let plan = plan_compute(&stack_with_container(), Platform::Aws, None)
+            .expect("plan should build");
+        assert_eq!(
+            plan.pools[0].scale,
+            CapacityGroupScalePolicy::Fixed {
+                machines: range(1, 10, 1),
+            }
+        );
+    }
+
+    #[test]
+    fn fixed_and_equal_autoscale_bounds_are_interchangeable_for_declared_pools() {
+        let fixed = |machines| ComputePoolSelection::Fixed {
+            machines,
+            machine: Some("m7g.xlarge".to_string()),
+            failure_domains: None,
+        };
+        let autoscale = |min, max| ComputePoolSelection::Autoscale {
+            min,
+            max,
+            machine: Some("m7g.xlarge".to_string()),
+            failure_domains: None,
+        };
+        let declared_fixed = CapacityGroupScalePolicy::Fixed {
+            machines: range(2, 4, 2),
+        };
+        let declared_autoscale = CapacityGroupScalePolicy::Autoscale {
+            min: range(1, 3, 1),
+            max: range(2, 6, 4),
+        };
+
+        assert!(declared_pool_errors(declared_fixed.clone(), autoscale(3, 3)).is_empty());
+        assert_eq!(
+            declared_pool_errors(declared_fixed.clone(), autoscale(2, 4)),
+            vec!["Pool 'general' must use fixed mode with 2-4 machines; autoscale 2-4 is not allowed"]
+        );
+        assert_eq!(
+            declared_pool_errors(declared_fixed, autoscale(5, 5)),
+            vec!["Pool 'general' machine count 5 is outside the allowed range 2-4"]
+        );
+
+        // Fixed N must fit both the declared minimum and maximum ranges.
+        assert!(declared_pool_errors(declared_autoscale.clone(), fixed(3)).is_empty());
+        assert_eq!(
+            declared_pool_errors(declared_autoscale.clone(), fixed(1)),
+            vec!["Pool 'general' fixed machine count 1 is outside the allowed range 2-3"]
+        );
+        assert_eq!(
+            declared_pool_errors(
+                CapacityGroupScalePolicy::Autoscale {
+                    min: range(1, 1, 1),
+                    max: range(3, 5, 3),
+                },
+                fixed(1),
+            ),
+            vec!["Pool 'general' must use autoscale mode (minimum 1-1, maximum 3-5)"]
+        );
+        assert_eq!(
+            declared_pool_errors(declared_autoscale, autoscale(1, 7)),
+            vec!["Pool 'general' autoscale maximum 7 is outside the allowed range 2-6"]
+        );
     }
 
     #[test]

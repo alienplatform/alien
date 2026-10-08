@@ -13,7 +13,7 @@ use crate::{
 use alien_core::{
     compute_planner::{
         capacity_group_requirements, default_persistent_failure_domains,
-        validate_compute_pool_selection,
+        generated_pool_scale_policy, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
@@ -390,7 +390,8 @@ impl ComputeClusterMutation {
                 continue;
             };
             for group in cluster.capacity_groups.iter_mut() {
-                materialize_group(group, stack_state.platform, config)?;
+                let scale = declared_scale_policy(group);
+                materialize_group(group, stack_state.platform, config, &scale)?;
                 let explicit_selection = config
                     .stack_settings
                     .compute
@@ -747,10 +748,19 @@ fn group_needs_materialization(
         || group.profile.is_none()
 }
 
+/// The scale bounds a capacity group carries: its declared policy, or the exact
+/// counts of an older stack that only has `minSize` and `maxSize`.
+fn declared_scale_policy(group: &CapacityGroup) -> CapacityGroupScalePolicy {
+    group.scale_policy.clone().unwrap_or_else(|| {
+        CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
+    })
+}
+
 fn materialize_group(
     group: &mut CapacityGroup,
     platform: Platform,
     config: &DeploymentConfig,
+    scale: &CapacityGroupScalePolicy,
 ) -> Result<()> {
     let selection = config
         .stack_settings
@@ -765,7 +775,7 @@ fn materialize_group(
                 ),
             })
         })?;
-    materialize_selected_group(group, platform, selection)
+    materialize_selection_within(group, platform, selection, scale)
 }
 
 /// Use the same validation and profile derivation for declared machine changes
@@ -774,6 +784,16 @@ pub(crate) fn materialize_selected_group(
     group: &mut CapacityGroup,
     platform: Platform,
     selection: &ComputePoolSelection,
+) -> Result<()> {
+    let scale = declared_scale_policy(group);
+    materialize_selection_within(group, platform, selection, &scale)
+}
+
+fn materialize_selection_within(
+    group: &mut CapacityGroup,
+    platform: Platform,
+    selection: &ComputePoolSelection,
+    scale: &CapacityGroupScalePolicy,
 ) -> Result<()> {
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
@@ -785,16 +805,13 @@ pub(crate) fn materialize_selected_group(
             resource_id: None,
         })
     })?;
-    let scale = group.scale_policy.clone().unwrap_or_else(|| {
-        CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
-    });
     let requirements = capacity_group_requirements(group);
     let errors = validate_compute_pool_selection(
         platform,
         &group.group_id,
         selection,
         &requirements,
-        &scale,
+        scale,
     );
     if !errors.is_empty() {
         return Err(AlienError::new(
@@ -1003,7 +1020,10 @@ fn build_capacity_group_for_id(
         nested_virtualization: None,
     };
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        materialize_group(&mut group, platform, config)?;
+        // No source declaration bounds a generated pool; its counts are only the
+        // recommendation, and the installer may choose others.
+        let scale = generated_pool_scale_policy(group.min_size, group.max_size);
+        materialize_group(&mut group, platform, config, &scale)?;
     } else {
         group.profile = Some(MachineProfile {
             cpu: format!(
@@ -2434,6 +2454,127 @@ mod tests {
             profile.ephemeral_storage_bytes > 0,
             "profile ephemeral storage should be > 0"
         );
+    }
+
+    /// A stack whose source declares no pool: one fixed container and one that
+    /// autoscales to two replicas, so the planner recommends autoscale 1-2.
+    fn generated_pool_stack() -> Stack {
+        let app = test_container("app", "1", "2Gi");
+        let mut gw = test_container("gw", "1", "2Gi");
+        gw.autoscaling = Some(ContainerAutoscaling {
+            min: 1,
+            desired: 1,
+            max: 2,
+            target_cpu_percent: Some(70.0),
+            target_memory_percent: None,
+            target_http_in_flight_per_replica: None,
+            max_http_p95_latency_ms: None,
+        });
+        Stack::new("generated-pool".to_string())
+            .add(app, ResourceLifecycle::Live)
+            .add(gw, ResourceLifecycle::Live)
+            .build()
+    }
+
+    fn general_selection(selection: ComputePoolSelection) -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(ComputeSettings {
+                    pools: [("general".to_string(), selection)].into_iter().collect(),
+                }),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    async fn prepare_generated_pool(
+        selection: ComputePoolSelection,
+    ) -> Result<CapacityGroup> {
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let stack = ComputeClusterMutation
+            .mutate(
+                generated_pool_stack(),
+                &stack_state,
+                &general_selection(selection),
+            )
+            .await?;
+        let cluster = stack
+            .resources
+            .get("compute")
+            .and_then(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .expect("the mutation should generate the compute cluster");
+        assert_eq!(cluster.capacity_groups.len(), 1);
+        Ok(cluster.capacity_groups[0].clone())
+    }
+
+    #[tokio::test]
+    async fn generated_pool_accepts_any_installer_count_within_limits() {
+        let plan = plan_compute(&generated_pool_stack(), Platform::Aws, None)
+            .expect("compute plan should build");
+        let recommended = plan.pools[0].recommended.clone();
+        assert_eq!(
+            (recommended.min_size(), recommended.max_size()),
+            (1, 2),
+            "fixture should recommend autoscale 1-2"
+        );
+        let machine = recommended.machine().map(ToString::to_string);
+
+        let fixed = |machines| ComputePoolSelection::Fixed {
+            machines,
+            machine: machine.clone(),
+            failure_domains: None,
+        };
+        let autoscale = |min, max| ComputePoolSelection::Autoscale {
+            min,
+            max,
+            machine: machine.clone(),
+            failure_domains: None,
+        };
+        for (selection, expected) in [
+            (fixed(1), (1, 1)),
+            (fixed(2), (2, 2)),
+            (autoscale(1, 1), (1, 1)),
+            (autoscale(2, 2), (2, 2)),
+            (autoscale(1, 2), (1, 2)),
+            (autoscale(2, 10), (2, 10)),
+        ] {
+            let group = prepare_generated_pool(selection.clone())
+                .await
+                .unwrap_or_else(|error| panic!("{selection:?} should be accepted: {error}"));
+            assert_eq!((group.min_size, group.max_size), expected, "{selection:?}");
+            assert_eq!(group.instance_type, machine, "{selection:?}");
+        }
+
+        for (selection, message) in [
+            (
+                autoscale(0, 2),
+                "autoscale minimum 0 is outside the allowed range 1-10",
+            ),
+            (
+                autoscale(1, 11),
+                "autoscale maximum 11 is outside the allowed range 1-10",
+            ),
+            (
+                fixed(11),
+                "fixed machine count 11 is outside the allowed range 1-10",
+            ),
+        ] {
+            let error = prepare_generated_pool(selection.clone())
+                .await
+                .expect_err("a count outside the pool limits must be rejected");
+            assert!(
+                error.message.contains(message),
+                "{selection:?}: {}",
+                error.message
+            );
+        }
     }
 
     #[tokio::test]
