@@ -183,7 +183,8 @@
             "acm:ImportCertificate",
             "acm:AddTagsToCertificate",
             "acm:DeleteCertificate",
-            "acm:DescribeCertificate"
+            "acm:DescribeCertificate",
+            "acm:ListTagsForCertificate"
           ]
         },
         "binding": {
@@ -205,6 +206,25 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
+          }
+        }
+      },
+      {
+        // ListCertificates supports no resource-level scoping or condition keys; AWS
+        // evaluates it against `*` only. It returns certificate ARNs and domain names.
+        // Used with ListTagsForCertificate to find a certificate whose import response
+        // was lost by the create token it was tagged with.
+        "label": "list-tls-certificates",
+        "description": "List ACM certificates (AWS supports this action only on all resources).",
+        "grant": {
+          "actions": ["acm:ListCertificates"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },

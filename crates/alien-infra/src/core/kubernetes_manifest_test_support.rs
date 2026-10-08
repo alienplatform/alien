@@ -91,6 +91,8 @@ pub(crate) struct KubernetesManifestTestHarness {
     registry: Arc<ResourceRegistry>,
     service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: DeploymentConfig,
+    /// The cloud the cluster runs in, for controllers that also call that cloud's APIs.
+    cloud: Option<ClientConfig>,
 }
 
 impl KubernetesManifestTestHarness {
@@ -128,7 +130,17 @@ impl KubernetesManifestTestHarness {
                 .allow_frozen_changes(false)
                 .external_bindings(ExternalBindings::default())
                 .build(),
+            cloud: None,
         }
+    }
+
+    pub(crate) fn with_cloud(mut self, cloud: ClientConfig) -> Self {
+        self.cloud = Some(cloud);
+        self
+    }
+
+    pub(crate) fn deployment_config_mut(&mut self) -> &mut DeploymentConfig {
+        &mut self.deployment_config
     }
 
     pub(crate) fn with_monitoring(mut self, monitoring: OtlpConfig) -> Self {
@@ -145,21 +157,29 @@ impl KubernetesManifestTestHarness {
     }
 
     pub(crate) fn ctx(&self) -> ResourceControllerContext<'_> {
+        let kubernetes = Box::new(KubernetesClientConfig::Manual {
+            server_url: "https://kubernetes.test".to_string(),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: Some(true),
+            client_certificate_data: None,
+            client_key_data: None,
+            token: None,
+            username: None,
+            password: None,
+            namespace: Some("test-ns".to_string()),
+            additional_headers: Default::default(),
+        });
+        let client_config = match &self.cloud {
+            Some(cloud) => ClientConfig::KubernetesCloud {
+                kubernetes,
+                cloud: Box::new(cloud.clone()),
+            },
+            None => ClientConfig::Kubernetes(kubernetes),
+        };
         ResourceControllerContext {
             desired_config: &self.resource,
             platform: Platform::Kubernetes,
-            client_config: ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::Manual {
-                server_url: "https://kubernetes.test".to_string(),
-                certificate_authority_data: None,
-                insecure_skip_tls_verify: Some(true),
-                client_certificate_data: None,
-                client_key_data: None,
-                token: None,
-                username: None,
-                password: None,
-                namespace: Some("test-ns".to_string()),
-                additional_headers: Default::default(),
-            })),
+            client_config,
             state: &self.state,
             resource_prefix: "test",
             registry: &self.registry,
