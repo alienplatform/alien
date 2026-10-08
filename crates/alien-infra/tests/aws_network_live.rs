@@ -35,10 +35,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 use alien_infra::controller_test::SingleControllerExecutor;
-use alien_infra::{
-    AwsNetworkController, DefaultPlatformServiceProvider, MockPlatformServiceProvider,
-    PlatformServiceProvider, ResourceController,
-};
+use alien_infra::{AwsNetworkController, MockPlatformServiceProvider, ResourceController};
 use async_trait::async_trait;
 use futures::FutureExt;
 use serde_json::Value;
@@ -293,6 +290,34 @@ fn aws_config() -> AwsClientConfig {
     }
 }
 
+/// Trust an explicitly selected test-runner CA without disabling peer verification.
+fn live_http_client() -> reqwest::Client {
+    let mut builder = reqwest::Client::builder();
+    if let Ok(path) = std::env::var("ALIEN_LIVE_TEST_CA_CERT") {
+        let pem = std::fs::read(path).expect("read test-runner CA");
+        builder = builder.add_root_certificate(
+            reqwest::Certificate::from_pem(&pem).expect("parse test-runner CA"),
+        );
+    }
+    builder.build().expect("live HTTP client")
+}
+
+fn live_ec2(config: AwsClientConfig) -> Arc<dyn Ec2Api> {
+    Arc::new(Ec2Client::new(
+        live_http_client(),
+        alien_aws_clients::AwsCredentialProvider::from_config_sync(config),
+    ))
+}
+
+fn live_quotas(
+    config: AwsClientConfig,
+) -> Arc<dyn alien_aws_clients::service_quotas::ServiceQuotasApi> {
+    Arc::new(alien_aws_clients::service_quotas::ServiceQuotasClient::new(
+        live_http_client(),
+        alien_aws_clients::AwsCredentialProvider::from_config_sync(config),
+    ))
+}
+
 struct Live {
     prefix: String,
     started: Instant,
@@ -306,15 +331,8 @@ impl Live {
         let config = aws_config();
         let suffix = &uuid::Uuid::new_v4().simple().to_string()[..6];
         let prefix = format!("alnet-{scenario}-{suffix}");
-        let real_provider = DefaultPlatformServiceProvider::default();
-        let real = real_provider
-            .get_aws_ec2_client(&config)
-            .await
-            .expect("real EC2 client");
-        let quotas = real_provider
-            .get_aws_service_quotas_client(&config)
-            .await
-            .expect("real Service Quotas client");
+        let real = live_ec2(config.clone());
+        let quotas = live_quotas(config.clone());
         let faulty = Arc::new(FaultyEc2::new(real.clone()));
         let ec2: Arc<dyn Ec2Api> = faulty.clone();
 
@@ -1345,10 +1363,7 @@ async fn delete_removes_duplicates_created_under_the_same_token() {
 async fn rebuild(live: Live, controller: AwsNetworkController) -> Live {
     let config = aws_config();
     let ec2: Arc<dyn Ec2Api> = live.faulty.clone();
-    let quotas = DefaultPlatformServiceProvider::default()
-        .get_aws_service_quotas_client(&config)
-        .await
-        .expect("Service Quotas client");
+    let quotas = live_quotas(config.clone());
     let mut provider = MockPlatformServiceProvider::new();
     provider
         .expect_get_aws_ec2_client()
@@ -1388,10 +1403,7 @@ async fn delete_resumes_retained_children_after_real_permission_restoration() {
         secret_access_key: env("ALIEN_AWS_NETWORK_DENIED_SECRET_ACCESS_KEY"),
         session_token: Some(env("ALIEN_AWS_NETWORK_DENIED_SESSION_TOKEN")),
     };
-    let denied = DefaultPlatformServiceProvider::default()
-        .get_aws_ec2_client(&restricted)
-        .await
-        .expect("restricted real EC2 client");
+    let denied = live_ec2(restricted);
     scenario("restore-perm", "10.240.0.0/16", |mut live| async move {
         assert!(live.create_to_running().await.is_empty());
         let created = live.inventory().await;
