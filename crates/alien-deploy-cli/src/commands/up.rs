@@ -821,6 +821,57 @@ mod tests {
         }
     }
 
+    /// A manager may refuse the deployment's own key for setup changes. A setup update that
+    /// used the saved key must say which token to pass instead of only nesting the 403.
+    #[tokio::test]
+    async fn refused_saved_key_names_the_setup_token_and_rerun_command() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200)
+                    .json_body(installed_deployment("running", Some("rel_target")));
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                then.status(403).json_body(serde_json::json!({
+                    "code": "SETUP_AUTHORITY_REQUIRED",
+                    "message": "Runtime credentials cannot authorize setup updates.",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 403
+                }));
+            })
+            .await;
+
+        let refused = run_machines_setup(&server)
+            .await
+            .expect_err("the manager refused the setup run");
+        acquire.assert_hits_async(1).await;
+
+        let explained = explain_refused_saved_key(refused.clone(), "smoke-1", true);
+        assert_eq!(explained.code, "VALIDATION_ERROR");
+        assert!(
+            explained.message.contains(
+                "alien-deploy deploy --name smoke-1 --setup-update --token-file <path-to-setup-token>"
+            ),
+            "{}",
+            explained.message
+        );
+        assert!(
+            explained.to_string().contains("SETUP_AUTHORITY_REQUIRED"),
+            "the manager's reason stays in the chain: {explained}"
+        );
+
+        // A token the caller passed explicitly was their choice; keep the manager's error.
+        let explicit = explain_refused_saved_key(refused.clone(), "smoke-1", false);
+        assert_eq!(explicit.code, refused.code);
+        assert_eq!(explicit.message, refused.message);
+    }
+
     /// The pending update can finish while setup waits for the lock. The locked read then
     /// shows nothing to apply, so setup releases the lock without writing any state.
     #[tokio::test]
@@ -2502,6 +2553,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .manager_url
             .as_deref()
             .unwrap_or(&tracked.manager_url);
+        // Without --token/--token-file, `token` is the key saved when this deployment was
+        // tracked. The manager can refuse that key for setup changes.
+        let uses_saved_key = resolve_token(&args, embedded_config).is_err();
         let setup_client = create_manager_client(&token, manager_url)?;
         let outcome = run_push_model(
             &setup_client,
@@ -2515,7 +2569,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             None,
             embedded_config.and_then(|config| config.setup_revision.as_deref()),
         )
-        .await?;
+        .await
+        .map_err(|error| explain_refused_saved_key(error, &name, uses_saved_key))?;
         if outcome == SetupRunOutcome::Applied {
             output::success(
                 "Setup applied. The existing runtime will continue the requested update.",
@@ -3471,6 +3526,33 @@ fn load_public_endpoints(
             }))
         }
     }
+}
+
+/// A setup update run with a deployment's saved key can be refused (HTTP 403): that key
+/// runs the deployment, and a manager may require the setup token to change installed
+/// infrastructure. Replace the nested 403 with the token to use and the command to rerun.
+fn explain_refused_saved_key(
+    error: AlienError<ErrorData>,
+    name: &str,
+    uses_saved_key: bool,
+) -> AlienError<ErrorData> {
+    let mut refused = error.http_status_code == Some(403);
+    let mut source = error.source.as_deref();
+    while let Some(cause) = source {
+        refused |= cause.http_status_code == Some(403);
+        source = cause.source.as_deref();
+    }
+    if !(uses_saved_key && refused) {
+        return error;
+    }
+    error.context(ErrorData::ValidationError {
+        field: "token".to_string(),
+        message: format!(
+            "The key saved for '{name}' can run the deployment but cannot approve setup changes. \
+             Use the setup token from the deployment's setup link (the deployment group token, \
+             usually ax_dg_...): alien-deploy deploy --name {name} --setup-update --token-file <path-to-setup-token>"
+        ),
+    })
 }
 
 fn resolve_deployment_info(
