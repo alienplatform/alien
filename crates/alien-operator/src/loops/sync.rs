@@ -724,7 +724,7 @@ mod tests {
     use super::{
         accept_target_release, apply_manager_control_state, create_authenticated_client,
         dynamic_containers_capability, is_uninitialized_deployment_state,
-        operation_command_address_capability, sync_with_manager,
+        operation_command_address_capability, reported_operations_config, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
