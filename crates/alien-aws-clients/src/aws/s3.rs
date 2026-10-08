@@ -273,11 +273,7 @@ impl S3Client {
         Ok(body)
     }
 
-    fn map_result<T>(
-        result: Result<T>,
-        operation: &str,
-        resource_name: &str,
-    ) -> Result<T> {
+    fn map_result<T>(result: Result<T>, operation: &str, resource_name: &str) -> Result<T> {
         match result {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -289,8 +285,7 @@ impl S3Client {
                 {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    if let Some(mapped) =
-                        Self::map_s3_error(status, text, operation, resource_name)
+                    if let Some(mapped) = Self::map_s3_error(status, text, operation, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -648,11 +643,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutBucketVersioning",
-            bucket,
-        )
+        Self::map_result(result, "PutBucketVersioning", bucket)
     }
 
     async fn put_public_access_block(
@@ -683,11 +674,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutPublicAccessBlock",
-            bucket,
-        )
+        Self::map_result(result, "PutPublicAccessBlock", bucket)
     }
 
     async fn put_bucket_policy(&self, bucket: &str, policy: &str) -> Result<()> {
@@ -753,11 +740,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutBucketLifecycleConfiguration",
-            bucket,
-        )
+        Self::map_result(result, "PutBucketLifecycleConfiguration", bucket)
     }
 
     async fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()> {
@@ -1080,8 +1063,7 @@ impl S3Api for S3Client {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
 
-            if let Some(mapped) = Self::map_s3_error(status, &body, "PutObject", &request.key)
-            {
+            if let Some(mapped) = Self::map_s3_error(status, &body, "PutObject", &request.key) {
                 return Err(AlienError::new(ErrorData::HttpResponseError {
                     message: format!("PutObject failed: {}", body),
                     url: url.clone(),
@@ -1170,8 +1152,7 @@ impl S3Api for S3Client {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
 
-            if let Some(mapped) = Self::map_s3_error(status, &body, "GetObject", &request.key)
-            {
+            if let Some(mapped) = Self::map_s3_error(status, &body, "GetObject", &request.key) {
                 return Err(AlienError::new(ErrorData::HttpResponseError {
                     message: format!("GetObject failed: {}", body),
                     url: url.clone(),
@@ -1385,11 +1366,7 @@ impl S3Api for S3Client {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
                 .await;
 
-        Self::map_result(
-            result,
-            "PutBucketNotificationConfiguration",
-            bucket,
-        )
+        Self::map_result(result, "PutBucketNotificationConfiguration", bucket)
     }
 
     async fn get_bucket_notification_configuration(

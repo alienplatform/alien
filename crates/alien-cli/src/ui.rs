@@ -524,7 +524,10 @@ mod event_tests {
             rendered.contains("Failed resources:\n  - st: S3 rejected the request (InvalidArgument): 'Days' for Expiration action must be a positive integer"),
             "{rendered}"
         );
-        assert!(!rendered.contains("Request failed with HTTP 400"), "{rendered}");
+        assert!(
+            !rendered.contains("Request failed with HTTP 400"),
+            "{rendered}"
+        );
     }
 
     #[test]

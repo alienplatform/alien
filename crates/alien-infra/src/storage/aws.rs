@@ -1952,7 +1952,10 @@ mod tests {
             saved.message,
             "Cloud platform operation failed: Failed to configure lifecycle rules for S3 bucket 'test-lifecycle-storage'"
         );
-        assert!(!saved.internal, "the controller's summary is shown: {saved:?}");
+        assert!(
+            !saved.internal,
+            "the controller's summary is shown: {saved:?}"
+        );
         // Unchanged retry behavior: the rejection still goes through the retry budget.
         assert!(saved.retryable);
 
@@ -1966,7 +1969,10 @@ mod tests {
 
         let transport = rejection.source.as_deref().expect("transport layer");
         assert_eq!(transport.code, "HTTP_RESPONSE_ERROR");
-        assert!(transport.internal, "the raw exchange stays hidden: {transport:?}");
+        assert!(
+            transport.internal,
+            "the raw exchange stays hidden: {transport:?}"
+        );
         assert!(transport.source.is_none());
     }
 }

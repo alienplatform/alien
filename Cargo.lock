@@ -433,6 +433,7 @@ dependencies = [
 name = "alien-cli"
 version = "3.3.30"
 dependencies = [
+ "alien-aws-clients",
  "alien-bindings",
  "alien-build",
  "alien-cli-common",
