@@ -535,6 +535,12 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
    * error details from being exposed to external users while preserving
    * the error chain structure for non-sensitive errors.
    *
+   * An internal error loses its code, message, context, hint, and source, but
+   * keeps `retryable` and a 5xx `httpStatusCode`, so callers can still tell a
+   * transient fault (e.g. a retryable 503) from a permanent one. A non-5xx
+   * status becomes 500: an internal error is a server fault, and a 4xx would
+   * blame the caller for it.
+   *
    * @returns Sanitized AlienErrorOptions safe for external consumption
    *
    * @example
@@ -557,9 +563,9 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       return {
         code: "GENERIC_ERROR",
         message: "Internal server error",
-        retryable: false,
+        retryable: this.retryable,
         internal: false,
-        httpStatusCode: 500,
+        httpStatusCode: this.httpStatusCode >= 500 ? this.httpStatusCode : 500,
       }
     }
 
