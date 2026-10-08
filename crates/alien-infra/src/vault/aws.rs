@@ -769,22 +769,18 @@ mod permission_update_tests {
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
         state.resources.insert("consumer-sa".to_string(), resource);
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -897,16 +893,26 @@ mod permission_update_tests {
             .lifecycle(ResourceLifecycle::Frozen)
             .authority(InitialSetupAuthority::DirectSetup)
             .fault(Fault::None)
-            .existing(&[(CONSUMER_ROLE, READ_POLICY), (CONSUMER_ROLE, "alien-other-vault-data-read")])
+            .existing(&[
+                (CONSUMER_ROLE, READ_POLICY),
+                (CONSUMER_ROLE, "alien-other-vault-data-read"),
+            ])
             .remove_consumer(true)
             .call();
         set_revision(&mut state, "previous-grants");
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         let iam = iam.lock().unwrap();
-        assert_eq!(iam.policies(CONSUMER_ROLE), vec!["alien-other-vault-data-read"]);
+        assert_eq!(
+            iam.policies(CONSUMER_ROLE),
+            vec!["alien-other-vault-data-read"]
+        );
         assert_eq!(iam.count("delete "), 1);
-        assert!(!executor.plan(&state).unwrap().updates.contains_key("secrets"));
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]

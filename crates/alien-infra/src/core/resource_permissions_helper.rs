@@ -1467,11 +1467,16 @@ impl ResourcePermissionsHelper {
             .keys()
             .map(String::as_str)
             .collect();
-        profile_names.extend(ctx.desired_stack.resources.iter().filter_map(|(id, entry)| {
-            (entry.config.resource_type() == alien_core::ServiceAccount::RESOURCE_TYPE)
-                .then(|| id.strip_suffix("-sa"))
-                .flatten()
-        }));
+        profile_names.extend(
+            ctx.desired_stack
+                .resources
+                .iter()
+                .filter_map(|(id, entry)| {
+                    (entry.config.resource_type() == alien_core::ServiceAccount::RESOURCE_TYPE)
+                        .then(|| id.strip_suffix("-sa"))
+                        .flatten()
+                }),
+        );
         for profile_name in profile_names {
             let Some(role_name) = Self::existing_aws_service_account_role_name(ctx, profile_name)?
             else {
