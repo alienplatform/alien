@@ -3737,7 +3737,7 @@ mod tests {
                     when.method(httpmock::Method::POST)
                         .path("/v1/deployment-info/prepare-stack")
                         .header("authorization", "Bearer test-group-token")
-                        .json_body_includes(r#"{"setupItem":"bucket"}"#);
+                        .json_body_partial(r#"{"setupItem":"bucket"}"#);
                     then.status(status).json_body(body);
                 })
                 .await;
@@ -3751,7 +3751,7 @@ mod tests {
                 .await;
             let create = server.mock_async(|when, then| {
                 when.method(httpmock::Method::POST).path("/v1/deployments")
-                    .json_body_includes(r#"{"setupItem":"bucket","releaseChannel":"preview"}"#);
+                    .json_body_partial(r#"{"setupItem":"bucket","releaseChannel":"preview"}"#);
                 // The deliberately rejected creation proves validation let a valid
                 // empty stack proceed without fabricating a deployment response.
                 then.status(409).json_body(serde_json::json!({"code":"CONFLICT", "message":"Synthetic creation rejection"}));
