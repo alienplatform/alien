@@ -1470,13 +1470,15 @@ async fn deploy_task_with_environment(
                             None => None,
                         };
 
-                        setup_validation::validate_before_creation(
-                            &base_url,
-                            token,
-                            &resolved_args,
-                            &args,
-                        )
-                        .await?;
+                        if ctx.is_platform() {
+                            setup_validation::validate_before_creation(
+                                &base_url,
+                                token,
+                                &resolved_args,
+                                &args,
+                            )
+                            .await?;
+                        }
 
                         let create_response = sdk_client
                             .create_deployment()
