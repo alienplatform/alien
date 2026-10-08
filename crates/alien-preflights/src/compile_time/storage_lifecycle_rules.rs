@@ -196,7 +196,9 @@ mod tests {
     fn stack(rules: Vec<LifecycleRule>) -> Stack {
         Stack::new("lifecycle".to_string())
             .add(
-                Storage::new("st".to_string()).lifecycle_rules(rules).build(),
+                Storage::new("st".to_string())
+                    .lifecycle_rules(rules)
+                    .build(),
                 ResourceLifecycle::Live,
             )
             .build()
@@ -253,7 +255,11 @@ mod tests {
                 failed[0].code.as_deref(),
                 Some("STORAGE_LIFECYCLE_RULES_INVALID")
             );
-            assert_eq!(failed[0].errors, vec![expected.to_string()], "{entry_point}");
+            assert_eq!(
+                failed[0].errors,
+                vec![expected.to_string()],
+                "{entry_point}"
+            );
         }
 
         // Deployment-time preflights start with exactly these compile-time checks.
@@ -277,7 +283,10 @@ mod tests {
     async fn s3_limits_match_what_s3_accepts_and_rejects() {
         let accepted: Vec<(&str, Vec<LifecycleRule>)> = vec![
             ("1 day: accepted", vec![rule(1, None)]),
-            ("2147483647 days: accepted", vec![rule(INT32_MAX_DAYS, None)]),
+            (
+                "2147483647 days: accepted",
+                vec![rule(INT32_MAX_DAYS, None)],
+            ),
             ("empty prefix: accepted", vec![rule(3, Some(""))]),
             (
                 "1024-byte prefix: accepted",
@@ -287,7 +296,10 @@ mod tests {
                 "341 three-byte characters plus 'a' (1024 bytes): accepted",
                 vec![rule(3, Some(&format!("{}a", "€".repeat(341))))],
             ),
-            ("tab, DEL and emoji in a prefix: accepted", vec![rule(3, Some("a\tb\u{7f}c/\u{1F600}/"))]),
+            (
+                "tab, DEL and emoji in a prefix: accepted",
+                vec![rule(3, Some("a\tb\u{7f}c/\u{1F600}/"))],
+            ),
             (
                 "duplicate and overlapping prefixes, two unfiltered rules: accepted",
                 vec![
@@ -301,7 +313,11 @@ mod tests {
             ("1000 rules: accepted", prefixed_rules(1000)),
         ];
         for (case, rules) in accepted {
-            assert_eq!(errors(rules, Platform::Aws).await, Vec::<String>::new(), "{case}");
+            assert_eq!(
+                errors(rules, Platform::Aws).await,
+                Vec::<String>::new(),
+                "{case}"
+            );
         }
 
         let rejected: Vec<(&str, Vec<LifecycleRule>, &str)> = vec![
@@ -344,7 +360,11 @@ mod tests {
             ),
         ];
         for (case, rules, expected) in rejected {
-            assert_eq!(errors(rules, Platform::Aws).await, vec![expected.to_string()], "{case}");
+            assert_eq!(
+                errors(rules, Platform::Aws).await,
+                vec![expected.to_string()],
+                "{case}"
+            );
         }
     }
 
@@ -366,13 +386,20 @@ mod tests {
     #[tokio::test]
     async fn gcp_accepts_a_zero_day_age_and_checks_its_own_limits() {
         assert_eq!(
-            errors(vec![rule(0, Some("tmp/")), rule(INT32_MAX_DAYS, None)], Platform::Gcp).await,
+            errors(
+                vec![rule(0, Some("tmp/")), rule(INT32_MAX_DAYS, None)],
+                Platform::Gcp
+            )
+            .await,
             Vec::<String>::new()
         );
         // Rules without a prefix don't count toward the prefix quota.
         let mut unprefixed = prefixed_rules(GCS_MAX_PREFIXES);
         unprefixed.push(rule(3, None));
-        assert_eq!(errors(unprefixed, Platform::Gcp).await, Vec::<String>::new());
+        assert_eq!(
+            errors(unprefixed, Platform::Gcp).await,
+            Vec::<String>::new()
+        );
 
         assert_eq!(
             errors(
@@ -391,7 +418,11 @@ mod tests {
     #[tokio::test]
     async fn azure_accepts_a_zero_day_rule_and_checks_its_own_limits() {
         assert_eq!(
-            errors(vec![rule(0, None), rule(AZURE_MAX_DAYS, Some("a"))], Platform::Azure).await,
+            errors(
+                vec![rule(0, None), rule(AZURE_MAX_DAYS, Some("a"))],
+                Platform::Azure
+            )
+            .await,
             Vec::<String>::new()
         );
         assert_eq!(
@@ -414,8 +445,16 @@ mod tests {
     #[test]
     fn platforms_without_lifecycle_support_are_not_checked() {
         let stack = stack(vec![rule(0, None)]);
-        for platform in [Platform::Kubernetes, Platform::Local, Platform::Machines, Platform::Test] {
-            assert!(!StorageLifecycleRulesCheck.should_run(&stack, platform), "{platform:?}");
+        for platform in [
+            Platform::Kubernetes,
+            Platform::Local,
+            Platform::Machines,
+            Platform::Test,
+        ] {
+            assert!(
+                !StorageLifecycleRulesCheck.should_run(&stack, platform),
+                "{platform:?}"
+            );
         }
     }
 }
