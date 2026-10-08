@@ -3736,7 +3736,8 @@ mod tests {
                 .mock_async(|when, then| {
                     when.method(httpmock::Method::POST)
                         .path("/v1/deployment-info/prepare-stack")
-                        .header("authorization", "Bearer test-group-token");
+                        .header("authorization", "Bearer test-group-token")
+                        .json_body_includes(r#"{"setupItem":"bucket"}"#);
                     then.status(status).json_body(body);
                 })
                 .await;
@@ -3749,7 +3750,8 @@ mod tests {
                 })
                 .await;
             let create = server.mock_async(|when, then| {
-                when.method(httpmock::Method::POST).path("/v1/deployments");
+                when.method(httpmock::Method::POST).path("/v1/deployments")
+                    .json_body_includes(r#"{"setupItem":"bucket","releaseChannel":"preview"}"#);
                 // The deliberately rejected creation proves validation let a valid
                 // empty stack proceed without fabricating a deployment response.
                 then.status(409).json_body(serde_json::json!({"code":"CONFLICT", "message":"Synthetic creation rejection"}));
@@ -3764,9 +3766,18 @@ mod tests {
                 input_values: HashMap::new(),
                 public_subdomain: None,
             };
-            let args =
-                DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
-                    .expect("deploy args");
+            let args = DeployArgs::try_parse_from([
+                "deploy",
+                "--name",
+                "test",
+                "--platform",
+                "aws",
+                "--setup-item",
+                "bucket",
+                "--channel",
+                "preview",
+            ])
+            .expect("deploy args");
             create_deployment_with_group_session(
                 &server.base_url(),
                 "test-group-token",
