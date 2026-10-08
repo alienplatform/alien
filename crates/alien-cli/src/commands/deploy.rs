@@ -1201,16 +1201,17 @@ async fn create_standalone_deployment(
         .context(ErrorData::ConfigurationError {
             message: "Failed to serialize deployment settings".to_string(),
         })?;
-    let settings = serde_json::from_value(settings)
+    let settings: alien_manager_api::types::StackSettings = serde_json::from_value(settings)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: "Failed to convert deployment settings for the manager".to_string(),
         })?;
-    let platform = serde_json::from_value(serde_json::json!(resolved_args.platform.as_str()))
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to convert deployment platform for the manager".to_string(),
-        })?;
+    let platform: alien_manager_api::types::Platform =
+        serde_json::from_value(serde_json::json!(resolved_args.platform.as_str()))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to convert deployment platform for the manager".to_string(),
+            })?;
     let client =
         alien_manager_api::Client::new_with_client(base_url, create_platform_http_client(token)?);
     let response = client
