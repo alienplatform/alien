@@ -2095,13 +2095,8 @@ machine = "m8i.xlarge"
     #[test]
     fn deployment_info_url_sends_the_api_name_for_the_onboard_name() {
         for name in ["application", "deployment"] {
-            let args = UpArgs::parse_from([
-                "alien-deploy",
-                "--platform",
-                "aws",
-                "--setup-item",
-                name,
-            ]);
+            let args =
+                UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--setup-item", name]);
             assert_eq!(args.setup_item, Some(SetupItem::Application), "{name}");
         }
         let url = deployment_info_url(
@@ -2161,8 +2156,11 @@ machine = "m8i.xlarge"
 
     #[test]
     fn a_multi_item_link_lists_the_names_the_flag_accepts() {
-        let error = select_setup_item(None, &info_with_setup_items(Some(&["deployment", "bucket"])))
-            .expect_err("several items need an explicit choice");
+        let error = select_setup_item(
+            None,
+            &info_with_setup_items(Some(&["deployment", "bucket"])),
+        )
+        .expect_err("several items need an explicit choice");
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(
             error
@@ -2584,29 +2582,34 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         return Ok(());
     }
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
-    let (deployer_inputs, setup_item) =
-        match fetch_deployment_info(&resolved.base_url, &token, platform, args.setup_item).await {
-            Ok(info) => {
-                let setup_item = select_setup_item(args.setup_item, &info)?;
-                // The link's only item was picked here: load that item's inputs and readiness.
-                let info = if setup_item == args.setup_item {
-                    info
-                } else {
-                    fetch_deployment_info(&resolved.base_url, &token, platform, setup_item)
-                        .await?
-                };
-                validate_deployment_readiness(&info, platform)?;
-                (deployer_inputs_from_info(&info, platform), setup_item)
-            }
-            Err(error) => {
-                if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
-                    output::warn(&format!(
+    let (deployer_inputs, setup_item) = match fetch_deployment_info(
+        &resolved.base_url,
+        &token,
+        platform,
+        args.setup_item,
+    )
+    .await
+    {
+        Ok(info) => {
+            let setup_item = select_setup_item(args.setup_item, &info)?;
+            // The link's only item was picked here: load that item's inputs and readiness.
+            let info = if setup_item == args.setup_item {
+                info
+            } else {
+                fetch_deployment_info(&resolved.base_url, &token, platform, setup_item).await?
+            };
+            validate_deployment_readiness(&info, platform)?;
+            (deployer_inputs_from_info(&info, platform), setup_item)
+        }
+        Err(error) => {
+            if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
+                output::warn(&format!(
                         "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
                     ));
-                }
-                (Vec::new(), args.setup_item)
             }
-        };
+            (Vec::new(), args.setup_item)
+        }
+    };
     let stack_input_values = collect_deployer_input_values(
         &deployer_inputs,
         &args.input_values,

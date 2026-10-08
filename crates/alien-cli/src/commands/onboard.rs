@@ -2,12 +2,12 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
+use alien_cli_common::SetupItem;
 use alien_core::{
     deployer_secret_value_refusal, is_deployer_secret_input, Platform, Stack, StackInputDefinition,
     StackInputKind, StackInputProvider,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_cli_common::SetupItem;
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -378,10 +378,7 @@ async fn fetch_available_setup(
 }
 
 #[cfg(feature = "platform")]
-fn validate_setup_items(
-    requested: &[SetupItem],
-    available: &[SetupItem],
-) -> Result<()> {
+fn validate_setup_items(requested: &[SetupItem], available: &[SetupItem]) -> Result<()> {
     if requested.is_empty() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "setup-items".to_string(),
@@ -2059,11 +2056,8 @@ mod tests {
 
     #[test]
     fn setup_items_must_be_configured_for_the_project() {
-        let err = validate_setup_items(
-            &[SetupItem::Models, SetupItem::Keys],
-            &[SetupItem::Models],
-        )
-        .expect_err("an unavailable setup item must fail before link creation");
+        let err = validate_setup_items(&[SetupItem::Models, SetupItem::Keys], &[SetupItem::Models])
+            .expect_err("an unavailable setup item must fail before link creation");
 
         assert!(err.to_string().contains("keys is not configured"));
     }
