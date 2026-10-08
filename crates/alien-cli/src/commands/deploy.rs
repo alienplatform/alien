@@ -1221,7 +1221,9 @@ async fn create_standalone_deployment(
                 .name(resolved_args.name.clone())
                 .platform(platform)
                 .stack_settings(settings)
-                .input_values(resolved_args.input_values.clone());
+                .input_values(
+                    resolved_args.input_values.clone().into_iter().collect::<serde_json::Map<String, serde_json::Value>>(),
+                );
             if let Some(prefix) = &args.resource_prefix {
                 body = body.resource_prefix(prefix.clone());
             }
@@ -4029,7 +4031,7 @@ max = 1
         .await
         .expect_err("manager rejects the correctly formed request");
         assert!(error.to_string().contains("409"), "{error}");
-        create.assert_calls_async(1).await;
+        create.assert_hits_async(1).await;
     }
 
     #[test]
