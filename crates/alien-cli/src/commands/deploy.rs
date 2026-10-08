@@ -3776,8 +3776,8 @@ mod tests {
             )
             .await
             .expect_err("preparation or synthetic creation must reject this request");
-            preparation.assert_hits_async(1).await;
             create.assert_hits_async(usize::from(should_create)).await;
+            preparation.assert_hits_async(1).await;
             plan.assert_hits_async(usize::from(status != 200)).await;
         }
     }
