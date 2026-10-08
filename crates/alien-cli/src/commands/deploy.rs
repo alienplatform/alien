@@ -1318,17 +1318,10 @@ async fn deploy_task_with_environment(
     };
     // A deployment group token passed for an existing deployment, with its group.
     let mut supplied_group_token: Option<(String, String)> = None;
+    let resuming_existing = existing_deployment.is_some();
     let tracked_deployment = match existing_deployment {
         Some(deployment) => {
             info!("Found tracked deployment '{}'", resolved_args.name);
-            if resolved_args.public_subdomain.is_some() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "public-subdomain".to_string(),
-                    message: "--public-subdomain can only be set when creating a new deployment."
-                        .to_string(),
-                }));
-            }
-
             match args.token.as_ref() {
                 Some(provided_token) if deployment.api_key != *provided_token => {
                     match validate_token(provided_token, &base_url).await? {
@@ -1587,6 +1580,33 @@ async fn deploy_task_with_environment(
             }
         }
     };
+
+    if resuming_existing {
+        if let Some(requested) = resolved_args.public_subdomain.as_deref() {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "public-subdomain".to_string(),
+                    message: "An existing standalone deployment cannot change its public subdomain. Omit --public-subdomain when resuming it.".to_string(),
+                }));
+            }
+            let existing = create_platform_client(&tracked_deployment.api_key, &base_url)?
+                .get_deployment()
+                .id(&tracked_deployment.deployment_id)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("reading deployment {}", tracked_deployment.deployment_id),
+                    url: None,
+                })?
+                .into_inner();
+            validate_existing_public_subdomain(
+                requested,
+                existing.public_subdomain.as_ref().map(|value| value.as_str()),
+            )?;
+        }
+    }
+
 
     steps.complete(
         0,
@@ -2693,6 +2713,21 @@ where
     Ok(session.token)
 }
 
+fn validate_existing_public_subdomain(requested: &str, existing: Option<&str>) -> Result<()> {
+    if existing == Some(requested) {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "public-subdomain".to_string(),
+        message: match existing {
+            Some(existing) => format!(
+                "This deployment already uses public subdomain '{existing}'. It cannot be changed by alien deploy; retry with --public-subdomain {existing} or omit the flag."
+            ),
+            None => "This deployment has no public subdomain. Omit --public-subdomain when resuming it; alien deploy cannot change an existing deployment's routing.".to_string(),
+        },
+    }))
+}
+
 /// The deployment's group and active update, read from the platform with the
 /// deployment token.
 async fn platform_deployment_progress(
@@ -2803,6 +2838,16 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::time::{timeout, Duration};
+
+    #[test]
+    fn an_existing_public_subdomain_can_be_repeated_but_not_changed() {
+        validate_existing_public_subdomain("release", Some("release")).unwrap();
+        let changed = validate_existing_public_subdomain("other", Some("release")).unwrap_err();
+        assert_eq!(changed.code, "VALIDATION_ERROR");
+        assert!(changed.message.contains("--public-subdomain release"));
+        let absent = validate_existing_public_subdomain("release", None).unwrap_err();
+        assert!(absent.message.contains("Omit --public-subdomain"));
+    }
 
     #[test]
     fn token_file_uses_the_existing_token_path_and_trims_whitespace() {
