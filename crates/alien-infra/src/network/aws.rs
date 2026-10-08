@@ -767,6 +767,38 @@ mod tests {
         ));
     }
 
+    /// Compare the real signed EC2 Query response with an independently counted
+    /// customer-owned usage supplied by the cloud test runner. Requires a test
+    /// account containing service-managed ALB addresses; performs only reads.
+    #[tokio::test]
+    #[ignore = "requires AWS test credentials and service-managed addresses"]
+    async fn live_eip_usage_matches_customer_owned_addresses() {
+        use alien_aws_clients::ec2::{Ec2Api, Ec2Client};
+        use alien_aws_clients::AwsCredentialProvider;
+        use alien_core::{AwsClientConfig, AwsCredentials};
+
+        let expected: usize = std::env::var("ALIEN_TEST_EXPECTED_EIP_USAGE")
+            .expect("set independently measured customer-owned EIP usage")
+            .parse()
+            .expect("expected usage must be an integer");
+        let config = AwsClientConfig {
+            account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+            region: std::env::var("AWS_TARGET_REGION").unwrap(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let credentials = AwsCredentialProvider::from_config(config).await.unwrap();
+        let client = Ec2Client::new(reqwest::Client::new(), credentials);
+        let response = client.describe_addresses().await.unwrap();
+        let reported = response.addresses_set.as_ref().unwrap().items.len();
+        assert!(reported > expected, "test account must include excluded addresses");
+        assert_eq!(quota_consuming_eip_usage(response), Some(expected));
+    }
+
     #[test]
     fn eip_usage_excludes_byoip_addresses_from_the_vpc_quota() {
         let response = DescribeAddressesResponse {
