@@ -7931,12 +7931,26 @@ mod controller_state_tests {
         ec2.expect_delete_subnet()
             .times(4)
             .returning(|_| Err(denied()));
-        ec2.expect_describe_subnets().times(4).returning(|request| {
-            let id = request.subnet_ids.unwrap()[0].clone();
+        // Each denial is checked against the subnet, which still exists. Lookups by tag for
+        // objects a lost response could have hidden find nothing.
+        ec2.expect_describe_subnets().returning(|request| {
+            let Some(ids) = request.subnet_ids else {
+                return Ok(parse(json!({})));
+            };
             Ok(parse(json!({ "subnetSet": { "item": [
-                { "subnetId": id, "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "eu-west-1a" }
+                { "subnetId": ids[0], "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "eu-west-1a" }
             ]}})))
         });
+        ec2.expect_describe_route_tables()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_internet_gateways()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_nat_gateways()
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_addresses()
+            .returning(|| Ok(parse(json!({}))));
+        ec2.expect_describe_vpcs()
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_delete_vpc().times(0);
 
         let mut executor = executor(

@@ -1360,9 +1360,11 @@ mod tests {
             ))
         });
         ec2.expect_describe_subnets().returning(|request| {
-            let id = request.subnet_ids.unwrap()[0].clone();
+            let Some(ids) = request.subnet_ids else {
+                return Ok(serde_json::from_value(serde_json::json!({})).unwrap());
+            };
             Ok(serde_json::from_value(serde_json::json!({ "subnetSet": { "item": [
-                { "subnetId": id, "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "us-east-1a" }
+                { "subnetId": ids[0], "vpcId": "vpc-1", "cidrBlock": "10.0.0.0/24", "availabilityZone": "us-east-1a" }
             ]}}))
             .unwrap())
         });
