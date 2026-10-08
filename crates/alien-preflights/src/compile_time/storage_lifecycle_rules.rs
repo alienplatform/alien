@@ -21,7 +21,8 @@
 //!   first midnight UTC after creation): <https://cloud.google.com/storage/docs/lifecycle>.
 //!   A bucket's rules hold at most 1,000 prefixes and suffixes in total:
 //!   <https://cloud.google.com/storage/quotas>.
-//! - **Azure Blob Storage** (the Terraform management policy): 0 is valid, the provider accepts
+//! - **Azure Blob Storage** (the Terraform management policy, so Frozen storage only: the Azure
+//!   controller ignores lifecycle rules on Live storage): 0 is valid, the provider accepts
 //!   0-99999 days for `delete_after_days_since_modification_greater_than`, and a policy holds
 //!   at most 100 rules:
 //!   <https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-policy-structure>.
@@ -31,7 +32,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, Storage};
+use alien_core::{Platform, ResourceLifecycle, Stack, Storage};
 
 /// S3 lifecycle `Days` and Cloud Storage `age` are 32-bit signed integers.
 const INT32_MAX_DAYS: u32 = i32::MAX as u32;
@@ -73,7 +74,11 @@ impl CompileTimeCheck for StorageLifecycleRulesCheck {
             let errors = match platform {
                 Platform::Aws => s3_errors(storage),
                 Platform::Gcp => gcs_errors(storage),
-                Platform::Azure => azure_errors(storage),
+                // Only setup's Terraform sends Azure lifecycle rules, and setup creates Frozen
+                // resources only.
+                Platform::Azure if entry.lifecycle == ResourceLifecycle::Frozen => {
+                    azure_errors(storage)
+                }
                 _ => Vec::new(),
             };
             for error in errors {
@@ -184,7 +189,7 @@ fn is_xml_char(c: char) -> bool {
 mod tests {
     use super::*;
     use crate::{error::ErrorData, runner::PreflightRunner};
-    use alien_core::{LifecycleRule, ResourceLifecycle};
+    use alien_core::LifecycleRule;
 
     fn rule(days: u32, prefix: Option<&str>) -> LifecycleRule {
         LifecycleRule {
@@ -194,18 +199,30 @@ mod tests {
     }
 
     fn stack(rules: Vec<LifecycleRule>) -> Stack {
+        stack_with(rules, ResourceLifecycle::Live)
+    }
+
+    fn stack_with(rules: Vec<LifecycleRule>, lifecycle: ResourceLifecycle) -> Stack {
         Stack::new("lifecycle".to_string())
             .add(
                 Storage::new("st".to_string())
                     .lifecycle_rules(rules)
                     .build(),
-                ResourceLifecycle::Live,
+                lifecycle,
             )
             .build()
     }
 
     async fn errors(rules: Vec<LifecycleRule>, platform: Platform) -> Vec<String> {
-        let stack = stack(rules);
+        errors_with(rules, ResourceLifecycle::Live, platform).await
+    }
+
+    async fn errors_with(
+        rules: Vec<LifecycleRule>,
+        lifecycle: ResourceLifecycle,
+        platform: Platform,
+    ) -> Vec<String> {
+        let stack = stack_with(rules, lifecycle);
         assert!(StorageLifecycleRulesCheck.should_run(&stack, platform));
         StorageLifecycleRulesCheck
             .check(&stack, platform)
@@ -415,28 +432,54 @@ mod tests {
         );
     }
 
+    /// Azure rules reach the provider only through setup's Terraform management policy, which
+    /// covers Frozen storage. The Azure controller ignores rules on Live storage.
     #[tokio::test]
-    async fn azure_accepts_a_zero_day_rule_and_checks_its_own_limits() {
+    async fn azure_checks_frozen_storage_rules_and_accepts_a_zero_day_rule() {
+        let frozen = ResourceLifecycle::Frozen;
         assert_eq!(
-            errors(
+            errors_with(
                 vec![rule(0, None), rule(AZURE_MAX_DAYS, Some("a"))],
+                frozen,
                 Platform::Azure
             )
             .await,
             Vec::<String>::new()
         );
         assert_eq!(
-            errors(prefixed_rules(AZURE_MAX_RULES), Platform::Azure).await,
+            errors_with(prefixed_rules(AZURE_MAX_RULES), frozen, Platform::Azure).await,
             Vec::<String>::new()
         );
 
         assert_eq!(
-            errors(vec![rule(AZURE_MAX_DAYS + 1, None)], Platform::Azure).await,
+            errors_with(vec![rule(AZURE_MAX_DAYS + 1, None)], frozen, Platform::Azure).await,
             vec!["Storage 'st': lifecycleRules[0].days is 100000; Azure Storage accepts at most 99999"]
         );
         assert_eq!(
-            errors(prefixed_rules(AZURE_MAX_RULES + 1), Platform::Azure).await,
+            errors_with(prefixed_rules(AZURE_MAX_RULES + 1), frozen, Platform::Azure).await,
             vec!["Storage 'st': lifecycleRules has 101 rules; an Azure Storage lifecycle policy allows at most 100"]
+        );
+
+        let mut unused = prefixed_rules(AZURE_MAX_RULES + 1);
+        unused.push(rule(AZURE_MAX_DAYS + 1, None));
+        assert_eq!(errors(unused, Platform::Azure).await, Vec::<String>::new());
+    }
+
+    /// AWS and GCP controllers send the rules of Live storage too.
+    #[tokio::test]
+    async fn aws_and_gcp_check_frozen_storage_like_live_storage() {
+        assert_eq!(
+            errors_with(vec![rule(0, None)], ResourceLifecycle::Frozen, Platform::Aws).await,
+            vec!["Storage 'st': lifecycleRules[0].days is 0; AWS S3 requires an expiration of at least 1 day"]
+        );
+        assert_eq!(
+            errors_with(
+                vec![rule(INT32_MAX_DAYS + 1, None)],
+                ResourceLifecycle::Frozen,
+                Platform::Gcp
+            )
+            .await,
+            vec!["Storage 'st': lifecycleRules[0].days is 2147483648; GCP Cloud Storage accepts at most 2147483647"]
         );
     }
 
