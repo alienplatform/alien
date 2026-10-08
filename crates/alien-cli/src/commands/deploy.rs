@@ -1220,7 +1220,8 @@ async fn create_standalone_deployment(
             let mut body = body
                 .name(resolved_args.name.clone())
                 .platform(platform)
-                .stack_settings(settings);
+                .stack_settings(settings)
+                .input_values(resolved_args.input_values.clone());
             if let Some(prefix) = &args.resource_prefix {
                 body = body.resource_prefix(prefix.clone());
             }
@@ -3980,6 +3981,55 @@ max = 1
         assert_eq!(json["pools"]["fixed"]["machines"], 2);
         assert_eq!(json["pools"]["elastic"]["min"], 1);
         assert_eq!(json["pools"]["elastic"]["max"], 4);
+    }
+
+    #[tokio::test]
+    async fn standalone_creation_forwards_resolved_inputs() {
+        let server = httpmock::MockServer::start_async().await;
+        let values = HashMap::from([
+            ("plain".to_string(), serde_json::json!("configured-value")),
+            (
+                "secret".to_string(),
+                serde_json::json!("synthetic-test-secret"),
+            ),
+            ("count".to_string(), serde_json::json!(3)),
+            ("enabled".to_string(), serde_json::json!(false)),
+            ("labels".to_string(), serde_json::json!(["one", "two"])),
+        ]);
+        let create = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/deployments")
+                    .header("authorization", "Bearer test-group-token")
+                    .json_body_partial(serde_json::json!({"inputValues": values}).to_string());
+                then.status(409)
+                    .json_body(serde_json::json!({"message":"Synthetic creation rejection"}));
+            })
+            .await;
+        let resolved = ResolvedDeployArgs {
+            name: "test".to_string(),
+            platform: "aws".to_string(),
+            platform_enum: Platform::Aws,
+            network_settings: None,
+            compute_settings: None,
+            domain_settings: None,
+            input_values: values,
+            public_subdomain: None,
+        };
+        let args = DeployArgs::try_parse_from(["deploy", "--name", "test", "--platform", "aws"])
+            .expect("valid standalone arguments");
+        let settings = serde_json::from_value(serde_json::json!({})).expect("valid empty settings");
+        let error = create_standalone_deployment(
+            "test-group-token",
+            &server.base_url(),
+            &resolved,
+            &args,
+            settings,
+        )
+        .await
+        .expect_err("manager rejects the correctly formed request");
+        assert!(error.to_string().contains("409"), "{error}");
+        create.assert_calls_async(1).await;
     }
 
     #[test]
