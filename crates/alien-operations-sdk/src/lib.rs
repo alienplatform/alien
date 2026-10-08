@@ -44,7 +44,8 @@ pub use kubernetes::{
 #[allow(deprecated)]
 pub use manifest::{
     Arch, CanonicalOperationManifest, CanonicalPluginManifest, OperationManifest, PluginManifest,
-    RetryPolicy, RiskTier, SensitiveOutputPolicy, MAX_BUNDLE_EXECUTABLE_BYTES,
+    PluginSettingKind, PluginSettingManifest, RetryPolicy, RiskTier, SensitiveOutputPolicy,
+    MAX_BUNDLE_EXECUTABLE_BYTES,
 };
 pub use mcp::{
     generate_mcp_tools, generate_mcp_tools_canonical, CanonicalMcpToolSchema, McpToolSchema,

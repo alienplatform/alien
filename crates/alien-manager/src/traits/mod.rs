@@ -30,7 +30,8 @@ pub use deployment_store::{
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentAcquireResult,
     DeploymentAcquireUnavailableReason, DeploymentFilter, DeploymentGroupRecord,
     DeploymentGroupSetup, DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput,
-    ReconcileInputBuilder, ReconcileOutcome, UnacquiredDeployment, UpdateImportedDeploymentParams,
+    ReconcileInputBuilder, ReconcileOutcome, SuppliedStacks, UnacquiredDeployment,
+    UpdateImportedDeploymentParams,
 };
 pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,

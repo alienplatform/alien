@@ -79,10 +79,13 @@ EXAMPLES:
     # Publish a custom plugin bundle
     alien operations publish ./postgres-operations-1.0.0.zip
 
-    # List available plugins (builtin + custom)
+    # List plugins a stack can declare in operations()
     alien operations list
 
-    # Invoke an enabled operation without an AI agent
+    # List the plugins a deployment declares
+    alien operations list --deployment mycustomer/prod
+
+    # Invoke a declared operation without an AI agent
     alien operations invoke --deployment mycustomer/prod \\
       --operation kubernetes/get-pods \\
       --params '{\"namespace\": \"default\", \"maxResults\": 10}'
@@ -167,10 +170,16 @@ pub enum OperationsAction {
         /// Path to the plugin bundle ZIP (contains metadata.json + binaries).
         bundle: PathBuf,
     },
-    /// List available operations plugins (builtin + custom).
+    /// List operations plugins: every built-in and published custom plugin a
+    /// stack can declare, or only the ones a deployment declares.
     #[cfg(feature = "platform")]
-    List,
-    /// Invoke an enabled operation and wait for its result.
+    List {
+        /// Only the plugins this deployment declares. Deployment ID, or
+        /// <deployment-group-name>/<deployment-name>.
+        #[arg(long)]
+        deployment: Option<String>,
+    },
+    /// Invoke an operation the deployment declares and wait for its result.
     #[cfg(feature = "platform")]
     Invoke {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>.
@@ -236,7 +245,7 @@ pub async fn local_operations_task(args: &OperationsArgs) -> Option<Result<()>> 
         }
         #[cfg(feature = "platform")]
         OperationsAction::Publish { .. }
-        | OperationsAction::List
+        | OperationsAction::List { .. }
         | OperationsAction::Invoke { .. } => None,
     }
 }
@@ -277,7 +286,25 @@ async fn platform_action_task(args: OperationsArgs, ctx: ExecutionMode) -> Resul
         OperationsAction::Publish { bundle } => {
             publish_task(&auth, &workspace, &project, &bundle, args.json).await
         }
-        OperationsAction::List => list_task(&auth, &workspace, &project, args.json).await,
+        OperationsAction::List { deployment } => {
+            let deployment_id = match deployment {
+                Some(deployment) => {
+                    let sdk_client = ctx.sdk_client().await?;
+                    let resolved = crate::platform_deployment_resolver::resolve(
+                        &ctx,
+                        &sdk_client,
+                        &workspace,
+                        &deployment,
+                        Some(&project),
+                        !args.json,
+                    )
+                    .await?;
+                    Some(String::from(resolved.id))
+                }
+                None => None,
+            };
+            list_task(&auth, &workspace, &project, deployment_id.as_deref(), args.json).await
+        }
         OperationsAction::Invoke {
             deployment,
             operation,

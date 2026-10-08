@@ -414,7 +414,7 @@ async fn request_access_then_reinvoke(
     // as `docker pull` writing progress to stderr and the final digest to
     // stdout.
     eprintln!(
-        "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        "Access requested: {}\nWaiting for the customer to approve it...",
         created.id
     );
 
@@ -435,14 +435,14 @@ async fn request_access_then_reinvoke(
             .into_inner();
 
         if !printed_kubectl_approve {
-            let kubectl_approve = crate::commands::access_requests::fetch_kubectl_approve(
+            let kubectl_approve = crate::commands::access_requests::fetch_approval_instructions(
                 sdk_client,
                 workspace,
                 created.id.as_str(),
             )
             .await?;
-            if let Some(command) = &kubectl_approve {
-                eprintln!("Run this in-cluster to approve:\n  {command}\n");
+            if let Some(message) = kubectl_approve.waiting_message() {
+                eprintln!("{message}\n");
                 printed_kubectl_approve = true;
             }
         }
@@ -833,9 +833,13 @@ pub async fn list_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
     project: &str,
+    deployment_id: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
+    let mut url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
+    if let Some(deployment_id) = deployment_id {
+        url.query_pairs_mut().append_pair("deployment", deployment_id);
+    }
     let response = auth
         .reqwest_client()
         .request(Method::GET, url.clone())

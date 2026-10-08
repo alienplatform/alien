@@ -820,6 +820,7 @@ mod tests {
             inputs: Vec::new(),
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            operations: None,
         }
     }
 

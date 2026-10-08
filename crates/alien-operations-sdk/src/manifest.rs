@@ -440,6 +440,126 @@ pub struct CanonicalPluginManifest {
     /// The operations this plugin exposes.
     #[serde(default)]
     pub operations: Vec<CanonicalOperationManifest>,
+    /// Settings a stack may give this plugin, by setting key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, PluginSettingManifest>,
+}
+
+/// A setting a plugin accepts from the stack that declares it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginSettingManifest {
+    /// What the setting is for, shown to stack authors.
+    pub description: String,
+    /// Kind of value the setting takes.
+    pub kind: PluginSettingKind,
+    /// Environment variable the plugin reads the value from. Required for
+    /// `string` and `secret` settings; `resources` settings scope permissions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// Stack resource type a `resources` setting lists (e.g. `storage`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_type: Option<String>,
+    /// Whether a stack declaring the plugin must set it.
+    #[serde(default)]
+    pub required: bool,
+}
+
+impl PluginSettingManifest {
+    /// An optional string setting read from `env`.
+    pub fn string(env: &str, description: &str) -> Self {
+        Self::env_backed(PluginSettingKind::String, env, description)
+    }
+
+    /// An optional secret setting read from `env`.
+    pub fn secret(env: &str, description: &str) -> Self {
+        Self::env_backed(PluginSettingKind::Secret, env, description)
+    }
+
+    /// An optional list of stack resources of `resource_type` that scopes permissions.
+    pub fn resources(resource_type: &str, description: &str) -> Self {
+        Self {
+            description: description.to_string(),
+            kind: PluginSettingKind::Resources,
+            env: None,
+            resource_type: Some(resource_type.to_string()),
+            required: false,
+        }
+    }
+
+    /// Make the setting required.
+    pub fn required(self) -> Self {
+        Self {
+            required: true,
+            ..self
+        }
+    }
+
+    fn env_backed(kind: PluginSettingKind, env: &str, description: &str) -> Self {
+        Self {
+            description: description.to_string(),
+            kind,
+            env: Some(env.to_string()),
+            resource_type: None,
+            required: false,
+        }
+    }
+
+    fn validate(&self, key: &str) -> Result<()> {
+        let field = format!("settings.{key}");
+        let invalid = |reason: String| AlienError::new(ErrorData::ManifestInvalid { reason });
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(invalid(format!(
+                "{field}: setting keys contain only ASCII letters, digits, or '_'"
+            )));
+        }
+        // A stack's `operations()` entry holds a plugin's settings next to its
+        // `approval` rules, so no setting may take that name.
+        if key == RESERVED_APPROVAL_KEY {
+            return Err(invalid(format!(
+                "{field}: '{RESERVED_APPROVAL_KEY}' is reserved for approval rules"
+            )));
+        }
+        match (self.kind, &self.env, &self.resource_type) {
+            (PluginSettingKind::String | PluginSettingKind::Secret, Some(env), None)
+                if valid_env_name(env) =>
+            {
+                Ok(())
+            }
+            (PluginSettingKind::String | PluginSettingKind::Secret, _, _) => Err(invalid(format!(
+                "{field}: a string or secret setting names the environment variable it is read from (A-Z, 0-9, '_') and no resource type"
+            ))),
+            (PluginSettingKind::Resources, None, Some(resource_type))
+                if !resource_type.is_empty() =>
+            {
+                Ok(())
+            }
+            (PluginSettingKind::Resources, _, _) => Err(invalid(format!(
+                "{field}: a resources setting names its resource type and no environment variable"
+            ))),
+        }
+    }
+}
+
+/// The key a stack's `operations()` entry uses for approval rules.
+const RESERVED_APPROVAL_KEY: &str = "approval";
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_uppercase() || c == '_')
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Kind of value a plugin setting takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginSettingKind {
+    /// A plain string.
+    String,
+    /// A secret string, which must come from a secret stack input.
+    Secret,
+    /// Stack resources the plugin's permissions are scoped to.
+    Resources,
 }
 
 #[allow(deprecated)]
@@ -478,6 +598,7 @@ impl From<PluginManifest> for CanonicalPluginManifest {
                 .into_iter()
                 .map(CanonicalOperationManifest::from)
                 .collect(),
+            settings: BTreeMap::new(),
         }
     }
 }
@@ -536,6 +657,9 @@ impl CanonicalPluginManifest {
             return Err(AlienError::new(ErrorData::FieldEmpty {
                 field: "binaries".to_string(),
             }));
+        }
+        for (key, setting) in &self.settings {
+            setting.validate(key)?;
         }
         let mut binary_entries = BTreeSet::new();
         for (arch, entry) in &self.binaries {
@@ -1281,6 +1405,29 @@ mod tests {
                 "operations": [{operations}]
             }}"#
         )
+    }
+
+    /// `operations()` puts approval rules under `approval`, next to the
+    /// settings, so a setting by that name could never be given a value.
+    #[test]
+    fn a_setting_may_not_take_the_approval_key() {
+        let with_setting = |key: &str| {
+            manifest_json("").replace(
+                r#""operations": []"#,
+                &format!(
+                    r#""operations": [], "settings": {{ "{key}": {{ "description": "x", "kind": "string", "env": "PLUGIN_VALUE" }} }}"#
+                ),
+            )
+        };
+        CanonicalPluginManifest::parse_and_validate(with_setting("host").as_bytes())
+            .expect("an ordinary setting key is accepted");
+        let error =
+            CanonicalPluginManifest::parse_and_validate(with_setting("approval").as_bytes())
+                .expect_err("the approval key is reserved");
+        assert!(
+            error.to_string().contains("reserved for approval rules"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -9,7 +9,10 @@ import * as z from "zod";
  * @description One bundle the Operator needs to download to reach `targetBundleHash`.\nThe manager mints a short-lived presigned GET URL per bundle — the\nOperator never holds real cloud storage credentials, mirroring the OCI\nregistry proxy\'s credential-injection pattern.
  */
 export const OperationsBundleDownloadSchema = z.object({
-    "plugin": z.string().describe("Plugin name this bundle provides."),
+    "env": z.optional(z.object({
+    
+    }).catchall(z.string()).describe("Environment the plugin process runs with: its settings, which may hold\nsecrets. Store only in encrypted state, and never log the values.")),
+"plugin": z.string().describe("Plugin name this bundle provides."),
 "pluginVersion": z.string().describe("Plugin version this bundle provides."),
 "url": z.string().describe("Presigned URL to GET the bundle ZIP from. Short-lived.")
     }).describe("One bundle the Operator needs to download to reach `targetBundleHash`.\nThe manager mints a short-lived presigned GET URL per bundle — the\nOperator never holds real cloud storage credentials, mirroring the OCI\nregistry proxy's credential-injection pattern.")

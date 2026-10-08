@@ -6,18 +6,20 @@
 //! bound to one exact command, and receiver access is bound to one deployment
 //! plus one exact target.
 
-use alien_commands::server::command_registry::{CommandStatus, OPERATOR_COMMAND_TARGET_ID};
+use alien_commands::server::command_registry::{
+    is_operations_command_target, is_operations_target, CommandStatus,
+};
 use alien_commands::server::CommandAccessContext;
-use alien_core::{CommandTarget, CommandTargetType};
+use alien_core::CommandTarget;
 
 use crate::auth::{CommandCapability, Role, Scope, Subject};
 use crate::traits::deployment_store::DeploymentRecord;
 
 /// Decide whether a commands-scoped subject may create this request.
 ///
-/// Ordinary senders may address stack targets but never the reserved operations
+/// Ordinary senders may address stack targets but never a reserved operations
 /// target. The operations capability has the inverse access: it is bound to one
-/// deployment and may address only the reserved target.
+/// deployment and may address only a reserved operations target.
 pub fn create_request_decision(
     subject: &Subject,
     deployment_id: &str,
@@ -34,10 +36,12 @@ pub fn create_request_decision(
     };
 
     let target_allowed = match capability {
-        CommandCapability::Send => requested_target != Some(OPERATOR_COMMAND_TARGET_ID),
+        CommandCapability::Send => !requested_target.is_some_and(is_operations_command_target),
         CommandCapability::Operations {
             command: scoped_command,
-        } => requested_target == Some(OPERATOR_COMMAND_TARGET_ID) && scoped_command == command,
+        } => {
+            requested_target.is_some_and(is_operations_command_target) && scoped_command == command
+        }
         CommandCapability::Status { .. } => false,
         CommandCapability::Receive { .. } => false,
     };
@@ -49,7 +53,7 @@ pub fn create_request_decision(
     )
 }
 
-/// Authorize completion of an operator command's presigned params upload.
+/// Authorize completion of an operations command's presigned params upload.
 pub fn operator_upload_complete_allowed(subject: &Subject, command: &CommandStatus) -> bool {
     matches!(
         &subject.scope,
@@ -64,8 +68,7 @@ pub fn operator_upload_complete_allowed(subject: &Subject, command: &CommandStat
             && project_id == &command.project_id
             && deployment_id == &command.deployment_id
             && scoped_command == &command.command
-            && command.target.resource_id == OPERATOR_COMMAND_TARGET_ID
-            && command.target.resource_type == CommandTargetType::Daemon
+            && is_operations_target(&command.target)
     )
 }
 
@@ -117,7 +120,7 @@ pub fn receiver_request_decision(
                 CommandCapability::Receive { target } if target == requested_target
             )
             && scoped_deployment_id == deployment_id
-            && requested_target.resource_id != OPERATOR_COMMAND_TARGET_ID,
+            && !is_operations_command_target(&requested_target.resource_id),
     )
 }
 
@@ -221,7 +224,7 @@ pub fn receiver_deployment_decision(
                 capability,
                 CommandCapability::Receive { target } if target == requested_target
             )
-            && requested_target.resource_id != OPERATOR_COMMAND_TARGET_ID
+            && !is_operations_command_target(&requested_target.resource_id)
             && subject.workspace_id == deployment.workspace_id
             && project_id == &deployment.project_id
             && deployment_id == &deployment.id,
@@ -237,7 +240,7 @@ pub fn receiver_context_allowed(subject: &Subject, command: &CommandAccessContex
             deployment_id,
             capability: CommandCapability::Receive { target },
         } if subject.role == Role::CommandCapability
-            && command.target.resource_id != OPERATOR_COMMAND_TARGET_ID
+            && !is_operations_command_target(&command.target.resource_id)
             && subject.workspace_id == command.workspace_id
             && project_id == &command.project_id
             && deployment_id == &command.deployment_id
@@ -248,7 +251,10 @@ pub fn receiver_context_allowed(subject: &Subject, command: &CommandAccessContex
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::CommandState;
+    use alien_commands::server::command_registry::{
+        OPERATIONS_WORKER_COMMAND_TARGET_ID, OPERATOR_COMMAND_TARGET_ID,
+    };
+    use alien_core::{CommandState, CommandTargetType};
     use chrono::Utc;
 
     use crate::auth::SubjectKind;
@@ -439,6 +445,69 @@ mod tests {
         assert!(!operator_upload_complete_allowed(
             &exact,
             &wrong_target_type,
+        ));
+    }
+
+    #[test]
+    fn operations_worker_is_reserved_for_operations_capabilities() {
+        let operations = operations_subject(
+            "workspace-1",
+            "project-1",
+            "deployment-1",
+            "postgres/health",
+        );
+        assert_eq!(
+            create_request_decision(
+                &operations,
+                "deployment-1",
+                "postgres/health",
+                Some(OPERATIONS_WORKER_COMMAND_TARGET_ID),
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            create_request_decision(
+                &operations,
+                "deployment-1",
+                "postgres/vacuum",
+                Some(OPERATIONS_WORKER_COMMAND_TARGET_ID),
+            ),
+            Some(false),
+            "the capability is bound to one exact command"
+        );
+
+        let sender = Subject {
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Send,
+            },
+            ..operations.clone()
+        };
+        assert_eq!(
+            create_request_decision(
+                &sender,
+                "deployment-1",
+                "postgres/health",
+                Some(OPERATIONS_WORKER_COMMAND_TARGET_ID),
+            ),
+            Some(false),
+            "an ordinary sender must not reach the operations worker"
+        );
+
+        let mut worker_command = operator_command_status();
+        worker_command.target = CommandTarget::new(
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+            CommandTargetType::Worker,
+        );
+        assert!(operator_upload_complete_allowed(
+            &operations,
+            &worker_command
+        ));
+        worker_command.target.resource_type = CommandTargetType::Daemon;
+        assert!(!operator_upload_complete_allowed(
+            &operations,
+            &worker_command
         ));
     }
 }

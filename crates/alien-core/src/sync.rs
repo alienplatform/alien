@@ -150,7 +150,7 @@ impl OperatorImageReport {
 /// The manager mints a short-lived presigned GET URL per bundle — the
 /// Operator never holds real cloud storage credentials, mirroring the OCI
 /// registry proxy's credential-injection pattern.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct OperationsBundleDownload {
@@ -160,6 +160,20 @@ pub struct OperationsBundleDownload {
     pub plugin_version: String,
     /// Presigned URL to GET the bundle ZIP from. Short-lived.
     pub url: String,
+    /// Environment the plugin process runs with: its settings, which may hold
+    /// secrets. Store only in encrypted state, and never log the values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for OperationsBundleDownload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OperationsBundleDownload")
+            .field("plugin", &self.plugin)
+            .field("plugin_version", &self.plugin_version)
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Target operations-bundle set for the Operator to converge its loaded
@@ -296,6 +310,11 @@ pub struct SyncRequest {
     /// this (older Operator versions), not that it has no operations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations_report: Option<OperationsReport>,
+    /// Operations an Operator installed on its own declares through its
+    /// environment, without setting values. Absent when its deployment's
+    /// release declares them instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations_config: Option<crate::OperationsConfig>,
 }
 
 /// Where the Operator read the application identity from.
@@ -503,6 +522,7 @@ mod tests {
             capabilities: Vec::new(),
             operator_version: None,
             operations_report: None,
+            operations_config: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -715,6 +735,7 @@ mod tests {
             capabilities: Vec::new(),
             operator_version: None,
             operations_report: None,
+            operations_config: None,
         };
         let input = SyncInput::builder(request)
             .operator_image(OperatorImageReport {
@@ -745,6 +766,7 @@ mod tests {
             capabilities: Vec::new(),
             operator_version: None,
             operations_report: None,
+            operations_config: None,
         };
 
         let value = serde_json::to_value(SyncInput::builder(request).build()).unwrap();
@@ -829,6 +851,7 @@ mod tests {
                     name: "list-buckets".to_string(),
                 }],
             }),
+            operations_config: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -874,6 +897,7 @@ mod tests {
                     plugin: "s3".to_string(),
                     plugin_version: "1.0.0".to_string(),
                     url: "https://storage.example.com/bundle.zip?sig=abc".to_string(),
+                    env: BTreeMap::new(),
                 }],
             }),
             target_dynamic_containers: None,

@@ -328,11 +328,25 @@ pub async fn handle_updating(
     // resources (ComputeCluster capacity and, on AWS, a same-architecture machine
     // type) to reconcile changed configuration through their management
     // controller.
+    // A frozen service account that only lost permissions keeps its installed
+    // definition too: setup trims it, and until then the update needs the
+    // broader grants to delete what the removed ones covered.
     if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
         for (resource_id, entry) in installed_stack.resources() {
-            if entry.lifecycle == ResourceLifecycle::Frozen
-                && !target_stack.resources.contains_key(resource_id)
-            {
+            if entry.lifecycle != ResourceLifecycle::Frozen {
+                continue;
+            }
+            let keep_installed = match target_stack.resources.get(resource_id) {
+                None => true,
+                Some(target) => {
+                    alien_preflights::compatibility::narrowing::service_account_narrowed(
+                        &target_stack,
+                        &entry.config,
+                        &target.config,
+                    )
+                }
+            };
+            if keep_installed {
                 target_stack
                     .resources
                     .insert(resource_id.clone(), entry.clone());

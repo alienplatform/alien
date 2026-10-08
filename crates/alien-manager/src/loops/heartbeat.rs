@@ -163,6 +163,7 @@ mod tests {
         let mut stack_settings = StackSettings::default();
         stack_settings.deployment_model = DeploymentModel::Push;
         DeploymentRecord {
+            supplied_stacks: None,
             id: "dep_heartbeat_claim".to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),

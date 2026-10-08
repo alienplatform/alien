@@ -295,6 +295,7 @@ impl SqliteDeploymentStore {
         let retry_requested_int: i64 = p.optional_i64(20, "retry_requested")?.unwrap_or(0);
 
         Ok(DeploymentRecord {
+            supplied_stacks: None,
             id: p.string(0, "id")?,
             name: p.string(1, "name")?,
             deployment_group_id: p.string(2, "deployment_group_id")?,
@@ -439,6 +440,7 @@ mod tests {
     fn deployment_record(status: &str) -> DeploymentRecord {
         let now = Utc::now();
         DeploymentRecord {
+            supplied_stacks: None,
             id: "dep_test".to_string(),
             input_values: Default::default(),
             workspace_id: "default".to_string(),
@@ -604,6 +606,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await?;
 
         Ok(DeploymentRecord {
+            supplied_stacks: None,
             id,
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),
@@ -778,6 +781,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await?;
 
         Ok(DeploymentRecord {
+            supplied_stacks: None,
             id,
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),

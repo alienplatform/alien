@@ -9,12 +9,27 @@ use alien_core::{
     sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
     EnvironmentVariable, GcpEnvironmentInfo, ManagementConfig, ObservedInventoryBatch, Platform,
-    ResourceHeartbeat, RuntimeMetadata, StackSettings, StackState,
+    ResourceHeartbeat, RuntimeMetadata, Stack, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
 pub(crate) fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
     serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
+}
+
+/// Release stacks an external control plane resolved for one deployment.
+///
+/// A control plane that changes only these stacks, keeping the release id,
+/// must deliver the deployment as `UpdatePending`: a `Running` deployment
+/// starts an update only when its desired release id differs from the
+/// current one, so a same-release difference is otherwise never applied.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuppliedStacks {
+    /// Stack for `current_release_id`: what is installed.
+    pub current: Option<Stack>,
+    /// Stack for `desired_release_id`: what an update installs.
+    pub desired: Option<Stack>,
 }
 
 /// A deployment record as stored in the database.
@@ -68,6 +83,12 @@ pub struct DeploymentRecord {
     /// trusted control-plane responses but never serialize it back to clients.
     #[serde(default, skip_serializing)]
     pub deployment_config: Option<DeploymentConfig>,
+    /// Stacks an external control plane resolved for this deployment's
+    /// releases. A control plane may add deployment-specific resources to a
+    /// release's stack, so when these are set the deployment loop deploys
+    /// them instead of reading the release again.
+    #[serde(default, skip_serializing)]
+    pub supplied_stacks: Option<SuppliedStacks>,
     /// Raw deployment token for proxy pull auth.
     /// Set during deployment creation. Used by the deployment loop to
     /// configure registry credentials (Container App secrets, K8s imagePullSecrets).
@@ -119,6 +140,7 @@ impl std::fmt::Debug for DeploymentRecord {
                     .map(|_| "[REDACTED]"),
             )
             .field("management_config", &self.management_config)
+            .field("supplied_stacks", &self.supplied_stacks.is_some())
             .field(
                 "deployment_config",
                 &self.deployment_config.as_ref().map(|_| "[PRESENT]"),
@@ -365,6 +387,7 @@ pub struct ReconcileInput {
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
+    operations_config: Option<alien_core::OperationsConfig>,
 }
 
 impl ReconcileInput {
@@ -374,7 +397,14 @@ impl ReconcileInput {
             operator_image: None,
             application: None,
             dynamic_containers: None,
+            operations_config: None,
         }
+    }
+
+    /// Operations an Operator installed without a release declares, without
+    /// setting values. Opaque to OSS beyond forwarding it.
+    pub fn operations_config(&self) -> Option<&alien_core::OperationsConfig> {
+        self.operations_config.as_ref()
     }
 
     /// Application release the Operator observed in its environment, opaque
@@ -399,9 +429,15 @@ pub struct ReconcileInputBuilder {
     operator_image: Option<OperatorImageReport>,
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
+    operations_config: Option<alien_core::OperationsConfig>,
 }
 
 impl ReconcileInputBuilder {
+    pub fn operations_config(mut self, config: alien_core::OperationsConfig) -> Self {
+        self.operations_config = Some(config);
+        self
+    }
+
     pub fn operator_image(mut self, operator_image: OperatorImageReport) -> Self {
         self.operator_image = Some(operator_image);
         self
@@ -426,6 +462,7 @@ impl ReconcileInputBuilder {
             operator_image: self.operator_image,
             application: self.application,
             dynamic_containers: self.dynamic_containers,
+            operations_config: self.operations_config,
         }
     }
 }
