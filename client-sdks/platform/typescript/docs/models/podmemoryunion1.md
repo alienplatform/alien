@@ -17,3 +17,4 @@ const value: models.MemoryPod1 = {
 ```typescript
 const value: string = "<value>";
 ```
+

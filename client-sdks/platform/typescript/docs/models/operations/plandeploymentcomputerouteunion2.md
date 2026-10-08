@@ -23,3 +23,4 @@ const value: operations.PlanDeploymentComputeRouteGateway2 = {
   routeApi: "gateway",
 };
 ```
+

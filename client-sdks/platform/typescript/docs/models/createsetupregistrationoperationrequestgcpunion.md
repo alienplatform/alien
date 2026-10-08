@@ -16,3 +16,4 @@ const value: models.CreateSetupRegistrationOperationRequestGcp = {
 ```typescript
 const value: string = "<value>";
 ```
+

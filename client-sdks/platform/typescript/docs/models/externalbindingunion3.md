@@ -74,3 +74,4 @@ const value: models.ExternalBindingLocalKv = {
   type: "kv",
 };
 ```
+

@@ -23,3 +23,4 @@ const value: models.CreateManagerResponseRouteGateway4 = {
   routeApi: "gateway",
 };
 ```
+

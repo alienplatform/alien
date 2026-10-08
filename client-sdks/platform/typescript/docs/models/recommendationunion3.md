@@ -16,3 +16,4 @@ const value: models.Recommendation3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

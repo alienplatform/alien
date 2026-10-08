@@ -16,3 +16,4 @@ const value: operations.Subject3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

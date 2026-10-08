@@ -16,3 +16,4 @@ const value: models.DeploymentSetupStackSettingsPolicyFailureDomains2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -14,3 +14,4 @@ const value: models.CreateSetupRegistrationOperationRequestDomains = {};
 ```typescript
 const value: string = "<value>";
 ```
+

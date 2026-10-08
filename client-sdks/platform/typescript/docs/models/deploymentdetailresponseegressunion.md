@@ -16,3 +16,4 @@ const value: models.DeploymentDetailResponseEgress = {
 ```typescript
 const value: string = "<value>";
 ```
+

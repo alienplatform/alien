@@ -20,3 +20,4 @@ const value: models.EventProgress = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -16,3 +16,4 @@ const value: models.DeploymentDetailResponseGcpStackSettings = {
 ```typescript
 const value: string = "<value>";
 ```
+

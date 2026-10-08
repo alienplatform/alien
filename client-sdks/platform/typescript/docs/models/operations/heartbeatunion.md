@@ -71,3 +71,4 @@ const value: operations.HeartbeatMissing = {
   resourceType: "<value>",
 };
 ```
+

@@ -16,3 +16,4 @@ const value: models.ComputePoolSelectionFailureDomains1 = {
 ```typescript
 const value: string = "<value>";
 ```
+

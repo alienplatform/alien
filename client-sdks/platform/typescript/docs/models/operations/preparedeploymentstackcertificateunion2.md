@@ -47,3 +47,4 @@ const value: operations.PrepareDeploymentStackCertificateNone2 = {
   mode: "none",
 };
 ```
+

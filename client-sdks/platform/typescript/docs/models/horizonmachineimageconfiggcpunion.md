@@ -16,3 +16,4 @@ const value: models.HorizonMachineImageGcpConfig = {
 ```typescript
 const value: string = "<value>";
 ```
+

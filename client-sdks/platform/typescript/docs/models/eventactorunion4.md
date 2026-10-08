@@ -17,3 +17,4 @@ const value: models.EventActor4 = {
 ```typescript
 const value: string = "<value>";
 ```
+

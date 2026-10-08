@@ -23,3 +23,4 @@ const value: models.ManagerRetryResponseRouteGateway5 = {
   routeApi: "gateway",
 };
 ```
+

@@ -14,3 +14,4 @@ const value: models.DeploymentDetailResponseLifecycleStackStateEnum = "live";
 ```typescript
 const value: string = "<value>";
 ```
+

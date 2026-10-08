@@ -56,3 +56,4 @@ const value: models.ExternalBindingLocalQueue = {
   type: "queue",
 };
 ```
+

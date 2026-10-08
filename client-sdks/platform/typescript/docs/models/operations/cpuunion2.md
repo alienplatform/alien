@@ -17,3 +17,4 @@ const value: operations.Cpu2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

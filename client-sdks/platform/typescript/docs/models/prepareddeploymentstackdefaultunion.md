@@ -46,3 +46,4 @@ const value: models.PreparedDeploymentStackDefaultStringList = {
 ```typescript
 const value: string = "<value>";
 ```
+

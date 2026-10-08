@@ -16,3 +16,4 @@ const value: operations.PrepareDeploymentStackGcp = {
 ```typescript
 const value: string = "<value>";
 ```
+

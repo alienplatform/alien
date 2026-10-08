@@ -14,3 +14,4 @@ const value: models.CreateManagerResponseDomains3 = {};
 ```typescript
 const value: string = "<value>";
 ```
+

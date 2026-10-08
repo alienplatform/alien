@@ -47,3 +47,4 @@ const value: models.DeploymentConfigCertificateNone1 = {
   mode: "none",
 };
 ```
+

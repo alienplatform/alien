@@ -16,3 +16,4 @@ const value: models.TargetDeploymentFailureDomains2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

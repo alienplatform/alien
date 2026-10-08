@@ -45,3 +45,4 @@ const value: models.TargetDeploymentManagementConfigKubernetes = {
 ```typescript
 const value: string = "<value>";
 ```
+

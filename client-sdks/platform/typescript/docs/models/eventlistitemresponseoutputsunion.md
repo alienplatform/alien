@@ -16,3 +16,4 @@ const value: models.EventListItemResponseOutputs = {
 ```typescript
 const value: string = "<value>";
 ```
+

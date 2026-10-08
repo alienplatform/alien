@@ -23,3 +23,4 @@ const value: models.DeploymentInfoPoolsAutoscale = {
   mode: "autoscale",
 };
 ```
+

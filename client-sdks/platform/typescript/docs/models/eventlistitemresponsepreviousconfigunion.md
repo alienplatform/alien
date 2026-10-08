@@ -17,3 +17,4 @@ const value: models.EventListItemResponsePreviousConfig = {
 ```typescript
 const value: string = "<value>";
 ```
+

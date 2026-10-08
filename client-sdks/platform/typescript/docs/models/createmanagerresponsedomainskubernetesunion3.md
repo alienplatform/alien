@@ -18,3 +18,4 @@ const value: models.CreateManagerResponseDomainsKubernetes3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

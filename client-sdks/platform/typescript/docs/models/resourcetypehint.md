@@ -14,3 +14,4 @@ const value: string = "<value>";
 ```typescript
 const value: any = "<value>";
 ```
+

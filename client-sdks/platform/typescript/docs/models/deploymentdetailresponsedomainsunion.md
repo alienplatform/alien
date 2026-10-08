@@ -14,3 +14,4 @@ const value: models.DeploymentDetailResponseDomains = {};
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -17,3 +17,4 @@ const value: operations.MemoryDaemonInstance3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -21,3 +21,4 @@ const value: models.Workload3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

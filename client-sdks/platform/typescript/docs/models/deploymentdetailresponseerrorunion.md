@@ -18,3 +18,4 @@ const value: models.DeploymentDetailResponseErrorStackState = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -16,3 +16,4 @@ const value: operations.Recommendation3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

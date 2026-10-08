@@ -23,3 +23,4 @@ const value: operations.PrepareDeploymentStackPoolsAutoscale = {
   mode: "autoscale",
 };
 ```
+

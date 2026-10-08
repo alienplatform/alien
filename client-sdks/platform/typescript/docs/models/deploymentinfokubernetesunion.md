@@ -14,3 +14,4 @@ const value: models.DeploymentInfoKubernetes = {};
 ```typescript
 const value: string = "<value>";
 ```
+

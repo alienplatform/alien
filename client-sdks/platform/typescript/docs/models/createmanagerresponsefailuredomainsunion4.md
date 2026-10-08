@@ -16,3 +16,4 @@ const value: models.CreateManagerResponseFailureDomains4 = {
 ```typescript
 const value: string = "<value>";
 ```
+

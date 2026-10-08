@@ -51,3 +51,4 @@ const value: models.CreateSetupRegistrationOperationRequestCertificateNone2 = {
   mode: "none",
 };
 ```
+

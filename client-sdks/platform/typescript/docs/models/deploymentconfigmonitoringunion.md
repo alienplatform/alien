@@ -17,3 +17,4 @@ const value: models.DeploymentConfigMonitoring = {
 ```typescript
 const value: string = "<value>";
 ```
+

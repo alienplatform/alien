@@ -17,3 +17,4 @@ const value: models.EventPreviousConfig = {
 ```typescript
 const value: string = "<value>";
 ```
+

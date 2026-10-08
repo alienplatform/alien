@@ -31,3 +31,4 @@ const value: models.Database1 = {
 ```typescript
 const value: string = "<value>";
 ```
+

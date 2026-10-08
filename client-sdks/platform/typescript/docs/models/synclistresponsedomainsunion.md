@@ -14,3 +14,4 @@ const value: models.SyncListResponseDomains = {};
 ```typescript
 const value: string = "<value>";
 ```
+

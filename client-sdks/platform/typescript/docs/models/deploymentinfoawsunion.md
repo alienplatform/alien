@@ -16,3 +16,4 @@ const value: models.DeploymentInfoAws = {
 ```typescript
 const value: string = "<value>";
 ```
+

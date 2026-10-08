@@ -64,3 +64,4 @@ const value: operations.DataAzureVnet = {
   backend: "azureVnet",
 };
 ```
+

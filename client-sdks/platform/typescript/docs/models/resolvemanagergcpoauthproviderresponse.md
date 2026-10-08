@@ -20,3 +20,4 @@ const value: models.ResolveManagerGcpOAuthProviderResponseCustom = {
   clientSecret: "GOCSPX-example",
 };
 ```
+

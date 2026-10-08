@@ -16,3 +16,4 @@ const value: models.DeploymentConfigCluster = {
 ```typescript
 const value: string = "<value>";
 ```
+

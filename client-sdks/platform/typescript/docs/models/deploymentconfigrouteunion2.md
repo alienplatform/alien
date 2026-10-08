@@ -23,3 +23,4 @@ const value: models.DeploymentConfigRouteGateway2 = {
   routeApi: "gateway",
 };
 ```
+

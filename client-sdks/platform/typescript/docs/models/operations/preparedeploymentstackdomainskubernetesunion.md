@@ -18,3 +18,4 @@ const value: operations.PrepareDeploymentStackDomainsKubernetes = {
 ```typescript
 const value: string = "<value>";
 ```
+

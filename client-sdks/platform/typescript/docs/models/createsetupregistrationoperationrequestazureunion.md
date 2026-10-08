@@ -16,3 +16,4 @@ const value: models.CreateSetupRegistrationOperationRequestAzure = {
 ```typescript
 const value: string = "<value>";
 ```
+

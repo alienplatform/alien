@@ -17,3 +17,4 @@ const value: models.CpuAllocatable = {
 ```typescript
 const value: string = "<value>";
 ```
+

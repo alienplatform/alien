@@ -18,3 +18,4 @@ const value: models.ManagerRetryResponseDomainsKubernetes2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -17,3 +17,4 @@ const value: models.UsageCpu = {
 ```typescript
 const value: string = "<value>";
 ```
+

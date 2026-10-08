@@ -16,3 +16,4 @@ const value: models.CreateManagerResponseAws2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

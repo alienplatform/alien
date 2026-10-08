@@ -17,3 +17,4 @@ const value: operations.CpuDaemonInstance1 = {
 ```typescript
 const value: string = "<value>";
 ```
+

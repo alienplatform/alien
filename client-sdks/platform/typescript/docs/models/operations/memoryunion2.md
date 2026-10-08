@@ -17,3 +17,4 @@ const value: operations.Memory2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

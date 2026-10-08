@@ -16,3 +16,4 @@ const value: operations.PrepareDeploymentStackAzure = {
 ```typescript
 const value: string = "<value>";
 ```
+

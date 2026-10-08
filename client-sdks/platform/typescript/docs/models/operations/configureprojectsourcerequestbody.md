@@ -24,3 +24,4 @@ const value: operations.TemplateRequest = {
   templatePath: "examples/customer-models-ts",
 };
 ```
+

@@ -69,3 +69,4 @@ const value: operations.DataAzureManagedIdentity2 = {
   backend: "azureManagedIdentity",
 };
 ```
+

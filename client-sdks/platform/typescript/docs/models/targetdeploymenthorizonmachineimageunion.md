@@ -30,3 +30,4 @@ const value: models.TargetDeploymentHorizonMachineImage = {
 ```typescript
 const value: string = "<value>";
 ```
+

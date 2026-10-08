@@ -16,3 +16,4 @@ const value: models.DeploymentAzureStackSettings = {
 ```typescript
 const value: string = "<value>";
 ```
+

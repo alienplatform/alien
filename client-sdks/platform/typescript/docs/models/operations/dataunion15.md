@@ -45,3 +45,4 @@ const value: operations.DataAzureResourceProvider = {
   backend: "azureResourceProvider",
 };
 ```
+

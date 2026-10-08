@@ -17,3 +17,4 @@ const value: models.CurrentReleaseExtendCondition = {
 ```typescript
 const value: string = "<value>";
 ```
+

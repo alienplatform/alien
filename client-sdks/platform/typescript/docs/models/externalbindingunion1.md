@@ -50,3 +50,4 @@ const value: models.ExternalBindingLocalStorage = {
   type: "storage",
 };
 ```
+

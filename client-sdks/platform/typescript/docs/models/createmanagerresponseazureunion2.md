@@ -16,3 +16,4 @@ const value: models.CreateManagerResponseAzure2 = {
 ```typescript
 const value: string = "<value>";
 ```
+

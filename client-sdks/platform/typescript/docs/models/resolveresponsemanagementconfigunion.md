@@ -44,3 +44,4 @@ const value: models.ResolveResponseManagementConfigKubernetes = {
   platform: "kubernetes",
 };
 ```
+

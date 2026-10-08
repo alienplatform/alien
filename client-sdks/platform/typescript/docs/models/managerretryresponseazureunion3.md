@@ -16,3 +16,4 @@ const value: models.ManagerRetryResponseAzure3 = {
 ```typescript
 const value: string = "<value>";
 ```
+

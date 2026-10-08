@@ -44,3 +44,4 @@ const value: operations.GetManagerManagementConfigKubernetes = {
   platform: "kubernetes",
 };
 ```
+

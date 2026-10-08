@@ -20,3 +20,4 @@ const value: models.DeploymentConfigHorizonMachineImageAzure = {
 ```typescript
 const value: string = "<value>";
 ```
+

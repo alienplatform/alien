@@ -23,3 +23,4 @@ const value: models.ImportSourceRouteGateway2 = {
   routeApi: "gateway",
 };
 ```
+

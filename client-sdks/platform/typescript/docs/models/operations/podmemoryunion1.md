@@ -17,3 +17,4 @@ const value: operations.MemoryPod1 = {
 ```typescript
 const value: string = "<value>";
 ```
+

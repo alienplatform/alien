@@ -18,3 +18,4 @@ const value: models.DeploymentDomainsKubernetes = {
 ```typescript
 const value: string = "<value>";
 ```
+

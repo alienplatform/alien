@@ -17,3 +17,4 @@ const value: models.DeploymentStatePreparedStackExtendConditionStack = {
 ```typescript
 const value: string = "<value>";
 ```
+

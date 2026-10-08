@@ -27,3 +27,4 @@ const value: operations.SensitiveOutputRequireConfirmation = {
   kind: "requireConfirmation",
 };
 ```
+

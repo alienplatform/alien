@@ -18,3 +18,4 @@ const value: models.CreateSetupRegistrationOperationRequestDomainsKubernetes = {
 ```typescript
 const value: string = "<value>";
 ```
+
