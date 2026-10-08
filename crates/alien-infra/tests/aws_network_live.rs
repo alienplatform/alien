@@ -73,7 +73,7 @@ struct CallRecord {
 /// An `Ec2Api` that forwards to the real client, logs every call and applies injections.
 #[derive(Debug)]
 struct FaultyEc2 {
-    inner: Arc<dyn Ec2Api>,
+    inner: Mutex<Arc<dyn Ec2Api>>,
     started: Instant,
     injections: Mutex<Vec<Injection>>,
     counts: Mutex<HashMap<&'static str, usize>>,
@@ -93,12 +93,20 @@ fn describe_error(error: &AlienError<ClientErrorData>) -> String {
 impl FaultyEc2 {
     fn new(inner: Arc<dyn Ec2Api>) -> Self {
         Self {
-            inner,
+            inner: Mutex::new(inner),
             started: Instant::now(),
             injections: Mutex::new(Vec::new()),
             counts: Mutex::new(HashMap::new()),
             log: Mutex::new(Vec::new()),
         }
+    }
+
+    fn client(&self) -> Arc<dyn Ec2Api> {
+        self.inner.lock().unwrap().clone()
+    }
+
+    fn set_client(&self, client: Arc<dyn Ec2Api>) {
+        *self.inner.lock().unwrap() = client;
     }
 
     fn inject(&self, operation: &'static str, occurrence: usize, fault: Fault) {
@@ -192,7 +200,7 @@ macro_rules! faulty_ec2_api {
         impl Ec2Api for FaultyEc2 {
             $(
                 async fn $name(&self, $( $arg: $ty ),*) -> ClientResult<$ret> {
-                    self.call(stringify!($name), self.inner.$name($( $arg ),*)).await
+                    self.call(stringify!($name), self.client().$name($( $arg ),*)).await
                 }
             )*
         }
@@ -1365,4 +1373,79 @@ async fn rebuild(live: Live, controller: AwsNetworkController) -> Live {
         .await
         .expect("executor builds");
     Live { executor, ..live }
+}
+
+/// AWS actually denies SG deletion through a restricted session; other children still
+/// disappear. Restore the full client and resume a serialized parent checkpoint.
+/// The restricted credentials must permit the same reads/deletes except for an explicit
+/// deny on ec2:DeleteSecurityGroup. Use an STS session policy, never change shared IAM.
+#[tokio::test]
+#[ignore = "creates billed AWS resources; needs live and restricted-session credentials"]
+async fn delete_resumes_retained_children_after_real_permission_restoration() {
+    let mut restricted = aws_config();
+    restricted.credentials = AwsCredentials::AccessKeys {
+        access_key_id: env("ALIEN_AWS_NETWORK_DENIED_ACCESS_KEY_ID"),
+        secret_access_key: env("ALIEN_AWS_NETWORK_DENIED_SECRET_ACCESS_KEY"),
+        session_token: Some(env("ALIEN_AWS_NETWORK_DENIED_SESSION_TOKEN")),
+    };
+    let denied = DefaultPlatformServiceProvider::default()
+        .get_aws_ec2_client(&restricted)
+        .await
+        .expect("restricted real EC2 client");
+    scenario("restore-perm", "10.240.0.0/16", |mut live| async move {
+        assert!(live.create_to_running().await.is_empty());
+        let created = live.inventory().await;
+        assert_full_network(&created);
+        let group = created.security_groups[0].clone();
+        let vpc = created.vpcs[0].clone();
+        live.faulty.set_client(denied);
+        live.executor.delete().expect("delete transition");
+        live.drive(
+            "delete while SG permission is denied",
+            Duration::from_secs(15),
+            |live| live.controller()["waitForRetainedDeleteIterations"].as_u64() == Some(1),
+        )
+        .await
+        .expect("retained children cause another cleanup pass");
+        assert_ne!(live.executor.status(), ResourceStatus::Deleted);
+        let remaining = live.inventory().await;
+        assert_eq!(remaining.vpcs, vec![vpc.clone()]);
+        assert_eq!(remaining.security_groups, vec![group.clone()]);
+        assert!(
+            remaining.subnets.is_empty(),
+            "independent subnet cleanup: {remaining:?}"
+        );
+        assert!(
+            live.faulty.calls("delete_vpc").is_empty(),
+            "parent stays untouched"
+        );
+        let denied_calls = live.faulty.calls("delete_security_group");
+        assert!(
+            denied_calls
+                .iter()
+                .any(|call| call.outcome.contains("REMOTE_ACCESS_DENIED")),
+            "AWS must actually deny the request: {denied_calls:?}"
+        );
+        let mut checkpoint = live.controller();
+        assert_eq!(checkpoint["securityGroupId"].as_str(), Some(group.as_str()));
+        assert_eq!(checkpoint["vpcId"].as_str(), Some(vpc.as_str()));
+        // Also cover a parent checkpoint saved by an older controller version.
+        checkpoint["state"] = serde_json::json!("deletingVpc");
+        let checkpoint: AwsNetworkController =
+            serde_json::from_value(checkpoint).expect("reload checkpoint");
+        live.faulty.set_client(live.real.clone());
+        let mut resumed = rebuild(live, checkpoint).await;
+        assert!(resumed
+            .drive_retrying(
+                "resume after restoring permission",
+                Duration::from_secs(15),
+                |live| { live.executor.status() == ResourceStatus::Deleted }
+            )
+            .await
+            .is_empty());
+        assert!(resumed.faulty.calls("delete_security_group").len() >= 2);
+        assert_nothing_left(&resumed).await;
+        resumed
+    })
+    .await;
 }
