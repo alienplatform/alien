@@ -50,6 +50,10 @@ use tracing::{info, warn};
     # Skip the build and release the existing build output (still pushes local artifacts)
     alien release --prebuilt
 
+    # Create a release now and promote its saved ID later
+    alien release --no-promote
+    alien releases promote <release-id> --channel production
+
     # Output JSON (for scripting/automation)
     alien release --json
 
@@ -2303,7 +2307,7 @@ mod tests {
 
     #[cfg(feature = "platform")]
     #[tokio::test]
-    async fn create_only_reuses_prebuilt_stack_and_omits_channel_in_both_release_requests() {
+    async fn no_promote_reuses_prebuilt_stack_and_omits_channel_in_both_release_requests() {
         let server = httpmock::MockServer::start_async().await;
         let project_id = "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let release_id = "rel_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
