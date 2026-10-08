@@ -20,8 +20,8 @@ mod tests {
 
     #[tokio::test]
     async fn move_command_obeys_preview_blockers_and_revision_over_http() {
-        let id = "dep_aaaaaaaaaaaaaaaaaaaaaaaa";
-        let destination = "dg_bbbbbbbbbbbbbbbbbbbbbbbb";
+        let id = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let destination = "dg_bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         for (dry_run, blocked, explicit_revision) in [
             (true, false, None),
             (false, true, None),
@@ -33,20 +33,20 @@ mod tests {
                 when.method(GET).path(format!("/v1/deployments/{id}"));
                 then.status(200).json_body(json!({
                     "id": id, "name": "sample", "status": "running", "platform": "machines",
-                    "projectId": "prj_aaaaaaaaaaaaaaaaaaaaaaaa", "deploymentProtocolVersion": 1,
-                    "deploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaa", "purpose": "application",
+                    "projectId": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "deploymentProtocolVersion": 1,
+                    "deploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "purpose": "application",
                     "stackSettings": { "deploymentModel": "push", "heartbeats": "on", "telemetry": "off",
                         "updates": "auto", "network": null, "domains": null },
                     "releaseChannel": "production", "retryRequested": false,
                     "createdAt": "2026-10-08T00:00:00Z", "updatedAt": "2026-10-08T00:00:00Z",
-                    "managerId": "mgr_aaaaaaaaaaaaaaaaaaaaaaaa", "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa"
+                    "managerId": "mgr_aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa"
                 }));
             }).await;
             let preview = server.mock_async(|when, then| {
                 when.method(POST).path(format!("/v1/deployments/{id}/move"))
                     .json_body_partial(json!({"deploymentGroupId": destination, "dryRun": true}).to_string());
                 then.status(200).json_body(json!({
-                    "deploymentId": id, "previousDeploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaa",
+                    "deploymentId": id, "previousDeploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "deploymentGroupId": destination, "membershipRevision": 17,
                     "result": "preview", "blockers": if blocked { vec!["active maintenance lease"] } else { vec![] },
                     "projectionStatus": "confirmed"
@@ -62,7 +62,7 @@ mod tests {
                             .to_string(),
                         );
                     then.status(200).json_body(json!({
-                    "deploymentId": id, "previousDeploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaa",
+                    "deploymentId": id, "previousDeploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "deploymentGroupId": destination, "membershipRevision": 18,
                     "result": "moved", "blockers": [], "projectionStatus": "pending"
                 }));
