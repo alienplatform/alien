@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use alien_core::{
     AlienEvent, DeploymentStatus, EventBus, EventChange, EventHandler, EventState, Platform,
-    PushProgress, ResourceStatus, StackResourceState,
+    PushProgress, ResourceLifecycle, ResourceStatus, StackResourceState,
 };
 use alien_error::{AlienError, AlienErrorData, GenericError};
 use async_trait::async_trait;
@@ -1183,6 +1183,7 @@ impl FixedSteps {
     pub fn sync_deployment_resources(
         &self,
         resources: &std::collections::HashMap<String, StackResourceState>,
+        deployment_status: DeploymentStatus,
     ) {
         if let Some(state) = &self.state {
             let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1193,18 +1194,39 @@ impl FixedSteps {
             for (resource_name, resource) in entries {
                 let key = format!("deployment:{resource_name}");
                 let label = deployment_resource_label(resource_name, resource);
-                let detail = deployment_resource_detail(resource);
-                let row_state = match resource.status {
-                    ResourceStatus::Running | ResourceStatus::Deleted => RowState::Complete,
-                    ResourceStatus::ProvisionFailed
-                    | ResourceStatus::UpdateFailed
-                    | ResourceStatus::DeleteFailed
-                    | ResourceStatus::RefreshFailed => RowState::Failed,
-                    ResourceStatus::Pending
-                    | ResourceStatus::Provisioning
-                    | ResourceStatus::Updating
-                    | ResourceStatus::Deleting
-                    | ResourceStatus::TeardownRequired => RowState::Active,
+                let previous_runtime_failure = deployment_status == DeploymentStatus::InitialSetup
+                    && resource.lifecycle == Some(ResourceLifecycle::Live)
+                    && matches!(
+                        resource.status,
+                        ResourceStatus::ProvisionFailed
+                            | ResourceStatus::UpdateFailed
+                            | ResourceStatus::RefreshFailed
+                    );
+                let detail = if previous_runtime_failure {
+                    Some(match deployment_resource_detail(resource) {
+                        Some(error) => {
+                            format!("Previous failure; runtime retry waits for setup: {error}")
+                        }
+                        None => "Runtime retry waits for setup".to_string(),
+                    })
+                } else {
+                    deployment_resource_detail(resource)
+                };
+                let row_state = if previous_runtime_failure {
+                    RowState::Pending
+                } else {
+                    match resource.status {
+                        ResourceStatus::Running | ResourceStatus::Deleted => RowState::Complete,
+                        ResourceStatus::ProvisionFailed
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::DeleteFailed
+                        | ResourceStatus::RefreshFailed => RowState::Failed,
+                        ResourceStatus::Pending
+                        | ResourceStatus::Provisioning
+                        | ResourceStatus::Updating
+                        | ResourceStatus::Deleting
+                        | ResourceStatus::TeardownRequired => RowState::Active,
+                    }
                 };
 
                 let entry = guard
@@ -1950,6 +1972,80 @@ fn build_resource_noun(
 #[cfg(test)]
 mod command_event_tests {
     use super::*;
+
+    #[test]
+    fn setup_progress_distinguishes_saved_runtime_failures() {
+        let state = Arc::new(Mutex::new(FixedStepsState {
+            step_labels: vec![],
+            step_states: vec![],
+            step_details: vec![],
+            resources: IndexMap::new(),
+        }));
+        let steps = FixedSteps {
+            live: None,
+            state: Some(state.clone()),
+        };
+        let mut resource = StackResourceState::new_pending(
+            "storage".to_string(),
+            alien_core::Resource::new(alien_core::Storage::new("data".to_string()).build()),
+            Some(ResourceLifecycle::Live),
+            vec![],
+        );
+        resource.error = Some(AlienError::new(GenericError {
+            message: "startup credentials unavailable".to_string(),
+        }));
+        for failed_status in [
+            ResourceStatus::ProvisionFailed,
+            ResourceStatus::UpdateFailed,
+            ResourceStatus::RefreshFailed,
+        ] {
+            resource.status = failed_status;
+            for lifecycle in [
+                Some(ResourceLifecycle::Live),
+                Some(ResourceLifecycle::Frozen),
+                None,
+            ] {
+                resource.lifecycle = lifecycle;
+                let resources = HashMap::from([("data".to_string(), resource.clone())]);
+                steps.sync_deployment_resources(&resources, DeploymentStatus::InitialSetup);
+                {
+                    let guard = state.lock().unwrap();
+                    let row = &guard.resources["deployment:data"];
+                    assert_eq!(
+                        row.state,
+                        if lifecycle == Some(ResourceLifecycle::Live) {
+                            RowState::Pending
+                        } else {
+                            RowState::Failed
+                        }
+                    );
+                    let rendered = guard.build_lines().join("\n");
+                    assert!(rendered.contains("startup credentials unavailable"));
+                    assert_eq!(
+                        rendered.contains("runtime retry waits for setup"),
+                        lifecycle == Some(ResourceLifecycle::Live)
+                    );
+                }
+                steps.sync_deployment_resources(&resources, DeploymentStatus::Provisioning);
+                let guard = state.lock().unwrap();
+                assert_eq!(guard.resources["deployment:data"].state, RowState::Failed);
+                assert!(!guard
+                    .build_lines()
+                    .join("\n")
+                    .contains("runtime retry waits for setup"));
+            }
+        }
+        resource.lifecycle = Some(ResourceLifecycle::Live);
+        resource.status = ResourceStatus::DeleteFailed;
+        steps.sync_deployment_resources(
+            &HashMap::from([("data".to_string(), resource)]),
+            DeploymentStatus::InitialSetup,
+        );
+        assert_eq!(
+            state.lock().unwrap().resources["deployment:data"].state,
+            RowState::Failed
+        );
+    }
 
     fn empty_command_state() -> CommandEventState {
         CommandEventState {

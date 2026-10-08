@@ -2065,7 +2065,7 @@ async fn deploy_task_with_environment(
     let progress_steps = steps.clone();
     let on_progress: alien_deployment::runner::ProgressCallback = Box::new(move |progress| {
         if let Some(stack_state) = progress.stack_state {
-            progress_steps.sync_deployment_resources(&stack_state.resources);
+            progress_steps.sync_deployment_resources(&stack_state.resources, progress.status);
         }
     });
     let runner_result = alien_deployment::runner::run_step_loop(
