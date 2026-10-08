@@ -954,6 +954,9 @@ fn deployment_create_request_body(
         "setupMethod": "cli",
     });
 
+    if let Some(setup_item) = args.setup_item.as_ref() {
+        body["setupItem"] = serde_json::Value::String(setup_item.clone());
+    }
     if let Some(resource_prefix) = args.resource_prefix.as_ref() {
         body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
     }
