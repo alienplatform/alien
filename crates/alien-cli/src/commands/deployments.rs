@@ -128,6 +128,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::CancelVolumeRestore { json: true, .. }
                 | DeploymentsCmd::Retry { json: true, .. }
                 | DeploymentsCmd::Redeploy { json: true, .. }
+                | DeploymentsCmd::Move { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
                 | DeploymentsCmd::SetChannel { json: true, .. }
         )
@@ -359,6 +360,23 @@ pub enum DeploymentsCmd {
         #[arg(long, default_value = "2s", value_parser = parse_wait_duration)]
         interval: Duration,
         /// Print the updated deployment as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a deployment to another group without changing its runtime
+    Move {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+        /// Destination deployment group ID
+        #[arg(long)]
+        deployment_group: String,
+        /// Preview eligibility without changing membership
+        #[arg(long)]
+        dry_run: bool,
+        /// Revision from a previous preview (otherwise preview immediately)
+        #[arg(long)]
+        expected_membership_revision: Option<u64>,
+        /// Print the server response as machine-readable JSON
         #[arg(long)]
         json: bool,
     },
@@ -755,6 +773,13 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 &format,
             )
             .await
+        }
+        DeploymentsCmd::Move { id, deployment_group, dry_run, expected_membership_revision, json } => {
+            crate::commands::deployment_move::run(
+                &ctx, &id, crate::commands::deployment_move::MoveOptions {
+                    destination: &deployment_group, dry_run, expected_revision: expected_membership_revision, json,
+                },
+            ).await
         }
         DeploymentsCmd::Pin {
             id,

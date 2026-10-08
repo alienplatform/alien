@@ -164,6 +164,61 @@
           }
         }
       },
+      // Delete detaches a volume that its host never released, for example when the
+      // host is unhealthy but its instance keeps running. AWS authorizes DetachVolume
+      // against both the volume and the instance. The instance belongs to the stack's
+      // compute cluster, not to this container, so it is scoped to the stack.
+      {
+        "grant": {
+          "actions": ["ec2:DetachVolume"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceId}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:DetachVolume"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
       // Volume backups: a snapshot of an owned volume (final snapshot on delete,
       // and of the replaced volume on restore). AWS authorizes CreateSnapshot against
       // both the source volume and the new snapshot.

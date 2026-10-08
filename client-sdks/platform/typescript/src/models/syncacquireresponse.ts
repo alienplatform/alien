@@ -11,10 +11,6 @@ import {
   SyncAcquireResponseDeployment,
   SyncAcquireResponseDeployment$inboundSchema,
 } from "./syncacquireresponsedeployment.js";
-import {
-  UnacquiredDeployment,
-  UnacquiredDeployment$inboundSchema,
-} from "./unacquireddeployment.js";
 
 export type Failure = {
   /**
@@ -40,10 +36,6 @@ export type SyncAcquireResponse = {
    * List of deployments that failed during context building (locks already released)
    */
   failures: Array<Failure>;
-  /**
-   * Bounded reasons for explicitly requested deployments that were not acquired. Empty for discovery batches.
-   */
-  notAcquired?: Array<UnacquiredDeployment> | undefined;
   /**
    * When the provisional leases on the returned deployments lapse. Confirm them with sync/renew before starting work. Null when nothing was acquired.
    */
@@ -74,7 +66,6 @@ export const SyncAcquireResponse$inboundSchema: z.ZodType<
 > = z.object({
   deployments: z.array(SyncAcquireResponseDeployment$inboundSchema),
   failures: z.array(z.lazy(() => Failure$inboundSchema)),
-  notAcquired: z.array(UnacquiredDeployment$inboundSchema).optional(),
   leaseExpiresAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
