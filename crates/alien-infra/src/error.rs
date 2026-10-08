@@ -608,3 +608,58 @@ pub enum ErrorData {
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_client_core::ErrorData as CloudClientErrorData;
+    use alien_error::{AlienError, ContextError};
+
+    /// Controllers wrap the provider's error, which the cloud client marks retryable. The
+    /// wrapper must still be final, or the executor spends its retries on a step that only
+    /// a setup rerun, or waiting until the stated time, can fix.
+    #[test]
+    fn denied_and_limited_steps_are_final_over_a_retryable_cause() {
+        let denied = AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "EC2 Resource".to_string(),
+            resource_name: "vol-1".to_string(),
+        });
+        assert!(denied.retryable);
+        let error = denied.context(ErrorData::ManagementPermissionMissing {
+            resource_id: "db".to_string(),
+            operation: "inspect EBS volume growth".to_string(),
+            action: "ec2:DescribeVolumesModifications".to_string(),
+        });
+        assert_eq!(error.code, "MANAGEMENT_PERMISSION_MISSING");
+        assert!(!error.retryable);
+        assert_eq!(error.http_status_code, Some(403));
+        assert_eq!(
+            error.message,
+            "Cannot inspect EBS volume growth for resource 'db': the installation's management \
+             role is not allowed ec2:DescribeVolumesModifications. Rerun the installation's \
+             setup to grant it, then retry"
+        );
+        assert_eq!(
+            error.source.as_ref().map(|source| source.code.as_str()),
+            Some("REMOTE_ACCESS_DENIED")
+        );
+
+        let limited = AlienError::new(CloudClientErrorData::QuotaExceeded {
+            message: "VolumeModificationRateExceeded: Wait until 2026-10-09T18:11:57.403Z"
+                .to_string(),
+        });
+        assert!(limited.retryable);
+        let error = limited.context(ErrorData::CloudLimitReached {
+            resource_id: "db".to_string(),
+            operation: "grow EBS volume vol-1".to_string(),
+            message: "Wait until 2026-10-09T18:11:57.403Z".to_string(),
+        });
+        assert_eq!(error.code, "CLOUD_LIMIT_REACHED");
+        assert!(!error.retryable);
+        assert_eq!(error.http_status_code, Some(429));
+        assert_eq!(
+            error.message,
+            "Cannot grow EBS volume vol-1 for resource 'db': Wait until 2026-10-09T18:11:57.403Z"
+        );
+    }
+}

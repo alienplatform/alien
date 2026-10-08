@@ -1852,12 +1852,29 @@ impl Ec2Api for Ec2Client {
         request: DescribeVolumesModificationsRequest,
     ) -> Result<DescribeVolumesModificationsResponse> {
         let form_data = Self::describe_volumes_modifications_form_data(&request);
-        self.send_form(
-            form_data,
-            "DescribeVolumesModifications",
-            "VolumeModification",
-        )
-        .await
+        // Name the volumes asked about, so a NotFound or denial says which ones.
+        let volumes = request
+            .volume_ids
+            .iter()
+            .flatten()
+            .chain(
+                request
+                    .filters
+                    .iter()
+                    .flatten()
+                    .filter(|filter| filter.name == "volume-id")
+                    .flat_map(|filter| &filter.values),
+            )
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let resource = if volumes.is_empty() {
+            "VolumeModification".to_string()
+        } else {
+            volumes
+        };
+        self.send_form(form_data, "DescribeVolumesModifications", &resource)
+            .await
     }
 
     async fn delete_volume(&self, volume_id: &str) -> Result<()> {
@@ -4861,8 +4878,8 @@ mod tests {
 
         assert!(
             matches!(&error.error,
-                Some(ErrorData::RemoteResourceNotFound { resource_type, .. })
-                if resource_type == "VolumeModification"),
+                Some(ErrorData::RemoteResourceNotFound { resource_type, resource_name })
+                if resource_type == "VolumeModification" && resource_name == "vol-1"),
             "{error:?}"
         );
         assert!(describe.hits_async().await >= 1);
