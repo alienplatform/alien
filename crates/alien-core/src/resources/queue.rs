@@ -73,6 +73,11 @@ impl ResourceDefinition for Queue {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys messages not yet consumed.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }

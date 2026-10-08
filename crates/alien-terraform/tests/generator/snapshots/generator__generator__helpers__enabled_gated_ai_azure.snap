@@ -9,7 +9,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.100, < 5.0"
+      version = ">= 4.75, < 5.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -72,6 +72,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -131,7 +142,13 @@ variable "input_fixture_enabled" {
 provider "azurerm" {
   resource_provider_registrations = "none"
 
-  features {}
+  features {
+    persist_id_on_create_before_polling_for_completion = true
+
+    resource_group {
+      prevent_deletion_if_contains_resources = true
+    }
+  }
 }
 
 === resource_prefix.tf ===
@@ -148,7 +165,7 @@ locals {
   deployment_region            = var.azure_location
   deployment_management_config = null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access })
   deployment_resources         = concat([{ id = "execution-sa", type = "service-account", importData = { subscriptionId = var.azure_subscription_id, resourceGroup = var.azure_resource_group_name, identityId = azurerm_user_assigned_identity.execution_sa.id, principalId = azurerm_user_assigned_identity.execution_sa.principal_id, clientId = azurerm_user_assigned_identity.execution_sa.client_id, stackPermissionsApplied = true } }], [{ id = "default-resource-group", type = "azure_resource_group", importData = { subscriptionId = var.azure_subscription_id, resourceGroup = azurerm_resource_group.default_resource_group.name, location = azurerm_resource_group.default_resource_group.location } }], [{ id = "default-storage-account", type = "azure_storage_account", importData = { subscriptionId = var.azure_subscription_id, resourceGroup = var.azure_resource_group_name, storageAccountName = azurerm_storage_account.default_storage_account.name, resourceId = azurerm_storage_account.default_storage_account.id, blobEndpoint = azurerm_storage_account.default_storage_account.primary_blob_endpoint, fileEndpoint = azurerm_storage_account.default_storage_account.primary_file_endpoint, queueEndpoint = azurerm_storage_account.default_storage_account.primary_queue_endpoint, tableEndpoint = azurerm_storage_account.default_storage_account.primary_table_endpoint } }], var.input_fixture_enabled ? [{ id = "fixture", type = "ai", importData = { subscriptionId = var.azure_subscription_id, resourceGroup = var.azure_resource_group_name, accountName = azurerm_cognitive_account.fixture[0].name, endpoint = azurerm_cognitive_account.fixture[0].endpoint, location = var.azure_location } }] : [])
 }
 

@@ -28,9 +28,7 @@ impl ResolvedRemoteBinding {
                     expires_at: credential_expires_at,
                 } = client_config.credentials;
                 Self::S3 {
-                    binding: alien_core::S3StorageBinding {
-                        bucket_name: binding.bucket_name.into(),
-                    },
+                    binding: alien_core::S3StorageBinding::bucket(binding.bucket_name),
                     client_config: Box::new(alien_core::AwsClientConfig {
                         account_id: client_config.account_id,
                         region: client_config.region,
@@ -88,6 +86,156 @@ impl ResolvedRemoteBinding {
                         project_number: client_config.project_number,
                     }),
                     expires_at: parse_manager_expiry(expires_at, &resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Sqs {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAwsCredentials::SessionCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                    expires_at: credential_expires_at,
+                } = client_config.credentials;
+                Self::Sqs {
+                    binding: alien_core::SqsQueueBinding {
+                        queue_url: binding.queue_url.into(),
+                    },
+                    client_config: Box::new(alien_core::AwsClientConfig {
+                        account_id: client_config.account_id,
+                        region: client_config.region,
+                        credentials: alien_core::AwsCredentials::SessionCredentials {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                            expires_at: credential_expires_at,
+                        },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Pubsub {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteGcpCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::Pubsub {
+                    binding: alien_core::PubSubQueueBinding {
+                        topic: binding.topic.into(),
+                        subscription: binding.subscription.into(),
+                    },
+                    client_config: Box::new(alien_core::GcpClientConfig {
+                        project_id: client_config.project_id,
+                        region: client_config.region,
+                        credentials: alien_core::GcpCredentials::AccessToken { token },
+                        service_overrides: None,
+                        project_number: client_config.project_number,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Servicebus {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAzureCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::Servicebus {
+                    binding: alien_core::ServiceBusQueueBinding {
+                        namespace: binding.namespace.into(),
+                        queue_name: binding.queue_name.into(),
+                    },
+                    client_config: Box::new(alien_core::AzureClientConfig {
+                        subscription_id: client_config.subscription_id,
+                        tenant_id: client_config.tenant_id,
+                        region: client_config.region,
+                        credentials: alien_core::AzureCredentials::AccessToken { token },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Dynamodb {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAwsCredentials::SessionCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                    expires_at: credential_expires_at,
+                } = client_config.credentials;
+                Self::Dynamodb {
+                    binding: alien_core::DynamodbKvBinding {
+                        table_name: binding.table_name.into(),
+                        region: binding.region.into(),
+                        endpoint_url: None,
+                    },
+                    client_config: Box::new(alien_core::AwsClientConfig {
+                        account_id: client_config.account_id,
+                        region: client_config.region,
+                        credentials: alien_core::AwsCredentials::SessionCredentials {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                            expires_at: credential_expires_at,
+                        },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Firestore {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteGcpCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::Firestore {
+                    binding: alien_core::FirestoreKvBinding {
+                        project_id: binding.project_id.into(),
+                        database_id: binding.database_id.into(),
+                        collection_name: binding.collection_name.into(),
+                    },
+                    client_config: Box::new(alien_core::GcpClientConfig {
+                        project_id: client_config.project_id,
+                        region: client_config.region,
+                        credentials: alien_core::GcpCredentials::AccessToken { token },
+                        service_overrides: None,
+                        project_number: client_config.project_number,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Tablestorage {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAzureCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::TableStorage {
+                    binding: alien_core::TableStorageKvBinding {
+                        resource_group_name: binding.resource_group_name.into(),
+                        account_name: binding.account_name.into(),
+                        table_name: binding.table_name.into(),
+                    },
+                    client_config: Box::new(alien_core::AzureClientConfig {
+                        subscription_id: client_config.subscription_id,
+                        tenant_id: client_config.tenant_id,
+                        region: client_config.region,
+                        credentials: alien_core::AzureCredentials::AccessToken { token },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
                 }
             }
             manager_types::ResolveBindingResponse::Kms {
@@ -365,6 +513,8 @@ impl ResolvedRemoteBinding {
                                 narrow_manager_number(seconds, "maxLifetimeSeconds", resource_id)
                             })
                             .transpose()?,
+                        // Absent from a manager older than the field: fail closed.
+                        allow_egress: binding.allow_egress.unwrap_or(false),
                     }),
                     client_config: Box::new(alien_core::GcpClientConfig {
                         project_id: client_config.project_id,

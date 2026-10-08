@@ -36,6 +36,7 @@ struct ApiGatewayErrorResponse {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
     async fn create_rest_api(&self, request: CreateRestApiRequest) -> Result<RestApi>;
+    async fn get_rest_api(&self, rest_api_id: &str) -> Result<RestApi>;
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()>;
 
     async fn create_resource(
@@ -65,6 +66,7 @@ pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
     ) -> Result<Deployment>;
 
     async fn create_domain_name(&self, request: CreateDomainNameRequest) -> Result<DomainName>;
+    async fn get_domain_name(&self, domain_name: &str) -> Result<DomainName>;
     async fn delete_domain_name(&self, domain_name: &str) -> Result<()>;
 
     async fn create_base_path_mapping(
@@ -310,6 +312,12 @@ impl ApiGatewayApi for ApiGatewayClient {
         .await
     }
 
+    async fn get_rest_api(&self, rest_api_id: &str) -> Result<RestApi> {
+        let path = format!("/restapis/{}", rest_api_id);
+        self.send_json(Method::GET, &path, None, "GetRestApi", rest_api_id)
+            .await
+    }
+
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()> {
         let path = format!("/restapis/{}", rest_api_id);
         self.send_no_response(Method::DELETE, &path, None, "DeleteRestApi", rest_api_id)
@@ -399,6 +407,12 @@ impl ApiGatewayApi for ApiGatewayClient {
             &request.domain_name,
         )
         .await
+    }
+
+    async fn get_domain_name(&self, domain_name: &str) -> Result<DomainName> {
+        let path = format!("/domainnames/{}", domain_name);
+        self.send_json(Method::GET, &path, None, "GetDomainName", domain_name)
+            .await
     }
 
     async fn delete_domain_name(&self, domain_name: &str) -> Result<()> {
@@ -546,6 +560,8 @@ pub struct DomainName {
     pub domain_name: Option<String>,
     pub regional_domain_name: Option<String>,
     pub regional_hosted_zone_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]

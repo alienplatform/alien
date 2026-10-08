@@ -1,5 +1,8 @@
 //! Integration tests for LocalWorkerManager
 //!
+//! CI runs these in their own job (`Worker integration` in ci-fast.yml), which prebuilds the
+//! bindings addon. They need Bun and fail without it.
+//!
 //! These tests verify the complete worker lifecycle:
 //! 1. Build TypeScript app using alien-build (the real build system)
 //! 2. Extract the OCI image using worker manager
@@ -74,6 +77,8 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     // Build the stack
@@ -129,24 +134,20 @@ async fn wait_for_ready(url: &str, timeout: Duration) -> bool {
 // TESTS
 // =============================================================================
 
-/// Full lifecycle: build app → extract → start → HTTP request → stop
-#[tokio::test]
-async fn test_function_full_lifecycle() {
-    tracing_subscriber::fmt::try_init().ok();
-
-    // Skip if Bun is not available (required by TypeScript toolchain)
-    if std::process::Command::new("bun")
+/// The TypeScript toolchain builds the worker with Bun, so these tests can't run without it.
+fn require_bun() {
+    let output = std::process::Command::new("bun")
         .arg("--version")
         .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
+        .expect("bun must be installed to run the worker integration tests");
+    assert!(output.status.success(), "`bun --version` failed");
+}
 
-    let temp_dir = TempDir::new().unwrap();
-
-    // 1. Build the test-app using alien-build
+/// Builds the example app once and extracts it for each of `worker_ids` into a fresh state dir.
+async fn extracted_worker(
+    temp_dir: &TempDir,
+    worker_ids: &[&str],
+) -> (Arc<LocalBindingsProvider>, PathBuf, Vec<PathBuf>) {
     let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
     assert!(
         oci_path.exists(),
@@ -154,42 +155,34 @@ async fn test_function_full_lifecycle() {
         oci_path.display()
     );
 
-    // 2. Create worker manager via LocalBindingsProvider
     let state_dir = temp_dir.path().join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
     let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
+    let mut extracted = Vec::new();
+    for worker_id in worker_ids {
+        let path = provider
+            .worker_manager()
+            .extract_image(worker_id, oci_path.to_str().unwrap(), None)
+            .await
+            .expect("Failed to extract image");
+        assert!(path.exists());
+        extracted.push(path);
+    }
+    (provider, oci_path, extracted)
+}
 
-    // 3. Extract image
-    let extracted_path = manager
-        .extract_image("test-func", oci_path.to_str().unwrap(), None)
-        .await
-        .expect("Failed to extract image");
-
-    assert!(extracted_path.exists());
-
-    // 4. Start worker
-    let url = manager
-        .start_worker("test-func", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .expect("Failed to start worker");
-
-    assert!(url.starts_with("http://localhost:"));
-    assert!(manager.is_running("test-func").await);
-
-    // 5. Wait for worker to be ready (app needs to register with runtime)
-    let health_url = format!("{}/health", url);
-    let ready = wait_for_ready(&health_url, Duration::from_secs(30)).await;
-    assert!(ready, "Worker should become ready within 30 seconds");
-
-    // 6. Make HTTP GET request to /health
-    let client = reqwest::Client::new();
-    let response = client
+/// GETs `/health` and checks the example app's response body.
+async fn assert_healthy(url: &str) {
+    let health_url = format!("{url}/health");
+    assert!(
+        wait_for_ready(&health_url, Duration::from_secs(30)).await,
+        "worker at {url} should become ready within 30 seconds"
+    );
+    let response = reqwest::Client::new()
         .get(&health_url)
         .send()
         .await
         .expect("GET /health request failed");
-
     assert!(response.status().is_success());
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["status"], "ok");
@@ -197,56 +190,111 @@ async fn test_function_full_lifecycle() {
         body["timestamp"].is_string(),
         "Response should include a timestamp"
     );
+}
 
-    // 7. Stop worker
+/// One worker through its whole lifecycle: build → extract → start (twice, idempotent) →
+/// binding → health → stop → restart → delete.
+#[tokio::test]
+async fn worker_lifecycle_on_one_image() {
+    tracing_subscriber::fmt::try_init().ok();
+    require_bun();
+
+    let temp_dir = TempDir::new().unwrap();
+    let (provider, _oci_path, extracted) = extracted_worker(&temp_dir, &["test-func"]).await;
+    let manager = provider.worker_manager();
+
+    assert!(
+        manager.check_health("test-func").await.is_err(),
+        "a worker that was never started is not healthy"
+    );
+
+    let url = manager
+        .start_worker("test-func", HashMap::new(), Vec::new(), Vec::new())
+        .await
+        .expect("Failed to start worker");
+    assert!(url.starts_with("http://localhost:"));
+    assert!(manager.is_running("test-func").await);
+
+    let again = manager
+        .start_worker("test-func", HashMap::new(), Vec::new(), Vec::new())
+        .await
+        .expect("Starting a running worker again should succeed");
+    assert_eq!(
+        url, again,
+        "Starting the same worker twice should return the same URL"
+    );
+
+    match manager.get_binding("test-func").await.unwrap() {
+        alien_core::bindings::WorkerBinding::Local(config) => {
+            let binding_url = config
+                .worker_url
+                .into_value("test-func", "worker_url")
+                .unwrap();
+            assert_eq!(
+                binding_url, url,
+                "the binding should point at the running worker"
+            );
+        }
+        other => panic!("Expected Local binding variant, got {other:?}"),
+    }
+
+    assert_healthy(&url).await;
+    manager
+        .check_health("test-func")
+        .await
+        .expect("a running worker should pass its health check");
+
     manager
         .stop_worker("test-func")
         .await
         .expect("Failed to stop worker");
     assert!(!manager.is_running("test-func").await);
+    assert!(manager.check_health("test-func").await.is_err());
+
+    let restarted = manager
+        .start_worker("test-func", HashMap::new(), Vec::new(), Vec::new())
+        .await
+        .expect("Failed to start worker after stop");
+    assert_healthy(&restarted).await;
+
+    manager.delete_worker("test-func").await.unwrap();
+    assert!(!manager.is_running("test-func").await);
+    assert!(
+        !extracted[0].exists(),
+        "Extracted directory should be deleted"
+    );
+    assert!(manager.get_worker_url("test-func").await.is_err());
 }
 
-/// Test that start_worker is idempotent (returns same URL)
+/// Two workers from the same image, started at the same time. Both run the same Bun-compiled
+/// binary, so this also covers processes sharing the binary's embedded bindings addon.
 #[tokio::test]
-async fn test_start_worker_idempotent() {
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
+async fn two_workers_from_one_image_run_side_by_side() {
+    tracing_subscriber::fmt::try_init().ok();
+    require_bun();
 
     let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
+    let (provider, _oci_path, _extracted) =
+        extracted_worker(&temp_dir, &["worker-a", "worker-b"]).await;
     let manager = provider.worker_manager();
 
-    manager
-        .extract_image("idempotent-func", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-
-    // Start twice - should return same URL
-    let url1 = manager
-        .start_worker("idempotent-func", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-    let url2 = manager
-        .start_worker("idempotent-func", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        url1, url2,
-        "Starting same worker twice should return same URL"
+    let (a, b) = tokio::join!(
+        manager.start_worker("worker-a", HashMap::new(), Vec::new(), Vec::new()),
+        manager.start_worker("worker-b", HashMap::new(), Vec::new(), Vec::new()),
     );
+    let (url_a, url_b) = (
+        a.expect("worker-a should start"),
+        b.expect("worker-b should start"),
+    );
+    assert_ne!(url_a, url_b, "workers should run on different ports");
 
-    manager.stop_worker("idempotent-func").await.unwrap();
+    assert_healthy(&url_a).await;
+    assert_healthy(&url_b).await;
+    assert!(manager.is_running("worker-a").await);
+    assert!(manager.is_running("worker-b").await);
+
+    manager.stop_worker("worker-a").await.unwrap();
+    manager.stop_worker("worker-b").await.unwrap();
 }
 
 /// Test stop on non-existent worker is idempotent
@@ -282,358 +330,4 @@ async fn test_start_without_extract_fails() {
         .start_worker("no-image", HashMap::new(), Vec::new(), Vec::new())
         .await;
     assert!(result.is_err());
-}
-
-/// Test delete_worker removes extracted files and stops worker
-#[tokio::test]
-async fn test_delete_worker_cleanup() {
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
-
-    // Extract and start
-    let extracted_path = manager
-        .extract_image("delete-test", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-    manager
-        .start_worker("delete-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-
-    // Wait for ready
-    let url = manager.get_worker_url("delete-test").await.unwrap();
-    wait_for_ready(&format!("{}/health", url), Duration::from_secs(30)).await;
-
-    // Delete should stop and remove files
-    manager.delete_worker("delete-test").await.unwrap();
-
-    assert!(!manager.is_running("delete-test").await);
-    assert!(
-        !extracted_path.exists(),
-        "Extracted directory should be deleted"
-    );
-}
-
-/// Test get_binding returns correct WorkerBinding::Local variant
-#[tokio::test]
-async fn test_get_binding_returns_local_variant() {
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
-
-    manager
-        .extract_image("binding-test", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-    manager
-        .start_worker("binding-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-
-    let binding = manager.get_binding("binding-test").await.unwrap();
-
-    // Verify it's the Local variant with a URL
-    match binding {
-        alien_core::bindings::WorkerBinding::Local(config) => {
-            let url = config
-                .worker_url
-                .into_value("binding-test", "worker_url")
-                .unwrap();
-            assert!(url.starts_with("http://localhost:"));
-        }
-        _ => panic!("Expected Local binding variant"),
-    }
-
-    manager.stop_worker("binding-test").await.unwrap();
-}
-
-/// Test health check works for running worker
-#[tokio::test]
-async fn test_health_check() {
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
-
-    // Health check should fail for non-existent worker
-    assert!(manager.check_health("nonexistent").await.is_err());
-
-    // Extract and start
-    manager
-        .extract_image("health-test", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-    manager
-        .start_worker("health-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-
-    // Wait for ready first
-    let url = manager.get_worker_url("health-test").await.unwrap();
-    wait_for_ready(&format!("{}/health", url), Duration::from_secs(30)).await;
-
-    // Health check should pass
-    manager.check_health("health-test").await.unwrap();
-
-    // Stop and verify health check fails
-    manager.stop_worker("health-test").await.unwrap();
-    assert!(manager.check_health("health-test").await.is_err());
-}
-
-/// Test multiple workers can run concurrently
-#[tokio::test]
-async fn test_multiple_functions_concurrent() {
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
-
-    // Start 3 workers
-    let mut urls = Vec::new();
-    for i in 0..3 {
-        let func_id = format!("concurrent-{}", i);
-        manager
-            .extract_image(&func_id, oci_path.to_str().unwrap(), None)
-            .await
-            .unwrap();
-        let url = manager
-            .start_worker(&func_id, HashMap::new(), Vec::new(), Vec::new())
-            .await
-            .unwrap();
-        urls.push((func_id, url));
-    }
-
-    // Wait for all to be ready
-    for (_, url) in &urls {
-        let ready = wait_for_ready(&format!("{}/health", url), Duration::from_secs(30)).await;
-        assert!(ready, "Worker at {} should become ready", url);
-    }
-
-    // All should be running on different ports
-    let ports: Vec<_> = urls
-        .iter()
-        .map(|(_, url)| url.split(':').last().unwrap())
-        .collect();
-
-    assert!(
-        ports[0] != ports[1] && ports[1] != ports[2] && ports[0] != ports[2],
-        "Functions should run on different ports"
-    );
-
-    // Make request to each
-    let client = reqwest::Client::new();
-    for (func_id, url) in &urls {
-        let response = client.get(format!("{}/health", url)).send().await.unwrap();
-        assert!(
-            response.status().is_success(),
-            "Request to {} failed",
-            func_id
-        );
-    }
-
-    // Cleanup
-    for (func_id, _) in &urls {
-        manager.stop_worker(func_id).await.unwrap();
-    }
-}
-
-/// Test port allocation fallback - when saved port is unavailable, allocates new port
-///
-/// This verifies the graceful fallback behavior. If the saved port is still in TIME_WAIT
-/// (common immediately after stop), the manager allocates a new port instead of failing.
-#[tokio::test]
-async fn test_port_allocation_fallback() {
-    tracing_subscriber::fmt::try_init().ok();
-
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
-
-    // 1. Extract and start worker
-    manager
-        .extract_image("fallback-test", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-
-    let url_before = manager
-        .start_worker("fallback-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-
-    // Wait for worker to be ready
-    let ready = wait_for_ready(&format!("{}/health", url_before), Duration::from_secs(30)).await;
-    assert!(ready, "Worker should become ready");
-
-    let port_before: u16 = url_before.split(':').last().unwrap().parse().unwrap();
-
-    // 2. Stop worker (simulates crash - metadata with port is preserved)
-    manager.stop_worker("fallback-test").await.unwrap();
-    assert!(!manager.is_running("fallback-test").await);
-
-    // With proper graceful shutdown (axum with_graceful_shutdown), the port is released
-    // immediately when the shutdown signal is received. We just need a brief delay for
-    // the OS to complete cleanup.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // 3. Start worker again (port should be reused if properly released)
-    let url_after = manager
-        .start_worker("fallback-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .expect("Failed to start worker after stop");
-
-    let port_after: u16 = url_after.split(':').last().unwrap().parse().unwrap();
-
-    // Wait for worker to be ready with new port
-    let ready = wait_for_ready(&format!("{}/health", url_after), Duration::from_secs(30)).await;
-    assert!(ready, "Worker should become ready after recovery");
-
-    // With 5 second delay, port SHOULD be reused (TIME_WAIT typically 1-5s on Linux, longer on macOS)
-    // We log the ports to verify behavior, but don't assert equality due to OS differences
-    eprintln!("Port before: {}, Port after: {}", port_before, port_after);
-    if port_before == port_after {
-        eprintln!("✓ Port reused (transparent recovery)");
-    } else {
-        eprintln!("⚠ Port changed (fallback due to TIME_WAIT)");
-    }
-
-    // Verify worker works regardless of port
-    let client = reqwest::Client::new();
-    let response = client
-        .get(format!("{}/health", url_after))
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        response.status().is_success(),
-        "Request should succeed after recovery"
-    );
-
-    // Cleanup
-    manager.delete_worker("fallback-test").await.unwrap();
-}
-
-/// Test that delete_worker removes metadata (no recovery possible)
-///
-/// This verifies that delete (unlike stop) removes metadata, so the next
-/// start will allocate a new random port instead of reusing the old one.
-#[tokio::test]
-async fn test_delete_prevents_port_reuse() {
-    if std::process::Command::new("bun")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("Skipping test: bun not available");
-        return;
-    }
-
-    let temp_dir = TempDir::new().unwrap();
-    let oci_path = build_test_app_with_alien_build(temp_dir.path()).await;
-
-    let state_dir = temp_dir.path().join("state");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    let provider = create_test_provider(state_dir);
-    let manager = provider.worker_manager();
-
-    // Extract image once
-    manager
-        .extract_image("delete-test", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-
-    // Start worker and get URL
-    let url_before = manager
-        .start_worker("delete-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-    let port_before: u16 = url_before.split(':').last().unwrap().parse().unwrap();
-
-    // Delete worker (removes metadata)
-    manager.delete_worker("delete-test").await.unwrap();
-
-    // Extract again (delete removed everything)
-    manager
-        .extract_image("delete-test", oci_path.to_str().unwrap(), None)
-        .await
-        .unwrap();
-
-    // Start again - should get a DIFFERENT port (no saved metadata)
-    let url_after = manager
-        .start_worker("delete-test", HashMap::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
-    let port_after: u16 = url_after.split(':').last().unwrap().parse().unwrap();
-
-    // Ports should be different (random allocation, no saved port)
-    assert_ne!(
-        port_before, port_after,
-        "After delete, worker should get a new random port"
-    );
-
-    // Cleanup
-    manager.delete_worker("delete-test").await.unwrap();
 }

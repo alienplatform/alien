@@ -77,6 +77,8 @@ pub fn stack_targets_native_host_binaries(stack: &Stack) -> bool {
                 DaemonCode::Image { .. } => None,
             }
         } else {
+            // No other resource contributes a host binary. A sandbox is the one worth naming:
+            // its base image is a Dockerfile build, so the missing arm is deliberate.
             None
         };
         matches!(
@@ -158,7 +160,8 @@ pub fn plan_runner_groups_for_stack(
 
     for platform in supported.iter().copied().filter(|platform| {
         matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-            || (*platform == Platform::Machines && machines_architecture.is_some())
+            || (matches!(*platform, Platform::Machines | Platform::Kubernetes)
+                && machines_architecture.is_some())
     }) {
         let required_target = resolve_targets_for_stack_platform(stack, platform, None)?[0];
         let target = target_name(required_target);
@@ -203,24 +206,26 @@ pub fn resolve_targets_for_stack_platform(
     platform: Platform,
     requested: Option<&[BinaryTarget]>,
 ) -> crate::error::Result<Vec<BinaryTarget>> {
-    if platform == Platform::Machines && exact_compute_architecture(stack)?.is_none() {
+    if matches!(platform, Platform::Machines | Platform::Kubernetes)
+        && exact_compute_architecture(stack)?.is_none()
+    {
         return Ok(requested
             .map(<[BinaryTarget]>::to_vec)
             .unwrap_or_else(|| BinaryTarget::defaults_for_platform(platform)));
     }
     if !matches!(
         platform,
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Kubernetes
     ) {
         return Ok(requested
             .map(<[BinaryTarget]>::to_vec)
             .unwrap_or_else(|| BinaryTarget::defaults_for_platform(platform)));
     }
 
-    let architecture = if platform == Platform::Machines {
+    let architecture = if matches!(platform, Platform::Machines | Platform::Kubernetes) {
         exact_compute_architecture(stack)?.ok_or_else(|| {
             AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
-                message: "machines architecture could not be resolved".to_string(),
+                message: format!("{platform} compute architecture could not be resolved"),
             })
         })?
     } else {
@@ -268,7 +273,7 @@ fn resolved_compute_architecture(
     stack: &Stack,
     platform: Platform,
 ) -> crate::error::Result<Architecture> {
-    let architectures = stack
+    let mut architectures = stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
         .flat_map(|cluster| cluster.capacity_groups.iter())
@@ -294,24 +299,40 @@ fn resolved_compute_architecture(
                 })
         })
         .collect::<crate::error::Result<Vec<_>>>()?;
-    if architectures.is_empty() {
-        return instance_catalog::default_architecture(platform).ok_or_else(|| {
-            AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
-                message: format!("managed cloud {platform} has no default compute architecture"),
-            })
-        });
-    }
-    let mut architectures = architectures.into_iter().collect::<Vec<_>>();
     architectures.sort_by_key(|architecture| match architecture {
         Architecture::Arm64 => 0,
         Architecture::X86_64 => 1,
     });
     architectures.dedup();
-    match architectures.as_slice() {
-        [architecture] => Ok(*architecture),
-        _ => Err(AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+
+    let compute_architecture = match architectures.as_slice() {
+        [] => None,
+        [architecture] => Some(*architecture),
+        _ => return Err(AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
             message: "compute pools require mixed CPU architectures; one platform image cannot satisfy both".to_string(),
         })),
+    };
+    let worker_architecture = (platform == Platform::Aws
+        && stack
+            .resources()
+            .any(|(_, entry)| entry.config.downcast_ref::<Worker>().is_some()))
+    .then_some(Architecture::Arm64);
+
+    match (compute_architecture, worker_architecture) {
+        (Some(compute), Some(worker)) if compute != worker => Err(AlienError::new(
+            crate::error::ErrorData::BuildConfigInvalid {
+                message: format!(
+                    "AWS Worker requires {worker:?}, but compute pools require {compute:?}; one platform image cannot satisfy both"
+                ),
+            },
+        )),
+        (Some(compute), _) => Ok(compute),
+        (None, Some(worker)) => Ok(worker),
+        (None, None) => instance_catalog::default_architecture(platform).ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                message: format!("managed cloud {platform} has no default compute architecture"),
+            })
+        }),
     }
 }
 
@@ -446,6 +467,30 @@ mod tests {
         stack_with(cluster.build())
     }
 
+    fn stack_with_worker_and_architecture(architecture: Architecture) -> Stack {
+        let cluster = ComputeCluster::new("runtime".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "pool".to_string(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "1".to_string(),
+                    memory_bytes: 2 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: Some(architecture),
+                    gpu: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        Stack::new("plan-test".to_string())
+            .add(worker_with(rust_source()), ResourceLifecycle::Live)
+            .add(cluster, ResourceLifecycle::Live)
+            .build()
+    }
+
     #[test]
     fn aws_explicit_x86_uses_x64_runner() {
         let stack = stack_with_architectures(&[Architecture::X86_64]);
@@ -465,6 +510,37 @@ mod tests {
     }
 
     #[test]
+    fn aws_worker_without_compute_constraint_requires_arm64() {
+        let stack = stack_with(worker_with(rust_source()));
+
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Aws, None).expect("target should resolve"),
+            vec![BinaryTarget::LinuxArm64]
+        );
+    }
+
+    #[test]
+    fn aws_worker_and_arm64_compute_share_one_target() {
+        let stack = stack_with_worker_and_architecture(Architecture::Arm64);
+
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Aws, None).expect("target should resolve"),
+            vec![BinaryTarget::LinuxArm64]
+        );
+    }
+
+    #[test]
+    fn aws_worker_and_x86_compute_are_rejected_before_build() {
+        let stack = stack_with_worker_and_architecture(Architecture::X86_64);
+
+        let error = resolve_targets_for_stack_platform(&stack, Aws, None)
+            .expect_err("incompatible fixed architectures should fail");
+        let message = error.to_string();
+        assert!(message.contains("AWS Worker requires Arm64"));
+        assert!(message.contains("compute pools require X86_64"));
+    }
+
+    #[test]
     fn gcp_and_azure_without_compute_constraint_keep_x64_default() {
         let stack = Stack::new("unconstrained".to_string()).build();
 
@@ -475,6 +551,38 @@ mod tests {
                 vec![BinaryTarget::LinuxX64]
             );
         }
+    }
+
+    #[test]
+    fn kubernetes_pool_architecture_selects_matching_image_and_rejects_conflicts() {
+        for (architecture, expected) in [
+            (Architecture::Arm64, BinaryTarget::LinuxArm64),
+            (Architecture::X86_64, BinaryTarget::LinuxX64),
+        ] {
+            let stack = stack_with_architectures(&[architecture]);
+            assert_eq!(
+                resolve_targets_for_stack_platform(&stack, Kubernetes, None).unwrap(),
+                vec![expected]
+            );
+            let groups = plan_runner_groups_for_stack(&[Kubernetes], &stack).unwrap();
+            let builds: Vec<_> = groups.iter().flat_map(|group| &group.builds).collect();
+            assert_eq!(builds.len(), 1);
+            assert_eq!(builds[0].target, target_name(expected));
+            let wrong = if expected == BinaryTarget::LinuxArm64 {
+                BinaryTarget::LinuxX64
+            } else {
+                BinaryTarget::LinuxArm64
+            };
+            assert!(
+                resolve_targets_for_stack_platform(&stack, Kubernetes, Some(&[wrong])).is_err()
+            );
+        }
+        assert!(resolve_targets_for_stack_platform(
+            &stack_with_architectures(&[Architecture::Arm64, Architecture::X86_64]),
+            Kubernetes,
+            None
+        )
+        .is_err());
     }
 
     #[test]

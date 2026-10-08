@@ -13,8 +13,8 @@ let value: DataAwsKms = {
     keyState: "<value>",
     keyUsage: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "failed",
+      health: "unknown",
+      lifecycle: "unknown",
     },
   },
   provider: "aws-kms",
@@ -23,7 +23,7 @@ let value: DataAwsKms = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data6](../../models/operations/data6.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `provider`                                           | *"aws-kms"*                                          | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData6](../../models/operations/getresourcedeploymentdetaildata6.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `provider`                                                                                                 | *"aws-kms"*                                                                                                | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

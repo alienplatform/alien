@@ -50,10 +50,13 @@ pub mod apigatewayv2;
 pub mod autoscaling;
 pub mod aws_request_utils;
 pub mod bedrock;
+pub mod cloudcontrol;
 pub mod cloudformation;
 pub mod cloudwatch;
+pub mod cloudwatch_logs;
 pub mod codebuild;
 pub mod credential_provider;
+pub mod dlm;
 pub mod dynamodb;
 pub mod ec2;
 pub mod ecr;
@@ -75,6 +78,8 @@ pub mod ssm;
 pub mod sts;
 
 const AWS_IMDS_ENDPOINT: &str = "http://169.254.169.254";
+/// Host that serves `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` on ECS.
+const AWS_ECS_CREDENTIALS_HOST: &str = "http://169.254.170.2";
 const AWS_IMDS_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(500);
 const AWS_IMDS_CREDENTIALS_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -186,6 +191,7 @@ impl AwsClientConfigExt for AwsClientConfig {
                 "SessionCredentials",
             ),
             AwsCredentials::Imds { .. }
+            | AwsCredentials::Container { .. }
             | AwsCredentials::Profile { .. }
             | AwsCredentials::WebIdentity { .. } => Credentials::new(
                 "PLACEHOLDER_ACCESS_KEY".to_string(),
@@ -261,6 +267,24 @@ impl AwsClientConfigExt for AwsClientConfig {
             }
             AwsCredentials::Imds { endpoint } => {
                 let credentials = load_imds_session_credentials(endpoint.as_deref()).await?;
+                Ok(AwsClientConfig {
+                    account_id: self.account_id.clone(),
+                    region: self.region.clone(),
+                    credentials,
+                    service_overrides: self.service_overrides.clone(),
+                })
+            }
+            AwsCredentials::Container {
+                endpoint,
+                authorization_token,
+                authorization_token_file,
+            } => {
+                let credentials = load_container_credentials(
+                    endpoint,
+                    authorization_token.as_deref(),
+                    authorization_token_file.as_deref(),
+                )
+                .await?;
                 Ok(AwsClientConfig {
                     account_id: self.account_id.clone(),
                     region: self.region.clone(),
@@ -403,6 +427,10 @@ async fn resolve_credentials(
         return Ok(AwsCredentials::Profile { name: profile });
     }
 
+    if let Some(credentials) = container_credentials(environment_variables) {
+        return Ok(credentials);
+    }
+
     let imds_error = if !metadata_disabled(environment_variables) {
         match discover_imds_credentials(environment_variables).await {
             Ok(()) => {
@@ -434,6 +462,32 @@ async fn resolve_credentials(
             Err(profile_error)
         }
     }
+}
+
+/// The container credentials endpoint that ECS (task roles) and EKS Pod
+/// Identity announce through environment variables, if any.
+fn container_credentials(
+    environment_variables: &HashMap<String, String>,
+) -> Option<AwsCredentials> {
+    let endpoint = if let Some(relative) =
+        environment_variables.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+    {
+        format!("{AWS_ECS_CREDENTIALS_HOST}{relative}")
+    } else {
+        environment_variables
+            .get("AWS_CONTAINER_CREDENTIALS_FULL_URI")?
+            .clone()
+    };
+    Some(AwsCredentials::Container {
+        endpoint,
+        authorization_token: environment_variables
+            .get("AWS_CONTAINER_AUTHORIZATION_TOKEN")
+            .filter(|token| !token.trim().is_empty())
+            .cloned(),
+        authorization_token_file: environment_variables
+            .get("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE")
+            .cloned(),
+    })
 }
 
 fn profile_is_explicit(environment_variables: &HashMap<String, String>) -> bool {
@@ -572,6 +626,67 @@ async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCred
     })
 }
 
+/// Fetch credentials from a container credentials endpoint.
+async fn load_container_credentials(
+    endpoint: &str,
+    authorization_token: Option<&str>,
+    authorization_token_file: Option<&str>,
+) -> Result<AwsCredentials> {
+    let authorization = match (authorization_token_file, authorization_token) {
+        (Some(path), _) => Some(
+            std::fs::read_to_string(path)
+                .into_alien_error()
+                .context(ErrorData::InvalidClientConfig {
+                    message: format!("Failed to read container authorization token file {path}"),
+                    errors: None,
+                })?
+                .trim()
+                .to_string(),
+        ),
+        (None, token) => token.map(str::to_string),
+    };
+
+    let client = reqwest::Client::builder()
+        .build()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to create AWS container credentials HTTP client".to_string(),
+            errors: None,
+        })?;
+    let mut request = client.get(endpoint).timeout(AWS_IMDS_CREDENTIALS_TIMEOUT);
+    if let Some(authorization) = authorization {
+        request = request.header(reqwest::header::AUTHORIZATION, authorization);
+    }
+    let credentials: AwsImdsCredentials = request
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: format!("Failed to request AWS container credentials from {endpoint}"),
+            errors: None,
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: format!("AWS container credentials request to {endpoint} failed"),
+            errors: None,
+        })?
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to parse AWS container credentials".to_string(),
+            errors: None,
+        })?;
+
+    Ok(AwsCredentials::SessionCredentials {
+        access_key_id: credentials.access_key_id,
+        secret_access_key: credentials.secret_access_key,
+        session_token: credentials.token,
+        expires_at: credentials.expiration,
+    })
+}
+
 async fn load_imds_region(environment_variables: &HashMap<String, String>) -> Result<String> {
     let endpoint = environment_variables
         .get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
@@ -698,6 +813,7 @@ async fn infer_account_id(
         probe_config.credentials,
         AwsCredentials::WebIdentity { .. }
             | AwsCredentials::Imds { .. }
+            | AwsCredentials::Container { .. }
             | AwsCredentials::Profile { .. }
     ) {
         probe_config = probe_config.get_web_identity_credentials().await?;
@@ -849,7 +965,7 @@ fn extract_account_id_from_role_arn(role_arn: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -975,6 +1091,106 @@ mod tests {
                 endpoint: Some(endpoint),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_container_credentials_endpoint() {
+        let (endpoint, seen_authorization) = start_mock_container_endpoint().await;
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(token_file.path(), "rotated-token\n").unwrap();
+        let mut env = HashMap::new();
+        env.insert(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI".to_string(),
+            format!("{endpoint}/v1/credentials"),
+        );
+        env.insert(
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE".to_string(),
+            token_file.path().display().to_string(),
+        );
+        env.insert("AWS_EC2_METADATA_DISABLED".to_string(), "true".to_string());
+
+        let credentials = resolve_credentials(&env).await.unwrap();
+        assert_eq!(
+            credentials,
+            AwsCredentials::Container {
+                endpoint: format!("{endpoint}/v1/credentials"),
+                authorization_token: None,
+                authorization_token_file: Some(token_file.path().display().to_string()),
+            }
+        );
+
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials,
+            service_overrides: None,
+        };
+        let resolved = config.get_web_identity_credentials().await.unwrap();
+        assert_eq!(
+            resolved.credentials,
+            AwsCredentials::SessionCredentials {
+                access_key_id: "AKIACONTAINER".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: "session".to_string(),
+                expires_at: "2099-01-01T00:00:00Z".to_string(),
+            }
+        );
+        assert_eq!(
+            seen_authorization.lock().unwrap().as_deref(),
+            Some("rotated-token"),
+            "the token file's contents must be sent as the Authorization header"
+        );
+    }
+
+    #[test]
+    fn test_container_relative_uri_uses_ecs_host() {
+        let mut env = HashMap::new();
+        env.insert(
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI".to_string(),
+            "/v2/credentials/abc".to_string(),
+        );
+        assert_eq!(
+            container_credentials(&env),
+            Some(AwsCredentials::Container {
+                endpoint: "http://169.254.170.2/v2/credentials/abc".to_string(),
+                authorization_token: None,
+                authorization_token_file: None,
+            })
+        );
+    }
+
+    /// Serves the container credentials document and records the
+    /// Authorization header it was asked with.
+    async fn start_mock_container_endpoint() -> (String, Arc<std::sync::Mutex<Option<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let seen_by_server = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 2048];
+                let Ok(n) = stream.read(&mut buffer).await else {
+                    continue;
+                };
+                let request = String::from_utf8_lossy(&buffer[..n]).to_string();
+                *seen_by_server.lock().unwrap() = request
+                    .lines()
+                    .find_map(|line| line.strip_prefix("authorization: "))
+                    .map(str::to_string);
+                let response = if request.starts_with("GET /v1/credentials ") {
+                    let body = r#"{"AccessKeyId":"AKIACONTAINER","SecretAccessKey":"secret","Token":"session","Expiration":"2099-01-01T00:00:00Z"}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n".to_string()
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (format!("http://{addr}"), seen)
     }
 
     async fn start_mock_imds() -> String {

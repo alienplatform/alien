@@ -1,6 +1,6 @@
 use crate::{
     emitters::enabled,
-    inline_policy::consolidate_role_inline_policies,
+    inline_policy::{consolidate_role_inline_policies, expression_references},
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -10,11 +10,11 @@ use crate::{
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
-    ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
-    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode,
+    ComputePoolSelection, Container, Daemon, DeploymentModel, DomainSettings, ErrorData,
+    ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
+    NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -27,6 +27,7 @@ const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 const PARAM_TOKEN: &str = "Token";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
+const PARAM_ENDPOINT_ACCESS: &str = "EndpointAccess";
 const PARAM_NETWORK_MODE: &str = "NetworkMode";
 const PARAM_VPC_CIDR: &str = "VpcCidr";
 const PARAM_AVAILABILITY_ZONES: &str = "AvailabilityZones";
@@ -35,6 +36,7 @@ const PARAM_PUBLIC_SUBNET_IDS: &str = "PublicSubnetIds";
 const PARAM_PRIVATE_SUBNET_IDS: &str = "PrivateSubnetIds";
 const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 const PARAM_DOMAIN_NAME: &str = "DomainName";
+const PARAM_DOMAIN_RESOURCE: &str = "DomainResource";
 const PARAM_HOSTED_ZONE_ID: &str = "HostedZoneId";
 const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
@@ -212,24 +214,69 @@ impl CloudFormationTarget {
     }
 }
 
-/// Generate a CloudFormation template for a stack.
-/// Whether this template will actually emit a sandbox that demands named subnets.
-///
-/// The predicate answers a question about the stack; this answers it about the artifact. On a
-/// Kubernetes target the sandbox is skipped, so nothing forces subnets and withholding the mode
-/// would remove an install option while explaining it with a resource the template never carries.
+/// Setup resources that require subnet IDs cannot use implicit default networking.
+/// EKS also requires explicit subnets: this package does not discover the default VPC.
 fn restricts_network_mode(stack: &Stack, target: CloudFormationTarget) -> bool {
-    alien_core::restricts_network_mode(stack, target.is_kubernetes())
+    target.is_kubernetes() || alien_core::restricts_network_mode(stack, false)
 }
 
+/// Generate a CloudFormation template for a stack.
 pub fn generate_cloudformation_template(
     stack: &Stack,
     options: CloudFormationOptions<'_>,
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
+            Some(NetworkSettings::Create {
+                availability_zones: 1,
+                ..
+            })
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| {
+                    matches!(
+                        network.settings,
+                        NetworkSettings::Create {
+                            availability_zones: 1,
+                            ..
+                        }
+                    )
+                })
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "EKS requires at least two distinct Availability Zones".to_string(),
+        }));
+    }
+
+    if options.target.is_kubernetes()
+        && (matches!(
+            options.stack_settings.network,
+            Some(NetworkSettings::UseDefault)
+        ) || stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| matches!(network.settings, NetworkSettings::UseDefault))
+        }))
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate EKS CloudFormation package".to_string(),
+            reason: "CloudFormation EKS requires create-new networking or an existing VPC with explicit subnet IDs; automatic default-VPC discovery is not supported".to_string(),
+        }));
+    }
 
     let mut stack_settings = options.stack_settings.clone();
+    if options.target.is_kubernetes() {
+        // Kubernetes compute pools use existing nodes, not cloud fleet choices.
+        stack_settings.compute = None;
+    }
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
@@ -274,6 +321,34 @@ pub fn generate_cloudformation_template(
         outputs: IndexMap::new(),
     };
 
+    // CloudFormation exposes one DomainName/CertificateArn pair and registers it under the
+    // selected public resource. Reject settings it cannot represent instead of moving a
+    // configured hostname onto a different workload.
+    if let Some(custom_domains) = stack_settings
+        .domains
+        .as_ref()
+        .and_then(|domains| domains.custom_domains.as_ref())
+        .filter(|_| !options.target.is_kubernetes())
+    {
+        if custom_domains.len() > 1 {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation custom domain settings".to_string(),
+                reason: "CloudFormation exposes one DomainName/CertificateArn pair. Configure one custom-domain resource or use Terraform for multiple domains.".to_string(),
+            }));
+        }
+        let public_resources = public_http_resource_ids(stack);
+        if let Some(id) = custom_domains
+            .keys()
+            .find(|id| !public_resources.contains(id))
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation custom domain settings".to_string(),
+                reason: format!(
+                    "Custom domain resource '{id}' must name a public HTTP resource in this stack."
+                ),
+            }));
+        }
+    }
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
     let access_only = stack
         .resources
@@ -320,6 +395,7 @@ pub fn generate_cloudformation_template(
 
     let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
+    let mut secrets_vault_binding: Option<CfExpression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -333,8 +409,11 @@ pub fn generate_cloudformation_template(
         // roles of the AWS backend it never uses, and register import data naming it. The
         // Terraform generator refuses the same way; the two formats have to install the same
         // thing from one declaration.
+        // Logical ComputeCluster pools belong to the Kubernetes operator too;
+        // they must not emit a second cloud fleet or cloud import payload.
         if options.target.is_kubernetes()
-            && resource_type.as_ref() == alien_core::Sandbox::RESOURCE_TYPE.as_ref()
+            && (resource_type == Sandbox::RESOURCE_TYPE
+                || resource_type == ComputeCluster::RESOURCE_TYPE)
         {
             continue;
         }
@@ -416,6 +495,10 @@ pub fn generate_cloudformation_template(
             insert_resource(&mut template, emitted)?;
         }
 
+        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
+            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        }
+
         let registration_data = emitter.emit_import_ref(&ctx)?;
         registration_resources.push(RegistrationEntry {
             enabled_when: enabled_when.map(str::to_string),
@@ -443,7 +526,15 @@ pub fn generate_cloudformation_template(
         access_only,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
+    apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     consolidate_role_inline_policies(&mut template)?;
+
+    add_deployer_secret_outputs(
+        &mut template,
+        stack,
+        options.target,
+        secrets_vault_binding.as_ref(),
+    )?;
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
@@ -475,14 +566,38 @@ pub fn generate_cloudformation_template(
     Ok(template)
 }
 
-fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> bool {
-    target.is_kubernetes()
-        || stack.resources().any(|(_resource_id, resource)| {
-            resource
+fn public_http_resource_ids(stack: &Stack) -> Vec<String> {
+    let mut ids: Vec<_> = stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            let public = entry
                 .config
                 .downcast_ref::<Worker>()
                 .is_some_and(|worker| !worker.public_endpoints.is_empty())
+                || entry
+                    .config
+                    .downcast_ref::<Container>()
+                    .is_some_and(|container| {
+                        container
+                            .public_endpoints
+                            .iter()
+                            .any(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+                    })
+                || entry.config.downcast_ref::<Daemon>().is_some_and(|daemon| {
+                    daemon
+                        .public_endpoints
+                        .iter()
+                        .any(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+                });
+            public.then(|| id.to_string())
         })
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> bool {
+    target.is_kubernetes() || !public_http_resource_ids(stack).is_empty()
 }
 
 fn stack_inputs_for_cloudformation(
@@ -495,6 +610,9 @@ fn stack_inputs_for_cloudformation(
         .iter()
         .filter(|input| {
             input.provided_by.contains(&StackInputProvider::Deployer)
+                // Deployer secrets are written into the customer's own secret
+                // store, never passed through the template.
+                && !alien_core::is_deployer_secret_input(input)
                 && input
                     .platforms
                     .as_ref()
@@ -502,6 +620,93 @@ fn stack_inputs_for_cloudformation(
         })
         .cloned()
         .collect()
+}
+
+/// One output per deployer secret, naming where the deployer writes its value.
+///
+/// On AWS that is the SSM parameter in the stack's `secrets` vault. On a
+/// Kubernetes target the value is a Secret in the deployment's namespace whose
+/// name the operator derives, so the output carries the vault key and the
+/// deployment status shows the full name.
+fn add_deployer_secret_outputs(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    target: CloudFormationTarget,
+    secrets_vault_binding: Option<&CfExpression>,
+) -> Result<()> {
+    let platform = target.deployment_platform();
+    let inputs: Vec<&StackInputDefinition> = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            alien_core::is_deployer_secret_input(input)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Ok(());
+    }
+
+    let vault_prefix = if target.is_kubernetes() {
+        None
+    } else {
+        let prefix = match secrets_vault_binding {
+            Some(CfExpression::Object(binding)) => binding.get("vaultPrefix").cloned(),
+            _ => None,
+        };
+        Some(prefix.ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "deployer secret inputs live in the '{}' vault, which this stack does not \
+                     emit; run the stack through preflights so the vault is added",
+                    alien_core::SECRETS_VAULT_ID
+                ),
+            })
+        })?)
+    };
+
+    for input in inputs {
+        let vault_key = alien_core::deployer_secret_vault_key(&input.id);
+        let output_name = format!("DeployerSecret{}", sanitize_logical_id(&input.id));
+        if template.outputs.contains_key(&output_name) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "stack input '{}' normalizes to CloudFormation output '{output_name}', \
+                     which another input already claimed; rename one",
+                    input.id
+                ),
+            }));
+        }
+        let (description, value) = match &vault_prefix {
+            Some(prefix) => (
+                format!(
+                    "SSM SecureString parameter to write the '{}' value into.",
+                    input.label
+                ),
+                CfExpression::join(
+                    "-",
+                    CfExpression::list([prefix.clone(), CfExpression::from(vault_key)]),
+                ),
+            ),
+            None => (
+                format!(
+                    "Secrets vault key for '{}'; the deployment status shows the Kubernetes \
+                     Secret to create.",
+                    input.label
+                ),
+                CfExpression::from(vault_key),
+            ),
+        };
+        template
+            .outputs
+            .insert(output_name, output(&description, value));
+    }
+    Ok(())
 }
 
 fn stack_input_parameter_name(input: &StackInputDefinition) -> String {
@@ -894,6 +1099,112 @@ fn insert_resource(template: &mut CfTemplate, resource: CfResource) -> Result<()
     Ok(())
 }
 
+/// Lambda deletes a worker's Hyperplane ENI with the function's execution
+/// role and its permissions. If those are deleted first, the ENI stays and the
+/// private subnets and security group it sits in can never be deleted. The
+/// created network's private subnets and security group therefore depend on
+/// every IAM role and policy, so CloudFormation deletes IAM last. Skipped:
+/// conditional IAM resources (`DependsOn` cannot name a resource whose
+/// condition is false) and IAM resources that already depend on the network,
+/// such as an IRSA role trusting a cluster placed in it.
+fn apply_network_iam_dependencies(
+    stack: &Stack,
+    emitted_resource_ids: &IndexMap<String, Vec<String>>,
+    template: &mut CfTemplate,
+) {
+    const IAM_TYPES: [&str; 3] = [
+        "AWS::IAM::Role",
+        "AWS::IAM::Policy",
+        "AWS::IAM::ManagedPolicy",
+    ];
+    let Some(network_id) = stack
+        .resources()
+        .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|_| id))
+    else {
+        return;
+    };
+    let targets: Vec<String> = emitted_resource_ids
+        .get(network_id)
+        .into_iter()
+        .flatten()
+        .filter(|logical_id| {
+            template.resources.get(*logical_id).is_some_and(|resource| {
+                match resource.resource_type.as_str() {
+                    "AWS::EC2::Subnet" => logical_id.contains("PrivateSubnet"),
+                    "AWS::EC2::SecurityGroup" => true,
+                    _ => false,
+                }
+            })
+        })
+        .cloned()
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+
+    let logical_ids: Vec<&String> = template.resources.keys().collect();
+    let direct_dependencies: IndexMap<&String, Vec<&String>> = template
+        .resources
+        .iter()
+        .map(|(logical_id, resource)| {
+            let dependencies = logical_ids
+                .iter()
+                .copied()
+                .filter(|other| {
+                    *other != logical_id
+                        && (resource.depends_on.contains(other)
+                            || resource
+                                .properties
+                                .values()
+                                .any(|expression| expression_references(expression, other)))
+                })
+                .collect();
+            (logical_id, dependencies)
+        })
+        .collect();
+    let reaches_target = |start: &String| -> bool {
+        let mut pending = vec![start];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(logical_id) = pending.pop() {
+            if !seen.insert(logical_id) {
+                continue;
+            }
+            if targets.contains(logical_id) {
+                return true;
+            }
+            pending.extend(
+                direct_dependencies
+                    .get(logical_id)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        false
+    };
+    let iam_logical_ids: Vec<String> = template
+        .resources
+        .iter()
+        .filter(|(logical_id, resource)| {
+            IAM_TYPES.contains(&resource.resource_type.as_str())
+                && resource.condition.is_none()
+                && !reaches_target(logical_id)
+        })
+        .map(|(logical_id, _)| logical_id.clone())
+        .collect();
+
+    for target in &targets {
+        let Some(resource) = template.resources.get_mut(target) else {
+            continue;
+        };
+        for logical_id in &iam_logical_ids {
+            if !resource.depends_on.contains(logical_id) {
+                resource.depends_on.push(logical_id.clone());
+            }
+        }
+    }
+}
+
 fn apply_resource_dependencies(
     stack: &Stack,
     emitted_resource_ids: &IndexMap<String, Vec<String>>,
@@ -933,6 +1244,27 @@ fn apply_resource_dependencies(
                 .resources
                 .get(dependency.id())
                 .is_some_and(|entry| entry.config.downcast_ref::<RemoteBindings>().is_some())
+            {
+                continue;
+            }
+            // Node grants reference both the role and Storage in their own policy. The
+            // executor edge orders cluster completion, not creation of every fragment:
+            // stamping it onto the role can cycle through a workload identity. Explicit
+            // edges to the same target have no separate origin and retain this ordering
+            // through the policy's actual references.
+            if dependency.resource_type() == &Storage::RESOURCE_TYPE
+                && stack.resources.get(dependency.id()).is_some_and(|target| {
+                    target
+                        .config
+                        .downcast_ref::<Storage>()
+                        .is_some_and(|storage| storage.id == dependency.id())
+                })
+                && entry
+                    .config
+                    .downcast_ref::<ComputeCluster>()
+                    .and_then(|cluster| cluster.node_permissions.as_ref())
+                    .and_then(|profile| profile.0.get(dependency.id()))
+                    .is_some_and(|references| !references.is_empty())
             {
                 continue;
             }
@@ -1006,14 +1338,33 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, stack, settings.network.as_ref(), target);
-    add_compute_parameters(template, stack, settings.compute.as_ref())?;
+    if !target.is_kubernetes() {
+        add_compute_parameters(template, stack, settings.compute.as_ref())?;
+    }
 
     if supports_custom_domain {
         let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
+        if !target.is_kubernetes() && public_http_resource_ids(stack).len() > 1 {
+            let ids = public_http_resource_ids(stack);
+            let default = domain_defaults
+                .resource_id
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| ids[0].clone());
+            template.parameters.insert(
+                PARAM_DOMAIN_RESOURCE.to_string(),
+                string_parameter(
+                    "Public HTTP resource that will use DomainName and CertificateArn.",
+                    Some(default),
+                    Some(ids.into_iter().map(CfExpression::from).collect()),
+                    false,
+                ),
+            );
+        }
         template.parameters.insert(
             PARAM_DOMAIN_NAME.to_string(),
             string_parameter(
-                "Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.",
+                "Optional custom domain. Leave unset to use the deployment-managed endpoint.",
                 Some(domain_defaults.domain_name.unwrap_or_default()),
                 None,
                 false,
@@ -1040,6 +1391,15 @@ fn add_standard_parameters(
         );
     }
 
+    template.parameters.insert(
+        PARAM_ENDPOINT_ACCESS.to_string(),
+        string_parameter(
+            "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.",
+            Some(settings.endpoint_access.as_str().to_string()),
+            Some(vec![CfExpression::from("internet"), CfExpression::from("private")]),
+            false,
+        ),
+    );
     template.parameters.insert(
         PARAM_UPDATES_MODE.to_string(),
         string_parameter(
@@ -1133,11 +1493,15 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(vec![
-                        CfExpression::from(1u8),
-                        CfExpression::from(2u8),
-                        CfExpression::from(3u8),
-                    ]),
+                    Some(if target.is_kubernetes() {
+                        vec![CfExpression::from(2u8), CfExpression::from(3u8)]
+                    } else {
+                        vec![
+                            CfExpression::from(1u8),
+                            CfExpression::from(2u8),
+                            CfExpression::from(3u8),
+                        ]
+                    }),
                 ),
             );
             template.parameters.insert(
@@ -1338,24 +1702,24 @@ fn add_standard_conditions(
                 CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
                 equals_ref(PARAM_NETWORK_MODE, "use-existing"),
             );
-            if has_created_network
-                && stack.resources().any(|(_id, entry)| {
-                    entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                        && entry
-                            .config
-                            .downcast_ref::<alien_core::Postgres>()
-                            .is_some()
-                })
-            {
-                template.conditions.insert(
-                    crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS
-                        .to_string(),
-                    CfExpression::or([
-                        equals_ref(PARAM_NETWORK_MODE, "create-new"),
-                        equals_ref(PARAM_NETWORK_MODE, "use-existing"),
-                    ]),
-                );
-            }
+        }
+        if !restricts_network_mode(stack, target)
+            && has_created_network
+            && stack.resources().any(|(_id, entry)| {
+                entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                    && entry
+                        .config
+                        .downcast_ref::<alien_core::Postgres>()
+                        .is_some()
+            })
+        {
+            template.conditions.insert(
+                crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS.to_string(),
+                CfExpression::or([
+                    equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                    equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+                ]),
+            );
         }
     }
     if has_created_network {
@@ -1399,6 +1763,15 @@ fn add_standard_conditions(
             CONDITION_HAS_DOMAIN_NAME.to_string(),
             CfExpression::not(equals_ref(PARAM_DOMAIN_NAME, "")),
         );
+        if !target.is_kubernetes() && public_http_resource_ids(stack).len() > 1 {
+            let ids = public_http_resource_ids(stack);
+            for (index, id) in ids.iter().enumerate().take(ids.len() - 1) {
+                template.conditions.insert(
+                    format!("CustomDomainResource{index}"),
+                    equals_ref(PARAM_DOMAIN_RESOURCE, id),
+                );
+            }
+        }
     }
 }
 
@@ -1455,9 +1828,17 @@ fn add_console_interface_metadata(
         }));
     }
     if supports_custom_domain {
+        let mut parameters = vec![
+            PARAM_DOMAIN_NAME,
+            PARAM_HOSTED_ZONE_ID,
+            PARAM_CERTIFICATE_ARN,
+        ];
+        if template.parameters.contains_key(PARAM_DOMAIN_RESOURCE) {
+            parameters.insert(0, PARAM_DOMAIN_RESOURCE);
+        }
         parameter_groups.push(json!({
             "Label": { "default": "Custom domain" },
-            "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
+            "Parameters": parameters
         }));
     }
     if !stack_inputs.is_empty() {
@@ -2135,6 +2516,7 @@ fn stack_settings_expression(
     }
     let mut values = vec![
         ("deploymentModel", CfExpression::from("push")),
+        ("endpointAccess", CfExpression::ref_(PARAM_ENDPOINT_ACCESS)),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
@@ -2144,7 +2526,7 @@ fn stack_settings_expression(
         ),
     ];
     if supports_custom_domain {
-        values.push(("domains", domains_expression()));
+        values.push(("domains", domains_expression(stack, target)));
     }
     if target.is_kubernetes() {
         values.push((
@@ -2379,28 +2761,38 @@ fn network_expression(
     }
 }
 
-fn domains_expression() -> CfExpression {
+fn domains_expression(stack: &Stack, target: CloudFormationTarget) -> CfExpression {
+    let domain = CfExpression::object([
+        ("domain", CfExpression::ref_(PARAM_DOMAIN_NAME)),
+        (
+            "certificate",
+            CfExpression::object([(
+                "aws",
+                CfExpression::object([(
+                    "certificateArn",
+                    CfExpression::ref_(PARAM_CERTIFICATE_ARN),
+                )]),
+            )]),
+        ),
+    ]);
+    let custom_domains = if target.is_kubernetes() {
+        CfExpression::object([("default", domain)])
+    } else {
+        let ids = public_http_resource_ids(stack);
+        let mut selected =
+            CfExpression::object([(ids.last().expect("public resource").clone(), domain.clone())]);
+        for (index, id) in ids.iter().enumerate().rev().skip(1) {
+            selected = CfExpression::if_(
+                format!("CustomDomainResource{index}"),
+                CfExpression::object([(id.clone(), domain.clone())]),
+                selected,
+            );
+        }
+        selected
+    };
     CfExpression::if_(
         CONDITION_HAS_DOMAIN_NAME,
-        CfExpression::object([(
-            "customDomains",
-            CfExpression::object([(
-                "default",
-                CfExpression::object([
-                    ("domain", CfExpression::ref_(PARAM_DOMAIN_NAME)),
-                    (
-                        "certificate",
-                        CfExpression::object([(
-                            "aws",
-                            CfExpression::object([(
-                                "certificateArn",
-                                CfExpression::ref_(PARAM_CERTIFICATE_ARN),
-                            )]),
-                        )]),
-                    ),
-                ]),
-            )]),
-        )]),
+        CfExpression::object([("customDomains", custom_domains)]),
         CfExpression::no_value(),
     )
 }
@@ -2587,6 +2979,7 @@ impl NetworkParameterDefaults {
 
 #[derive(Debug)]
 struct DomainParameterDefaults {
+    resource_id: Option<String>,
     domain_name: Option<String>,
     certificate_arn: Option<String>,
 }
@@ -2599,11 +2992,12 @@ impl DomainParameterDefaults {
         let Some(custom_domains) = &domains.custom_domains else {
             return Self::empty();
         };
-        let Some((_resource_id, domain)) = custom_domains.iter().next() else {
+        let Some((resource_id, domain)) = custom_domains.iter().min_by_key(|(id, _)| *id) else {
             return Self::empty();
         };
 
         Self {
+            resource_id: Some(resource_id.clone()),
             domain_name: Some(domain.domain.clone()),
             certificate_arn: domain
                 .certificate
@@ -2615,6 +3009,7 @@ impl DomainParameterDefaults {
 
     fn empty() -> Self {
         Self {
+            resource_id: None,
             domain_name: None,
             certificate_arn: None,
         }
@@ -2624,6 +3019,209 @@ impl DomainParameterDefaults {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{PermissionProfile, Resource, ResourceRef};
+
+    fn node_dependency_fixture() -> (Stack, IndexMap<String, Vec<String>>, CfTemplate) {
+        let mut stack = Stack::new("example".to_string())
+            .add(
+                ComputeCluster::new("compute".to_string())
+                    .node_permissions(
+                        PermissionProfile::new().resource("objects", ["storage/data-read"]),
+                    )
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("ordinary".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        stack.resources.get_mut("compute").unwrap().dependencies = vec![
+            ResourceRef::new(Storage::RESOURCE_TYPE, "objects"),
+            ResourceRef::new(Storage::RESOURCE_TYPE, "ordinary"),
+        ];
+        let ids = indexmap! {
+            "compute".to_string() => vec!["NodeRole".to_string(), "NodePolicy".to_string()],
+            "objects".to_string() => vec!["Bucket".to_string()],
+            "ordinary".to_string() => vec!["OtherBucket".to_string()],
+        };
+        let mut template = CfTemplate::default();
+        for (id, kind) in [
+            ("NodeRole", "AWS::IAM::Role"),
+            ("NodePolicy", "AWS::IAM::Policy"),
+            ("Bucket", "AWS::S3::Bucket"),
+            ("OtherBucket", "AWS::S3::Bucket"),
+        ] {
+            template.resources.insert(
+                id.to_string(),
+                CfResource::new(id.to_string(), kind.to_string()),
+            );
+        }
+        let policy = template.resources.get_mut("NodePolicy").unwrap();
+        policy.properties.insert(
+            "Roles".to_string(),
+            CfExpression::list([CfExpression::ref_("NodeRole")]),
+        );
+        policy.properties.insert(
+            "PolicyDocument".to_string(),
+            CfExpression::object([
+                ("Version", CfExpression::from("2012-10-17")),
+                (
+                    "Statement",
+                    CfExpression::list([CfExpression::object([
+                        ("Effect", CfExpression::from("Allow")),
+                        ("Action", CfExpression::from("s3:GetObject")),
+                        ("Resource", CfExpression::get_att("Bucket", "Arn")),
+                    ])]),
+                ),
+            ]),
+        );
+        (stack, ids, template)
+    }
+
+    #[test]
+    fn node_storage_order_is_projected_without_changing_policy_or_executor_edges() {
+        for location in ["managed", "gated", "external"] {
+            let (stack, mut ids, mut template) = node_dependency_fixture();
+            let target = if location == "gated" {
+                template.resources.get_mut("Bucket").unwrap().condition =
+                    Some("Enabled".to_string());
+                template.resources.get_mut("NodePolicy").unwrap().condition =
+                    Some("Enabled".to_string());
+                CfExpression::if_(
+                    "Enabled",
+                    CfExpression::get_att("Bucket", "Arn"),
+                    CfExpression::no_value(),
+                )
+            } else if location == "external" {
+                template.resources.shift_remove("Bucket");
+                ids.shift_remove("objects");
+                CfExpression::from("arn:aws:s3:::existing-objects/*")
+            } else {
+                CfExpression::get_att("Bucket", "Arn")
+            };
+            let CfExpression::Object(document) = template
+                .resources
+                .get_mut("NodePolicy")
+                .unwrap()
+                .properties
+                .get_mut("PolicyDocument")
+                .unwrap()
+            else {
+                panic!("policy document")
+            };
+            let CfExpression::List(statements) = document.get_mut("Statement").unwrap() else {
+                panic!("statements")
+            };
+            let CfExpression::Object(statement) = &mut statements[0] else {
+                panic!("statement")
+            };
+            statement.insert("Resource".to_string(), target);
+            let policy = template.resources["NodePolicy"].clone();
+            let dependencies = stack.resources["compute"].dependencies.clone();
+            apply_resource_dependencies(&stack, &ids, &mut template);
+            for id in ["NodeRole", "NodePolicy"] {
+                assert_eq!(
+                    template.resources[id].depends_on,
+                    vec!["OtherBucket".to_string()]
+                );
+            }
+            assert_eq!(
+                template.resources["NodePolicy"].properties,
+                policy.properties
+            );
+            assert_eq!(template.resources["NodePolicy"].condition, policy.condition);
+            assert_eq!(stack.resources["compute"].dependencies, dependencies);
+            let once = template.clone();
+            apply_resource_dependencies(&stack, &ids, &mut template);
+            assert_eq!(template, once);
+        }
+    }
+
+    #[test]
+    fn ordinary_or_invalid_node_targets_keep_physical_dependencies() {
+        for case in [
+            "no-profile",
+            "empty",
+            "other-target",
+            "wrong-ref-type",
+            "wrong-target-type",
+            "missing",
+            "mismatched-id",
+            "non-node",
+        ] {
+            let (mut stack, ids, mut template) = node_dependency_fixture();
+            match case {
+                "no-profile" => {
+                    stack
+                        .resources
+                        .get_mut("compute")
+                        .unwrap()
+                        .config
+                        .downcast_mut::<ComputeCluster>()
+                        .unwrap()
+                        .node_permissions = None
+                }
+                "empty" => stack
+                    .resources
+                    .get_mut("compute")
+                    .unwrap()
+                    .config
+                    .downcast_mut::<ComputeCluster>()
+                    .unwrap()
+                    .node_permissions
+                    .as_mut()
+                    .unwrap()
+                    .0
+                    .get_mut("objects")
+                    .unwrap()
+                    .clear(),
+                "other-target" => {
+                    stack
+                        .resources
+                        .get_mut("compute")
+                        .unwrap()
+                        .config
+                        .downcast_mut::<ComputeCluster>()
+                        .unwrap()
+                        .node_permissions =
+                        Some(PermissionProfile::new().resource("elsewhere", ["storage/data-read"]))
+                }
+                "wrong-ref-type" => {
+                    stack.resources.get_mut("compute").unwrap().dependencies[0] =
+                        ResourceRef::new(ComputeCluster::RESOURCE_TYPE, "objects")
+                }
+                "wrong-target-type" => {
+                    stack.resources.get_mut("objects").unwrap().config =
+                        Resource::new(ComputeCluster::new("objects".to_string()).build())
+                }
+                "missing" => {
+                    stack.resources.shift_remove("objects");
+                }
+                "mismatched-id" => {
+                    stack.resources.get_mut("objects").unwrap().config =
+                        Resource::new(Storage::new("different".to_string()).build())
+                }
+                "non-node" => {
+                    stack.resources.get_mut("compute").unwrap().config =
+                        Resource::new(Storage::new("compute".to_string()).build())
+                }
+                _ => unreachable!(),
+            }
+            apply_resource_dependencies(&stack, &ids, &mut template);
+            for id in ["NodeRole", "NodePolicy"] {
+                assert_eq!(
+                    template.resources[id].depends_on,
+                    vec!["Bucket".to_string(), "OtherBucket".to_string()],
+                    "{case}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn quotes_yaml_1_1_boolean_like_strings_in_object_values() {

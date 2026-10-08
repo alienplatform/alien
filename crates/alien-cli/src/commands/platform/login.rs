@@ -9,13 +9,27 @@ use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Authenticate with Alien and choose a default workspace",
-    long_about = "Authenticate with the Alien platform and set the default workspace used by platform-managed commands.",
+    about = "Sign in to alien.dev, or connect to a manager you run",
+    long_about = "Sign in to alien.dev and choose a default workspace, or connect the CLI to a manager you run with --manager. Later commands use whichever you logged in to.",
     after_help = "EXAMPLES:
     alien login
-    alien login --workspace my-workspace"
+    alien login --workspace my-workspace
+    alien login --manager https://manager.example.com --token ax_admin_..."
 )]
-pub struct LoginArgs {}
+pub struct LoginArgs {
+    /// URL of a manager you run (instead of alien.dev)
+    #[arg(long, value_name = "URL")]
+    pub manager: Option<String>,
+
+    /// API key for --manager (prompted for when omitted in a terminal)
+    #[arg(
+        long,
+        requires = "manager",
+        env = "ALIEN_API_KEY",
+        hide_env_values = true
+    )]
+    pub token: Option<String>,
+}
 
 pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
     let auth_opts = ctx.auth_opts();

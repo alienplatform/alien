@@ -35,6 +35,28 @@ export type AwsCredentialsProfile = {
 };
 
 /**
+ * Container credentials endpoint: ECS task roles and EKS Pod Identity.
+ */
+export type AwsCredentialsContainer = {
+  /**
+   * Authorization header value for the endpoint
+   */
+  authorizationToken?: string | null | undefined;
+  /**
+   * File holding the authorization header value, re-read on each
+   *
+   * @remarks
+   * refresh because the platform rotates it
+   */
+  authorizationTokenFile?: string | null | undefined;
+  /**
+   * Credentials endpoint URL
+   */
+  endpoint: string;
+  type: "container";
+};
+
+/**
  * AWS Instance Metadata Service credentials.
  */
 export type AwsCredentialsImds = {
@@ -94,6 +116,7 @@ export type AwsCredentials =
   | AwsCredentialsAccessKeys
   | AwsCredentialsSessionCredentials
   | AwsCredentialsImds
+  | AwsCredentialsContainer
   | AwsCredentialsProfile
   | AwsCredentialsWebIdentity;
 
@@ -132,6 +155,32 @@ export function awsCredentialsProfileFromJSON(
     jsonString,
     (x) => AwsCredentialsProfile$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'AwsCredentialsProfile' from JSON`,
+  );
+}
+
+/** @internal */
+export const AwsCredentialsContainer$inboundSchema: z.ZodType<
+  AwsCredentialsContainer,
+  unknown
+> = z.object({
+  authorization_token: z.nullable(z.string()).optional(),
+  authorization_token_file: z.nullable(z.string()).optional(),
+  endpoint: z.string(),
+  type: z.literal("container"),
+}).transform((v) => {
+  return remap$(v, {
+    "authorization_token": "authorizationToken",
+    "authorization_token_file": "authorizationTokenFile",
+  });
+});
+
+export function awsCredentialsContainerFromJSON(
+  jsonString: string,
+): SafeParseResult<AwsCredentialsContainer, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => AwsCredentialsContainer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'AwsCredentialsContainer' from JSON`,
   );
 }
 
@@ -216,6 +265,7 @@ export const AwsCredentials$inboundSchema: z.ZodType<AwsCredentials, unknown> =
     z.lazy(() => AwsCredentialsAccessKeys$inboundSchema),
     z.lazy(() => AwsCredentialsSessionCredentials$inboundSchema),
     z.lazy(() => AwsCredentialsImds$inboundSchema),
+    z.lazy(() => AwsCredentialsContainer$inboundSchema),
     z.lazy(() => AwsCredentialsProfile$inboundSchema),
     z.lazy(() => AwsCredentialsWebIdentity$inboundSchema),
   ]);

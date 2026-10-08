@@ -72,6 +72,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -200,7 +211,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = var.deployment_model == "push" ? { platform = "aws", managingRoleArn = var.managing_role_arn } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -342,6 +353,23 @@ resource "aws_subnet" "default_network_private" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_role_policy.execution_sa_set_1,
+    aws_iam_role.management,
+    aws_iam_policy.management_managed_policy_0,
+    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
+    aws_iam_policy.management_managed_policy_1,
+    aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
+    aws_iam_role_policy.management_self_read,
+    aws_iam_role_policy.assets_management_storage-heartbeat_0,
+    aws_iam_role_policy.management_vault_secrets_set_0,
+    aws_iam_role.registry_pull,
+    aws_iam_role.registry_push,
+    aws_iam_role_policy.registry_pull_policy,
+    aws_iam_role_policy.registry_push_policy
+  ]
 }
 
 resource "aws_eip" "default_network_nat" {
@@ -434,6 +462,23 @@ resource "aws_security_group" "default_network_workload" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+  depends_on = [
+    aws_iam_role.execution_sa,
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_role_policy.execution_sa_set_1,
+    aws_iam_role.management,
+    aws_iam_policy.management_managed_policy_0,
+    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
+    aws_iam_policy.management_managed_policy_1,
+    aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
+    aws_iam_role_policy.management_self_read,
+    aws_iam_role_policy.assets_management_storage-heartbeat_0,
+    aws_iam_role_policy.management_vault_secrets_set_0,
+    aws_iam_role.registry_pull,
+    aws_iam_role.registry_push,
+    aws_iam_role_policy.registry_pull_policy,
+    aws_iam_role_policy.registry_push_policy
+  ]
 }
 
 === execution_sa.tf ===
@@ -474,7 +519,7 @@ resource "aws_iam_role" "management" {
 
 resource "aws_iam_policy" "management_managed_policy_0" {
   name   = length(format("%s-%s", local.resource_prefix, "deployment-management-0")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-0")), 0, 8))
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "UpdateLambdaFunctions", Effect = "Allow", Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission"], Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ManageEventSourceMappings", Effect = "Allow", Action = ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"], Resource = ["*"], Condition = { StringLike = { "lambda:FunctionArn" = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*" } } }, { Sid = "ListEventSourceMappings", Effect = "Allow", Action = ["lambda:ListEventSourceMappings"], Resource = ["*"] }, { Sid = "PassLambdaExecutionRoles", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"] }, { Sid = "GetEcrLoginToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "ReadDeploymentContainerImages", Effect = "Allow", Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"] }, { Sid = "ImportTlsCertificates", Effect = "Allow", Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate"], Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageTlsCertificates", Effect = "Allow", Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "CreateHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:POST", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "CreateHttpApiRoutes", Effect = "Allow", Action = ["apigateway:POST"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "TagHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:TagResource", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages/*", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings/*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "UpdateLambdaFunctions", Effect = "Allow", Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission"], Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ManageEventSourceMappings", Effect = "Allow", Action = ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"], Resource = ["*"], Condition = { StringLike = { "lambda:FunctionArn" = "arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*" } } }, { Sid = "ListEventSourceMappings", Effect = "Allow", Action = ["lambda:ListEventSourceMappings"], Resource = ["*"] }, { Sid = "PassLambdaExecutionRoles", Effect = "Allow", Action = ["iam:PassRole"], Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"] }, { Sid = "GetEcrLoginToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "ReadDeploymentContainerImages", Effect = "Allow", Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"] }, { Sid = "ImportTlsCertificates", Effect = "Allow", Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate"], Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageTlsCertificates", Effect = "Allow", Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate", "acm:ListTagsForCertificate"], Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "ListTlsCertificates", Effect = "Allow", Action = ["acm:ListCertificates"], Resource = ["*"] }, { Sid = "CreateHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:POST", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "CreateHttpApiRoutes", Effect = "Allow", Action = ["apigateway:POST"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }, { Sid = "TagHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:TagResource", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages/*", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } } }, { Sid = "ManageHttpApiEndpoints", Effect = "Allow", Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/restapis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/basepathmappings/*"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } } }] })
 }
 
 resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {

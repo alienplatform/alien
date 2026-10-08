@@ -1,5 +1,5 @@
-amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Builtins.pkl"
 
 stash_untracked = false
 
@@ -8,7 +8,16 @@ local fast_steps = new Mapping<String, Step> {
         check = "pnpm exec biome check --no-errors-on-unmatched {{files}}"
         fix = "pnpm exec biome check --write --no-errors-on-unmatched {{files}}"
     }
-    ["check-added-large-files"] = Builtins.check_added_large_files
+    ["check-added-large-files"] = (Builtins.check_added_large_files) {
+        // Embedded WASM is verified against native Rust in the package tests.
+        // The generated OpenAPI inputs are already tracked above the size limit.
+        exclude = List(
+            "packages/permissions/generated/bytes.js",
+            "client-sdks/platform/openapi.json",
+            "client-sdks/platform/rust/openapi.json",
+            "client-sdks/platform/rust/openapi-3.0.json",
+        )
+    }
     ["check-merge-conflict"] = Builtins.check_merge_conflict
     ["newlines"] = Builtins.newlines
     ["rustfmt"] = (Builtins.rustfmt) {

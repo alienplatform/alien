@@ -1,18 +1,78 @@
 #!/usr/bin/env bash
 #
-# Qualify a published alien-sandbox-agent image on both platforms it ships for:
-# the architecture it actually contains, the identity and filesystem it grants
-# the supervised command, its rejection of an invalid config, and a real run
-# that reaches its listener and stays up.
+# Qualify a published GCP sandbox image on each platform it ships for: the
+# architecture it actually contains, the identity and filesystem it grants the
+# supervised command, its rejection of an invalid config, and a real run that
+# reaches its listener and stays up. With --tools, also that every command in the
+# list file (one per line, `#` comments skipped) runs as the image's user.
 #
-# Usage: scripts/smoke-sandbox-agent.sh <image-reference>
+# Usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>
 set -euo pipefail
 
-image="${1:?usage: scripts/smoke-sandbox-agent.sh <image-reference>}"
+usage="usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>"
+platforms="linux/amd64,linux/arm64"
+tools_file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --platforms|--tools)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage" >&2; exit 2; }
+      case "$1" in --platforms) platforms="$2" ;; *) tools_file="$2" ;; esac
+      shift 2 ;;
+    -*) echo "$usage" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -eq 1 ] && [ -n "$1" ] || { echo "$usage" >&2; exit 2; }
+image="$1"
 
-for platform in linux/amd64 linux/arm64; do
-  # This image is wolfi-base plus git's 24 transitive packages plus the agent, and the
-  # amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
+tools=()
+if [ -n "$tools_file" ]; then
+  if [ ! -r "$tools_file" ]; then
+    echo "::error::the tools list ${tools_file} is not readable"
+    exit 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in ''|'#'*) continue ;; esac
+    tools+=("$line")
+  done < "$tools_file"
+  if [ "${#tools[@]}" -eq 0 ]; then
+    echo "::error::the tools list ${tools_file} names no tools"
+    exit 1
+  fi
+fi
+# Each command gets its own shell, so a `#` or a quote in one line cannot swallow the
+# check on it or reach the next one.
+# shellcheck disable=SC2016
+tools_probe='for tool do printf "probing %s\n" "$tool"; out=$(sh -c "$tool" 2>&1 </dev/null) || {
+  last=$(printf "%s" "$out" | tail -n 1)
+  printf "tool probe: %s failed%s\n" "$tool" "${last:+: $last}"; exit 1; }; done'
+
+# Prints true or false for a container that exists, gone for one that does not, and unknown
+# when the daemon does not say. stderr is kept out of the value, since the docker CLI can
+# print warnings there on every call.
+probe_state() {
+  local running error status=0
+  running=$(timeout -k 5 30 docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null) || status=$?
+  case "$status" in
+    0) printf '%s\n' "$running" | tail -n 1; return ;;
+    124|137) echo unknown; return ;;
+  esac
+  error=$(timeout -k 5 30 docker inspect "$1" 2>&1 >/dev/null) || true
+  # "no such file or directory" is an unreachable daemon, not a missing container.
+  case "$error" in
+    *[Nn]"o such object"*|*[Nn]"o such container"*) echo gone ;;
+    *) echo unknown ;;
+  esac
+}
+
+# Checked whole, since read splits only the first line and drops a trailing empty field.
+case "$platforms" in ''|*[[:space:]]*|,*|*,|*,,*) echo "$usage" >&2; exit 2 ;; esac
+IFS=, read -r -a platform_list <<< "$platforms"
+for platform in "${platform_list[@]}"; do
+  # Sandbox images are large (wolfi-base plus git's 24 packages, or all of buildpack-deps) and
+  # the amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
   status=0
   pull=$(timeout -k 5 300 docker pull --platform "$platform" "$image" 2>&1) || status=$?
   case "$status" in
@@ -65,6 +125,45 @@ for platform in linux/amd64 linux/arm64; do
       ' 2>&1); then
     echo "::error::${platform}: ${identity:-the identity probe did not complete}"
     exit 1
+  fi
+  if [ "${#tools[@]}" -gt 0 ]; then
+    # timeout kills the docker client, not the container, so a probe is removed by name.
+    probe="smoke-tools-$$-${platform//\//-}"
+    tools_budget=120
+    status=0
+    tools_out=$(timeout -k 5 "$tools_budget" docker run --rm --name "$probe" --platform "$platform" \
+      --entrypoint /bin/sh "$image" -c "$tools_probe" sh "${tools[@]}" 2>&1) || status=$?
+    if [ "$status" -ne 0 ]; then
+      # The probe exits only 0 or 1. A 137 is our deadline when the container outlived its
+      # killed client, and an outside kill when it is already gone; unknown stays a deadline.
+      if [ "$status" = 137 ]; then
+        case "$(probe_state "$probe")" in false|gone) status=1 ;; esac
+      fi
+      timeout -k 5 30 docker rm -f "$probe" >/dev/null 2>&1 || true
+      # rm races the --rm removal a kill triggers, so whether the container is gone is read
+      # back rather than taken from rm's own status.
+      case "$(probe_state "$probe")" in
+        false|gone) ;;
+        *) echo "::warning::${platform}: container ${probe} could not be removed and may still be running" ;;
+      esac
+    fi
+    case "$status" in
+      0) ;;
+      124|137)
+        # The last "probing" line names the tool that hung.
+        echo "$tools_out"
+        echo "::error::${platform}: the tools probe did not finish within ${tools_budget}s"
+        exit 1 ;;
+      *)
+        echo "$tools_out"
+        last=$(printf '%s' "$tools_out" | tail -n 1)
+        case "$last" in
+          '') last="the tools probe did not complete" ;;
+          "probing "*) last="the tools probe stopped while running ${last#probing }" ;;
+        esac
+        echo "::error::${platform}: ${last}"
+        exit 1 ;;
+    esac
   fi
   # The unlink rather than the file mode: only the directory permission stops the
   # supervised command removing its own supervisor. Removing a file it may remove first,

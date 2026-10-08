@@ -85,12 +85,11 @@ Parameters:
     Default: ''
   NetworkMode:
     Type: String
-    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Description: Choose create-new for a managed VPC, or use-existing for your VPC. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC.
     Default: create-new
     AllowedValues:
     - create-new
     - use-existing
-    - use-default
   VpcCidr:
     Type: String
     Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
@@ -100,7 +99,6 @@ Parameters:
     Description: Only used with create-new. Number of availability zones for the new VPC.
     Default: 2
     AllowedValues:
-    - 1
     - 2
     - 3
   VpcId:
@@ -121,7 +119,7 @@ Parameters:
     Default: ''
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
+    Description: Optional custom domain. Leave unset to use the deployment-managed endpoint.
     Default: ''
   HostedZoneId:
     Type: String
@@ -132,6 +130,13 @@ Parameters:
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
     AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -157,10 +162,6 @@ Conditions:
     Fn::Equals:
     - Ref: NetworkMode
     - create-new
-  NetworkModeUseExisting:
-    Fn::Equals:
-    - Ref: NetworkMode
-    - use-existing
   NetworkUseAz2:
     Fn::Not:
     - Fn::Equals:
@@ -600,6 +601,8 @@ Resources:
       ManagementConfig: null
       StackSettings:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -617,18 +620,15 @@ Resources:
               - Ref: AWS::NoValue
             availability_zones:
               Ref: AvailabilityZones
-          - Fn::If:
-            - NetworkModeUseExisting
-            - type: byo-vpc-aws
-              vpc_id:
-                Ref: VpcId
-              public_subnet_ids:
-                Ref: PublicSubnetIds
-              private_subnet_ids:
-                Ref: PrivateSubnetIds
-              security_group_ids:
-                Ref: SecurityGroupIds
-            - type: use-default
+          - type: byo-vpc-aws
+            vpc_id:
+              Ref: VpcId
+            public_subnet_ids:
+              Ref: PublicSubnetIds
+            private_subnet_ids:
+              Ref: PrivateSubnetIds
+            security_group_ids:
+              Ref: SecurityGroupIds
         domains:
           Fn::If:
           - HasDomainName
@@ -748,22 +748,16 @@ Resources:
                     Ref: AWS::Region
               - Ref: AWS::NoValue
             isByoVpc: false
-          - Fn::If:
-            - NetworkModeUseExisting
-            - vpcId:
-                Ref: VpcId
-              publicSubnetIds:
-                Ref: PublicSubnetIds
-              privateSubnetIds:
-                Ref: PrivateSubnetIds
-              securityGroupId:
-                Fn::Select:
-                - 0
-                - Ref: SecurityGroupIds
-              availabilityZones: []
-              isByoVpc: true
-            - publicSubnetIds: []
-              privateSubnetIds: []
-              availabilityZones: []
-              isByoVpc: true
+          - vpcId:
+              Ref: VpcId
+            publicSubnetIds:
+              Ref: PublicSubnetIds
+            privateSubnetIds:
+              Ref: PrivateSubnetIds
+            securityGroupId:
+              Fn::Select:
+              - 0
+              - Ref: SecurityGroupIds
+            availabilityZones: []
+            isByoVpc: true
       BasePlatform: aws

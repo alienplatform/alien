@@ -1,6 +1,8 @@
 pub mod auth_validator;
+pub mod bundle_sources;
 pub mod credential_resolver;
 pub mod deployment_store;
+pub mod release_channel_store;
 pub mod release_store;
 pub mod server_bindings;
 pub mod telemetry_backend;
@@ -15,6 +17,10 @@ pub(crate) fn default_string() -> String {
 }
 
 pub use auth_validator::{AuthValidator, TokenType};
+pub use bundle_sources::{
+    deploy_cli_downloads, BundleSource, BundleSourceResolver, BundleSources, SourceCredentials,
+    ToolDownload,
+};
 pub use credential_resolver::{
     CredentialResolver, RemoteStorageCredentialSource, ResolvedCredentials,
 };
@@ -22,9 +28,12 @@ pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentAcquireResult,
-    DeploymentAcquireUnavailableReason, DeploymentFilter, DeploymentGroupRecord, DeploymentRecord,
-    DeploymentStore, ReconcileData, ReconcileInput, ReconcileInputBuilder, ReconcileOutcome,
-    UnacquiredDeployment, UpdateImportedDeploymentParams,
+    DeploymentAcquireUnavailableReason, DeploymentFilter, DeploymentGroupRecord,
+    DeploymentGroupSetup, DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput,
+    ReconcileInputBuilder, ReconcileOutcome, UnacquiredDeployment, UpdateImportedDeploymentParams,
+};
+pub use release_channel_store::{
+    DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;

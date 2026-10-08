@@ -1,9 +1,12 @@
 //! Authors permission-profile grants for resource links and triggers.
 //!
-//! Resource links and triggers are dependency edges, not implicit data-access grants.
-//! This mutation makes the required data permissions explicit in the consumer's
-//! permission profile so setup emitters and runtime controllers consume one
-//! permission source of truth.
+//! Resource links and triggers are dependency edges. They provide default
+//! data-access grants only when the consumer's profile has no entry for the
+//! resource. Explicit resource grants take precedence over those defaults, and
+//! a permission set the profile already grants stack-wide (`*`) is not added
+//! again for the one resource.
+
+use std::collections::HashSet;
 
 use crate::error::Result;
 use crate::StackMutation;
@@ -36,7 +39,7 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             } else if let Some(container) = entry.config.downcast_ref::<Container>() {
                 !container.links.is_empty()
             } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-                !daemon.links.is_empty()
+                daemon.permissions.is_some() && !daemon.links.is_empty()
             } else if let Some(build) = entry.config.downcast_ref::<Build>() {
                 !build.links.is_empty()
             } else {
@@ -61,14 +64,34 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             } else if let Some(container) = entry.config.downcast_ref::<Container>() {
                 collect_link_grants(&mut grants, &container.permissions, &container.links);
             } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-                collect_link_grants(&mut grants, &daemon.permissions, &daemon.links);
+                if let Some(profile) = &daemon.permissions {
+                    collect_link_grants(&mut grants, profile, &daemon.links);
+                }
             } else if let Some(build) = entry.config.downcast_ref::<Build>() {
                 collect_link_grants(&mut grants, &build.permissions, &build.links);
             }
         }
 
+        // Capture existing targets before adding any defaults. A profile may have
+        // multiple consumers or both a link and a trigger for the same resource.
+        let explicit_targets: HashSet<_> = stack
+            .permissions
+            .profiles
+            .iter()
+            .flat_map(|(profile_name, profile)| {
+                profile
+                    .0
+                    .keys()
+                    .map(|resource_id| (profile_name.clone(), resource_id.clone()))
+            })
+            .collect();
+
         let mut grants_added = 0;
         for grant in grants {
+            if explicit_targets.contains(&(grant.profile_name.clone(), grant.resource_id.clone())) {
+                continue;
+            }
+
             let Some(profile) = stack.permissions.profiles.get_mut(&grant.profile_name) else {
                 debug!(
                     profile_name = %grant.profile_name,
@@ -77,16 +100,40 @@ impl StackMutation for ResourceLinkPermissionsMutation {
                 continue;
             };
 
+            // A stack-wide grant of the same built-in set already covers the linked resource.
+            // Repeating it on the one resource adds an exact-resource grant, which AWS refuses
+            // for Live resources. An inline set that reuses the id may grant less, so only a
+            // reference to the built-in set counts.
+            let stack_wide = profile.0.get("*");
+            let missing: Vec<&str> = grant
+                .permission_set_ids
+                .iter()
+                .copied()
+                .filter(|permission_set_id| {
+                    !stack_wide.is_some_and(|permissions| {
+                        permissions.iter().any(|permission| {
+                            matches!(
+                                permission,
+                                PermissionSetReference::Name(name) if name == permission_set_id
+                            )
+                        })
+                    })
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+
             let permissions = profile.0.entry(grant.resource_id).or_default();
-            for permission_set_id in grant.permission_set_ids {
+            for permission_set_id in missing {
                 if permissions
                     .iter()
-                    .any(|permission| permission.id() == *permission_set_id)
+                    .any(|permission| permission.id() == permission_set_id)
                 {
                     continue;
                 }
 
-                permissions.push(PermissionSetReference::from_name(*permission_set_id));
+                permissions.push(PermissionSetReference::from_name(permission_set_id));
                 grants_added += 1;
             }
         }
@@ -175,8 +222,8 @@ mod tests {
     use super::*;
     use alien_core::{
         permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig},
-        EnvironmentVariablesSnapshot, ExternalBindings, Platform, Resource, ResourceEntry,
-        ResourceLifecycle, StackSettings, WorkerCode,
+        ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Platform, Resource,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -186,6 +233,41 @@ mod tests {
             hash: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn daemon_without_profile_keeps_links_without_authoring_grants() {
+        let storage = Storage::new("objects".to_string()).build();
+        let daemon = Daemon::new("observer".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "observer:latest".to_string(),
+            })
+            .link(&storage)
+            .build();
+        let links = daemon.links.clone();
+        let stack = Stack::new("example".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Gcp);
+        assert!(!ResourceLinkPermissionsMutation.should_run(&stack, &state, &config));
+        let mutated = ResourceLinkPermissionsMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        assert!(mutated.permissions.profiles.is_empty());
+        let daemon = mutated.resources["observer"]
+            .config
+            .downcast_ref::<Daemon>()
+            .unwrap();
+        assert_eq!(daemon.links, links);
+        assert_eq!(daemon.permissions, None);
     }
 
     #[tokio::test]
@@ -234,6 +316,8 @@ mod tests {
         let mut profiles = IndexMap::new();
         profiles.insert("execution".to_string(), PermissionProfile::new());
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -276,5 +360,229 @@ mod tests {
         assert!(queue_permissions
             .iter()
             .any(|permission| permission.id() == "queue/data-read"));
+    }
+
+    /// A Live sandbox linked from a container whose profile is `profile`, after the link
+    /// mutation, with the stack state and config it ran against.
+    async fn mutate_live_sandbox_link(
+        profile: PermissionProfile,
+    ) -> (Stack, StackState, DeploymentConfig) {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "example.com/sandbox:latest".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let api = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&sandbox)
+            .build();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .add(api, ResourceLifecycle::Live)
+            .build();
+        stack
+            .permissions
+            .profiles
+            .insert("execution".to_string(), profile);
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutated = ResourceLinkPermissionsMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .expect("mutation should succeed");
+        (mutated, stack_state, config)
+    }
+
+    /// The AWS setup check tells a profile that targets a Live resource to grant stack-wide
+    /// instead. A link must not undo that by adding the same grant on the one resource.
+    #[tokio::test]
+    async fn a_stack_wide_grant_satisfies_a_live_link_on_aws() {
+        use crate::deployment_prerequisites::AwsExactPermissionsSetupOwnedCheck;
+        use crate::DeploymentPrerequisiteCheck;
+
+        let (mutated, stack_state, config) =
+            mutate_live_sandbox_link(PermissionProfile::new().global(["sandbox/execute"])).await;
+
+        assert!(!mutated.permissions.profiles["execution"]
+            .0
+            .contains_key("agents"));
+        let result = AwsExactPermissionsSetupOwnedCheck
+            .check(&mutated, &stack_state, &config)
+            .await
+            .expect("check should run");
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    /// An inline set may reuse a built-in id and grant less, so it doesn't stand in for the
+    /// link's built-in grant.
+    #[tokio::test]
+    async fn an_inline_set_with_a_built_in_id_keeps_the_link_grant() {
+        let inline = alien_core::permissions::PermissionSet {
+            id: "sandbox/execute".to_string(),
+            description: "narrower than the built-in set".to_string(),
+            platforms: alien_core::permissions::PlatformPermissions {
+                aws: None,
+                gcp: None,
+                azure: None,
+            },
+        };
+        let (mutated, _, _) = mutate_live_sandbox_link(
+            PermissionProfile::new().global([PermissionSetReference::from_inline(inline)]),
+        )
+        .await;
+
+        assert!(mutated.permissions.profiles["execution"].0["agents"]
+            .iter()
+            .any(|permission| matches!(
+                permission,
+                PermissionSetReference::Name(name) if name == "sandbox/execute"
+            )));
+    }
+
+    #[tokio::test]
+    async fn explicit_resource_permissions_override_link_defaults() {
+        let storage = Storage::new("objects".to_string()).build();
+        let queue = Queue::new("messages".to_string()).build();
+        let container = |id: &str, link_queue: bool| {
+            let builder = Container::new(id.to_string())
+                .code(ContainerCode::Image {
+                    image: "example.com/app:latest".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions(id.to_string())
+                .link(&storage);
+            if link_queue {
+                builder.link(&queue).build()
+            } else {
+                builder.build()
+            }
+        };
+        let sender = container("sender", true);
+        let receiver = container("receiver", true);
+        let automatic = container("automatic", true);
+        let no_access = container("no-access", false);
+        let triggered = Worker::new("triggered".to_string())
+            .permissions("triggered".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/worker:latest".to_string(),
+            })
+            .trigger(WorkerTrigger::queue(&queue))
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(queue, ResourceLifecycle::Frozen)
+            .add(sender, ResourceLifecycle::Live)
+            .add(receiver, ResourceLifecycle::Live)
+            .add(automatic, ResourceLifecycle::Live)
+            .add(no_access, ResourceLifecycle::Live)
+            .add(triggered, ResourceLifecycle::Live)
+            .permission(
+                "sender",
+                PermissionProfile::new()
+                    .resource("objects", ["storage/data-read"])
+                    .resource("messages", ["queue/publish"]),
+            )
+            .permission(
+                "receiver",
+                PermissionProfile::new()
+                    .resource("objects", ["storage/data-read", "storage/data-write"])
+                    .resource("messages", ["queue/data-read"]),
+            )
+            .permission("automatic", PermissionProfile::new())
+            .permission(
+                "no-access",
+                PermissionProfile::new().resource("objects", Vec::<&str>::new()),
+            )
+            .permission(
+                "triggered",
+                PermissionProfile::new().resource("messages", ["queue/data-write"]),
+            )
+            .build();
+
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let mutated = ResourceLinkPermissionsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .expect("mutation should succeed");
+
+        let permission_ids = |profile_name: &str, resource_id: &str| {
+            mutated.permissions.profiles[profile_name].0[resource_id]
+                .iter()
+                .map(|permission| permission.id().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(permission_ids("sender", "objects"), ["storage/data-read"]);
+        assert_eq!(permission_ids("sender", "messages"), ["queue/publish"]);
+        assert_eq!(
+            permission_ids("receiver", "objects"),
+            ["storage/data-read", "storage/data-write"]
+        );
+        assert_eq!(permission_ids("receiver", "messages"), ["queue/data-read"]);
+        assert_eq!(
+            permission_ids("automatic", "objects"),
+            ["storage/data-write"]
+        );
+        assert_eq!(
+            permission_ids("automatic", "messages"),
+            ["queue/data-read", "queue/data-write"]
+        );
+        assert!(permission_ids("no-access", "objects").is_empty());
+        assert_eq!(
+            permission_ids("triggered", "messages"),
+            ["queue/data-write"]
+        );
+
+        for consumer in ["sender", "receiver", "automatic", "no-access"] {
+            let container = mutated.resources[consumer]
+                .config
+                .downcast_ref::<Container>()
+                .expect("linked resource should remain a container");
+            assert!(container.links.iter().any(|link| link.id() == "objects"));
+            if consumer != "no-access" {
+                assert!(container.links.iter().any(|link| link.id() == "messages"));
+            }
+        }
+        let worker = mutated.resources["triggered"]
+            .config
+            .downcast_ref::<Worker>()
+            .expect("triggered resource should remain a worker");
+        assert!(worker.triggers.iter().any(|trigger| {
+            matches!(trigger, WorkerTrigger::Queue { queue } if queue.id() == "messages")
+        }));
     }
 }

@@ -40,6 +40,12 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[builder(default)]
     pub input_values: HashMap<String, serde_json::Value>,
+    /// IDs of applicable secret inputs stored for this exact deployment target.
+    /// Trusted presence metadata only: never values, gate answers, or authority.
+    /// Absent on legacy targets; an explicit empty list means no stored secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub stored_secret_input_ids: Option<Vec<String>>,
     /// Allow frozen resource changes during updates
     /// When true, skips the frozen resources compatibility check.
     /// This requires running with elevated cloud credentials.
@@ -135,6 +141,34 @@ pub struct DeploymentConfig {
     /// - GAR: `{region}-docker.pkg.dev/{project_id}/{repository_name}`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_image_host: Option<String>,
+    /// Operator requests to replace a replica's persistent volume with a new
+    /// volume made from a snapshot. A container controller performs each
+    /// request once, identified by its `request_id`, and reports it in
+    /// `ContainerOutputs.volumes`. Only a volume that a controller reports in
+    /// `ContainerOutputs.volumes` can be the target of a request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub volume_restores: Vec<VolumeRestoreRequest>,
+}
+
+/// Replace one replica's persistent volume with a new volume made from a snapshot.
+///
+/// The controller stops the replica, snapshots the volume it is about to
+/// replace (so the restore can be undone), creates the new volume in the same
+/// zone, starts the replica on it, and deletes the replaced volume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeRestoreRequest {
+    /// Unique ID of this request. A controller performs each request once.
+    pub request_id: String,
+    /// ID of the container resource that owns the volume
+    pub resource_id: String,
+    /// Replica ordinal whose volume is replaced
+    pub ordinal: u32,
+    /// Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
+    /// Engine snapshot name, or an Azure snapshot resource ID
+    pub snapshot_id: String,
 }
 
 /// Resource-attribute key marking OTLP telemetry as Alien system-component
@@ -209,11 +243,72 @@ mod input_values_tests {
         let config: DeploymentConfig =
             serde_json::from_value(json).expect("old shape deserializes");
         assert!(config.input_values.is_empty());
+        assert!(config.stored_secret_input_ids.is_none());
 
         let round = serde_json::to_value(&config).expect("serializes");
+        assert!(round.get("storedSecretInputIds").is_none());
         assert!(
             round.get("inputValues").is_none(),
             "empty map must not serialize"
+        );
+    }
+    #[test]
+    fn stored_secret_presence_roundtrips_without_values_or_gate_answers() {
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        assert!(config.stored_secret_input_ids.is_none());
+        config.stored_secret_input_ids = Some(Vec::new());
+        let empty = serde_json::to_value(&config).unwrap();
+        assert_eq!(empty["storedSecretInputIds"], serde_json::json!([]));
+        assert_eq!(
+            serde_json::from_value::<DeploymentConfig>(empty)
+                .unwrap()
+                .stored_secret_input_ids,
+            Some(Vec::new())
+        );
+        config.stored_secret_input_ids =
+            Some(vec!["apiKey".to_string(), "enableFeature".to_string()]);
+        let wire = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            wire["storedSecretInputIds"],
+            serde_json::json!(["apiKey", "enableFeature"])
+        );
+        assert!(wire.get("inputValues").is_none());
+        let decoded: DeploymentConfig = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            decoded.stored_secret_input_ids,
+            config.stored_secret_input_ids
+        );
+        assert_eq!(serde_json::to_value(decoded.clone()).unwrap(), wire);
+        assert!(decoded.input_values.is_empty());
+        for default in [false, true] {
+            let input: crate::StackInputDefinition = serde_json::from_value(serde_json::json!({
+                "id": "enableFeature", "kind": "boolean", "providedBy": ["deployer"],
+                "required": false, "label": "Enable feature", "description": "", "default": crate::StackInputDefaultValue::Boolean(default)
+            }))
+            .unwrap();
+            assert_eq!(
+                crate::gate_resolves_true(
+                    &[input],
+                    "enableFeature",
+                    &decoded.input_values,
+                    "worker"
+                )
+                .unwrap(),
+                default
+            );
+        }
+        assert!(
+            crate::gate_resolves_true(&[], "enableFeature", &decoded.input_values, "worker")
+                .is_err()
         );
     }
 }

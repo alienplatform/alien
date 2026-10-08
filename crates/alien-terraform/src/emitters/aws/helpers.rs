@@ -252,7 +252,7 @@ fn iam_json_key_order(key: &str) -> u8 {
         "Effect" => 3,
         "Principal" => 4,
         "Action" => 5,
-        "Resource" => 6,
+        "Resource" | "NotResource" => 6,
         "Condition" => 7,
         _ => u8::MAX,
     }
@@ -673,6 +673,7 @@ mod tests {
             effect: "Allow".to_string(),
             action: vec!["s3:GetObject".to_string()],
             resource: vec!["*".to_string()],
+            not_resource: Vec::new(),
             condition: None,
         }
     }

@@ -25,6 +25,8 @@ alien-client-config = { workspace = true }
 alien-commands = { workspace = true, default-features = false, features = ["dispatchers"] }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 alien-k8s-clients = { workspace = true }
+k8s-openapi = { workspace = true }
+sha2 = { workspace = true }
 
 # Async & HTTP
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
@@ -56,8 +58,11 @@ async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
+urlencoding = { workspace = true }
 hostname = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
+alien-tunnel = { workspace = true, features = ["operator"] }
+http = { workspace = true }
 
 # Debug-session tunnel (kubectl forwarding for pull-mode K8s `alien debug`)
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
@@ -85,5 +90,6 @@ windows-service = "0.8"
 fs2 = "0.4"
 
 [dev-dependencies]
+alien-infra = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 temp-env = { workspace = true }

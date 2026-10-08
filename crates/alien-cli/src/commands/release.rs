@@ -6,23 +6,25 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Daemon, DaemonCode, Platform, Stack,
-    StackInputDefinition, StackInputKind, StackInputProvider, Worker, WorkerCode,
+    alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
+    DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
+    StackInputProvider, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
-use alien_manager_api::SdkResultExt;
+use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Parser, Debug, Clone)]
 // The root command sets `version` + `propagate_version`, which pushes an
@@ -85,6 +87,10 @@ pub struct ReleaseArgs {
     /// Channel to advance after creating the release (platform mode).
     #[arg(long, default_value = "production")]
     pub channel: String,
+
+    /// Human-readable title for this release (platform mode).
+    #[arg(long)]
+    pub title: Option<String>,
 
     /// Emit structured JSON output
     #[arg(long)]
@@ -153,6 +159,15 @@ type ReleaseResult = String;
 /// Main entry point for the release command.
 pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
     validate_release_channel(&args.channel, &ctx)?;
+    if let Some(title) = args.title.as_deref() {
+        if !ctx.is_platform() {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "This manager doesn't store release titles; omit --title".to_string(),
+            }));
+        }
+        #[cfg(feature = "platform")]
+        parse_release_title(Some(title))?;
+    }
 
     if args.no_stack {
         let declared = release_declare(&args, &ctx).await?;
@@ -180,20 +195,54 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
     }
 }
 
+#[cfg_attr(not(feature = "platform"), allow(unused_variables))]
 fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
-    if !ctx.is_platform() && channel != "production" {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "channel".to_string(),
-            message: "Named release channels currently require platform mode.".to_string(),
-        }));
-    }
-
+    // A manager you run checks the name, and that the channel exists, itself.
     #[cfg(feature = "platform")]
     if ctx.is_platform() {
         parse_release_channel_name(channel)?;
     }
 
     Ok(())
+}
+
+/// Fails unless `channel` exists in the project.
+#[cfg(feature = "platform")]
+async fn ensure_release_channel_exists(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project_id: &str,
+    channel: &str,
+) -> Result<()> {
+    use alien_platform_api::SdkResultExt as _;
+
+    let client = http.sdk_client();
+    let mut request = client.list_release_channels().project(project_id);
+    if let Some(workspace) = workspace {
+        request = request.workspace(workspace);
+    }
+    let channels = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing release channels".to_string(),
+            url: None,
+        })?;
+    if channels
+        .items
+        .iter()
+        .any(|existing| existing.name.as_str() == channel)
+    {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "channel".to_string(),
+        message: format!(
+            "Release channel '{channel}' does not exist in this project. Create it with \
+             `alien releases create-channel {channel}`."
+        ),
+    }))
 }
 
 #[cfg(feature = "platform")]
@@ -206,6 +255,22 @@ fn parse_release_channel_name(
             message: "Channel names must start with a letter and contain only lowercase letters, numbers, and hyphens.".to_string(),
         })
     })
+}
+
+#[cfg(feature = "platform")]
+fn parse_release_title(
+    title: Option<&str>,
+) -> Result<Option<alien_platform_api::types::CreateReleaseRequestTitle>> {
+    title
+        .map(|value| {
+            value.trim().try_into().map_err(|error| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "title".to_string(),
+                    message: format!("Invalid release title: {error}"),
+                })
+            })
+        })
+        .transpose()
 }
 
 /// Release task that returns JSON-serializable output
@@ -280,6 +345,20 @@ async fn load_release_config(
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
     let workspace_name = project_link.workspace.clone();
+
+    // A release is created only after every image is pushed, which can take many minutes, so a
+    // channel the project doesn't have is refused before any of that work.
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let workspace = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+        ensure_release_channel_exists(
+            &ctx.auth_http().await?,
+            workspace.as_deref(),
+            &project_link.project_id,
+            &args.channel,
+        )
+        .await?;
+    }
 
     let is_dev = ctx.is_dev();
 
@@ -401,6 +480,9 @@ async fn load_release_config(
     } else {
         None
     };
+    if let Some(manager) = &manager {
+        ensure_manager_channel(manager, &args.channel).await?;
+    }
 
     let git_metadata = if args.no_git {
         None
@@ -515,54 +597,31 @@ async fn release_task_core(
             // registry prefix (ECR, GAR, ACR, local Docker). In platform mode,
             // resolve_manager calls the platform API to get the per-project
             // repo name for this specific platform.
-            let push_settings = if let Some(ref image_repo) = args.image_repo {
-                create_manual_push_settings(&args, image_repo)?
-            } else {
-                let per_platform = ctx
-                    .resolve_manager(&project_link.project_id, platform_str)
-                    .await?;
-                build_proxy_push_settings(&per_platform, &platform).await?
-            };
+            let (push_settings, public_registry_host) =
+                if let Some(ref image_repo) = args.image_repo {
+                    (create_manual_push_settings(&args, image_repo)?, None)
+                } else {
+                    let per_platform = ctx
+                        .resolve_manager(&project_link.project_id, platform_str)
+                        .await?;
+                    build_proxy_push_settings(&per_platform, &platform).await?
+                };
 
-            // Load push cache — maps content-hashed dir names to previously pushed URIs.
-            // Cache entries are reusable only within the resolved destination repository;
-            // the same local build may be released to multiple managers or projects.
-            let mut push_cache = load_push_cache(&output_dir, platform_str);
-
-            // Keep a copy of the stack before cache application so we can map
-            // original local paths → pushed URIs for cache updates later.
-            let pre_push_stack = built_stack.clone();
-
-            // Apply cached URIs to skip pushing already-pushed artifacts.
-            let cache_hits =
-                apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
-            if cache_hits > 0 {
-                info!(
-                    "   Skipping push for {} resource(s) (already pushed)",
-                    cache_hits
-                );
+            let mut pushed =
+                push_stack_with_cache(built_stack, platform, &output_dir, &push_settings)
+                    .await
+                    .context(ErrorData::ReleaseFailed {
+                        message: format!("Failed to push images for {} platform", platform_str),
+                    })?;
+            if let Some(public_host) = public_registry_host {
+                let push_host = push_settings
+                    .repository
+                    .split('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                retarget_stack_registry(&mut pushed, &push_host, &public_host);
             }
-
-            info!("   Pushing images to {}...", push_settings.repository);
-
-            let push_started = Instant::now();
-            let pushed = alien_build::push_stack(built_stack, platform.clone(), &push_settings)
-                .await
-                .context(ErrorData::ReleaseFailed {
-                    message: format!("Failed to push images for {} platform", platform_str),
-                })?;
-            info!(
-                "Push for platform '{}' completed in {:.2}s",
-                platform_str,
-                push_started.elapsed().as_secs_f64()
-            );
-
-            // Update and persist the push cache with newly pushed URIs
-            collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
-            if let Err(e) = save_push_cache(&output_dir, platform_str, &push_cache) {
-                info!("Warning: Failed to save push cache: {}", e);
-            }
-
             pushed
         } else {
             built_stack
@@ -610,6 +669,7 @@ async fn release_task_core(
             &project_link.project_id,
             stack_by_platform,
             sdk_git_metadata,
+            &args.channel,
         )
         .await?
     } else {
@@ -624,6 +684,7 @@ async fn release_task_core(
                 stack_by_platform,
                 git_metadata,
                 &args.channel,
+                args.title.as_deref(),
             )
             .await?
         }
@@ -646,6 +707,35 @@ async fn release_task_core(
     Ok(release_id)
 }
 
+/// Fail before building when a manager you run has no such channel.
+/// `production` always exists: the first release creates it.
+async fn ensure_manager_channel(manager: &ManagerContext, channel: &str) -> Result<()> {
+    if channel == "production" {
+        return Ok(());
+    }
+    let channels = manager
+        .client
+        .list_manager_release_channels()
+        .send()
+        .await
+        .into_sdk_error_reading_body()
+        .await
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing release channels".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    if channels.items.iter().any(|item| item.name == channel) {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "channel".to_string(),
+        message: format!(
+            "No channel named '{channel}'. Create it with `alien releases create-channel {channel}`."
+        ),
+    }))
+}
+
 /// Create a release on the manager
 #[alien_event(AlienEvent::CreatingRelease {
     project: "release".to_string(),
@@ -655,6 +745,7 @@ async fn create_manager_release(
     project_id: &str,
     stack: ManagerStackByPlatform,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
+    channel: &str,
 ) -> Result<String> {
     info!("Creating release on manager...");
 
@@ -665,10 +756,12 @@ async fn create_manager_release(
             stack,
             git_metadata,
             project_id: project_id.to_string(),
+            channel: Some(channel.to_string()),
         })
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create release".to_string(),
             url: None,
@@ -695,6 +788,7 @@ async fn create_platform_release(
     stack: ManagerStackByPlatform,
     git_metadata: Option<GitMetadata>,
     channel: &str,
+    title: Option<&str>,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
 
@@ -724,7 +818,8 @@ async fn create_platform_release(
         .project(project_id.to_string())
         .stack(platform_stack)
         .channel(channel)
-        .git_metadata(git_metadata);
+        .git_metadata(git_metadata)
+        .title(parse_release_title(title)?);
 
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
         AlienError::new(ErrorData::ApiRequestFailed {
@@ -793,8 +888,7 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
 
     if ctx.is_standalone() || ctx.is_dev() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Declaring a stackless release (--no-stack) requires platform mode."
-                .to_string(),
+            message: "This manager doesn't support stackless releases (--no-stack).".to_string(),
         }));
     }
 
@@ -817,6 +911,13 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
     #[cfg(feature = "platform")]
     {
         let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
+        ensure_release_channel_exists(
+            &ctx.auth_http().await?,
+            workspace_query.as_deref(),
+            &project_link.project_id,
+            &args.channel,
+        )
+        .await?;
         let release_id = declare_platform_release(
             ctx,
             &project_link.project_id,
@@ -824,6 +925,7 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
             &version,
             git_metadata,
             &args.channel,
+            args.title.as_deref(),
         )
         .await?;
         Ok(DeclaredRelease {
@@ -850,6 +952,7 @@ async fn declare_platform_release(
     version: &str,
     git_metadata: Option<GitMetadata>,
     channel: &str,
+    title: Option<&str>,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
 
@@ -871,7 +974,8 @@ async fn declare_platform_release(
         .project(project_id.to_string())
         .version(version)
         .channel(channel)
-        .git_metadata(git_metadata);
+        .git_metadata(git_metadata)
+        .title(parse_release_title(title)?);
 
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
         AlienError::new(ErrorData::ApiRequestFailed {
@@ -1020,7 +1124,7 @@ async fn auto_build_for_platforms(
     Ok(())
 }
 
-fn auto_build_settings_for_platform(
+pub(crate) fn auto_build_settings_for_platform(
     platform_str: &str,
     output_dir: &PathBuf,
     override_base_image: Option<String>,
@@ -1074,6 +1178,8 @@ fn auto_build_settings_for_platform(
         cache_url: None,
         override_base_image,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     })
 }
 
@@ -1211,18 +1317,21 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 /// The manager IS the container registry. Images are pushed to
 /// `{manager_url}/v2/{repo_name}/{name}:{tag}` using the caller's auth token.
 /// The proxy forwards to the upstream cloud registry transparently.
+/// Push settings for the manager's registry proxy, plus the registry host
+/// deployments pull from when the manager advertises one that differs from
+/// the address this CLI pushes through.
 async fn build_proxy_push_settings(
     manager: &ManagerContext,
     platform: &Platform,
-) -> Result<PushSettings> {
+) -> Result<(PushSettings, Option<String>)> {
     let manager_url = &manager.manager_url;
 
     // Repository name — the upstream repo prefix. The proxy forwards the OCI
     // path as-is, so this must match the upstream repository name.
     // First try the statically-known repository_name (from platform mode).
     // If not available, call the manager's build-config endpoint to discover it.
-    let repo_name = if let Some(ref name) = manager.repository_name {
-        name.clone()
+    let (repo_name, registry_host) = if let Some(ref name) = manager.repository_name {
+        (name.clone(), None)
     } else {
         // Standalone mode: call the manager's build-config endpoint directly
         // to discover the repository name for this platform.
@@ -1264,7 +1373,12 @@ async fn build_proxy_push_settings(
                     message: "Failed to parse build-config response".to_string(),
                 })?;
 
-        bc.get("repositoryName")
+        let registry_host = bc
+            .get("registryHost")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let repo_name = bc
+            .get("repositoryName")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| {
@@ -1273,18 +1387,38 @@ async fn build_proxy_push_settings(
                               Use --image-repo to specify a container registry."
                         .to_string(),
                 })
-            })?
+            })?;
+        (repo_name, registry_host)
     };
 
-    // Strip scheme to get the registry host (OCI clients use host:port, not URLs).
-    let registry_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
+    let settings = manager_proxy_push_settings(manager_url, &repo_name, manager)?;
+    let push_host = alien_core::image_rewrite::strip_url_scheme(manager_url).to_string();
+    Ok((
+        settings,
+        registry_host.filter(|public| *public != push_host),
+    ))
+}
 
-    // Translate host.docker.internal → localhost for CLI access (dev mode).
+/// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
+/// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
+pub(crate) fn manager_proxy_push_settings(
+    registry_host: &str,
+    repository: &str,
+    manager: &ManagerContext,
+) -> Result<PushSettings> {
+    // A manager served over plain HTTP (a trial install without a
+    // certificate) must be pushed to over HTTP, whatever its host name.
+    let plain_http = registry_host.starts_with("http://");
+    // OCI clients address a registry as host:port, not as a URL.
+    let registry_host = alien_core::image_rewrite::strip_url_scheme(registry_host);
     let (registry_host, protocol) =
-        translate_registry_url_for_cli(&registry_host, &Platform::Local)?;
-
-    // Full repository: host/repo_name (e.g., "manager.alien.dev/alien-e2e")
-    let repository = format!("{}/{}", registry_host, repo_name);
+        translate_registry_url_for_cli(registry_host, &Platform::Local)?;
+    let protocol = if plain_http {
+        ClientProtocol::Http
+    } else {
+        protocol
+    };
+    let repository = format!("{registry_host}/{repository}");
 
     // OCI speaks Basic — the token rides in the password slot, the
     // workspace rides in the username slot. OCI clients can't add custom
@@ -1418,6 +1552,7 @@ fn onboard_command_hint(config: &ReleaseConfig) -> String {
         .iter()
         .filter(|input| input.required)
         .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .filter(|input| !is_deployer_secret_input(input))
         .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
         .collect::<Vec<_>>();
 
@@ -1535,6 +1670,53 @@ fn parse_kubernetes_base_platform(
 /// `.alien[-target]/build/{platform}/{artifact}` paths before pushing. The
 /// artifact path may point at a different platform than the release currently
 /// being pushed when platforms share a built image.
+/// Point image references pushed through `push_host` at `public_host`, the
+/// address deployments pull from. The images are the same; only the registry
+/// host in the reference changes.
+fn retarget_stack_registry(stack: &mut Stack, push_host: &str, public_host: &str) {
+    let prefix = format!("{push_host}/");
+    let retarget = |image: &str| {
+        image
+            .strip_prefix(&prefix)
+            .map(|rest| format!("{public_host}/{rest}"))
+    };
+    for (_resource_id, entry) in stack.resources_mut() {
+        if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { image } = &worker.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = worker.clone();
+                    updated.code = WorkerCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        } else if let Some(container) = entry.config.downcast_ref::<Container>() {
+            if let ContainerCode::Image { image } = &container.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = container.clone();
+                    updated.code = ContainerCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            if let DaemonCode::Image { image } = &daemon.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = daemon.clone();
+                    updated.code = DaemonCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+            if let SandboxCode::Image { image } = &sandbox.code {
+                if let Some(image) = retarget(image) {
+                    let mut updated = sandbox.clone();
+                    updated.code = SandboxCode::Image { image };
+                    entry.config = alien_core::Resource::new(updated);
+                }
+            }
+        }
+    }
+}
+
 fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Result<()> {
     for (_resource_id, resource_entry) in stack.resources_mut() {
         if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
@@ -1580,6 +1762,21 @@ fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Re
                 }
                 DaemonCode::Source { .. } => {
                     return Err(prebuilt_source_error("Daemon", &daemon.id));
+                }
+            }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            match &sandbox.code {
+                SandboxCode::Image { image } => {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("sandbox", &sandbox.id, image, output_dir)?
+                    {
+                        let mut updated = sandbox.clone();
+                        updated.code = SandboxCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
+                }
+                SandboxCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Sandbox", &sandbox.id));
                 }
             }
         }
@@ -1678,15 +1875,105 @@ fn prebuilt_source_error(resource_type: &str, resource_id: &str) -> AlienError<E
 // pushed remote image URIs. This lets `alien release` skip pushing when the
 // same build artifacts were already pushed in a prior release.
 
-/// Push cache file name, stored at `.alien/build/{platform}/push-cache.json`.
-const PUSH_CACHE_FILE: &str = "push-cache.json";
+/// Push cache file name, stored at `.alien/build/{platform}/push-cache-v2.json`.
+const PUSH_CACHE_FILE: &str = "push-cache-v2.json";
+
+/// Pushes the built stack's local images, reusing the pushed reference of any artifact already
+/// pushed to the same repository. `push_stack` tags every push afresh, so this cache is what
+/// keeps an unchanged artifact's reference stable across runs.
+async fn push_stack_with_cache(
+    mut built_stack: Stack,
+    platform: Platform,
+    output_dir: &PathBuf,
+    push_settings: &PushSettings,
+) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
+    if platform == Platform::Aws {
+        alien_build::validate_aws_worker_artifacts(&built_stack)?;
+    }
+    let platform_str = platform.as_str();
+    let mut push_cache = load_push_cache(output_dir, platform_str);
+    drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings).await;
+    let pre_push_stack = built_stack.clone();
+
+    let cache_hits = apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
+    if cache_hits > 0 {
+        info!(
+            "   Skipping push for {} resource(s) (already pushed)",
+            cache_hits
+        );
+    }
+
+    info!("   Pushing images to {}...", push_settings.repository);
+
+    let push_started = Instant::now();
+    let pushed = alien_build::push_stack(built_stack, platform, push_settings).await?;
+    info!(
+        "Push for platform '{}' completed in {:.2}s",
+        platform_str,
+        push_started.elapsed().as_secs_f64()
+    );
+
+    collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
+    if let Err(e) = save_push_cache(output_dir, platform_str, &push_cache) {
+        warn!(error = %e, "Failed to save push cache");
+    }
+
+    Ok(pushed)
+}
+
+/// Forget cached pushes this stack would reuse that the registry can't
+/// confirm it still has (a manager whose state was reset, a pruned
+/// repository), so they're pushed again instead of released as references to
+/// nothing. A lookup the registry refuses (a push-only token can't read
+/// manifests) also means pushing again: that is always correct, just slower.
+async fn drop_images_missing_from_registry(
+    stack: &Stack,
+    cache: &mut HashMap<String, String>,
+    push_settings: &PushSettings,
+) {
+    let mut reused = stack.clone();
+    if apply_push_cache(&mut reused, cache, &push_settings.repository) == 0 {
+        return;
+    }
+    let mut hits = HashMap::new();
+    collect_push_cache_entries(&reused, stack, &mut hits);
+    for (key, image) in hits {
+        match alien_build::registry::manifest_digest(&image, &push_settings.options).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                info!("   {image} is no longer in the registry; pushing it again");
+                cache.remove(&key);
+            }
+            Err(e) => {
+                info!(
+                    "   Couldn't confirm {image} is still in the registry ({e}); pushing it again"
+                );
+                cache.remove(&key);
+            }
+        }
+    }
+}
+
+fn push_cache_file_name(platform: &str) -> String {
+    if platform == "aws" {
+        // Older entries may resolve to multi-architecture or zstd Worker images.
+        "push-cache-v3.json".to_string()
+    } else if platform == "local" {
+        format!(
+            "push-cache-v2-{}.json",
+            alien_core::BinaryTarget::current_os().runtime_platform_id()
+        )
+    } else {
+        PUSH_CACHE_FILE.to_string()
+    }
+}
 
 /// Load the push cache for a platform. Returns an empty map on any error.
 fn load_push_cache(output_dir: &PathBuf, platform: &str) -> HashMap<String, String> {
     let cache_path = output_dir
         .join("build")
         .join(platform)
-        .join(PUSH_CACHE_FILE);
+        .join(push_cache_file_name(platform));
     match fs::read_to_string(&cache_path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
         Err(_) => HashMap::new(),
@@ -1702,19 +1989,34 @@ fn save_push_cache(
     let cache_path = output_dir
         .join("build")
         .join(platform)
-        .join(PUSH_CACHE_FILE);
+        .join(push_cache_file_name(platform));
     let content = serde_json::to_string_pretty(cache)
         .into_alien_error()
         .context(ErrorData::JsonError {
             operation: "serialize".to_string(),
             reason: "Failed to serialize push cache".to_string(),
         })?;
-    fs::write(&cache_path, content)
+    // Written through a temp file: a truncated cache reads back as empty, which re-pushes
+    // every artifact under a new tag. Each write gets its own temp file, so two releases in
+    // one directory never rename each other's half-written cache.
+    let write_failed = || ErrorData::FileOperationFailed {
+        operation: "write".to_string(),
+        file_path: cache_path.display().to_string(),
+        reason: "Failed to write push cache".to_string(),
+    };
+    let mut tmp = tempfile::NamedTempFile::new_in(cache_path.parent().unwrap_or(Path::new(".")))
+        .into_alien_error()
+        .context(write_failed())?;
+    tmp.write_all(content.as_bytes())
+        .into_alien_error()
+        .context(write_failed())?;
+    tmp.persist(&cache_path)
+        .map_err(|error| error.error)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
-            operation: "write".to_string(),
+            operation: "rename".to_string(),
             file_path: cache_path.display().to_string(),
-            reason: "Failed to write push cache".to_string(),
+            reason: "Failed to replace push cache".to_string(),
         })?;
     Ok(())
 }
@@ -1739,9 +2041,12 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
     let mut hits = 0;
 
     for (_resource_id, resource_entry) in stack.resources_mut() {
+        let cache_kind = resource_entry.config.resource_type().as_ref().to_string();
         if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
             if let WorkerCode::Image { ref image } = func.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -1759,7 +2064,9 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(container) = resource_entry.config.downcast_mut::<Container>() {
             if let ContainerCode::Image { ref image } = container.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -1777,7 +2084,9 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(daemon) = resource_entry.config.downcast_mut::<Daemon>() {
             if let DaemonCode::Image { ref image } = daemon.code {
-                if let Some(key) = cache_key_from_path(image) {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -1787,6 +2096,26 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
                             daemon.id, key, cached_uri
                         );
                         daemon.code = DaemonCode::Image {
+                            image: cached_uri.clone(),
+                        };
+                        hits += 1;
+                    }
+                }
+            }
+        } else if let Some(sandbox) = resource_entry.config.downcast_mut::<Sandbox>() {
+            if let SandboxCode::Image { ref image } = sandbox.code {
+                if let Some(key) =
+                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
+                {
+                    if let Some(cached_uri) = cache
+                        .get(&key)
+                        .filter(|uri| image_uri_belongs_to_repository(uri, repository))
+                    {
+                        info!(
+                            "Push cache hit for sandbox '{}': {} → {}",
+                            sandbox.id, key, cached_uri
+                        );
+                        sandbox.code = SandboxCode::Image {
                             image: cached_uri.clone(),
                         };
                         hits += 1;
@@ -1831,6 +2160,11 @@ fn collect_push_cache_entries(
                     return Some((id.clone(), image.clone()));
                 }
             }
+            if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+                if let SandboxCode::Image { ref image } = sandbox.code {
+                    return Some((id.clone(), image.clone()));
+                }
+            }
             None
         })
         .collect();
@@ -1854,6 +2188,12 @@ fn collect_push_cache_entries(
             } else {
                 None
             }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            if let SandboxCode::Image { ref image } = sandbox.code {
+                Some(image.clone())
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -1868,7 +2208,10 @@ fn collect_push_cache_entries(
             // Find the original local path for this resource to use as cache key
             if let Some(original_path) = pre_push_images.get(resource_id) {
                 if let Some(key) = cache_key_from_path(original_path) {
-                    cache.insert(key, uri);
+                    cache.insert(
+                        format!("{}:{}", resource_entry.config.resource_type().as_ref(), key),
+                        uri,
+                    );
                 }
             }
         }
@@ -1879,6 +2222,125 @@ fn collect_push_cache_entries(
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+
+    #[tokio::test]
+    async fn cached_aws_worker_still_validates_its_local_archive_before_registry_access() {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        let artifact = output_dir.join("build/aws/job-oldhash");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let layer = dockdash::Layer::builder()
+            .unwrap()
+            .data("/app/job", b"legacy application", Some(0o755))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        dockdash::Image::builder()
+            .platform("linux", &dockdash::Arch::ARM64)
+            .layer(layer)
+            .output_to(artifact.join("linux-aarch64.oci.tar"))
+            .build()
+            .await
+            .unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("job".to_string())
+            .code(WorkerCode::Image {
+                image: artifact.display().to_string(),
+            })
+            .build();
+        let stack = Stack::new("cached-worker".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let server = httpmock::MockServer::start_async().await;
+        let requests = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500);
+            })
+            .await;
+        let repository = format!("{}/tests/worker", server.address());
+        let cache = HashMap::from([(
+            "worker:job-oldhash".to_string(),
+            format!("{repository}:legacy"),
+        )]);
+        save_push_cache(&output_dir, "aws", &cache).unwrap();
+        let settings = PushSettings {
+            repository,
+            destination_label: None,
+            options: dockdash::PushOptions {
+                protocol: ClientProtocol::Http,
+                ..Default::default()
+            },
+        };
+        let error = push_stack_with_cache(stack, Platform::Aws, &output_dir, &settings)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
+        assert!(error.to_string().contains("zstd"));
+        assert_eq!(requests.hits_async().await, 0);
+    }
+
+    #[test]
+    fn legacy_aws_push_cache_is_not_reused_but_other_platform_caches_are() {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        let legacy = HashMap::from([(
+            "worker:job-oldhash".to_string(),
+            "registry.example.com/job:multiarch".to_string(),
+        )]);
+        for platform in ["aws", "gcp"] {
+            let dir = output_dir.join("build").join(platform);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(PUSH_CACHE_FILE),
+                serde_json::to_vec(&legacy).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(load_push_cache(&output_dir, "aws").is_empty());
+        assert_eq!(load_push_cache(&output_dir, "gcp"), legacy);
+        let current = HashMap::from([(
+            "worker:job-newhash".to_string(),
+            "registry.example.com/job:arm64-gzip".to_string(),
+        )]);
+        save_push_cache(&output_dir, "aws", &current).unwrap();
+        assert_eq!(load_push_cache(&output_dir, "aws"), current);
+        assert_eq!(load_push_cache(&output_dir, "gcp"), legacy);
+    }
+
+    #[test]
+    fn concurrent_push_cache_writes_each_land_whole() {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        std::fs::create_dir_all(output_dir.join("build/aws")).unwrap();
+
+        let writers = (0..8)
+            .map(|writer| {
+                let output_dir = output_dir.clone();
+                std::thread::spawn(move || {
+                    let cache = HashMap::from([(format!("worker-{writer}"), writer.to_string())]);
+                    for _ in 0..25 {
+                        save_push_cache(&output_dir, "aws", &cache)
+                            .expect("a concurrent write should not fail");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        assert_eq!(load_push_cache(&output_dir, "aws").len(), 1);
+        let files = std::fs::read_dir(output_dir.join("build/aws"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            files,
+            [std::ffi::OsString::from(push_cache_file_name("aws"))]
+        );
+    }
 
     #[tokio::test]
     async fn prebuilt_release_does_not_load_source_configuration() {
@@ -1901,6 +2363,77 @@ mod tests {
             .build()
     }
 
+    fn sandbox_with_image(image: &str) -> Sandbox {
+        Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    /// A sandbox earns the same cache the other compute types do, so an unchanged one is not
+    /// re-pushed on every release. A bundle URI is left alone: it names no local artifact.
+    #[test]
+    fn push_cache_applies_and_collects_for_sandboxes() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("sbx-9f8e7d6c");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let cache = HashMap::from([(
+            "sandbox:sbx-9f8e7d6c".to_string(),
+            "registry.example.com/base:tag".to_string(),
+        )]);
+        let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/base");
+        assert_eq!(hits, 1, "sandbox local path should hit the cache");
+        let sandbox = stack
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>().cloned())
+            .expect("sandbox should exist");
+        assert_eq!(
+            sandbox.code,
+            SandboxCode::Image {
+                image: "registry.example.com/base:tag".to_string()
+            }
+        );
+
+        let pre_push = Stack::new("cache-test".to_string())
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let pushed = Stack::new("cache-test".to_string())
+            .add(
+                sandbox_with_image("registry.example.com/base:pushed"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut collected = HashMap::new();
+        collect_push_cache_entries(&pushed, &pre_push, &mut collected);
+        assert_eq!(
+            collected.get("sandbox:sbx-9f8e7d6c").map(String::as_str),
+            Some("registry.example.com/base:pushed")
+        );
+
+        let mut bundle_stack = Stack::new("cache-test".to_string())
+            .add(
+                sandbox_with_image("s3://acme-bundles-us-east-1/sandbox-bundle/abc/bundle.zip"),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        assert_eq!(
+            apply_push_cache(&mut bundle_stack, &cache, "registry.example.com/base"),
+            0,
+            "a bundle URI names no artifact the cache could have pushed"
+        );
+    }
+
     #[test]
     fn push_cache_applies_and_collects_for_daemons() {
         let local_dir = tempfile::tempdir().unwrap();
@@ -1913,7 +2446,7 @@ mod tests {
             .add(daemon_with_image(&local_path), ResourceLifecycle::Live)
             .build();
         let cache = HashMap::from([(
-            "operator-a1b2c3d4".to_string(),
+            "daemon:operator-a1b2c3d4".to_string(),
             "registry.example.com/operator:tag".to_string(),
         )]);
         let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/operator");
@@ -1942,9 +2475,44 @@ mod tests {
         let mut collected = HashMap::new();
         collect_push_cache_entries(&pushed, &pre_push, &mut collected);
         assert_eq!(
-            collected.get("operator-a1b2c3d4").map(String::as_str),
+            collected
+                .get("daemon:operator-a1b2c3d4")
+                .map(String::as_str),
             Some("registry.example.com/operator:pushed")
         );
+    }
+
+    #[test]
+    fn native_worker_cache_does_not_replace_a_linux_resource_sharing_its_artifacts() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("shared-artifacts");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(
+                Worker::new("worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: local_path.clone(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let cache = HashMap::from([(
+            "worker:shared-artifacts".to_string(),
+            "registry.example.com/base:native".to_string(),
+        )]);
+        assert_eq!(
+            apply_push_cache(&mut stack, &cache, "registry.example.com/base"),
+            1
+        );
+        let sandbox = stack
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+            .unwrap();
+        assert_eq!(sandbox.code, SandboxCode::Image { image: local_path });
     }
 
     #[test]
@@ -1965,7 +2533,7 @@ mod tests {
             )
             .build();
         let cache = HashMap::from([(
-            "worker-a1b2c3d4".to_string(),
+            "worker:worker-a1b2c3d4".to_string(),
             "manager.dev.example/artifacts-project-a:worker-tag".to_string(),
         )]);
 
@@ -2209,6 +2777,8 @@ mod tests {
                 cache_url: None,
                 override_base_image: None,
                 debug_mode: false,
+                rebuild: false,
+                pull_base_images: false,
             },
         }
     }
@@ -2233,5 +2803,85 @@ mod tests {
             ContainerCode::Image { image } => image,
             ContainerCode::Source { .. } => panic!("expected image container"),
         }
+    }
+
+    /// A release is created only after every image is pushed, so the release flow must refuse a
+    /// missing channel before it loads the stack. The test runs in a directory with no stack:
+    /// an existing channel gets past the check and fails on the stack, a missing one fails on
+    /// the channel.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_missing_release_channel_fails_before_the_stack_is_loaded() {
+        use axum::{extract::Query, routing::get, Json, Router};
+
+        let project = || {
+            serde_json::json!({
+                "id": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "name": "sample",
+                "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+                "createdAt": "2026-01-01T00:00:00Z",
+            })
+        };
+        let app = Router::new()
+            .route(
+                "/v1/projects/sample",
+                get(move || async move { Json(project()) }),
+            )
+            .route(
+                "/v1/release-channels",
+                get(|Query(query): Query<HashMap<String, String>>| async move {
+                    assert_eq!(
+                        query.get("project").map(String::as_str),
+                        Some("prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                    );
+                    assert_eq!(
+                        query.get("workspace").map(String::as_str),
+                        Some("sample-workspace")
+                    );
+                    Json(serde_json::json!({ "items": [{
+                        "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+                        "projectId": "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "name": "production",
+                        "currentReleaseId": null,
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "updatedAt": "2026-01-01T00:00:00Z",
+                    }] }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ctx = ExecutionMode::Platform {
+            base_url,
+            api_key: Some("test-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: Some("sample".to_string()),
+        };
+        let release = |channel: &str| {
+            ReleaseArgs::try_parse_from(["release", "--channel", channel]).expect("valid args")
+        };
+
+        let missing = load_release_config(&release("canary"), &ctx, false, false)
+            .await
+            .err()
+            .expect("a missing channel is refused");
+        assert!(
+            missing
+                .message
+                .contains("`alien releases create-channel canary`"),
+            "{}",
+            missing.message
+        );
+
+        let existing = load_release_config(&release("production"), &ctx, false, false)
+            .await
+            .err()
+            .expect("there is no stack to release here");
+        assert!(
+            existing.message.contains("Failed to load configuration"),
+            "an existing channel passes the check and the flow reaches the stack: {}",
+            existing.message
+        );
     }
 }

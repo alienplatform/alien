@@ -3,7 +3,7 @@ use progenitor::{GenerationSettings, InterfaceStyle};
 #[path = "build/openapi_filter.rs"]
 mod openapi_filter;
 
-// The deduplicated filtered client currently generates about 195,000 lines. Leave enough
+// The deduplicated filtered client currently generates about 214,000 lines. Leave enough
 // room for normal API evolution while catching accidental graph explosions.
 const MAX_FILTERED_GENERATED_LINES: usize = 240_000;
 
@@ -35,7 +35,9 @@ fn run() {
         serde_json::from_value(filtered_spec).unwrap()
     };
     let mut generator = progenitor::Generator::new(
-        GenerationSettings::new().with_interface(InterfaceStyle::Builder),
+        GenerationSettings::new()
+            .with_interface(InterfaceStyle::Builder)
+            .with_crate("std", progenitor::CrateVers::Any, None),
     );
 
     let tokens = generator.generate_tokens(&spec).unwrap();

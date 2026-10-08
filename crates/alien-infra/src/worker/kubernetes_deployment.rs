@@ -9,8 +9,8 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
-    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    projected_env_vars, EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
     ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
@@ -110,10 +110,19 @@ pub(super) async fn build_worker_deployment(
             name: name.to_string(),
         }]
     });
-    let pod_annotations = env_secret_plan
-        .map(|plan| BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())]));
+    let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
+    // Source images share the stack build target. Workers do not select a
+    // compute pool, but must still run on nodes compatible with that image.
+    let node_selector = alien_core::kubernetes_compute_node_selector(ctx.desired_stack, None)
+        .map_err(|message| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message,
+            })
+        })?;
     let pod_spec = PodSpec {
+        node_selector,
         service_account_name: Some(service_account_name.to_string()),
         containers: vec![container],
         restart_policy: Some("Always".to_string()),
@@ -207,6 +216,63 @@ mod tests {
     };
 
     use super::{build_worker_deployment, KubernetesWorkerController};
+
+    #[tokio::test]
+    async fn worker_manifest_matches_the_stack_source_build_architecture() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let compute = alien_core::ComputeCluster::new("compute".to_string())
+            .capacity_group(alien_core::CapacityGroup {
+                group_id: "apps".to_string(),
+                instance_type: None,
+                profile: Some(alien_core::MachineProfile {
+                    cpu: "2".to_string(),
+                    memory_bytes: 4 << 30,
+                    ephemeral_storage_bytes: 20 << 30,
+                    architecture: Some(alien_core::instance_catalog::Architecture::X86_64),
+                    gpu: None,
+                }),
+                min_size: 1,
+                max_size: 3,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        let stack = alien_core::Stack::new("test".to_string())
+            .add(compute, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let harness = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new());
+        let mut ctx = harness.ctx();
+        ctx.desired_stack = &stack;
+        let manifest = build_worker_deployment(
+            &KubernetesWorkerController::default(),
+            &worker,
+            "api",
+            "test-ns",
+            "api-sa",
+            None,
+            None,
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let selector = manifest
+            .spec
+            .unwrap()
+            .template
+            .spec
+            .unwrap()
+            .node_selector
+            .unwrap();
+        assert_eq!(
+            selector.get("kubernetes.io/arch").map(String::as_str),
+            Some("amd64")
+        );
+    }
 
     #[tokio::test]
     async fn worker_manifest_projects_secrets_without_alien_secrets_pointer() {

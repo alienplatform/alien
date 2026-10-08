@@ -21,7 +21,7 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
-use alien_error::ContextError;
+use alien_error::{AlienError, ContextError};
 use async_trait::async_trait;
 use bon::Builder;
 use form_urlencoded;
@@ -116,6 +116,10 @@ pub trait Elbv2Api: Send + Sync + std::fmt::Debug {
         request: ModifyListenerRequest,
     ) -> Result<ModifyListenerResponse>;
     async fn delete_listener(&self, listener_arn: &str) -> Result<()>;
+
+    // Tag Operations
+    /// Reads the tags of up to 20 load balancers, target groups or listeners.
+    async fn describe_tags(&self, resource_arns: Vec<String>) -> Result<DescribeTagsResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,6 +1137,27 @@ impl Elbv2Api for Elbv2Client {
             .await
     }
 
+    async fn describe_tags(&self, resource_arns: Vec<String>) -> Result<DescribeTagsResponse> {
+        if resource_arns.is_empty() || resource_arns.len() > DESCRIBE_TAGS_MAX_ARNS {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                message: format!(
+                    "DescribeTags takes 1 to {DESCRIBE_TAGS_MAX_ARNS} resource ARNs, got {}",
+                    resource_arns.len()
+                ),
+                field_name: Some("resource_arns".to_string()),
+            }));
+        }
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DescribeTags".to_string());
+        form_data.insert("Version".to_string(), "2015-12-01".to_string());
+        for (i, arn) in resource_arns.iter().enumerate() {
+            form_data.insert(format!("ResourceArns.member.{}", i + 1), arn.clone());
+        }
+
+        self.send_form(form_data, "DescribeTags", "ElbResourceTags")
+            .await
+    }
+
     async fn delete_listener(&self, listener_arn: &str) -> Result<()> {
         let mut form_data = HashMap::new();
         form_data.insert("Action".to_string(), "DeleteListener".to_string());
@@ -1147,6 +1172,62 @@ impl Elbv2Api for Elbv2Client {
 // ---------------------------------------------------------------------------
 // Common Types
 // ---------------------------------------------------------------------------
+
+/// The most resource ARNs one DescribeTags call accepts.
+pub const DESCRIBE_TAGS_MAX_ARNS: usize = 20;
+
+/// Response from describing the tags of ELB resources.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeTagsResponse {
+    pub describe_tags_result: DescribeTagsResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeTagsResult {
+    pub tag_descriptions: Option<TagDescriptionsWrapper>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TagDescriptionsWrapper {
+    #[serde(rename = "member", default)]
+    pub members: Vec<TagDescription>,
+}
+
+/// The tags of one ELB resource.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TagDescription {
+    pub resource_arn: Option<String>,
+    pub tags: Option<ResourceTagsWrapper>,
+}
+
+impl TagDescription {
+    /// The value of the tag with this key, if the resource carries it.
+    pub fn tag_value(&self, key: &str) -> Option<&str> {
+        self.tags
+            .as_ref()?
+            .members
+            .iter()
+            .find(|tag| tag.key == key)
+            .map(|tag| tag.value.as_deref().unwrap_or_default())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceTagsWrapper {
+    #[serde(rename = "member", default)]
+    pub members: Vec<ResourceTag>,
+}
+
+/// A tag as DescribeTags returns it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ResourceTag {
+    pub key: String,
+    pub value: Option<String>,
+}
 
 /// A tag for an ELB resource.
 #[derive(Debug, Clone, Serialize, Builder)]
@@ -2088,5 +2169,143 @@ mod wire_tests {
             .get("LoadBalancerArn")
             .is_some_and(|arn| arn.contains("loadbalancer/net/example/abc")));
         assert_eq!(form.len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod describe_tags_tests {
+    use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::prelude::*;
+    use std::collections::HashMap;
+
+    const LOAD_BALANCER_ARN: &str = "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/my-load-balancer/50dc6c495c0c9188";
+    const TARGET_GROUP_ARN: &str =
+        "arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067";
+
+    /// The DescribeTags response example from the Elastic Load Balancing API reference.
+    const DOCS_RESPONSE: &str = r#"<DescribeTagsResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeTagsResult>
+    <TagDescriptions>
+      <member>
+        <ResourceArn>arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/my-load-balancer/50dc6c495c0c9188</ResourceArn>
+        <Tags>
+          <member>
+            <Value>lima</Value>
+            <Key>project</Key>
+          </member>
+          <member>
+            <Value>digital-media</Value>
+            <Key>department</Key>
+          </member>
+        </Tags>
+      </member>
+    </TagDescriptions>
+  </DescribeTagsResult>
+  <ResponseMetadata>
+    <RequestId>34f144db-f2d9-11e5-a53c-67205c0d10fd</RequestId>
+  </ResponseMetadata>
+</DescribeTagsResponse>"#;
+
+    fn client(server: &MockServer) -> Elbv2Client {
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-west-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".to_string(),
+                secret_access_key: "test-secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("elasticloadbalancing".to_string(), server.base_url())]),
+            }),
+        };
+        Elbv2Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    #[test]
+    fn docs_response_parses_into_tags_per_resource() {
+        let response: DescribeTagsResponse =
+            quick_xml::de::from_str(DOCS_RESPONSE).expect("the documented response parses");
+        let descriptions = response
+            .describe_tags_result
+            .tag_descriptions
+            .expect("tag descriptions")
+            .members;
+        assert_eq!(descriptions.len(), 1);
+        assert_eq!(
+            descriptions[0].resource_arn.as_deref(),
+            Some(LOAD_BALANCER_ARN)
+        );
+        assert_eq!(descriptions[0].tag_value("project"), Some("lima"));
+        assert_eq!(
+            descriptions[0].tag_value("department"),
+            Some("digital-media")
+        );
+        assert_eq!(descriptions[0].tag_value("owner"), None);
+    }
+
+    #[tokio::test]
+    async fn describe_tags_sends_each_arn_as_a_member() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .body_contains("Action=DescribeTags")
+                    .body_contains("Version=2015-12-01")
+                    .body_contains(format!(
+                        "ResourceArns.member.1={}",
+                        form_urlencoded::byte_serialize(LOAD_BALANCER_ARN.as_bytes())
+                            .collect::<String>()
+                    ))
+                    .body_contains(format!(
+                        "ResourceArns.member.2={}",
+                        form_urlencoded::byte_serialize(TARGET_GROUP_ARN.as_bytes())
+                            .collect::<String>()
+                    ));
+                then.status(200).body(DOCS_RESPONSE);
+            })
+            .await;
+
+        let response = client(&server)
+            .describe_tags(vec![
+                LOAD_BALANCER_ARN.to_string(),
+                TARGET_GROUP_ARN.to_string(),
+            ])
+            .await
+            .expect("describe tags");
+
+        assert_eq!(mock.hits_async().await, 1);
+        let descriptions = response
+            .describe_tags_result
+            .tag_descriptions
+            .expect("tag descriptions")
+            .members;
+        assert_eq!(descriptions[0].tag_value("project"), Some("lima"));
+    }
+
+    #[tokio::test]
+    async fn more_than_twenty_arns_are_refused_without_a_request() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/");
+                then.status(200).body(DOCS_RESPONSE);
+            })
+            .await;
+
+        let arns = (0..=DESCRIBE_TAGS_MAX_ARNS)
+            .map(|i| format!("{TARGET_GROUP_ARN}{i}"))
+            .collect();
+        let error = client(&server)
+            .describe_tags(arns)
+            .await
+            .expect_err("21 ARNs are more than one call takes");
+        assert_eq!(error.code, "INVALID_INPUT");
+        assert_eq!(mock.hits_async().await, 0);
     }
 }

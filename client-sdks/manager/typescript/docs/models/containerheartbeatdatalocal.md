@@ -11,11 +11,18 @@ let value: ContainerHeartbeatDataLocal = {
   portCount: 776553,
   runtimeReachable: false,
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };

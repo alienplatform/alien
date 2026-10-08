@@ -5,22 +5,24 @@
 
 use std::collections::HashSet;
 
-use crate::core::{azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext};
+use crate::core::{
+    azure_permissions_helper::AzurePermissionsHelper, GcpCustomRoleNaming,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_gcp_clients::iam::{Binding, IamPolicy};
+use alien_gcp_clients::iam::{
+    Binding, CreateRoleRequest, IamApi, IamPolicy, Role, RoleLaunchStage,
+};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
 use tracing::{debug, info, warn};
 
-fn gcp_custom_role_matches(
-    existing: &alien_gcp_clients::iam::Role,
-    desired: &alien_gcp_clients::iam::Role,
-) -> bool {
+fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
     let mut existing_permissions = existing.included_permissions.clone();
     let mut desired_permissions = desired.included_permissions.clone();
     existing_permissions.sort();
@@ -31,6 +33,147 @@ fn gcp_custom_role_matches(
         && existing.stage == desired.stage
         && existing_permissions == desired_permissions
         && !existing.deleted.unwrap_or(false)
+}
+
+const GCP_CUSTOM_ROLE_UPDATE_MASK: &str = "includedPermissions,title,description,stage";
+
+/// Converge one GCP custom role on `custom_role`, reusing its ID in whatever
+/// state GCP holds it.
+///
+/// A deleted custom role keeps its ID and its slot in the project's 300-role
+/// limit for 7 days, and GCP rejects `create` for that ID while it does.
+/// Undeleting it lets a deployment that is deleted and recreated with the same
+/// resource prefix reuse its roles instead of consuming new slots. A `create`
+/// that conflicts re-reads the role, so a concurrent caller ensuring the same
+/// role converges instead of failing.
+async fn ensure_gcp_custom_role(
+    iam: &dyn IamApi,
+    permission_set_id: &str,
+    custom_role: &GcpCustomRole,
+) -> Result<()> {
+    info!(
+        role_id = %custom_role.role_id,
+        permission_set = %permission_set_id,
+        permissions_count = custom_role.included_permissions.len(),
+        "Ensuring GCP custom role exists"
+    );
+
+    let desired = Role::builder()
+        .title(custom_role.title.clone())
+        .description(custom_role.description.clone())
+        .included_permissions(custom_role.included_permissions.clone())
+        .stage(RoleLaunchStage::Ga)
+        .build();
+
+    if let Some(existing) = get_gcp_custom_role(iam, permission_set_id, custom_role).await? {
+        return converge_gcp_custom_role(iam, permission_set_id, custom_role, existing, desired)
+            .await;
+    }
+
+    let create_conflict = match iam
+        .create_role(
+            custom_role.role_id.clone(),
+            CreateRoleRequest::builder().role(desired.clone()).build(),
+        )
+        .await
+    {
+        Ok(_) => return Ok(()),
+        Err(e)
+            if matches!(
+                e.error,
+                Some(CloudClientErrorData::RemoteResourceConflict { .. })
+            ) =>
+        {
+            e
+        }
+        Err(e) => {
+            return Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create custom role '{}'", custom_role.role_id),
+                resource_id: Some(permission_set_id.to_string()),
+            }))
+        }
+    };
+
+    match get_gcp_custom_role(iam, permission_set_id, custom_role).await? {
+        Some(existing) => {
+            converge_gcp_custom_role(iam, permission_set_id, custom_role, existing, desired).await
+        }
+        // IAM reads are eventually consistent. An absent re-read proves no
+        // permanent deletion unless create explicitly reported that state.
+        None if matches!(
+            &create_conflict.error,
+            Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+                if message.contains("which has been marked for deletion")
+        ) => Err(create_conflict.context(ErrorData::GcpCustomRoleIdUnavailable {
+            role_id: custom_role.role_id.clone(),
+            message: "a role with this ID was deleted more than 7 days ago, so it can no longer be undeleted, and GCP rejects a new role with the same ID until the old one is purged, up to 44 days after deletion. Deploy with a different resource prefix, or retry after the old role is purged".to_string(),
+        })),
+        None => Err(create_conflict.context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create custom role '{}'", custom_role.role_id),
+            resource_id: Some(permission_set_id.to_string()),
+        })),
+    }
+}
+
+async fn get_gcp_custom_role(
+    iam: &dyn IamApi,
+    permission_set_id: &str,
+    custom_role: &GcpCustomRole,
+) -> Result<Option<Role>> {
+    match iam.get_role(custom_role.name.clone()).await {
+        Ok(role) => Ok(Some(role)),
+        Err(e)
+            if matches!(
+                e.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read custom role '{}'", custom_role.role_id),
+            resource_id: Some(permission_set_id.to_string()),
+        })),
+    }
+}
+
+async fn converge_gcp_custom_role(
+    iam: &dyn IamApi,
+    permission_set_id: &str,
+    custom_role: &GcpCustomRole,
+    existing: Role,
+    desired: Role,
+) -> Result<()> {
+    if existing.deleted.unwrap_or(false) {
+        // Undelete restores the role as it was when deleted; the patch below
+        // brings it to the current permissions.
+        iam.undelete_role(custom_role.name.clone()).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to undelete custom role '{}'", custom_role.role_id),
+                resource_id: Some(permission_set_id.to_string()),
+            },
+        )?;
+        info!(role_id = %custom_role.role_id, "Undeleted GCP custom role for reuse");
+    } else if gcp_custom_role_matches(&existing, &desired) {
+        info!(
+            role_id = %custom_role.role_id,
+            permission_set = %permission_set_id,
+            "GCP custom role already matches desired permissions"
+        );
+        return Ok(());
+    }
+
+    iam.patch_role(
+        custom_role.name.clone(),
+        desired,
+        Some(GCP_CUSTOM_ROLE_UPDATE_MASK.to_string()),
+    )
+    .await
+    .context(ErrorData::CloudPlatformError {
+        message: format!("Failed to update custom role '{}'", custom_role.role_id),
+        resource_id: Some(permission_set_id.to_string()),
+    })?;
+    Ok(())
 }
 
 /// Helper for applying resource-scoped permissions across all platforms
@@ -92,6 +235,7 @@ impl ResourcePermissionsHelper {
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx)?)
             .with_project_name(project_id)
             .with_region(region)
             .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
@@ -305,128 +449,39 @@ impl ResourcePermissionsHelper {
 
         let mut seen_role_names = HashSet::new();
         for custom_role in custom_roles {
-            if !seen_role_names.insert(custom_role.name.clone()) {
-                continue;
-            }
-
-            let role_id = custom_role.role_id.clone();
-
-            info!(
-                role_id = %role_id,
-                permission_set = %permission_set_id,
-                permissions_count = custom_role.included_permissions.len(),
-                "Ensuring GCP custom role exists"
-            );
-
-            let role_request = alien_gcp_clients::iam::CreateRoleRequest::builder()
-                .role(
-                    alien_gcp_clients::iam::Role::builder()
-                        .title(custom_role.title.clone())
-                        .description(custom_role.description.clone())
-                        .included_permissions(custom_role.included_permissions.clone())
-                        .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-                        .build(),
-                )
-                .build();
-
-            let updated_role = alien_gcp_clients::iam::Role::builder()
-                .title(custom_role.title.clone())
-                .description(custom_role.description.clone())
-                .included_permissions(custom_role.included_permissions.clone())
-                .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-                .build();
-
-            match iam_client.get_role(custom_role.name.clone()).await {
-                Ok(existing_role) => {
-                    if existing_role.deleted.unwrap_or(false) {
-                        iam_client
-                            .undelete_role(custom_role.name.clone())
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to undelete existing custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
-                        iam_client
-                            .patch_role(
-                                custom_role.name.clone(),
-                                updated_role,
-                                Some("includedPermissions,title,description,stage".to_string()),
-                            )
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update undeleted custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
-                    } else if gcp_custom_role_matches(&existing_role, &updated_role) {
-                        info!(
-                            role_id = %role_id,
-                            permission_set = %permission_set_id,
-                            "GCP custom role already matches desired permissions"
-                        );
-                    } else {
-                        iam_client
-                            .patch_role(
-                                custom_role.name.clone(),
-                                updated_role,
-                                Some("includedPermissions,title,description,stage".to_string()),
-                            )
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update existing custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
-                    }
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    iam_client
-                        .create_role(role_id.clone(), role_request)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to create custom role '{}'", role_id),
-                            resource_id: Some(permission_set_id.to_string()),
-                        })?;
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to check existence of custom role '{}'", role_id),
-                        resource_id: Some(permission_set_id.to_string()),
-                    }));
-                }
+            if seen_role_names.insert(custom_role.name.clone()) {
+                ensure_gcp_custom_role(iam_client.as_ref(), permission_set_id, &custom_role)
+                    .await?;
             }
         }
 
         Ok(())
     }
 
-    /// Setup-delete: delete the GCP custom roles generated for the selected permission sets.
+    /// Setup-delete: delete every GCP custom role this deployment created.
+    ///
+    /// A role belongs to this deployment when its ID is in one of the
+    /// deployment's namespaces and its description names the deployment's
+    /// resource prefix. The ID alone does not prove it: `role_acme_` also
+    /// starts every role of a deployment with prefix `acme-prod`. Listing the
+    /// project's roles, rather than regenerating IDs from the current stack,
+    /// also finds the roles of permission sets an earlier update removed.
     ///
     /// Project IAM/resource IAM bindings must be removed before this runs. Missing
     /// roles are tolerated so delete stays idempotent.
-    pub async fn delete_gcp_custom_roles(
-        ctx: &ResourceControllerContext<'_>,
-        permission_context: &PermissionContext,
-    ) -> Result<()> {
+    pub async fn delete_gcp_custom_roles(ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-        let role_name_prefix = format!(
-            "projects/{}/roles/{}",
-            gcp_config.project_id,
-            custom_role_prefix(permission_context)
-        );
+        let mut namespaces = vec![
+            GcpCustomRoleNaming::HashedLongPrefix.namespace(ctx.resource_prefix),
+            GcpCustomRoleNaming::TruncatedPrefix.namespace(ctx.resource_prefix),
+        ];
+        namespaces.sort();
+        namespaces.dedup();
+        let role_name_prefixes: Vec<String> = namespaces
+            .iter()
+            .map(|namespace| format!("projects/{}/roles/role_{namespace}_", gcp_config.project_id))
+            .collect();
         let mut role_names = Vec::new();
         let mut page_token = None;
 
@@ -443,7 +498,21 @@ impl ResourcePermissionsHelper {
                 let Some(role_name) = role.name else {
                     continue;
                 };
-                if role_name.starts_with(&role_name_prefix) {
+                if !role_name_prefixes
+                    .iter()
+                    .any(|prefix| role_name.starts_with(prefix))
+                {
+                    continue;
+                }
+                let Some(description) = role.description else {
+                    warn!(
+                        role_name = %role_name,
+                        resource_prefix = %ctx.resource_prefix,
+                        "Skipping GCP custom role without a description; ownership cannot be verified"
+                    );
+                    continue;
+                };
+                if custom_role_description_names_prefix(&description, ctx.resource_prefix) {
                     role_names.push(role_name);
                 }
             }
@@ -867,13 +936,20 @@ impl ResourcePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         resource_name: &str,
     ) -> Result<PermissionContext> {
+        Ok(Self::gcp_permission_context(ctx)?.with_resource_name(resource_name.to_string()))
+    }
+
+    /// Build the deployment-wide GCP permission context.
+    pub(crate) fn gcp_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<PermissionContext> {
         let gcp_config = ctx.get_gcp_config()?;
 
         let mut permission_ctx = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(resource_name.to_string());
+            .with_gcp_custom_role_namespace(Self::gcp_custom_role_namespace(ctx)?);
         if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
             permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
         }
@@ -881,6 +957,11 @@ impl ResourcePermissionsHelper {
             permission_ctx = permission_ctx.with_project_number(project_number.clone());
         }
         Ok(permission_ctx)
+    }
+
+    /// Return the namespace of this deployment's GCP custom role IDs.
+    pub fn gcp_custom_role_namespace(ctx: &ResourceControllerContext<'_>) -> Result<String> {
+        Ok(GcpCustomRoleNaming::for_deployment(ctx.state)?.namespace(ctx.resource_prefix))
     }
 
     /// Process GCP permissions for a specific profile
@@ -896,6 +977,14 @@ impl ResourcePermissionsHelper {
         // Get the service account for this profile
         let service_account_email = Self::get_gcp_service_account_email(ctx, profile_name)?;
 
+        let permission_context = permission_context.clone().with_service_account_name(
+            service_account_email
+                .split('@')
+                .next()
+                .unwrap_or(&service_account_email)
+                .to_string(),
+        );
+
         // Process each permission set for this resource
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
@@ -908,7 +997,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for permission set '{}'",
@@ -1073,6 +1166,13 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
+        let permission_context = permission_context.clone().with_service_account_name(
+            management_sa_email
+                .split('@')
+                .next()
+                .unwrap_or(&management_sa_email)
+                .to_string(),
+        );
 
         for permission_set_ref in &combined_refs {
             let permission_set = permission_set_ref
@@ -1088,7 +1188,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for management permission set '{}'",
@@ -1183,21 +1287,7 @@ impl ResourcePermissionsHelper {
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            // Combine resource-specific permissions with matching wildcard permissions
-            let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
-
-            if let Some(permission_set_refs) = profile.0.get(resource_id) {
-                combined_refs.extend(permission_set_refs.iter().cloned());
-            }
-
-            if let Some(wildcard_refs) = profile.0.get("*") {
-                combined_refs.extend(
-                    wildcard_refs
-                        .iter()
-                        .filter(|r| r.id().starts_with(&type_prefix))
-                        .cloned(),
-                );
-            }
+            let combined_refs = Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix);
 
             if !combined_refs.is_empty() {
                 info!(
@@ -1279,7 +1369,7 @@ impl ResourcePermissionsHelper {
         } else {
             return Ok(());
         };
-        let policy_name = format!("alien-{resource_id}-remote-access");
+        let policy_name = aws_remote_access_policy_name(resource_id);
         let iam = ctx
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
@@ -1304,26 +1394,8 @@ impl ResourcePermissionsHelper {
                 })),
             };
         };
-        let permission_set = alien_permissions::get_permission_set(definition.permission_set)
-            .cloned()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "Remote Bindings permission set '{}' is not registered",
-                        definition.permission_set
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })
-            })?;
-        let policy = generator
-            .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to generate Remote Bindings policy '{}'",
-                    definition.permission_set
-                ),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+        let policy =
+            aws_remote_access_policy(generator, definition, permission_context, resource_id)?;
         let policy_json = serde_json::to_string_pretty(&policy)
             .into_alien_error()
             .context(ErrorData::CloudPlatformError {
@@ -1339,7 +1411,219 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    fn resource_is_setup_owned(
+    /// Resource-specific permissions plus matching wildcard permissions.
+    fn aws_resource_scoped_refs(
+        profile: &PermissionProfile,
+        resource_id: &str,
+        type_prefix: &str,
+    ) -> Vec<PermissionSetReference> {
+        let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
+        if let Some(permission_set_refs) = profile.0.get(resource_id) {
+            combined_refs.extend(permission_set_refs.iter().cloned());
+        }
+        if let Some(wildcard_refs) = profile.0.get("*") {
+            combined_refs.extend(
+                wildcard_refs
+                    .iter()
+                    .filter(|r| r.id().starts_with(type_prefix))
+                    .cloned(),
+            );
+        }
+        combined_refs
+    }
+
+    /// Remove inline policies that `apply_aws_resource_scoped_permissions`
+    /// attached for grants the desired stack no longer has.
+    ///
+    /// The upsert path never deletes, so without this a dropped grant (or a
+    /// dropped permission set) stays on the role. Only exact owned names are
+    /// removed: `alien-<resource>-<set>` on service-account roles and
+    /// `alien-mgmt-<resource>-<set>` on the management role, for registered
+    /// `<resource_type>/` permission sets. A role that no longer exists has
+    /// nothing to remove.
+    pub async fn remove_stale_aws_resource_scoped_permissions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> Result<()> {
+        if !Self::resource_is_setup_owned(ctx, resource_id)? {
+            return Ok(());
+        }
+
+        let type_prefix = format!("{}/", resource_type);
+        let registered_sets: Vec<&str> = alien_permissions::list_permission_set_ids()
+            .into_iter()
+            .filter(|id| id.starts_with(&type_prefix))
+            .collect();
+
+        // (role, owned policy names, desired policy names)
+        let mut roles: Vec<(String, HashSet<String>, HashSet<String>)> = Vec::new();
+        for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
+            let Some(role_name) = Self::existing_aws_service_account_role_name(ctx, profile_name)?
+            else {
+                continue;
+            };
+            let owned = registered_sets
+                .iter()
+                .map(|id| aws_resource_policy_name(resource_id, id))
+                .collect();
+            let desired = Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix)
+                .iter()
+                .map(|r| aws_resource_policy_name(resource_id, r.id()))
+                .collect();
+            roles.push((role_name, owned, desired));
+        }
+        if let Some(role_name) = Self::existing_aws_management_role_name(ctx)? {
+            // Provision sets are granted by RemoteStackManagement, never per resource.
+            let owned = registered_sets
+                .iter()
+                .filter(|id| !id.ends_with("/provision"))
+                .map(|id| aws_management_resource_policy_name(resource_id, id))
+                .collect();
+            let desired = ctx
+                .desired_stack
+                .management()
+                .profile()
+                .map(|profile| Self::aws_management_resource_permission_refs(profile, resource_id))
+                .unwrap_or_default()
+                .iter()
+                .map(|r| aws_management_resource_policy_name(resource_id, r.id()))
+                .collect();
+            roles.push((role_name, owned, desired));
+        }
+        if roles.is_empty() {
+            return Ok(());
+        }
+
+        let iam = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
+        for (role_name, owned, desired) in roles {
+            let listed = match iam.list_role_policies(&role_name).await {
+                Ok(response) => response.list_role_policies_result,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to list inline policies of role '{role_name}' to remove previous '{resource_id}' grants"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }));
+                }
+            };
+            if listed.is_truncated == Some(true) {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Role '{role_name}' has more inline policies than one ListRolePolicies page; cannot prove previous '{resource_id}' grants were removed"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+            let stale = listed
+                .policy_names
+                .map(|names| names.member)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|name| owned.contains(name) && !desired.contains(name));
+            for policy_name in stale {
+                match iam.delete_role_policy(&role_name, &policy_name).await {
+                    Ok(()) => {}
+                    // Already removed, e.g. by an earlier attempt whose response was lost.
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteAccessDenied { .. })
+                        ) =>
+                    {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Setup credentials cannot delete inline policy '{policy_name}' from role '{role_name}' (iam:DeleteRolePolicy); grant it and rerun setup to remove the previous '{resource_id}' grant"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }));
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete inline policy '{policy_name}' from role '{role_name}'"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }));
+                    }
+                }
+                info!(
+                    role_name = %role_name,
+                    policy_name = %policy_name,
+                    resource_id = %resource_id,
+                    "Removed AWS resource-scoped permission that is no longer granted"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The role of a profile's service account, if setup has created it.
+    fn existing_aws_service_account_role_name(
+        ctx: &ResourceControllerContext<'_>,
+        profile_name: &str,
+    ) -> Result<Option<String>> {
+        let service_account_id = format!("{}-sa", profile_name);
+        let Some(resource) = ctx.desired_stack.resources.get(&service_account_id) else {
+            return Ok(None);
+        };
+        let has_controller_state = ctx
+            .state
+            .resources
+            .get(&service_account_id)
+            .is_some_and(|state| state.internal_state.is_some());
+        if !has_controller_state {
+            return Ok(None);
+        }
+        Ok(ctx
+            .require_dependency::<crate::service_account::AwsServiceAccountController>(
+                &(&resource.config).into(),
+            )?
+            .role_name)
+    }
+
+    /// The management role, if the stack has one and setup has created it.
+    fn existing_aws_management_role_name(
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Option<String>> {
+        let Some((id, entry)) = ctx.desired_stack.resources.iter().find(|(_, entry)| {
+            entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+        }) else {
+            return Ok(None);
+        };
+        let has_controller_state = ctx
+            .state
+            .resources
+            .get(id)
+            .is_some_and(|state| state.internal_state.is_some());
+        if !has_controller_state {
+            return Ok(None);
+        }
+        Ok(ctx
+            .require_dependency::<crate::remote_stack_management::AwsRemoteStackManagementController>(
+                &(&entry.config).into(),
+            )?
+            .role_name)
+    }
+
+    pub(crate) fn resource_is_setup_owned(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<bool> {
@@ -1409,11 +1693,7 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            let policy_name = format!(
-                "alien-{}-{}",
-                resource_id,
-                permission_set.id.replace('/', "-")
-            );
+            let policy_name = aws_resource_policy_name(resource_id, &permission_set.id);
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
@@ -1523,11 +1803,7 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            let policy_name = format!(
-                "alien-mgmt-{}-{}",
-                resource_id,
-                permission_set.id.replace('/', "-")
-            );
+            let policy_name = aws_management_resource_policy_name(resource_id, &permission_set.id);
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
@@ -1686,6 +1962,13 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
+        let permission_context = permission_context.clone().with_service_account_name(
+            management_sa_email
+                .split('@')
+                .next()
+                .unwrap_or(&management_sa_email)
+                .to_string(),
+        );
 
         for permission_set_ref in management_refs {
             let permission_set = permission_set_ref
@@ -1701,7 +1984,11 @@ impl ResourcePermissionsHelper {
                 })?;
 
             let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate IAM grant plan for management permission set '{}'",
@@ -1814,12 +2101,65 @@ impl ResourcePermissionsHelper {
     }
 }
 
+/// The inline policy on the shared Remote Bindings role that carries one resource's remote grant.
+/// Inline policy a resource attaches to a profile's service-account role.
+fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
+    format!(
+        "alien-{}-{}",
+        resource_id,
+        permission_set_id.replace('/', "-")
+    )
+}
+
+/// Inline policy a resource attaches to the management role.
+fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
+    format!(
+        "alien-mgmt-{}-{}",
+        resource_id,
+        permission_set_id.replace('/', "-")
+    )
+}
+
+pub(crate) fn aws_remote_access_policy_name(resource_id: &str) -> String {
+    format!("alien-{resource_id}-remote-access")
+}
+
+pub(crate) fn aws_remote_access_policy(
+    generator: &AwsRuntimePermissionsGenerator,
+    definition: &alien_core::remote_bindings::RemoteBindingDefinition,
+    permission_context: &PermissionContext,
+    resource_id: &str,
+) -> Result<AwsIamPolicy> {
+    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Bindings permission set '{}' is not registered",
+                    definition.permission_set
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })?;
+    generator
+        .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to generate Remote Bindings policy '{}'",
+                definition.permission_set
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{Stack, Storage};
+    use alien_gcp_clients::iam::MockIamApi;
     use indexmap::IndexMap;
+    use mockall::Sequence;
 
     #[test]
     fn gcp_resource_custom_roles_are_selected_for_resource_bindings() {
@@ -1830,7 +2170,8 @@ mod tests {
             .with_project_name("test-project")
             .with_region("us-central1")
             .with_stack_prefix("test")
-            .with_resource_name("test-bucket");
+            .with_resource_name("test-bucket")
+            .with_service_account_name("reader");
 
         let grant_plan = generator
             .generate_grant_plan(permission_set, BindingTarget::Resource, &permission_context)
@@ -1838,19 +2179,20 @@ mod tests {
 
         let resource_bindings =
             grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-        let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+        let account_bindings =
+            grant_plan.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
 
         let resource_custom_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
-        let project_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+        let account_custom_roles = grant_plan.custom_roles_for_bindings(&account_bindings);
 
         assert_eq!(resource_custom_roles.len(), 1);
         assert!(resource_custom_roles[0]
             .included_permissions
             .iter()
             .any(|permission| permission == "storage.objects.get"));
-        assert_eq!(project_custom_roles.len(), 1);
+        assert_eq!(account_custom_roles.len(), 1);
         assert_eq!(
-            project_custom_roles[0].included_permissions,
+            account_custom_roles[0].included_permissions,
             vec!["iam.serviceAccounts.signBlob"]
         );
     }
@@ -1925,6 +2267,103 @@ mod tests {
         );
 
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn narrowed_signing_plan_removes_old_project_member_and_preserves_other_members() {
+        let current = alien_permissions::get_permission_set("storage/data-read").unwrap();
+        let mut old = current.clone();
+        for entry in old.platforms.gcp.as_mut().unwrap() {
+            if entry.grant.permissions.as_ref().is_some_and(|permissions| {
+                permissions
+                    .iter()
+                    .any(|permission| permission == "iam.serviceAccounts.signBlob")
+            }) {
+                entry.binding.resource.as_mut().unwrap().scope =
+                    "projects/${projectName}".to_string();
+            }
+        }
+        let context = PermissionContext::new()
+            .with_project_name("test-project")
+            .with_stack_prefix("test")
+            .with_resource_name("test-objects")
+            .with_service_account_name("reader");
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let before = generator
+            .generate_grant_plan(&old, BindingTarget::Resource, &context)
+            .unwrap();
+        let after = generator
+            .generate_grant_plan(current, BindingTarget::Resource, &context)
+            .unwrap();
+        let project = before.bindings_for_target(GcpBindingTargetScope::Project);
+        assert_eq!(project.len(), 1);
+        assert!(after
+            .bindings_for_target(GcpBindingTargetScope::Project)
+            .is_empty());
+        assert_eq!(
+            before.bindings_for_target(GcpBindingTargetScope::CurrentResource),
+            after.bindings_for_target(GcpBindingTargetScope::CurrentResource)
+        );
+        let own = after.bindings_for_target(GcpBindingTargetScope::ServiceAccount);
+        assert_eq!(own.len(), 1);
+        assert_eq!(
+            own[0].target_resource_name.as_deref(),
+            Some(
+                "projects/test-project/serviceAccounts/reader@test-project.iam.gserviceaccount.com"
+            )
+        );
+        let roles = after.custom_roles_for_bindings(&own);
+        assert_eq!(roles.len(), 1);
+        assert_eq!(
+            roles[0].included_permissions,
+            vec!["iam.serviceAccounts.signBlob"]
+        );
+        let member = "serviceAccount:reader@test-project.iam.gserviceaccount.com";
+        let other = "serviceAccount:writer@test-project.iam.gserviceaccount.com";
+        let mut bindings = project
+            .into_iter()
+            .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
+            .collect::<Vec<_>>();
+        bindings[0].members = vec![member.to_string(), other.to_string()];
+        let old_role = bindings[0].role.clone();
+        let owned_prefix = ResourcePermissionsHelper::gcp_stack_custom_role_name_prefix(&context);
+        assert!(old_role.starts_with(&owned_prefix));
+        let unrelated = Binding {
+            role: "projects/test-project/roles/unrelated_signer".to_string(),
+            members: vec![member.to_string()],
+            condition: None,
+        };
+        bindings.push(unrelated.clone());
+        assert!(
+            ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut bindings,
+                vec![],
+                member,
+                &[owned_prefix.clone()],
+                &[],
+            )
+        );
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].role, old_role);
+        assert_eq!(bindings[0].members, vec![other]);
+        assert_eq!(
+            serde_json::to_value(&bindings[1]).unwrap(),
+            serde_json::to_value(&unrelated).unwrap()
+        );
+        let converged = bindings.clone();
+        assert!(
+            !ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut bindings,
+                vec![],
+                member,
+                &[owned_prefix],
+                &[],
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(&bindings).unwrap(),
+            serde_json::to_value(&converged).unwrap()
+        );
     }
 
     #[test]
@@ -2138,20 +2577,412 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn gcp_deleted_custom_role_does_not_match_desired_role() {
-        let desired = alien_gcp_clients::iam::Role::builder()
-            .title("Role".to_string())
-            .description("Test role".to_string())
-            .included_permissions(vec!["storage.objects.get".to_string()])
-            .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-            .build();
-        let mut deleted_existing = desired.clone();
-        deleted_existing.deleted = Some(true);
+    const PROBE_ROLE_NAME: &str = "projects/p/roles/role_acme_storage_data_write";
 
-        assert!(
-            !gcp_custom_role_matches(&deleted_existing, &desired),
-            "soft-deleted custom roles cannot be treated as grantable"
+    fn desired_custom_role() -> GcpCustomRole {
+        GcpCustomRole {
+            role_id: "role_acme_storage_data_write".to_string(),
+            name: PROBE_ROLE_NAME.to_string(),
+            title: "acme: Storage data write".to_string(),
+            description: "Used by acme. Write objects. Resource prefix: acme.".to_string(),
+            included_permissions: vec![
+                "storage.objects.create".to_string(),
+                "storage.objects.get".to_string(),
+            ],
+            stage: "GA".to_string(),
+        }
+    }
+
+    fn gcp_role(permissions: &[&str], deleted: bool) -> Role {
+        let desired = desired_custom_role();
+        Role {
+            name: Some(desired.name),
+            title: Some(desired.title),
+            description: Some(desired.description),
+            included_permissions: permissions.iter().map(|p| p.to_string()).collect(),
+            stage: Some(RoleLaunchStage::Ga),
+            etag: Some("BwZc7xFUf9U=".to_string()),
+            deleted: deleted.then_some(true),
+        }
+    }
+
+    /// Map a GCP error body exactly as `IamClient` does for a real response.
+    fn gcp_error(status: u16, body: &str) -> alien_error::AlienError<CloudClientErrorData> {
+        AlienError::new(alien_gcp_clients::gcp_request_utils::map_gcp_error(
+            status,
+            body,
+            "https://iam.googleapis.com/v1/projects/p/roles",
+            "create_role",
+            "role_acme_storage_data_write",
+            "role",
+            None,
+        ))
+    }
+
+    fn not_found() -> alien_error::AlienError<CloudClientErrorData> {
+        gcp_error(
+            404,
+            r#"{"error":{"code":404,"message":"The role named projects/p/roles/role_acme_storage_data_write was not found.","status":"NOT_FOUND"}}"#,
+        )
+    }
+
+    fn expect_patch_to_desired(iam: &mut MockIamApi, seq: &mut Sequence) {
+        iam.expect_patch_role()
+            .times(1)
+            .in_sequence(seq)
+            .withf(|name, role, mask| {
+                name == PROBE_ROLE_NAME
+                    && role.included_permissions
+                        == vec!["storage.objects.create", "storage.objects.get"]
+                    && role.title.as_deref() == Some("acme: Storage data write")
+                    && role.deleted.is_none()
+                    && mask.as_deref() == Some(GCP_CUSTOM_ROLE_UPDATE_MASK)
+            })
+            .returning(|_, role, _| Ok(role));
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_deleted_by_a_previous_deployment_is_undeleted_and_updated() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], true)));
+        iam.expect_undelete_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|name| name == PROBE_ROLE_NAME)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+        iam.expect_create_role().never();
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("a soft-deleted role should be reused");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_live_with_stale_permissions_is_updated_in_place() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+        iam.expect_undelete_role().never();
+        iam.expect_create_role().never();
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("a live role should be updated");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_already_matching_is_left_alone() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().times(1).returning(|_| {
+            Ok(gcp_role(
+                &["storage.objects.get", "storage.objects.create"],
+                false,
+            ))
+        });
+        iam.expect_patch_role().never();
+        iam.expect_undelete_role().never();
+        iam.expect_create_role().never();
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("a matching role needs no write");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_missing_is_created_with_its_stable_id() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .times(1)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .withf(|role_id, request| {
+                role_id == "role_acme_storage_data_write"
+                    && request.role.included_permissions
+                        == vec!["storage.objects.create", "storage.objects.get"]
+            })
+            .returning(|_, request| Ok(request.role));
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("a missing role should be created");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_created_concurrently_is_updated_instead_of_failing() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    409,
+                    r#"{"error":{"code":409,"message":"A role named role_acme_storage_data_write in projects/p already exists.","status":"ALREADY_EXISTS"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("losing a create race should converge on the existing role");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_deleted_between_read_and_create_is_undeleted() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"You can't create a role with role_id (role_acme_storage_data_write) where there is an existing role with that role_id in a deleted state.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], true)));
+        iam.expect_undelete_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("a role soft-deleted during setup should be reused");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_stale_read_after_create_conflict_converges_on_retry() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    409,
+                    r#"{"error":{"code":409,"message":"A role named role_acme_storage_data_write in projects/p already exists.","status":"ALREADY_EXISTS"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+        iam.expect_undelete_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("an inconclusive read should return the create conflict");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert_eq!(
+            error.source.as_ref().unwrap().code,
+            "REMOTE_RESOURCE_CONFLICT"
         );
+        assert!(error
+            .source
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("already exists"));
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("the caller's retry should update the now-visible role");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_stale_read_after_soft_delete_converges_on_retry() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"You can't create a role with role_id (role_acme_storage_data_write) where there is an existing role with that role_id in a deleted state.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], true)));
+        iam.expect_undelete_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|name| name == PROBE_ROLE_NAME)
+            .returning(|_| Ok(gcp_role(&["storage.objects.get"], false)));
+        expect_patch_to_desired(&mut iam, &mut seq);
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("a soft-deleted role hidden by a stale read can still be reused");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert!(error
+            .source
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("deleted state"));
+
+        ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect("the caller's retry should undelete and update the now-visible role");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_unknown_precondition_and_missing_read_remain_retryable() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"A role precondition was not met.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("an unknown precondition does not establish permanent deletion");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert_eq!(
+            error.source.as_ref().unwrap().code,
+            "REMOTE_RESOURCE_CONFLICT"
+        );
+        assert!(error
+            .source
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("precondition was not met"));
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_failed_read_after_conflict_preserves_read_error() {
+        let mut iam = MockIamApi::new();
+        let mut seq = Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| {
+                Err(gcp_error(
+                    400,
+                    r#"{"error":{"code":400,"message":"You can't create a role_id (role_acme_storage_data_write) which has been marked for deletion.","status":"FAILED_PRECONDITION"}}"#,
+                ))
+            });
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| {
+                Err(gcp_error(
+                    503,
+                    r#"{"error":{"code":503,"message":"IAM is temporarily unavailable.","status":"UNAVAILABLE"}}"#,
+                ))
+            });
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("a failed read cannot establish role absence");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable);
+        assert_eq!(
+            error.source.as_ref().unwrap().code,
+            "REMOTE_SERVICE_UNAVAILABLE"
+        );
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_id_in_permanent_deletion_fails_without_retry() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .times(2)
+            .returning(|_| Err(not_found()));
+        iam.expect_create_role().times(1).returning(|_, _| {
+            Err(gcp_error(
+                400,
+                r#"{"error":{"code":400,"message":"You can't create a role_id (role_acme_storage_data_write) which has been marked for deletion.","status":"FAILED_PRECONDITION"}}"#,
+            ))
+        });
+        iam.expect_undelete_role().never();
+        iam.expect_patch_role().never();
+
+        let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .expect_err("GCP blocks the ID until the old role is purged");
+
+        assert_eq!(error.code, "GCP_CUSTOM_ROLE_ID_UNAVAILABLE");
+        assert!(
+            !error.retryable,
+            "retrying cannot succeed for weeks, so the deployment must fail fast"
+        );
+        assert!(error.message.contains("role_acme_storage_data_write"));
+        assert!(error.message.contains("different resource prefix"));
     }
 }

@@ -16,6 +16,7 @@
       "!**/api-v1.d.ts",
       "!**/entrypoint.js",
       "!**/generated",
+      "!examples/custom-operations/metadata.json",
       "!**/shim.mjs",
       "!**/target",
       "!**/examples/**/github-agent/packages/dashboard"

@@ -144,6 +144,11 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeNetworkInterfacesRequest,
     ) -> Result<DescribeNetworkInterfacesResponse>;
+    async fn create_network_interface(
+        &self,
+        request: CreateNetworkInterfaceRequest,
+    ) -> Result<CreateNetworkInterfaceResponse>;
+    async fn delete_network_interface(&self, network_interface_id: &str) -> Result<()>;
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -171,6 +176,12 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeAvailabilityZonesRequest,
     ) -> Result<DescribeAvailabilityZonesResponse>;
+
+    // Instance Type Operations
+    async fn describe_instance_type_offerings(
+        &self,
+        request: DescribeInstanceTypeOfferingsRequest,
+    ) -> Result<DescribeInstanceTypeOfferingsResponse>;
 
     // AMI Operations
     async fn describe_images(
@@ -203,6 +214,20 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
     async fn attach_volume(&self, request: AttachVolumeRequest) -> Result<AttachVolumeResponse>;
     async fn detach_volume(&self, request: DetachVolumeRequest) -> Result<DetachVolumeResponse>;
 
+    // Snapshot Operations
+    /// Starts a snapshot of a volume. EC2 offers no idempotency token for this call:
+    /// callers that must not create duplicates look for an existing tagged snapshot first.
+    async fn create_snapshot(&self, request: CreateSnapshotRequest) -> Result<Snapshot>;
+    async fn describe_snapshots(
+        &self,
+        request: DescribeSnapshotsRequest,
+    ) -> Result<DescribeSnapshotsResponse>;
+    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<()>;
+
+    // Tag Operations
+    async fn create_tags(&self, request: CreateTagsRequest) -> Result<()>;
+    async fn delete_tags(&self, request: DeleteTagsRequest) -> Result<()>;
+
     // Launch Template Operations
     async fn create_launch_template(
         &self,
@@ -233,6 +258,13 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 // ---------------------------------------------------------------------------
 // EC2 Client
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+enum Attempts {
+    Retried,
+    /// Only a throttled request is sent again.
+    ThrottlingOnly,
+}
 
 #[derive(Debug, Clone)]
 pub struct Ec2Client {
@@ -278,6 +310,30 @@ impl Ec2Client {
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        self.send_form_with(Attempts::Retried, form_data, operation, resource)
+            .await
+    }
+
+    /// Sends a create that has no idempotency token, retrying it only when EC2 throttled it.
+    /// Retrying after a lost response (a timeout, a reset connection or a 5xx after EC2 acted on
+    /// the call) would make a second object; the caller finds the first one by its tags instead.
+    async fn send_create_once<T: DeserializeOwned + Send + 'static>(
+        &self,
+        form_data: HashMap<String, String>,
+        operation: &str,
+        resource: &str,
+    ) -> Result<T> {
+        self.send_form_with(Attempts::ThrottlingOnly, form_data, operation, resource)
+            .await
+    }
+
+    async fn send_form_with<T: DeserializeOwned + Send + 'static>(
+        &self,
+        attempts: Attempts,
+        form_data: HashMap<String, String>,
+        operation: &str,
+        resource: &str,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let url = self.get_base_url();
 
@@ -293,8 +349,18 @@ impl Ec2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = match attempts {
+            Attempts::Retried => {
+                crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+            }
+            Attempts::ThrottlingOnly => {
+                crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
+                    builder,
+                    &self.sign_config(),
+                )
+                .await
+            }
+        };
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -492,6 +558,24 @@ impl Ec2Client {
                 resource_type: "RouteTableAssociation".into(),
                 resource_name: resource.into(),
             },
+            // A revoke naming a rule the group no longer holds.
+            "InvalidPermission.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "SecurityGroupRule".into(),
+                resource_name: resource.into(),
+            },
+            "InvalidSnapshot.NotFound" | "InvalidSnapshotID.NotFound" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "Snapshot".into(),
+                    resource_name: resource.into(),
+                }
+            }
+            // A snapshot still used by a registered image.
+            "InvalidSnapshot.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Snapshot".into(),
+                resource_name: resource.into(),
+            },
+            "SnapshotCreationPerVolumeRateExceeded" => ErrorData::RateLimitExceeded { message },
             "InvalidVolume.NotFound" | "InvalidVolumeID.NotFound" => {
                 ErrorData::RemoteResourceNotFound {
                     resource_type: "Volume".into(),
@@ -519,9 +603,36 @@ impl Ec2Client {
                 resource_type: "EC2 Resource".into(),
                 resource_name: resource.into(),
             },
+            "InvalidNetworkInterfaceID.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "NetworkInterface".into(),
+                resource_name: resource.into(),
+            },
+            "InvalidNetworkInterface.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "NetworkInterface".into(),
+                resource_name: resource.into(),
+            },
             "Gateway.NotAttached" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "InternetGateway".into(),
+                resource_name: resource.into(),
+            },
+            // An internet gateway that is already attached to a VPC.
+            "Resource.AlreadyAssociated" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
+            // A subnet whose CIDR overlaps an existing subnet in the VPC.
+            "InvalidSubnet.Conflict" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Subnet".into(),
+                resource_name: resource.into(),
+            },
+            // An Elastic IP still associated with a NAT gateway or network interface.
+            "InvalidIPAddress.InUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "ElasticIP".into(),
                 resource_name: resource.into(),
             },
             "RouteAlreadyExists" => ErrorData::RemoteResourceConflict {
@@ -653,6 +764,69 @@ impl Ec2Client {
         form_data
     }
 
+    fn create_snapshot_form_data(request: &CreateSnapshotRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateSnapshot".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("VolumeId".to_string(), request.volume_id.clone());
+        if let Some(description) = &request.description {
+            form_data.insert("Description".to_string(), description.clone());
+        }
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+        form_data
+    }
+
+    fn describe_snapshots_form_data(request: &DescribeSnapshotsRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DescribeSnapshots".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, snapshot_id) in request.snapshot_ids.iter().flatten().enumerate() {
+            form_data.insert(format!("SnapshotId.{}", i + 1), snapshot_id.clone());
+        }
+        for (i, owner) in request.owner_ids.iter().flatten().enumerate() {
+            form_data.insert(format!("Owner.{}", i + 1), owner.clone());
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+        form_data
+    }
+
+    fn create_tags_form_data(request: &CreateTagsRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateTags".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, resource_id) in request.resource_ids.iter().enumerate() {
+            form_data.insert(format!("ResourceId.{}", i + 1), resource_id.clone());
+        }
+        for (i, tag) in request.tags.iter().enumerate() {
+            form_data.insert(format!("Tag.{}.Key", i + 1), tag.key.clone());
+            form_data.insert(format!("Tag.{}.Value", i + 1), tag.value.clone());
+        }
+        form_data
+    }
+
+    fn delete_tags_form_data(request: &DeleteTagsRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteTags".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        for (i, resource_id) in request.resource_ids.iter().enumerate() {
+            form_data.insert(format!("ResourceId.{}", i + 1), resource_id.clone());
+        }
+        for (i, key) in request.tag_keys.iter().enumerate() {
+            form_data.insert(format!("Tag.{}.Key", i + 1), key.clone());
+        }
+        form_data
+    }
+
     fn modify_volume_form_data(request: &ModifyVolumeRequest) -> HashMap<String, String> {
         let mut form_data = HashMap::new();
         form_data.insert("Action".to_string(), "ModifyVolume".to_string());
@@ -759,7 +933,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateVpc", &request.cidr_block)
+        self.send_create_once(form_data, "CreateVpc", &request.cidr_block)
             .await
     }
 
@@ -851,7 +1025,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateSubnet", &request.cidr_block)
+        self.send_create_once(form_data, "CreateSubnet", &request.cidr_block)
             .await
     }
 
@@ -881,7 +1055,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateInternetGateway", "InternetGateway")
+        self.send_create_once(form_data, "CreateInternetGateway", "InternetGateway")
             .await
     }
 
@@ -993,6 +1167,10 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
+        }
+
         self.send_form(form_data, "CreateNatGateway", &request.subnet_id)
             .await
     }
@@ -1057,7 +1235,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "AllocateAddress", "ElasticIP")
+        self.send_create_once(form_data, "AllocateAddress", "ElasticIP")
             .await
     }
 
@@ -1126,7 +1304,7 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
-        self.send_form(form_data, "CreateRouteTable", &request.vpc_id)
+        self.send_create_once(form_data, "CreateRouteTable", &request.vpc_id)
             .await
     }
 
@@ -1298,6 +1476,46 @@ impl Ec2Api for Ec2Client {
             .await
     }
 
+    async fn create_network_interface(
+        &self,
+        request: CreateNetworkInterfaceRequest,
+    ) -> Result<CreateNetworkInterfaceResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateNetworkInterface".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("SubnetId".to_string(), request.subnet_id.clone());
+
+        if let Some(description) = &request.description {
+            form_data.insert("Description".to_string(), description.clone());
+        }
+
+        if let Some(groups) = &request.groups {
+            for (i, group) in groups.iter().enumerate() {
+                form_data.insert(format!("SecurityGroupId.{}", i + 1), group.clone());
+            }
+        }
+
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        self.send_create_once(form_data, "CreateNetworkInterface", &request.subnet_id)
+            .await
+    }
+
+    async fn delete_network_interface(&self, network_interface_id: &str) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteNetworkInterface".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert(
+            "NetworkInterfaceId".to_string(),
+            network_interface_id.to_string(),
+        );
+
+        self.send_form_no_body(form_data, "DeleteNetworkInterface", network_interface_id)
+            .await
+    }
+
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -1313,6 +1531,8 @@ impl Ec2Api for Ec2Client {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
 
+        // A group name is unique in its VPC, so a resend after a lost response fails as a
+        // duplicate and the caller finds its group by name.
         self.send_form(form_data, "CreateSecurityGroup", &request.group_name)
             .await
     }
@@ -1443,6 +1663,42 @@ impl Ec2Api for Ec2Client {
 
         self.send_form(form_data, "DescribeAvailabilityZones", "AvailabilityZone")
             .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Instance Type Operations
+    // ---------------------------------------------------------------------------
+
+    async fn describe_instance_type_offerings(
+        &self,
+        request: DescribeInstanceTypeOfferingsRequest,
+    ) -> Result<DescribeInstanceTypeOfferingsResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeInstanceTypeOfferings".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(location_type) = &request.location_type {
+            form_data.insert("LocationType".to_string(), location_type.clone());
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(
+            form_data,
+            "DescribeInstanceTypeOfferings",
+            "InstanceTypeOffering",
+        )
+        .await
     }
 
     // ---------------------------------------------------------------------------
@@ -1648,6 +1904,52 @@ impl Ec2Api for Ec2Client {
         }
 
         self.send_form(form_data, "DetachVolume", &request.volume_id)
+            .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Snapshot Operations
+    // ---------------------------------------------------------------------------
+
+    async fn create_snapshot(&self, request: CreateSnapshotRequest) -> Result<Snapshot> {
+        let form_data = Self::create_snapshot_form_data(&request);
+        self.send_form(form_data, "CreateSnapshot", &request.volume_id)
+            .await
+    }
+
+    async fn describe_snapshots(
+        &self,
+        request: DescribeSnapshotsRequest,
+    ) -> Result<DescribeSnapshotsResponse> {
+        let form_data = Self::describe_snapshots_form_data(&request);
+        self.send_form(form_data, "DescribeSnapshots", "Snapshot")
+            .await
+    }
+
+    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DeleteSnapshot".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("SnapshotId".to_string(), snapshot_id.to_string());
+        self.send_form_no_body(form_data, "DeleteSnapshot", snapshot_id)
+            .await
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tag Operations
+    // ---------------------------------------------------------------------------
+
+    async fn create_tags(&self, request: CreateTagsRequest) -> Result<()> {
+        let form_data = Self::create_tags_form_data(&request);
+        let resource = request.resource_ids.join(",");
+        self.send_form_no_body(form_data, "CreateTags", &resource)
+            .await
+    }
+
+    async fn delete_tags(&self, request: DeleteTagsRequest) -> Result<()> {
+        let form_data = Self::delete_tags_form_data(&request);
+        let resource = request.resource_ids.join(",");
+        self.send_form_no_body(form_data, "DeleteTags", &resource)
             .await
     }
 
@@ -2451,6 +2753,10 @@ pub struct CreateNatGatewayRequest {
     pub private_ip_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_specifications: Option<Vec<TagSpecification>>,
+    /// Idempotency token (up to 64 ASCII characters). Repeating a request with the same
+    /// token returns the NAT gateway the first request created instead of a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 /// Response from creating a NAT gateway.
@@ -2470,6 +2776,10 @@ pub struct NatGateway {
     pub vpc_id: Option<String>,
     pub state: Option<String>,
     pub connectivity_type: Option<String>,
+    /// Set when the gateway is `failed`, e.g. `Gateway.NotAttached`.
+    pub failure_code: Option<String>,
+    /// Set when the gateway is `failed`; explains why AWS could not create it.
+    pub failure_message: Option<String>,
     #[serde(rename = "natGatewayAddressSet")]
     pub nat_gateway_address_set: Option<NatGatewayAddressSet>,
     #[serde(rename = "tagSet")]
@@ -2571,9 +2881,15 @@ pub struct Address {
     pub allocation_id: Option<String>,
     pub public_ip: Option<String>,
     pub domain: Option<String>,
+    /// Set while the address is associated with an instance or a network interface, such as
+    /// a NAT gateway's.
+    pub association_id: Option<String>,
+    pub network_interface_id: Option<String>,
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
+    #[serde(rename = "tagSet")]
+    pub tag_set: Option<TagSet>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2802,15 +3118,41 @@ pub struct NetworkInterfaceSet {
     pub items: Vec<NetworkInterface>,
 }
 
+/// Request to create a network interface.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateNetworkInterfaceRequest {
+    pub subnet_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Security group IDs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
+}
+
+/// Response from creating a network interface.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateNetworkInterfaceResponse {
+    pub network_interface: Option<NetworkInterface>,
+}
+
 /// Represents an EC2 network interface.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInterface {
     pub network_interface_id: Option<String>,
+    /// `available` (attached to nothing), `in-use`, `attaching`, `detaching`.
     pub status: Option<String>,
     pub description: Option<String>,
     pub subnet_id: Option<String>,
     pub vpc_id: Option<String>,
+    /// The kind of interface, such as `interface`, `lambda` or `nat_gateway`.
+    pub interface_type: Option<String>,
+    /// The AWS service or account that created the interface, when it is service-managed.
+    pub requester_id: Option<String>,
+    pub requester_managed: Option<bool>,
     #[serde(rename = "groupSet")]
     pub group_set: Option<GroupIdentifierSet>,
 }
@@ -2849,6 +3191,22 @@ pub struct IpPermissionResponse {
     pub ipv6_ranges: Option<Ipv6RangeSet>,
     #[serde(rename = "groups")]
     pub groups: Option<UserIdGroupPairSet>,
+    #[serde(rename = "prefixListIds")]
+    pub prefix_list_ids: Option<PrefixListIdSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixListIdSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<PrefixListIdResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixListIdResponse {
+    pub prefix_list_id: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3030,6 +3388,51 @@ pub struct AvailabilityZone {
     pub region_name: Option<String>,
     pub zone_type: Option<String>,
     pub opt_in_status: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Instance Type Offering Request/Response Types
+// ---------------------------------------------------------------------------
+
+/// Request to list where instance types are offered.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeInstanceTypeOfferingsRequest {
+    /// `region`, `availability-zone`, or `availability-zone-id`. AWS defaults to `region`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
+    /// Filters: `instance-type` and `location`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    /// Page size (5-1000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from listing instance type offerings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeInstanceTypeOfferingsResponse {
+    pub instance_type_offering_set: Option<InstanceTypeOfferingSet>,
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceTypeOfferingSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<InstanceTypeOffering>,
+}
+
+/// One instance type offered in one location.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceTypeOffering {
+    pub instance_type: Option<String>,
+    pub location_type: Option<String>,
+    /// Region, zone name, or zone ID, depending on `location_type`.
+    pub location: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -3431,9 +3834,97 @@ pub struct VolumeAttachment {
     pub volume_id: Option<String>,
     pub instance_id: Option<String>,
     pub device: Option<String>,
+    /// `attaching`, `attached`, `detaching`, `detached` or `busy`. EC2 names it `status`.
+    #[serde(rename = "status")]
     pub state: Option<String>,
     pub attach_time: Option<String>,
     pub delete_on_termination: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot and Tag Request/Response Types
+// ---------------------------------------------------------------------------
+
+/// Request to snapshot a volume.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateSnapshotRequest {
+    pub volume_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Tags for the snapshot (resource type `snapshot`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
+}
+
+/// Request to describe snapshots.
+///
+/// Pass `owner_ids: ["self"]` to list only this account's snapshots. EC2 rejects
+/// `max_results` together with `snapshot_ids`.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeSnapshotsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from describing snapshots.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeSnapshotsResponse {
+    #[serde(rename = "snapshotSet")]
+    pub snapshot_set: Option<SnapshotSet>,
+    #[serde(rename = "nextToken")]
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<Snapshot>,
+}
+
+/// An EBS snapshot, as returned by `CreateSnapshot` and `DescribeSnapshots`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub snapshot_id: Option<String>,
+    pub volume_id: Option<String>,
+    /// `pending`, `completed`, `error`, `recoverable` or `recovering`.
+    #[serde(rename = "status")]
+    pub state: Option<String>,
+    pub status_message: Option<String>,
+    pub start_time: Option<String>,
+    pub progress: Option<String>,
+    pub owner_id: Option<String>,
+    /// Size of the source volume in GiB.
+    pub volume_size: Option<i32>,
+    pub description: Option<String>,
+    pub encrypted: Option<bool>,
+    pub storage_tier: Option<String>,
+    #[serde(rename = "tagSet")]
+    pub tag_set: Option<TagSet>,
+}
+
+/// Request to add or overwrite tags on EC2 resources.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct CreateTagsRequest {
+    pub resource_ids: Vec<String>,
+    pub tags: Vec<Tag>,
+}
+
+/// Request to remove tags (by key, whatever their value) from EC2 resources.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct DeleteTagsRequest {
+    pub resource_ids: Vec<String>,
+    pub tag_keys: Vec<String>,
 }
 
 /// Request to attach a volume.
@@ -3730,8 +4221,313 @@ pub struct GetConsoleOutputResponse {
 }
 
 #[cfg(test)]
+mod error_mapping_tests {
+    use super::*;
+
+    fn mapped(code: &str) -> Option<ErrorData> {
+        let body = format!(
+            "<Response><Errors><Error><Code>{code}</Code><Message>m</Message></Error></Errors>\
+             <RequestID>r</RequestID></Response>"
+        );
+        Ec2Client::map_ec2_error(StatusCode::BAD_REQUEST, &body, "op", "sg-1", None)
+    }
+
+    #[test]
+    fn security_group_rule_codes_map_to_their_kind() {
+        assert!(matches!(
+            mapped("InvalidPermission.NotFound"),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidPermission.Duplicate"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+    }
+
+    // Callers wait on these instead of failing: the address or gateway is still
+    // held by another resource.
+    #[test]
+    fn in_use_and_already_associated_codes_map_to_conflict() {
+        assert!(matches!(
+            mapped("InvalidIPAddress.InUse"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("Resource.AlreadyAssociated"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidSubnet.Conflict"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidNetworkInterface.InUse"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidNetworkInterfaceID.NotFound"),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+    }
+
+    /// A detached Lambda interface as DescribeNetworkInterfaces returns it.
+    #[test]
+    fn network_interface_reads_its_requester_and_type() {
+        let body = r#"<DescribeNetworkInterfacesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+            <requestId>r</requestId>
+            <networkInterfaceSet>
+                <item>
+                    <networkInterfaceId>eni-1</networkInterfaceId>
+                    <subnetId>subnet-1</subnetId>
+                    <vpcId>vpc-1</vpcId>
+                    <description>AWS Lambda VPC ENI-fn-abc</description>
+                    <requesterId>123456789012:fn</requesterId>
+                    <requesterManaged>true</requesterManaged>
+                    <status>available</status>
+                    <interfaceType>lambda</interfaceType>
+                    <groupSet><item><groupId>sg-1</groupId><groupName>stack-sg</groupName></item></groupSet>
+                </item>
+            </networkInterfaceSet>
+        </DescribeNetworkInterfacesResponse>"#;
+
+        let response: DescribeNetworkInterfacesResponse =
+            quick_xml::de::from_str(body).expect("network interface response should parse");
+        let interface = &response.network_interface_set.expect("set").items[0];
+        assert_eq!(interface.status.as_deref(), Some("available"));
+        assert_eq!(interface.interface_type.as_deref(), Some("lambda"));
+        assert_eq!(interface.requester_id.as_deref(), Some("123456789012:fn"));
+        assert_eq!(interface.requester_managed, Some(true));
+        assert_eq!(
+            interface.description.as_deref(),
+            Some("AWS Lambda VPC ENI-fn-abc")
+        );
+    }
+
+    #[test]
+    fn failed_nat_gateway_carries_the_aws_failure_reason() {
+        let body = r#"<DescribeNatGatewaysResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+            <requestId>r</requestId>
+            <natGatewaySet>
+                <item>
+                    <natGatewayId>nat-1</natGatewayId>
+                    <state>failed</state>
+                    <failureCode>InsufficientFreeAddressesInSubnet</failureCode>
+                    <failureMessage>Subnet has insufficient free addresses</failureMessage>
+                </item>
+            </natGatewaySet>
+        </DescribeNatGatewaysResponse>"#;
+
+        let response: DescribeNatGatewaysResponse =
+            quick_xml::de::from_str(body).expect("NAT gateway response should parse");
+        let nat = &response.nat_gateway_set.expect("set").items[0];
+        assert_eq!(nat.state.as_deref(), Some("failed"));
+        assert_eq!(
+            nat.failure_code.as_deref(),
+            Some("InsufficientFreeAddressesInSubnet")
+        );
+        assert_eq!(
+            nat.failure_message.as_deref(),
+            Some("Subnet has insufficient free addresses")
+        );
+    }
+}
+
+#[cfg(test)]
 mod volume_operation_tests {
     use super::*;
+
+    #[test]
+    fn create_volume_from_snapshot_sends_snapshot_id() {
+        let request = CreateVolumeRequest::builder()
+            .availability_zone("us-west-2a".to_string())
+            .snapshot_id("snap-0123456789abcdef0".to_string())
+            .size(64)
+            .build();
+
+        let form = Ec2Client::create_volume_form_data(&request);
+
+        assert_eq!(
+            form.get("SnapshotId").map(String::as_str),
+            Some("snap-0123456789abcdef0")
+        );
+        assert_eq!(form.get("Size").map(String::as_str), Some("64"));
+    }
+
+    #[test]
+    fn snapshot_operations_map_to_ec2_query_parameters() {
+        let create = CreateSnapshotRequest::builder()
+            .volume_id("vol-0123456789abcdef0".to_string())
+            .description("final snapshot".to_string())
+            .tag_specifications(vec![TagSpecification {
+                resource_type: "snapshot".to_string(),
+                tags: vec![Tag {
+                    key: "alien-snapshot-kind".to_string(),
+                    value: "final".to_string(),
+                }],
+            }])
+            .build();
+        let create_form = Ec2Client::create_snapshot_form_data(&create);
+        assert_eq!(
+            create_form.get("Action").map(String::as_str),
+            Some("CreateSnapshot")
+        );
+        assert_eq!(
+            create_form.get("VolumeId").map(String::as_str),
+            Some("vol-0123456789abcdef0")
+        );
+        assert_eq!(
+            create_form
+                .get("TagSpecification.1.ResourceType")
+                .map(String::as_str),
+            Some("snapshot")
+        );
+        assert_eq!(
+            create_form
+                .get("TagSpecification.1.Tag.1.Key")
+                .map(String::as_str),
+            Some("alien-snapshot-kind")
+        );
+
+        let describe = DescribeSnapshotsRequest::builder()
+            .owner_ids(vec!["self".to_string()])
+            .filters(vec![Filter {
+                name: "tag:Container".to_string(),
+                values: vec!["db".to_string()],
+            }])
+            .max_results(1000)
+            .build();
+        let describe_form = Ec2Client::describe_snapshots_form_data(&describe);
+        assert_eq!(describe_form.get("Owner.1").map(String::as_str), Some("self"));
+        assert_eq!(
+            describe_form.get("Filter.1.Name").map(String::as_str),
+            Some("tag:Container")
+        );
+        assert_eq!(
+            describe_form.get("Filter.1.Value.1").map(String::as_str),
+            Some("db")
+        );
+        assert_eq!(
+            describe_form.get("MaxResults").map(String::as_str),
+            Some("1000")
+        );
+        assert!(!describe_form.contains_key("SnapshotId.1"));
+    }
+
+    #[test]
+    fn tag_operations_map_to_ec2_query_parameters() {
+        let create = Ec2Client::create_tags_form_data(
+            &CreateTagsRequest::builder()
+                .resource_ids(vec!["vol-1".to_string()])
+                .tags(vec![Tag {
+                    key: "Ordinal".to_string(),
+                    value: "2".to_string(),
+                }])
+                .build(),
+        );
+        assert_eq!(create.get("Action").map(String::as_str), Some("CreateTags"));
+        assert_eq!(create.get("ResourceId.1").map(String::as_str), Some("vol-1"));
+        assert_eq!(create.get("Tag.1.Key").map(String::as_str), Some("Ordinal"));
+        assert_eq!(create.get("Tag.1.Value").map(String::as_str), Some("2"));
+
+        let delete = Ec2Client::delete_tags_form_data(
+            &DeleteTagsRequest::builder()
+                .resource_ids(vec!["vol-1".to_string()])
+                .tag_keys(vec!["RestoreOrdinal".to_string()])
+                .build(),
+        );
+        assert_eq!(delete.get("Action").map(String::as_str), Some("DeleteTags"));
+        assert_eq!(
+            delete.get("Tag.1.Key").map(String::as_str),
+            Some("RestoreOrdinal")
+        );
+        // Without a value, EC2 removes the tag whatever its value.
+        assert!(!delete.contains_key("Tag.1.Value"));
+    }
+
+    #[test]
+    fn describe_snapshots_reads_state_start_time_and_tags() {
+        let response: DescribeSnapshotsResponse = quick_xml::de::from_str(
+            r#"<DescribeSnapshotsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <requestId>12345678-1234-1234-1234-3755ba4b9fa6</requestId>
+                <snapshotSet>
+                    <item>
+                        <snapshotId>snap-0abcdef1234567890</snapshotId>
+                        <volumeId>vol-01234567890abcdef</volumeId>
+                        <status>completed</status>
+                        <startTime>2025-02-03T23:53:18.195Z</startTime>
+                        <progress>100%</progress>
+                        <ownerId>123456789012</ownerId>
+                        <volumeSize>8</volumeSize>
+                        <description>My root volume snapshot</description>
+                        <tagSet>
+                            <item><key>Ordinal</key><value>1</value></item>
+                        </tagSet>
+                        <encrypted>true</encrypted>
+                        <storageTier>standard</storageTier>
+                    </item>
+                </snapshotSet>
+            </DescribeSnapshotsResponse>"#,
+        )
+        .expect("DescribeSnapshots response should deserialize");
+        let snapshot = &response.snapshot_set.expect("snapshot set").items[0];
+        assert_eq!(snapshot.snapshot_id.as_deref(), Some("snap-0abcdef1234567890"));
+        assert_eq!(snapshot.state.as_deref(), Some("completed"));
+        assert_eq!(
+            snapshot.start_time.as_deref(),
+            Some("2025-02-03T23:53:18.195Z")
+        );
+        assert_eq!(snapshot.volume_size, Some(8));
+        assert_eq!(snapshot.owner_id.as_deref(), Some("123456789012"));
+        let tags = &snapshot.tag_set.as_ref().expect("tags").items;
+        assert_eq!((tags[0].key.as_str(), tags[0].value.as_str()), ("Ordinal", "1"));
+
+        let created: Snapshot = quick_xml::de::from_str(
+            r#"<CreateSnapshotResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
+                <snapshotId>snap-1234567890abcdef0</snapshotId>
+                <volumeId>vol-1234567890abcdef0</volumeId>
+                <status>pending</status>
+                <startTime>2025-02-03T23:53:18.000Z</startTime>
+                <progress>60%</progress>
+                <ownerId>111122223333</ownerId>
+                <volumeSize>30</volumeSize>
+                <description>Daily Backup</description>
+            </CreateSnapshotResponse>"#,
+        )
+        .expect("CreateSnapshot response should deserialize");
+        assert_eq!(created.snapshot_id.as_deref(), Some("snap-1234567890abcdef0"));
+        assert_eq!(created.state.as_deref(), Some("pending"));
+    }
+
+    #[test]
+    fn snapshot_error_codes_map_to_their_kind() {
+        let body = |code: &str| {
+            format!(
+                "<Response><Errors><Error><Code>{code}</Code><Message>m</Message></Error></Errors>\
+                 <RequestID>r</RequestID></Response>"
+            )
+        };
+        assert!(matches!(
+            Ec2Client::map_ec2_error(
+                StatusCode::BAD_REQUEST,
+                &body("InvalidSnapshot.NotFound"),
+                "DescribeSnapshots",
+                "snap-1",
+                None
+            ),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+        assert!(matches!(
+            Ec2Client::map_ec2_error(
+                StatusCode::BAD_REQUEST,
+                &body("InvalidSnapshot.InUse"),
+                "DeleteSnapshot",
+                "snap-1",
+                None
+            ),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+    }
 
     #[test]
     fn create_volume_maps_idempotency_token_to_ec2_query_parameter() {
@@ -3869,7 +4665,7 @@ mod volume_operation_tests {
         let response: DescribeAddressesResponse = quick_xml::de::from_str(
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
-                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><publicIpv4Pool>amazon</publicIpv4Pool></item>
+                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><associationId>eipassoc-1</associationId><networkInterfaceId>eni-1</networkInterfaceId><publicIpv4Pool>amazon</publicIpv4Pool></item>
                     <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
@@ -3883,7 +4679,10 @@ mod volume_operation_tests {
             addresses.items[0].allocation_id.as_deref(),
             Some("eipalloc-1")
         );
-        assert_eq!(addresses.items[0].public_ipv4_pool.as_deref(), Some("amazon"));
+        assert_eq!(
+            addresses.items[0].public_ipv4_pool.as_deref(),
+            Some("amazon")
+        );
         assert!(addresses
             .items
             .iter()
@@ -3892,6 +4691,17 @@ mod volume_operation_tests {
             addresses.items[2].public_ipv4_pool.as_deref(),
             Some("ipv4pool-ec2-1234567890abcdef0")
         );
+        // An address held by a NAT gateway carries its association and network interface.
+        assert_eq!(
+            addresses.items[0].association_id.as_deref(),
+            Some("eipassoc-1")
+        );
+        assert_eq!(
+            addresses.items[0].network_interface_id.as_deref(),
+            Some("eni-1")
+        );
+        assert_eq!(addresses.items[1].association_id, None);
+        assert_eq!(addresses.items[1].network_interface_id, None);
     }
 }
 
@@ -3910,6 +4720,171 @@ impl GetConsoleOutputResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ServiceOverrides;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::prelude::*;
+
+    fn client(server: &MockServer) -> Ec2Client {
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(ServiceOverrides {
+                endpoints: HashMap::from([("ec2".to_string(), server.base_url())]),
+            }),
+        };
+        Ec2Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
+    }
+
+    /// A create EC2 cannot make idempotent is sent once. EC2 may already have made the VPC
+    /// when it answers 5xx (or the response is lost); a second send would make another one.
+    #[tokio::test]
+    async fn a_failed_create_vpc_is_not_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").body_contains("Action=CreateVpc");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .create_vpc(
+                CreateVpcRequest::builder()
+                    .cidr_block("10.1.0.0/16".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create fails");
+
+        assert_eq!(create.hits_async().await, 1);
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+    }
+
+    /// A throttled request was rejected before EC2 acted on it, so even a create without an
+    /// idempotency token is sent again.
+    #[tokio::test]
+    async fn a_throttled_create_subnet_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").body_contains("Action=CreateSubnet");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>RequestLimitExceeded</Code><Message>Request limit exceeded.</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        let error = client(&server)
+            .create_subnet(
+                CreateSubnetRequest::builder()
+                    .vpc_id("vpc-1".to_string())
+                    .cidr_block("10.1.0.0/20".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create stays throttled");
+
+        assert_eq!(create.hits_async().await, 4, "one send and three retries");
+        assert_eq!(error.code, "RATE_LIMIT_EXCEEDED");
+    }
+
+    /// A security group name is unique in its VPC: a resend after a lost response fails as a
+    /// duplicate instead of making a second group, so the create keeps its retries.
+    #[tokio::test]
+    async fn a_failed_create_security_group_is_sent_again() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/")
+                    .body_contains("Action=CreateSecurityGroup");
+                then.status(503).body(
+                    "<Response><Errors><Error><Code>Unavailable</Code><Message>try again</Message></Error></Errors></Response>",
+                );
+            })
+            .await;
+
+        client(&server)
+            .create_security_group(
+                CreateSecurityGroupRequest::builder()
+                    .group_name("stack-sg".to_string())
+                    .description("test".to_string())
+                    .vpc_id("vpc-1".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the create keeps failing");
+
+        assert_eq!(create.hits_async().await, 4);
+    }
+
+    /// Body returned by AWS for `--location-type availability-zone` filtered to t4g.micro in
+    /// us-east-1a and us-east-1e (us-east-1e does not offer the type, so it is absent).
+    #[test]
+    fn describe_instance_type_offerings_reads_zone_offerings() {
+        let response: DescribeInstanceTypeOfferingsResponse = quick_xml::de::from_str(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<DescribeInstanceTypeOfferingsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>92cf3d40-21c3-453f-8074-b44c6a3b6cf5</requestId><instanceTypeOfferingSet><item><instanceType>t4g.micro</instanceType><location>us-east-1a</location><locationType>availability-zone</locationType></item></instanceTypeOfferingSet><nextToken>page-2</nextToken></DescribeInstanceTypeOfferingsResponse>"#,
+        )
+        .expect("parses");
+        let offerings = response
+            .instance_type_offering_set
+            .expect("offering set")
+            .items;
+        assert_eq!(offerings.len(), 1);
+        assert_eq!(offerings[0].instance_type.as_deref(), Some("t4g.micro"));
+        assert_eq!(offerings[0].location.as_deref(), Some("us-east-1a"));
+        assert_eq!(
+            offerings[0].location_type.as_deref(),
+            Some("availability-zone")
+        );
+        assert_eq!(response.next_token.as_deref(), Some("page-2"));
+
+        let empty: DescribeInstanceTypeOfferingsResponse = quick_xml::de::from_str(
+            r#"<DescribeInstanceTypeOfferingsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>r</requestId><instanceTypeOfferingSet/></DescribeInstanceTypeOfferingsResponse>"#,
+        )
+        .expect("empty set parses");
+        assert!(empty
+            .instance_type_offering_set
+            .is_none_or(|set| set.items.is_empty()));
+    }
+
+    /// A rule that names a prefix list carries no CIDR, so a reader that dropped the list would
+    /// see an egress rule reaching nothing where one reaches a whole AWS service.
+    #[test]
+    fn egress_prefix_lists_are_read() {
+        let response: DescribeSecurityGroupsResponse = quick_xml::de::from_str(
+            r#"<DescribeSecurityGroupsResponse>
+                <securityGroupInfo><item>
+                    <groupId>sg-1</groupId>
+                    <ipPermissionsEgress><item>
+                        <ipProtocol>-1</ipProtocol>
+                        <ipRanges><item><cidrIp>127.0.0.1/32</cidrIp></item></ipRanges>
+                        <prefixListIds><item><prefixListId>pl-63a5400a</prefixListId></item></prefixListIds>
+                    </item></ipPermissionsEgress>
+                </item></securityGroupInfo>
+            </DescribeSecurityGroupsResponse>"#,
+        )
+        .expect("parses");
+        let group = &response.security_group_info.expect("groups").items[0];
+        let rule = &group.ip_permissions_egress.as_ref().expect("egress").items[0];
+        assert_eq!(
+            rule.prefix_list_ids.as_ref().expect("prefix lists").items[0]
+                .prefix_list_id
+                .as_deref(),
+            Some("pl-63a5400a")
+        );
+    }
 
     #[test]
     fn describe_volumes_deserializes_aws_status_as_volume_state() {
@@ -3938,6 +4913,40 @@ mod tests {
             Some("vol-0123456789abcdef0")
         );
         assert_eq!(volumes[0].state.as_deref(), Some("available"));
+    }
+
+    #[test]
+    fn describe_volumes_reads_the_attachment_status() {
+        // Sample from the EC2 DescribeVolumes reference: the attachment state is `<status>`.
+        let response: DescribeVolumesResponse = quick_xml::de::from_str(
+            r#"<DescribeVolumesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <volumeSet>
+                    <item>
+                        <volumeId>vol-1234567890abcdef0</volumeId>
+                        <size>80</size>
+                        <availabilityZone>us-east-1a</availabilityZone>
+                        <status>in-use</status>
+                        <attachmentSet>
+                            <item>
+                                <volumeId>vol-1234567890abcdef0</volumeId>
+                                <instanceId>i-1234567890abcdef0</instanceId>
+                                <device>/dev/sdh</device>
+                                <status>attached</status>
+                                <attachTime>YYYY-MM-DDTHH:MM:SS.SSSZ</attachTime>
+                                <deleteOnTermination>false</deleteOnTermination>
+                            </item>
+                        </attachmentSet>
+                        <volumeType>standard</volumeType>
+                    </item>
+                </volumeSet>
+            </DescribeVolumesResponse>"#,
+        )
+        .expect("DescribeVolumes response should deserialize");
+        let volume = &response.volume_set.expect("volume set").items[0];
+        let attachment = &volume.attachment_set.as_ref().expect("attachments").items[0];
+        assert_eq!(volume.state.as_deref(), Some("in-use"));
+        assert_eq!(attachment.state.as_deref(), Some("attached"));
+        assert_eq!(attachment.instance_id.as_deref(), Some("i-1234567890abcdef0"));
     }
 
     #[test]

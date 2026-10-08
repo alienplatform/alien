@@ -36,6 +36,21 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// A required vault-native deployer secret is not in the deployment's
+    /// secrets vault, so the workload does not start.
+    #[error(
+        code = "DEPLOYER_SECRET_MISSING",
+        message = "missing: {label} (no value at '{secret_name}' in the deployment's secrets vault)",
+        retryable = "true",
+        internal = "false"
+    )]
+    DeployerSecretMissing {
+        /// The stack input's label
+        label: String,
+        /// Name the deployer writes the value under
+        secret_name: String,
+    },
+
     /// Resource state serialization or deserialization failed.
     #[error(
         code = "RESOURCE_STATE_SERIALIZATION_FAILED",
@@ -215,6 +230,53 @@ pub enum ErrorData {
         max_times: u32,
     },
 
+    /// The delete half of a replace was denied; the replace waits for an explicit retry.
+    #[error(
+        code = "REPLACE_DELETE_DENIED",
+        message = "Cannot replace '{resource_id}': {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    ReplaceDeleteDenied {
+        /// The resource being replaced
+        resource_id: String,
+        /// What was denied and what to do
+        message: String,
+    },
+
+    /// A delete step gave up on a cloud object that other objects still depend on.
+    #[error(
+        code = "RESOURCE_DELETE_BLOCKED",
+        message = "Cannot delete {object} of resource '{resource_id}'; still in use by: {blockers}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ResourceDeleteBlocked {
+        /// The resource being deleted
+        resource_id: String,
+        /// The cloud object that cannot be deleted yet
+        object: String,
+        /// What still holds it, with enough detail to find it
+        blockers: String,
+    },
+
+    /// A workload update was accepted, but its rollout was not confirmed before the wait ended.
+    ///
+    /// The accepted configuration stays desired downstream, so the rollout can still complete
+    /// later. Retrying the update checks it again.
+    #[error(
+        code = "ROLLOUT_UNCONFIRMED",
+        message = "The update to '{resource_id}' was accepted, but its rollout was not confirmed in time. It may still complete once the workload's machines can receive it. Retry to check again.",
+        retryable = "false",
+        internal = "false"
+    )]
+    RolloutUnconfirmed {
+        /// ID of the resource whose update was accepted
+        resource_id: String,
+    },
+
     /// Platform configuration is missing or invalid.
     #[error(
         code = "client_config_INVALID",
@@ -370,6 +432,23 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A cloud object setup would create already exists and is not one setup can safely adopt.
+    #[error(
+        code = "SETUP_SCAFFOLDING_NOT_ADOPTABLE",
+        message = "Cannot adopt existing {object} for resource '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupScaffoldingNotAdoptable {
+        /// Resource the scaffolding was being created for
+        resource_id: String,
+        /// The existing object, named as the cloud names it
+        object: String,
+        /// Every property that differs from what setup would have created
+        reason: String,
+    },
+
     /// Errors originating from cloud platform operations.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",
@@ -382,6 +461,21 @@ pub enum ErrorData {
         message: String,
         /// The resource ID affected by the error, if applicable
         resource_id: Option<String>,
+    },
+
+    /// GCP refuses a custom role ID because a role with that ID is being permanently deleted.
+    #[error(
+        code = "GCP_CUSTOM_ROLE_ID_UNAVAILABLE",
+        message = "GCP custom role ID '{role_id}' cannot be reused yet: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    GcpCustomRoleIdUnavailable {
+        /// The custom role ID that GCP rejected
+        role_id: String,
+        /// Why the ID is unavailable and what the operator can do
+        message: String,
     },
 
     /// Local platform service not available.

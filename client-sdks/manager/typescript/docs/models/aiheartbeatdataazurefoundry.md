@@ -28,13 +28,13 @@ let value: AiHeartbeatDataAzureFoundry = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "forbidden",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "updating",
     partial: true,
     stale: true,
   },

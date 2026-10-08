@@ -2,9 +2,9 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandboxes and run arbitrary code inside them",
   "platforms": {
-    // Every cloud here creates the sandbox's parent in setup, and can therefore scope a grant to
-    // it. All three refuse an assignment naming a resource that doesn't exist yet, so parent and
-    // grant must come from the same template.
+    // Every cloud here creates the sandbox's parent in setup and scopes the grant to it, and an
+    // assignment naming a resource that does not exist yet is refused, so the two come from one
+    // template. AWS Live is the exception: an inline ARN policy needs no target to exist.
     "aws": [
       {
         "label": "sandbox-lifecycle",

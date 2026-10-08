@@ -1,14 +1,79 @@
 //! EKS CloudFormation target coverage.
 
-use super::helpers::render_built_ins_target;
+use super::helpers::{render_built_ins_target, render_built_ins_template};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
+    CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
     KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
     KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
     KubernetesSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
     ServiceAccount, Stack, StackSettings, Storage,
 };
+
+#[test]
+fn eks_compute_pools_do_not_emit_cloud_fleets_or_choices() {
+    let baseline = Stack::new("portable".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let stack = Stack::new("portable".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "apps".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 3,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .dynamic_container_pool("apps".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        compute: Some(ComputeSettings {
+            pools: [(
+                "apps".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("provider-machine".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        ..Default::default()
+    };
+    let render = |stack: &Stack, settings| {
+        render_built_ins_template(
+            stack,
+            settings,
+            RegistrationMode::OutputsFallback,
+            CloudFormationTarget::Eks,
+            "kubernetes",
+            "portable compute pools",
+        )
+        .0
+    };
+    // Full template equality proves the pool adds neither fleet infrastructure,
+    // machine-choice parameters nor cloud registration entries. Both templates
+    // also pass the normal CloudFormation linter in the render helper.
+    assert_eq!(
+        serde_json::to_value(render(&stack, settings)).unwrap(),
+        serde_json::to_value(render(&baseline, StackSettings::default())).unwrap(),
+    );
+}
 
 #[test]
 fn eks_target_renders_managed_cluster_and_kubernetes_import_payload() {
@@ -99,7 +164,9 @@ fn eks_target_remote_management_uses_management_role_trust() {
     assert!(yaml.contains("ManagementRole:"));
     assert!(yaml.contains("sts:AssumeRole"));
     assert!(yaml.contains("AllowManagingRole"));
-    assert!(!yaml.contains("sts:AssumeRoleWithWebIdentity"));
+    assert!(yaml.contains("sts:AssumeRoleWithWebIdentity"));
+    assert!(yaml.contains("sts.amazonaws.com"));
+    assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-manager-sa"));
 }
 
 #[test]
@@ -278,4 +345,106 @@ fn eks_target_attaches_storage_permissions_to_irsa_service_account() {
     assert!(yaml.contains("- Ref: AppSaRole"));
     assert!(yaml.contains("s3:PutObject"));
     assert!(yaml.contains("arn:${AWS::Partition}:s3:::${Files}/*"));
+}
+
+#[test]
+fn eks_cloudformation_rejects_unsupported_network_and_identity_names() {
+    let cluster = KubernetesCluster::new("kubernetes".to_string())
+        .provider(KubernetesClusterProvider::Eks)
+        .ownership(KubernetesClusterOwnership::Managed)
+        .namespace("alien".to_string())
+        .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+        .build();
+    let stack = Stack::new("portable".to_string())
+        .add(cluster.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let error = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings {
+            network: Some(alien_core::NetworkSettings::UseDefault),
+            ..Default::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "unsupported default discovery",
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("automatic default-VPC discovery is not supported"));
+
+    for profile in [
+        "Uppercase",
+        "punctuation_name",
+        "abcdefghijklmnopqrstuvwxyz",
+    ] {
+        let stack = Stack::new("portable".to_string())
+            .add(cluster.clone(), ResourceLifecycle::Frozen)
+            .add(
+                ServiceAccount::new(format!("{profile}-sa")).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let error = super::helpers::try_render_built_ins(
+            &stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            CloudFormationTarget::Eks,
+            "kubernetes",
+            "unsupported identity name",
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("lowercase DNS label of at most 24 characters"));
+    }
+}
+
+#[test]
+fn eks_requires_two_zones_while_native_aws_retains_single_zone_networking() {
+    let stack = Stack::new("single-zone".to_string())
+        .add(
+            alien_core::Network::new("network".to_string())
+                .settings(alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 1,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let error = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings {
+            network: Some(alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 1,
+            }),
+            ..Default::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "single-zone EKS",
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("at least two distinct Availability Zones"));
+    // Real lint verifies the native AWS one-zone package remains installable.
+    render_built_ins_target(
+        &stack,
+        StackSettings {
+            network: Some(alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 1,
+            }),
+            ..Default::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Aws,
+        "aws",
+        "single-zone AWS network",
+    );
 }

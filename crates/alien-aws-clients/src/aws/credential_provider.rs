@@ -88,6 +88,7 @@ impl AwsCredentialProvider {
             }
             AwsCredentials::WebIdentity { .. }
             | AwsCredentials::Imds { .. }
+            | AwsCredentials::Container { .. }
             | AwsCredentials::Profile { .. } => {
                 use crate::aws::AwsClientConfigExt;
                 let resolved = config.get_web_identity_credentials().await?;
@@ -132,6 +133,7 @@ impl AwsCredentialProvider {
             },
             AwsCredentials::WebIdentity { .. }
             | AwsCredentials::Imds { .. }
+            | AwsCredentials::Container { .. }
             | AwsCredentials::Profile { .. } => {
                 panic!("Cannot create sync credential provider from refreshable source config")
             }
@@ -317,6 +319,7 @@ fn cached_credentials_from_resolved(credentials: &AwsCredentials) -> Result<Cach
         }),
         AwsCredentials::WebIdentity { .. }
         | AwsCredentials::Imds { .. }
+        | AwsCredentials::Container { .. }
         | AwsCredentials::Profile { .. } => Err(AlienError::new(ErrorData::InvalidClientConfig {
             message: "AWS credential source did not resolve to concrete credentials".to_string(),
             errors: None,

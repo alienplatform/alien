@@ -4,13 +4,19 @@ pub use controller::*;
 mod registry;
 pub use registry::*;
 mod executor;
-pub use executor::{PlanResult, RunningResourcePolicy, StackExecutor, StepResult};
+pub use executor::{
+    allow_denied_replaces_to_retry, PlanResult, RunningResourcePolicy, StackExecutor, StepResult,
+    REPLACE_DELETE_DENIED_CODE,
+};
 
 mod service_provider;
 pub use service_provider::*;
 
 mod certificates;
 pub use certificates::*;
+
+#[cfg(feature = "aws")]
+pub(crate) mod aws_tag_scoped;
 
 pub mod state_utils;
 pub use state_utils::*;
@@ -37,6 +43,9 @@ pub use azure_permissions_helper::*;
 
 mod resource_permissions_helper;
 pub use resource_permissions_helper::*;
+
+mod gcp_custom_role_naming;
+pub use gcp_custom_role_naming::GcpCustomRoleNaming;
 
 use std::collections::BTreeMap;
 

@@ -26,6 +26,13 @@ async function run() {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
+    deploymentSetupConfig: {
+      validatedReleaseSelection: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseChannel: "<value>",
+        platform: "kubernetes",
+      },
+    },
     recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
 
@@ -55,6 +62,13 @@ async function run() {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
+    deploymentSetupConfig: {
+      validatedReleaseSelection: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseChannel: "<value>",
+        platform: "kubernetes",
+      },
+    },
     recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
   if (res.ok) {
@@ -66,6 +80,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useSetupLinksCreateMutation
+} from "@alienplatform/platform-api/react-query/setupLinksCreate.js";
 ```
 
 ### Parameters

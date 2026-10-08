@@ -85,6 +85,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
     }
 
     Some(HorizonMachineImage {
+        runtime_isolation_generation: 0,
         channel: "byo".to_string(),
         machine_image_version: "byo-local".to_string(),
         horizond_version: "byo".to_string(),
@@ -138,6 +139,7 @@ fn active_work_statuses() -> Vec<String> {
         "initial-setup",
         "provisioning",
         "waiting-for-machines",
+        "waiting-for-secrets",
         "update-pending",
         "updating",
         "delete-pending",
@@ -273,19 +275,43 @@ impl DeploymentLoop {
 
     /// Run the deployment loop forever.
     pub async fn run(&self) {
+        let (_sender, shutdown) = tokio::sync::watch::channel(false);
+        self.run_until_shutdown(shutdown).await;
+    }
+
+    pub(crate) async fn run_until_shutdown(
+        &self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
         info!(
             interval_secs = self.config.deployment_interval_secs,
             "Starting deployment loop"
         );
 
-        loop {
+        while !*shutdown.borrow() {
             if let Err(payload) = AssertUnwindSafe(self.tick()).catch_unwind().await {
                 error!(
                     panic = panic_payload_message(payload.as_ref()),
                     "Deployment loop tick panicked"
                 );
             }
-            tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)).await;
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)) => {}
+            }
+        }
+    }
+
+    pub(crate) async fn shutdown_local_runtimes(&self) {
+        let providers: Vec<_> = {
+            let mut cache = self
+                .local_bindings_cache
+                .lock()
+                .expect("local_bindings_cache poisoned");
+            cache.drain().map(|(_, provider)| provider).collect()
+        };
+        for provider in providers {
+            provider.shutdown().await;
         }
     }
 
@@ -468,6 +494,44 @@ impl DeploymentLoop {
             })?;
         let deployment_stack = release.stacks.get(&deployment.platform).cloned();
 
+        let recorded_state = state_from_record(
+            &deployment,
+            status,
+            deployment_stack.as_ref(),
+            target_release_id,
+        );
+        if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
+            info!(
+                deployment_id = %deployment_id,
+                next_status = ?next_status,
+                "Runtime never started; skipping runtime cleanup"
+            );
+            let state_after = DeploymentState {
+                status: next_status,
+                error: None,
+                retry_requested: false,
+                ..recorded_state
+            };
+            self.checkpoint_without_step(
+                &deployment_id,
+                session,
+                state_after.clone(),
+                execution_claim,
+            )
+            .await?;
+            crate::registry_access::cleanup_deleted_registry_access(
+                self.deployment_store.as_ref(),
+                &self.server_bindings.bindings_provider,
+                &self.server_bindings.target_bindings_providers,
+                &deployment_id,
+                &deployment.project_id,
+                &state_after,
+            )
+            .await
+            .map_err(|error| error.into_generic())?;
+            return Ok(());
+        }
+
         // 2. Resolve credentials for the target platform and lifecycle phase.
         let resolved_credentials = match self
             .credential_resolver
@@ -509,25 +573,13 @@ impl DeploymentLoop {
                         platform = ?deployment.platform,
                         "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
                     );
-                    let caller = Subject::system();
-                    self.deployment_store
-                        .reconcile(
-                            &caller,
-                            ReconcileData {
-                                deployment_id: deployment_id.clone(),
-                                session: session.to_string(),
-                                state: failed_state,
-                                update_heartbeat: false,
-                                suggested_delay_ms: None,
-                                heartbeats: Vec::new(),
-                                observed_inventory_batches: Vec::new(),
-                                capabilities: Vec::new(),
-                                operator_version: None,
-                                execution_claim: execution_claim.clone(),
-                                operations_report: None,
-                            },
-                        )
-                        .await?;
+                    self.checkpoint_without_step(
+                        &deployment_id,
+                        session,
+                        failed_state,
+                        execution_claim.clone(),
+                    )
+                    .await?;
                 }
                 return Ok(());
             }
@@ -606,7 +658,7 @@ impl DeploymentLoop {
         let provided_config = deployment.deployment_config.as_ref();
         let monitoring = provided_config
             .and_then(|config| config.monitoring.clone())
-            .or_else(|| self.build_monitoring_config(&deployment));
+            .or_else(|| build_monitoring_config(&self.config, &deployment));
 
         // 5. Build deployment config.
         // Management config resolution:
@@ -674,6 +726,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
+                stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
@@ -698,6 +751,7 @@ impl DeploymentLoop {
                 manager_url: Some(self.config.base_url()),
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
+                volume_restores: Vec::new(),
             }
         };
 
@@ -857,6 +911,34 @@ impl DeploymentLoop {
         runner_result.map(|_| ()).map_err(|e| e.into_generic())
     }
 
+    async fn checkpoint_without_step(
+        &self,
+        deployment_id: &str,
+        session: &str,
+        state: DeploymentState,
+        execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
+    ) -> Result<(), AlienError> {
+        self.deployment_store
+            .reconcile(
+                &Subject::system(),
+                ReconcileData {
+                    deployment_id: deployment_id.to_string(),
+                    session: session.to_string(),
+                    state,
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: Vec::new(),
+                    observed_inventory_batches: Vec::new(),
+                    capabilities: Vec::new(),
+                    operator_version: None,
+                    execution_claim,
+                    operations_report: None,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Derive the native image host for Lambda/Cloud Run deployments.
     ///
     /// Lambda requires ECR URIs and Cloud Run requires GAR URIs — they can't pull
@@ -948,23 +1030,29 @@ impl DeploymentLoop {
             created_at: chrono::Utc::now().to_rfc3339(),
         })
     }
+}
 
-    fn build_monitoring_config(
-        &self,
-        deployment: &DeploymentRecord,
-    ) -> Option<alien_core::OtlpConfig> {
-        let otlp_enabled =
-            self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest();
-        let token = deployment.deployment_token.as_ref()?;
+/// Where a deployment without a monitoring config sends its logs: back to this manager, unless
+/// the deployment turned telemetry off. The platform leaves `monitoring` empty for `off`, so
+/// filling it here must honor the same setting.
+fn build_monitoring_config(
+    config: &ManagerConfig,
+    deployment: &DeploymentRecord,
+) -> Option<alien_core::OtlpConfig> {
+    let telemetry_off = deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.telemetry == alien_core::TelemetryMode::Off);
+    let otlp_enabled = config.otlp_endpoint.is_some() || config.enable_local_log_ingest();
+    let token = deployment.deployment_token.as_ref()?;
 
-        otlp_enabled.then(|| alien_core::OtlpConfig {
-            logs_endpoint: format!("{}/v1/logs", self.config.base_url()),
-            logs_auth_header: format!("authorization=Bearer {}", token),
-            metrics_endpoint: None,
-            metrics_auth_header: None,
-            resource_attributes: std::collections::HashMap::new(),
-        })
-    }
+    (otlp_enabled && !telemetry_off).then(|| alien_core::OtlpConfig {
+        logs_endpoint: format!("{}/v1/logs", config.base_url()),
+        logs_auth_header: format!("authorization=Bearer {}", token),
+        metrics_endpoint: None,
+        metrics_auth_header: None,
+        resource_attributes: std::collections::HashMap::new(),
+    })
 }
 
 /// Builds the scoped token that authenticates Local/Kubernetes command pushes
@@ -1063,6 +1151,20 @@ fn failed_state_for_credential_error(
 ) -> DeploymentState {
     DeploymentState {
         status: failed_status_for_deployment_error(status),
+        error: Some(error),
+        retry_requested: false,
+        ..state_from_record(deployment, status, deployment_stack, target_release_id)
+    }
+}
+
+fn state_from_record(
+    deployment: &DeploymentRecord,
+    status: DeploymentStatus,
+    deployment_stack: Option<&alien_core::Stack>,
+    target_release_id: &str,
+) -> DeploymentState {
+    DeploymentState {
+        status,
         platform: deployment.platform,
         current_release: deployment_stack.and_then(|stack| {
             deployment
@@ -1082,10 +1184,10 @@ fn failed_state_for_credential_error(
             stack: stack.clone(),
         }),
         stack_state: deployment.stack_state.clone(),
-        error: Some(error),
+        error: None,
         environment_info: deployment.environment_info.clone(),
         runtime_metadata: deployment.runtime_metadata.clone(),
-        retry_requested: false,
+        retry_requested: deployment.retry_requested,
         protocol_version: deployment.deployment_protocol_version,
     }
 }
@@ -1097,10 +1199,11 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, commands_receiver_env_vars, gcp_credential_handoff_retry_remaining,
-        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
-        manager_candidate_statuses, needs_provision_capability, parse_status,
-        retryable_failed_statuses, should_wait_for_credential_handoff, with_environment_snapshot,
+        active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
+        gcp_credential_handoff_retry_remaining, get_or_create_local_bindings_provider,
+        has_remote_stack_management_outputs, manager_candidate_statuses,
+        needs_provision_capability, parse_status, retryable_failed_statuses,
+        should_wait_for_credential_handoff, with_environment_snapshot,
         worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
@@ -1163,6 +1266,36 @@ mod tests {
         }
     }
 
+    /// A deployment that turned telemetry off gets no log endpoint from this manager, as the
+    /// platform already does; one that left it on gets this manager's.
+    #[test]
+    fn telemetry_off_gets_no_log_endpoint_from_the_manager() {
+        let config = crate::config::ManagerConfig {
+            enable_local_log_ingest: true,
+            ..Default::default()
+        };
+        let deployment_with = |telemetry: alien_core::TelemetryMode| DeploymentRecord {
+            deployment_token: Some("dep-token".to_string()),
+            stack_settings: Some(StackSettings {
+                telemetry,
+                ..Default::default()
+            }),
+            ..deployment_record(DeploymentStatus::Running, None)
+        };
+
+        assert!(
+            build_monitoring_config(&config, &deployment_with(alien_core::TelemetryMode::Off))
+                .is_none()
+        );
+        let monitoring =
+            build_monitoring_config(&config, &deployment_with(alien_core::TelemetryMode::Auto))
+                .expect("telemetry left on ships logs to the manager");
+        assert_eq!(
+            monitoring.logs_endpoint,
+            format!("{}/v1/logs", config.base_url())
+        );
+    }
+
     fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         match status {
             DeploymentStatus::Pending => "pending",
@@ -1171,6 +1304,7 @@ mod tests {
             DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
             DeploymentStatus::Provisioning => "provisioning",
             DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+            DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
             DeploymentStatus::ProvisioningFailed => "provisioning-failed",
             DeploymentStatus::Running => "running",
             DeploymentStatus::RefreshFailed => "refresh-failed",
@@ -1846,6 +1980,7 @@ fn parse_status(status: &str) -> DeploymentStatus {
         "initial-setup-failed" => DeploymentStatus::InitialSetupFailed,
         "provisioning" => DeploymentStatus::Provisioning,
         "waiting-for-machines" => DeploymentStatus::WaitingForMachines,
+        "waiting-for-secrets" => DeploymentStatus::WaitingForSecrets,
         "provisioning-failed" => DeploymentStatus::ProvisioningFailed,
         "running" => DeploymentStatus::Running,
         "refresh-failed" => DeploymentStatus::RefreshFailed,

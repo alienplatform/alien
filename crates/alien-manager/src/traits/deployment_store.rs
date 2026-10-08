@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind,
-    sync::{OperatorCapabilityReport, OperatorImageReport},
+    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
-    EnvironmentVariable, ManagementConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
-    RuntimeMetadata, StackSettings, StackState,
+    EnvironmentVariable, GcpEnvironmentInfo, ManagementConfig, ObservedInventoryBatch, Platform,
+    ResourceHeartbeat, RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -75,7 +75,8 @@ pub struct DeploymentRecord {
     pub deployment_token: Option<String>,
     /// Deployer-provided stack input values, keyed by input id. Gated live
     /// resources resolve against these on every reconcile; without them a
-    /// stored deployment would fall back to declared defaults.
+    /// stored deployment would fall back to declared defaults. Values can be
+    /// sensitive and must not be included in diagnostics.
     #[serde(default)]
     pub input_values: HashMap<String, serde_json::Value>,
     pub retry_requested: bool,
@@ -112,7 +113,10 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("setup_fingerprint_version", &self.setup_fingerprint_version)
             .field(
                 "user_environment_variables",
-                &self.user_environment_variables,
+                &self
+                    .user_environment_variables
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
             )
             .field("management_config", &self.management_config)
             .field(
@@ -123,7 +127,7 @@ impl std::fmt::Debug for DeploymentRecord {
                 "deployment_token",
                 &self.deployment_token.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("input_values", &self.input_values)
+            .field("input_values", &"[REDACTED]")
             .field("retry_requested", &self.retry_requested)
             .field("locked_by", &self.locked_by)
             .field("locked_at", &self.locked_at)
@@ -227,6 +231,29 @@ pub struct DeploymentGroupRecord {
     pub max_deployments: i64,
     pub deployment_count: i64,
     pub created_at: DateTime<Utc>,
+    /// Values the developer set for every deployment created in this group.
+    #[serde(default)]
+    pub setup: DeploymentGroupSetup,
+}
+
+/// Developer-provided configuration applied to each deployment a group's
+/// token creates: stack input values and environment variables.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentGroupSetup {
+    /// Stack input values, keyed by input ID.
+    #[serde(default)]
+    pub input_values: HashMap<String, serde_json::Value>,
+    /// Environment variables, including secret ones.
+    #[serde(default)]
+    pub environment_variables: Vec<EnvironmentVariable>,
+}
+
+impl DeploymentGroupSetup {
+    /// Whether the group carries no setup values.
+    pub fn is_empty(&self) -> bool {
+        self.input_values.is_empty() && self.environment_variables.is_empty()
+    }
 }
 
 /// Parameters for creating a deployment group.
@@ -234,6 +261,8 @@ pub struct DeploymentGroupRecord {
 pub struct CreateDeploymentGroupParams {
     pub name: String,
     pub max_deployments: i64,
+    /// Developer-provided values applied to each deployment the group creates.
+    pub setup: DeploymentGroupSetup,
 }
 
 /// Filter for listing deployments.
@@ -334,6 +363,8 @@ pub struct ReconcileData {
 pub struct ReconcileInput {
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 }
 
 impl ReconcileInput {
@@ -341,7 +372,19 @@ impl ReconcileInput {
         ReconcileInputBuilder {
             data,
             operator_image: None,
+            application: None,
+            dynamic_containers: None,
         }
+    }
+
+    /// Application release the Operator observed in its environment, opaque
+    /// to OSS beyond forwarding it. Read it before [`Self::into_parts`].
+    pub fn application(&self) -> Option<&ObservedApplicationReport> {
+        self.application.as_ref()
+    }
+
+    pub fn dynamic_containers(&self) -> Option<&[alien_core::sync::DynamicContainerReport]> {
+        self.dynamic_containers.as_deref()
     }
 
     pub fn into_parts(self) -> (ReconcileData, Option<OperatorImageReport>) {
@@ -354,6 +397,8 @@ impl ReconcileInput {
 pub struct ReconcileInputBuilder {
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 }
 
 impl ReconcileInputBuilder {
@@ -362,10 +407,25 @@ impl ReconcileInputBuilder {
         self
     }
 
+    pub fn application(mut self, application: ObservedApplicationReport) -> Self {
+        self.application = Some(application);
+        self
+    }
+
+    pub fn dynamic_containers(
+        mut self,
+        reports: Vec<alien_core::sync::DynamicContainerReport>,
+    ) -> Self {
+        self.dynamic_containers = Some(reports);
+        self
+    }
+
     pub fn build(self) -> ReconcileInput {
         ReconcileInput {
             data: self.data,
             operator_image: self.operator_image,
+            application: self.application,
+            dynamic_containers: self.dynamic_containers,
         }
     }
 }
@@ -377,6 +437,8 @@ pub struct ReconcileOutcome {
     /// enabled-plugin-set hash, opaque to OSS beyond forwarding it back to the
     /// Operator's next sync response.
     pub target_operations_bundle_set: Option<alien_core::sync::TargetOperationsBundleSet>,
+    /// Complete container target set supplied by a multi-tenant embedder.
+    pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -466,6 +528,45 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         filter: &DeploymentFilter,
     ) -> Result<Vec<DeploymentRecord>, AlienError>;
+
+    /// Whether a deployment other than `excluding_deployment_id`, not deleted, runs in the GCP
+    /// project numbered `project_number`.
+    ///
+    /// Cloud Run pulls as a project-scoped service agent, so every deployment in one project
+    /// shares a single registry grant. A revoke asks this before removing that grant, and the
+    /// answer must cover every deployment: a missed one loses its image pulls.
+    ///
+    /// The answer depends only on each deployment's id, status and environment. A store that
+    /// can read those without decoding the rest of every record should, so that one record with
+    /// stack or runtime state the current types reject does not fail the revoke of every other
+    /// deployment.
+    async fn has_other_gcp_project_deployment(
+        &self,
+        caller: &crate::auth::Subject,
+        project_number: &str,
+        excluding_deployment_id: &str,
+    ) -> Result<bool, AlienError> {
+        let deployments = self
+            .list_deployments(
+                caller,
+                &DeploymentFilter {
+                    platforms: Some(vec![Platform::Gcp]),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(deployments.iter().any(|deployment| {
+            deployment.id != excluding_deployment_id
+                && deployment.status != "deleted"
+                && matches!(
+                    &deployment.environment_info,
+                    Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                        project_number: other,
+                        ..
+                    })) if other == project_number
+                )
+        }))
+    }
 
     async fn delete_deployment(
         &self,
@@ -564,6 +665,21 @@ pub trait DeploymentStore: Send + Sync {
         session: &str,
         execution_claim: Option<ExecutionClaim>,
     ) -> Result<(), AlienError>;
+
+    /// Acknowledge an exact completed pull execution without applying its report.
+    /// Returns false when completion cannot be established. Implementations must
+    /// preserve any newer attempt and its lease, including within the same session.
+    /// Stores that do not issue execution claims cannot establish completion and
+    /// deliberately decline recovery. Claim-capable embedders implement this hook.
+    async fn acknowledge_completed_execution(
+        &self,
+        _caller: &crate::auth::Subject,
+        _deployment_id: &str,
+        _session: &str,
+        _execution_claim: &ExecutionClaim,
+    ) -> Result<bool, AlienError> {
+        Ok(false)
+    }
 
     /// Release lock on a deployment.
     async fn release(

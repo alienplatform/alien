@@ -37,6 +37,7 @@ fn config(shared_dir: &Path) -> ContainerConfig {
         command: Some(vec!["sleep".to_string(), "300".to_string()]),
         ports: vec![],
         public_endpoint: None,
+        health_check_port: None,
         env_vars: HashMap::new(),
         stateful: true,
         ordinal: Some(0),

@@ -12,9 +12,9 @@ const value: operations.Cpu2 = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

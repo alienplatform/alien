@@ -12,8 +12,8 @@ let value: AwsKmsKeyHeartbeatData = {
   keyState: "<value>",
   keyUsage: "<value>",
   status: {
-    health: "unknown",
-    lifecycle: "deleted",
+    health: "healthy",
+    lifecycle: "running",
   },
 };
 ```

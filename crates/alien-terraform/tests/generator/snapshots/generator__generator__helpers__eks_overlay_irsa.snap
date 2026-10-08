@@ -76,6 +76,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -245,7 +256,7 @@ locals {
   }
   kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))
   deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
-  deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
+  deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "data"
@@ -359,7 +370,7 @@ data "aws_iam_policy_document" "execution_sa_assume_role" {
       test     = "StringEquals"
       variable = "${local.eks_oidc_issuer_host_path}:sub"
       values = [
-        "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
+        "system:serviceaccount:${var.kubernetes_namespace}:${trim(substr(format("%s-%s-sa", coalesce(trim(lower(replace(local.resource_prefix, "/[^a-zA-Z0-9]+/", "-")), "-"), "alien"), coalesce(trim(lower(replace("execution", "/[^a-zA-Z0-9]+/", "-")), "-"), "alien")), 0, 63), "-")}"
       ]
     }
 

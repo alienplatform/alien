@@ -40,20 +40,6 @@ fn strip_vault_secret_pointers(env_vars: &mut std::collections::HashMap<String, 
     env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
 }
 
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
-            }
-        }),
-    }
-}
-
 fn applicable_secret_environment_variables<'a>(
     resource_id: &str,
     variables: &'a [EnvironmentVariable],
@@ -61,8 +47,41 @@ fn applicable_secret_environment_variables<'a>(
     variables
         .iter()
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .filter(|var| alien_core::targets_resource(&var.target_resources, resource_id))
         .collect()
+}
+
+fn local_health_check_port(config: &Container, ports: &[u16]) -> Result<Option<u16>> {
+    let Some(health) = &config.health_check else {
+        return Ok(None);
+    };
+    if health.failure_threshold == 0 {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Container health-check failureThreshold must be at least 1".to_string(),
+            resource_id: Some(config.id.clone()),
+        }));
+    }
+    if !(1..=5).contains(&health.timeout_seconds) {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Container health-check timeoutSeconds must be between 1 and 5".to_string(),
+            resource_id: Some(config.id.clone()),
+        }));
+    }
+    reqwest::Method::from_bytes(health.method.as_bytes()).map_err(|error| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!("Container health-check method is invalid: {error}"),
+            resource_id: Some(config.id.clone()),
+        })
+    })?;
+    health.port.or_else(|| ports.first().copied()).map_or_else(
+        || {
+            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Container health check requires a port".to_string(),
+                resource_id: Some(config.id.clone()),
+            }))
+        },
+        |port| Ok(Some(port)),
+    )
 }
 
 fn local_queue_bind_mount(
@@ -98,6 +117,12 @@ fn local_queue_bind_mount(
 pub struct LocalContainerController {
     /// Container info after starting
     pub(crate) container_info: Option<ContainerInfo>,
+    /// Consecutive failed observations while the container was previously healthy.
+    #[serde(default)]
+    pub(crate) consecutive_health_failures: u32,
+    /// Last restart count observed from Docker.
+    #[serde(default)]
+    pub(crate) restart_count: Option<u32>,
 }
 
 #[controller]
@@ -248,6 +273,8 @@ impl LocalContainerController {
         ) {
             env_vars.insert(var.name.clone(), var.value.clone());
         }
+        crate::core::environment_variables::resolve_local_deployer_secrets(ctx, &mut env_vars)
+            .await?;
         // Monitoring credentials are controller-owned and must win over a
         // same-name value from the deployment environment snapshot.
         env_vars.extend(crate::core::direct_monitoring_auth_headers(ctx));
@@ -310,6 +337,7 @@ impl LocalContainerController {
 
         // Build the container config
         let ports: Vec<u16> = config.ports.iter().map(|p| p.port).collect();
+        let health_check_port = local_health_check_port(&config, &ports)?;
 
         let container_config = ContainerConfig {
             image,
@@ -327,6 +355,7 @@ impl LocalContainerController {
                         .map(|endpoint| endpoint.name.clone())
                         .collect(),
                 }),
+            health_check_port,
             env_vars,
             stateful: config.stateful,
             ordinal: None, // TODO: Handle ordinals for stateful containers
@@ -351,6 +380,8 @@ impl LocalContainerController {
             })?;
 
         self.container_info = Some(container_info.clone());
+        self.consecutive_health_failures = 0;
+        self.restart_count = Some(0);
 
         info!(
             container_id = %config.id,
@@ -360,9 +391,71 @@ impl LocalContainerController {
         );
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if config.health_check.is_some() {
+                WaitingForHealth
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = WaitingForHealth,
+        on_failure = ProvisionFailed,
+        status = ResourceStatus::Provisioning
+    )]
+    async fn waiting_for_health(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let health = config.health_check.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Container readiness state requires a health check".to_string(),
+            })
+        })?;
+        let container_mgr = ctx
+            .service_provider
+            .get_local_container_manager()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::LocalServicesNotAvailable {
+                    service_name: "LocalContainerManager".to_string(),
+                })
+            })?;
+
+        match container_mgr
+            .check_health(
+                &config.id,
+                Some(&health.method),
+                Some(&health.path),
+                Duration::from_secs(health.timeout_seconds.into()),
+            )
+            .await
+        {
+            Ok(restart_count) => {
+                self.consecutive_health_failures = 0;
+                self.restart_count = Some(restart_count);
+                Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: None,
+                })
+            }
+            Err(error)
+                if self._internal_stay_count.unwrap_or_default() + 1 < health.failure_threshold =>
+            {
+                debug!(container_id = %config.id, error = %error, "Waiting for container health check");
+                Ok(HandlerAction::Stay {
+                    max_times: Some(health.failure_threshold),
+                    suggested_delay: Some(Duration::from_secs(1)),
+                })
+            }
+            Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Container '{}' did not become healthy", config.id),
+                resource_id: Some(config.id.clone()),
+            }),
+        }
     }
 
     #[handler(
@@ -383,13 +476,67 @@ impl LocalContainerController {
                 })
             })?;
 
-        container_mgr
-            .check_health(&config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Container health check failed for '{}'", config.id),
+        if !container_mgr.container_exists(&config.id).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to inspect container '{}'", config.id),
                 resource_id: Some(config.id.clone()),
-            })?;
+            },
+        )? {
+            // Absence is drift of a desired Live workload, not a failed health probe.
+            self.container_info = None;
+            self.consecutive_health_failures = 0;
+            self.restart_count = None;
+            return Ok(HandlerAction::Continue {
+                state: StartingContainer,
+                suggested_delay: None,
+            });
+        }
+
+        let health_result = if let Some(health) = &config.health_check {
+            container_mgr
+                .check_health(
+                    &config.id,
+                    Some(&health.method),
+                    Some(&health.path),
+                    Duration::from_secs(health.timeout_seconds.into()),
+                )
+                .await
+        } else {
+            container_mgr
+                .check_health(&config.id, None, None, Duration::from_secs(1))
+                .await
+        };
+        match health_result {
+            Ok(restart_count) => self.restart_count = Some(restart_count),
+            Err(error) => {
+                self.consecutive_health_failures += 1;
+                let threshold = config
+                    .health_check
+                    .as_ref()
+                    .map_or(1, |health| health.failure_threshold);
+                if self.consecutive_health_failures >= threshold {
+                    if let Ok(restart_count) = container_mgr.restart_count(&config.id).await {
+                        self.restart_count = Some(restart_count);
+                    }
+                    emit_local_container_heartbeat(
+                        ctx,
+                        &config,
+                        self.container_info.as_ref(),
+                        false,
+                        self.restart_count,
+                    );
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!("Container health check failed for '{}'", config.id),
+                        resource_id: Some(config.id.clone()),
+                    });
+                }
+                return Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: Some(Duration::from_secs(1)),
+                });
+            }
+        }
+        self.consecutive_health_failures = 0;
 
         // Query the CURRENT binding from the manager (in case recovery changed ports)
         // This ensures controller state stays in sync with runtime reality
@@ -424,7 +571,13 @@ impl LocalContainerController {
             }
         }
 
-        emit_local_container_heartbeat(ctx, &config, self.container_info.as_ref(), true);
+        emit_local_container_heartbeat(
+            ctx,
+            &config,
+            self.container_info.as_ref(),
+            true,
+            self.restart_count,
+        );
 
         debug!(container_id = %config.id, "Container health check passed");
 
@@ -467,6 +620,8 @@ impl LocalContainerController {
         )?;
 
         self.container_info = None;
+        self.consecutive_health_failures = 0;
+        self.restart_count = None;
 
         Ok(HandlerAction::Continue {
             state: StartingContainer,
@@ -521,10 +676,13 @@ impl LocalContainerController {
     );
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
-    terminal_state!(
-        state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+    #[handler(state = RefreshFailed, on_failure = RefreshFailed, status = ResourceStatus::RefreshFailed)]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     // ─────────────── HELPER METHODS ──────────────────────────────────────
 
@@ -538,6 +696,10 @@ impl LocalContainerController {
                 internal_dns: info.internal_dns.clone(),
                 public_endpoints: local_public_endpoint_outputs(info),
                 replicas: Vec::new(), // TODO: Add replica status
+                // A local volume is a host directory: nothing is snapshotted, and with no
+                // volumes reported there is nothing to restore.
+                volumes: Vec::new(),
+                volume_backups: None,
             })
         })
     }
@@ -642,6 +804,7 @@ fn emit_local_container_heartbeat(
     config: &Container,
     container_info: Option<&ContainerInfo>,
     runtime_reachable: bool,
+    restart_count: Option<u32>,
 ) {
     let image = match &config.code {
         ContainerCode::Image { image } => Some(image.clone()),
@@ -669,9 +832,21 @@ fn emit_local_container_heartbeat(
         data: ResourceHeartbeatData::Container(ContainerHeartbeatData::Local(
             LocalContainerHeartbeatData {
                 status: WorkloadHeartbeatStatus {
-                    health: ObservedHealth::Healthy,
-                    lifecycle: ProviderLifecycleState::Running,
-                    message: Some(format!("Local container '{}' is running", config.id)),
+                    health: if runtime_reachable {
+                        ObservedHealth::Healthy
+                    } else {
+                        ObservedHealth::Unhealthy
+                    },
+                    lifecycle: if runtime_reachable {
+                        ProviderLifecycleState::Running
+                    } else {
+                        ProviderLifecycleState::Failed
+                    },
+                    message: Some(if runtime_reachable {
+                        format!("Local container '{}' is healthy", config.id)
+                    } else {
+                        format!("Local container '{}' failed its health check", config.id)
+                    }),
                     stale: false,
                     partial: false,
                     collection_issues: vec![],
@@ -680,7 +855,7 @@ fn emit_local_container_heartbeat(
                 name: container_info.map(|info| info.container_id.clone()),
                 image,
                 runtime_status: Some("running".to_string()),
-                restart_count: None,
+                restart_count,
                 port_count: container_info
                     .map(|info| info.ports.len() as u32)
                     .unwrap_or(config.ports.len() as u32),
@@ -696,7 +871,7 @@ fn emit_local_container_heartbeat(
                     ready: runtime_reachable,
                     phase: Some("running".to_string()),
                     pid: None,
-                    restart_count: None,
+                    restart_count,
                     cpu: None,
                     memory: None,
                 }),
@@ -710,7 +885,121 @@ fn emit_local_container_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+
+    use futures::FutureExt;
+
+    use crate::{core::controller_test::SingleControllerExecutor, ResourceController};
+
+    #[tokio::test]
+    #[ignore = "requires Docker and registry access"]
+    async fn removed_unchanged_container_recovers_from_ready_and_refresh_failed() {
+        let directory = tempfile::tempdir().unwrap();
+        let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+        let manager = bindings.container_manager().unwrap();
+        let services = Arc::new(crate::DefaultPlatformServiceProvider::with_local_bindings(
+            bindings,
+        ));
+        let id = format!("recovery-{}", std::process::id());
+        let config = Container::new(id.clone())
+            .permissions("default-profile".to_string())
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "64Mi".to_string(),
+                desired: "64Mi".to_string(),
+            })
+            .code(ContainerCode::Image {
+                image: "alpine:3.22".to_string(),
+            })
+            .command(vec!["sleep".to_string(), "300".to_string()])
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(LocalContainerController::default())
+            .platform(Platform::Local)
+            .client_config(alien_core::ClientConfig::Local {
+                state_directory: directory.path().to_string_lossy().into_owned(),
+            })
+            .service_provider(services.clone())
+            .build()
+            .await
+            .unwrap();
+        let verification = AssertUnwindSafe(async {
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let first = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .container_info
+                .as_ref()
+                .unwrap()
+                .docker_container_id
+                .clone();
+            manager.delete_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            let second = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .container_info
+                .as_ref()
+                .unwrap()
+                .docker_container_id
+                .clone();
+            assert_ne!(first, second);
+            assert!(manager.is_running(&id).await);
+
+            // A present, deliberately stopped container must not be recreated.
+            manager.stop_container(&id).await.unwrap();
+            for _ in 0..2 {
+                let error = executor
+                    .step()
+                    .await
+                    .err()
+                    .expect("a present stopped container must fail its health check");
+                assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+                assert!(error.message.contains("Container health check failed"));
+                assert_eq!(executor.status(), ResourceStatus::Running);
+            }
+            assert!(!manager.is_running(&id).await);
+            assert!(manager.container_exists(&id).await.unwrap());
+
+            // The production executor moves to failure after its retry policy is exhausted.
+            let mut failed_controller = executor
+                .internal_state::<LocalContainerController>()
+                .unwrap()
+                .clone();
+            failed_controller.transition_to_failure();
+            executor = SingleControllerExecutor::builder()
+                .resource(config.clone())
+                .controller(failed_controller)
+                .platform(Platform::Local)
+                .client_config(alien_core::ClientConfig::Local {
+                    state_directory: directory.path().to_string_lossy().into_owned(),
+                })
+                .service_provider(services.clone())
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(executor.status(), ResourceStatus::RefreshFailed);
+
+            // Once absent, even an already failed health checkpoint can recover.
+            manager.delete_container(&id).await.unwrap();
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert!(manager.is_running(&id).await);
+        })
+        .catch_unwind()
+        .await;
+        manager.delete_container(&id).await.unwrap();
+        if let Err(panic) = verification {
+            std::panic::resume_unwind(panic);
+        }
+    }
 
     #[test]
     fn tcp_binding_and_named_outputs_describe_the_published_endpoint() {
@@ -718,6 +1007,7 @@ mod tests {
             container_id: "database".to_string(),
             docker_container_id: "docker-id".to_string(),
             host_port: Some(49152),
+            health_host_port: None,
             public_endpoint: Some(LocalPublicEndpoint {
                 port: 5432,
                 protocol: ExposeProtocol::Tcp,

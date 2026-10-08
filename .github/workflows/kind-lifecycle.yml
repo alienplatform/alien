@@ -1,0 +1,127 @@
+name: Kind lifecycle
+
+# The Kind compute-pool and Remote Operator lifecycle tests take ~35 min, so they
+# run after merge instead of on every PR push. Start this workflow manually on a
+# branch to run them before merging. A failure on main opens an issue. A PR that
+# changes this file runs it, so the workflow itself is tested before merge.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kind-lifecycle.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/alien-core/**'
+      - 'crates/alien-helm/**'
+      - 'crates/alien-infra/**'
+      - 'crates/alien-operator/**'
+      - 'crates/alien-terraform/**'
+      - '.github/workflows/kind-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kind-lifecycle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  kind-lifecycle:
+    name: Kind lifecycle
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      # Rust on aarch64 Linux links with GNU ld by default; mold is much faster.
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.3
+          terraform_wrapper: false
+
+      - uses: azure/setup-helm@v5
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Build the Kind test binaries
+        run: |
+          cargo test --locked -p alien-operator --test dynamic_containers_kind --no-run
+          cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
+
+      - name: Start disposable Kubernetes cluster
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: alien-product-lifecycle
+
+      - name: Kubernetes compute pool dynamic container lifecycle
+        env:
+          ALIEN_DYNAMIC_KIND_CONTEXT: kind-alien-product-lifecycle
+          ALIEN_DYNAMIC_KIND_NAMESPACE: alien-dynamic-compute-ci
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/dynamic-compute.kubeconfig"
+          kind get kubeconfig --name alien-product-lifecycle > "$KUBECONFIG"
+          kubectl create namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE"
+          trap 'kubectl delete namespace "$ALIEN_DYNAMIC_KIND_NAMESPACE" --ignore-not-found; rm -f "$KUBECONFIG"' EXIT
+          image=docker.io/library/memcached@sha256:9e4de012dc607573052061c0bcb38abc775e1dd59b24e7ac38d1892842094aaf
+          docker pull "$image"
+          docker tag "$image" docker.io/library/memcached:alien-kind-test
+          kind load docker-image docker.io/library/memcached:alien-kind-test --name alien-product-lifecycle
+          cargo test --locked -p alien-operator --test dynamic_containers_kind -- \
+            --ignored --nocapture --test-threads=1
+
+      - name: Product Remote Operator Helm and Terraform lifecycle
+        env:
+          ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
+        run: |
+          cargo test --locked -p alien-helm --test product_remote_operator_lifecycle -- \
+            --ignored --nocapture --test-threads=1
+
+  report-failure:
+    name: Report a failure on main
+    needs: kind-lifecycle
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          title="Kind lifecycle tests are failing on main"
+          body="Run: $RUN_URL (commit $SHA)"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi

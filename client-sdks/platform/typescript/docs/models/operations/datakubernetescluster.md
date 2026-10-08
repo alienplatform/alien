@@ -18,10 +18,10 @@ let value: DataKubernetesCluster = {
     podCounts: {},
     status: {
       collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "failed",
-      partial: false,
-      stale: false,
+      health: "healthy",
+      lifecycle: "deleting",
+      partial: true,
+      stale: true,
     },
   },
   resourceType: "kubernetes-cluster",
@@ -30,7 +30,7 @@ let value: DataKubernetesCluster = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `data`                                               | [operations.Data1](../../models/operations/data1.md) | :heavy_check_mark:                                   | N/A                                                  |
-| `resourceType`                                       | *"kubernetes-cluster"*                               | :heavy_check_mark:                                   | N/A                                                  |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `data`                                                                                                     | [operations.GetResourceDeploymentDetailData1](../../models/operations/getresourcedeploymentdetaildata1.md) | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `resourceType`                                                                                             | *"kubernetes-cluster"*                                                                                     | :heavy_check_mark:                                                                                         | N/A                                                                                                        |

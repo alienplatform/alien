@@ -10,8 +10,8 @@ let value: AzureKeyVaultKeyHeartbeatData = {
   keyOperations: [],
   keyType: "<value>",
   status: {
-    health: "unknown",
-    lifecycle: "deleted",
+    health: "healthy",
+    lifecycle: "running",
   },
 };
 ```

@@ -107,6 +107,13 @@ Parameters:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing security group IDs.
     Default: ''
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -266,6 +273,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -327,6 +336,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -388,6 +399,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -535,6 +548,8 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
     Condition: NetworkModeCreate
   AgentsBuildRole:
     Type: AWS::IAM::Role
@@ -563,12 +578,6 @@ Resources:
             - s3:GetObject
             Resource:
               Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
-          - Effect: Allow
-            Action:
-            - logs:CreateLogGroup
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-            Resource: '*'
       Tags:
       - Key: managed-by
         Value: setup
@@ -658,6 +667,8 @@ Resources:
           Ref: ManagingRoleArn
       StackSettings:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:

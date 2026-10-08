@@ -32,6 +32,75 @@ impl LocalVault {
         self.vault_dir.join("secrets.json")
     }
 
+    /// Path of the per-secret version counters, kept next to the secrets.
+    fn versions_file_path(&self) -> PathBuf {
+        self.vault_dir.join("versions.json")
+    }
+
+    /// How many times each secret was written. A counter rather than a
+    /// timestamp: two writes can share a modification time, and a counter
+    /// says nothing about the value. Like the secrets file, it assumes one
+    /// writer at a time (the developer's own machine).
+    async fn load_versions(&self) -> Result<HashMap<String, u64>> {
+        let versions_file = self.versions_file_path();
+        if !versions_file.exists() {
+            return Ok(HashMap::new());
+        }
+        let content = tokio::fs::read_to_string(&versions_file)
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read vault versions file: {}",
+                    versions_file.display()
+                ),
+                resource_id: None,
+            })?;
+        serde_json::from_str(&content)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to parse vault versions file: {}",
+                    versions_file.display()
+                ),
+                resource_id: None,
+            })
+    }
+
+    /// Counts one more write of `secret_name`. A deleted secret keeps its
+    /// counter, so writing it again is still a new version.
+    async fn bump_version(&self, secret_name: &str) -> Result<()> {
+        let mut versions = self.load_versions().await?;
+        *versions.entry(secret_name.to_string()).or_default() += 1;
+        tokio::fs::create_dir_all(&self.vault_dir)
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create vault directory: {}",
+                    self.vault_dir.display()
+                ),
+                resource_id: None,
+            })?;
+        let versions_file = self.versions_file_path();
+        let json = serde_json::to_string_pretty(&versions)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to serialize vault versions".to_string(),
+                resource_id: None,
+            })?;
+        tokio::fs::write(&versions_file, json)
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to write vault versions file: {}",
+                    versions_file.display()
+                ),
+                resource_id: None,
+            })
+    }
+
     /// Load secrets from disk.
     async fn load_secrets(&self) -> Result<HashMap<String, String>> {
         let secrets_file = self.secrets_file_path();
@@ -109,17 +178,34 @@ impl crate::traits::Binding for LocalVault {}
 
 #[async_trait]
 impl crate::traits::Vault for LocalVault {
+    /// The local vault is the developer's own file, so presence is whether
+    /// the key is set to a non-empty value. The version counts the writes of
+    /// that key through this vault.
+    async fn secret_presence(&self, secret_name: &str) -> Result<crate::traits::SecretPresence> {
+        let secrets = self.load_secrets().await?;
+        Ok(match secrets.get(secret_name) {
+            None => crate::traits::SecretPresence::Missing,
+            Some(value) if value.is_empty() => crate::traits::SecretPresence::Invalid {
+                reason: format!("'{secret_name}' is set to an empty value"),
+            },
+            Some(_) => crate::traits::SecretPresence::Present {
+                version: self
+                    .load_versions()
+                    .await?
+                    .get(secret_name)
+                    .map(u64::to_string),
+            },
+        })
+    }
+
     /// Get a secret value by name
     async fn get_secret(&self, secret_name: &str) -> Result<String> {
         let secrets = self.load_secrets().await?;
 
         secrets.get(secret_name).cloned().ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Secret '{}' not found in vault '{}'",
-                    secret_name, self.vault_name
-                ),
-                resource_id: None,
+            AlienError::new(ErrorData::VaultSecretNotFound {
+                vault: self.vault_name.clone(),
+                secret_name: secret_name.to_string(),
             })
         })
     }
@@ -128,15 +214,19 @@ impl crate::traits::Vault for LocalVault {
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;
         secrets.insert(secret_name.to_string(), value.to_string());
+        // Count the write before making it: if saving the value then fails,
+        // the next update restarts the workload once more than needed, but a
+        // new value can never sit behind an unchanged version.
+        self.bump_version(secret_name).await?;
         self.save_secrets(&secrets).await
     }
 
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;
-
-        secrets.remove(secret_name);
-
+        if secrets.remove(secret_name).is_none() {
+            return Ok(());
+        }
         self.save_secrets(&secrets).await
     }
 
@@ -157,8 +247,36 @@ mod tests {
 
     fn test_vault() -> (LocalVault, TempDir) {
         let temp_dir = TempDir::new().expect("tempdir");
-        let vault = LocalVault::new("secrets".to_string(), temp_dir.path().to_path_buf());
+        // A vault directory that does not exist yet, as on first use.
+        let vault = LocalVault::new("secrets".to_string(), temp_dir.path().join("vault"));
         (vault, temp_dir)
+    }
+
+    fn present_version(presence: crate::traits::SecretPresence) -> String {
+        match presence {
+            crate::traits::SecretPresence::Present {
+                version: Some(version),
+            } => version,
+            other => panic!("expected a present secret with a version, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn secret_version_changes_only_when_the_vault_is_written() {
+        let (vault, _temp_dir) = test_vault();
+        vault.set_secret("api-key", "v1").await.expect("set v1");
+
+        let v1 = present_version(vault.secret_presence("api-key").await.expect("presence"));
+        assert_eq!(
+            present_version(vault.secret_presence("api-key").await.expect("presence")),
+            v1,
+            "reading the vault keeps the version"
+        );
+
+        vault.set_secret("api-key", "v2").await.expect("set v2");
+        let v2 = present_version(vault.secret_presence("api-key").await.expect("presence"));
+        assert_ne!(v1, v2, "overwriting the secret is a new version");
+        assert!(!v2.contains("v2"), "the version never carries the value");
     }
 
     #[tokio::test]
@@ -208,6 +326,21 @@ mod tests {
             names,
             vec!["keep".to_string()],
             "deleted secret must be gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_missing_secret_does_not_create_vault_state() {
+        let (vault, temp_dir) = test_vault();
+
+        vault
+            .delete_secret("missing")
+            .await
+            .expect("deleting a missing secret should succeed");
+
+        assert!(
+            !temp_dir.path().join("vault").exists(),
+            "a no-op delete must not create any vault state"
         );
     }
 }

@@ -5,17 +5,21 @@
 //!
 //! Pull model (Local, Kubernetes): installs and starts the alien-operator service.
 
+mod setup_update;
+
 use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
-    parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
-    Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentInfo, ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
-    ResourceLifecycle, Stack, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, TelemetryMode, UpdatesMode, Worker,
+    deployer_secret_value_refusal, is_deployer_secret_input, parse_public_endpoint_assignment,
+    validate_public_endpoint_urls, ClientConfig, ComputeSettings, Container, Daemon,
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EndpointAccess,
+    EnvironmentInfo, KubernetesClusterOwnership, KubernetesClusterSettings,
+    KubernetesExposureSettings, KubernetesSettings, ManagementConfig, NetworkSettings, Platform,
+    PublicEndpointUrls, ReleaseInfo, Stack, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -28,14 +32,16 @@ use alien_deployment::{
         preserve_semantic_failure, run_step_loop as shared_run_step_loop, RunnerPolicy,
         RunnerResult,
     },
+    setup_run_has_pending_update,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_infra::{ClientConfigExt, StackStateExt};
+use alien_infra::ClientConfigExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap},
     io::{IsTerminal, Write},
@@ -113,6 +119,18 @@ pub struct UpArgs {
     #[arg(long)]
     pub setup_update: bool,
 
+    /// Existing deployment ID for setup from a fresh runner.
+    #[arg(long, requires_all = ["setup_update", "update_operation_id", "release_id"], conflicts_with = "name")]
+    pub deployment_id: Option<String>,
+
+    /// Exact pending update operation to configure and apply setup for.
+    #[arg(long, requires = "deployment_id")]
+    pub update_operation_id: Option<String>,
+
+    /// Exact release expected by the setup update.
+    #[arg(long, requires = "deployment_id")]
+    pub release_id: Option<String>,
+
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -155,6 +173,11 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_OPERATOR_IMAGE")]
     pub operator_image: Option<String>,
 
+    /// Kubernetes Secret containing external-bindings.json for existing services.
+    /// The Secret must exist in the install namespace before deployment.
+    #[arg(long)]
+    pub external_bindings_secret: Option<String>,
+
     /// TOML file containing deployment settings.
     #[arg(long)]
     pub config: Option<PathBuf>,
@@ -167,8 +190,9 @@ pub struct UpArgs {
     #[arg(long = "input")]
     pub input_values: Vec<String>,
 
-    /// Secret stack input value for setup (id=value).
-    #[arg(long = "secret-input")]
+    /// Refused: deployer secrets are written into your own secret store, never
+    /// passed to Alien. Kept so an old invocation fails with what to do instead.
+    #[arg(long = "secret-input", hide = true)]
     pub secret_input_values: Vec<String>,
 
     /// Public URL for an exposed endpoint in <resource-id>.<endpoint-name>=<absolute-url> form.
@@ -203,7 +227,9 @@ struct DeployConfigFile {
     public_endpoints: Option<PublicEndpointUrls>,
     /// Deployer-provided stack inputs.
     inputs: Option<HashMap<String, String>>,
-    /// Secret deployer-provided stack inputs.
+    /// Typed bindings for externally owned resources.
+    external_bindings: Option<alien_core::ExternalBindings>,
+    /// Refused: deployer secrets are written into your own secret store.
     secret_inputs: Option<HashMap<String, String>>,
 }
 
@@ -291,6 +317,21 @@ mod tests {
     use clap::Parser;
     use httpmock::{Method::PATCH, MockServer};
     use std::io::Write;
+
+    #[test]
+    fn kubernetes_install_retry_reuses_resource_prefix() {
+        let first = kubernetes_resource_prefix("setup-token", "production");
+        assert_eq!(
+            first,
+            kubernetes_resource_prefix("setup-token", "production")
+        );
+        assert!(alien_core::is_valid_resource_prefix(&first));
+        assert_ne!(
+            first,
+            kubernetes_resource_prefix("another-token", "production")
+        );
+        assert_ne!(first, kubernetes_resource_prefix("setup-token", "preview"));
+    }
 
     #[test]
     fn cloud_push_platforms_require_install_context() {
@@ -394,6 +435,7 @@ mod tests {
             "initial-setup-failed",
             "provisioning",
             "waiting-for-machines",
+            "waiting-for-secrets",
             "provisioning-failed",
         ] {
             assert!(supports_hosted_compute_update(status), "{status}");
@@ -418,6 +460,7 @@ mod tests {
             "initial-setup-failed",
             "provisioning",
             "waiting-for-machines",
+            "waiting-for-secrets",
             "provisioning-failed",
         ] {
             assert!(hosted_compute_update_required(status, false), "{status}");
@@ -507,6 +550,89 @@ mod tests {
         assert!(validate_push_environment_identity(&azure, &wrong_azure).is_err());
     }
 
+    #[test]
+    fn fresh_machines_settings_use_ambient_s3_credentials() {
+        for credentials in [
+            serde_json::json!({}),
+            serde_json::json!({"accessKeyId": "fixture-access-id"}),
+            serde_json::json!({"secretAccessKey": "sensitive-signing-marker"}),
+            serde_json::json!({"secretAccessKey": {"secretRef": {"name": "object-store", "key": "signing-key"}}}),
+        ] {
+            let mut binding =
+                serde_json::json!({"type": "storage", "service": "s3", "bucketName": "archive"});
+            binding
+                .as_object_mut()
+                .unwrap()
+                .extend(credentials.as_object().unwrap().clone());
+            let config: DeployConfigFile = serde_json::from_value(serde_json::json!({
+                "externalBindings": {"archive": binding.clone()}
+            }))
+            .unwrap();
+            let result = load_stack_settings(
+                &UpArgs::parse_from(["democtl"]),
+                Platform::Machines,
+                Platform::Machines,
+                Some(&config),
+            );
+            if credentials.as_object().unwrap().is_empty() {
+                let bindings = result.unwrap().external_bindings.unwrap();
+                assert_eq!(serde_json::to_value(bindings).unwrap()["archive"], binding);
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("encrypted Secret inputs"));
+                assert!(!format!("{error:?}").contains("sensitive-signing-marker"));
+            }
+            // Kubernetes retains its existing SecretRef resolution contract.
+            assert!(load_stack_settings(
+                &UpArgs::parse_from(["democtl"]),
+                Platform::Kubernetes,
+                Platform::Kubernetes,
+                Some(&config)
+            )
+            .is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn machines_setup_does_not_require_cloud_credentials() {
+        assert!(matches!(
+            setup_client_config(Platform::Machines).await.unwrap(),
+            ClientConfig::Machines
+        ));
+    }
+
+    #[test]
+    fn deploy_config_passes_typed_external_storage_to_settings() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+            platform = "machines"
+            [externalBindings.archive]
+            type = "storage"
+            service = "s3"
+            bucketName = "customer-archive"
+            endpoint = "http://127.0.0.1:9000"
+            region = "us-east-1"
+            forcePathStyle = true
+        "#,
+        )
+        .unwrap();
+        let args = UpArgs::parse_from(["democtl"]);
+        let settings =
+            load_stack_settings(&args, Platform::Machines, Platform::Machines, Some(&config))
+                .unwrap();
+        let binding = settings.external_bindings.unwrap();
+        let storage = binding.get_storage("archive").unwrap().unwrap();
+        let alien_core::bindings::StorageBinding::S3(storage) = storage else {
+            panic!("expected S3 binding");
+        };
+        assert_eq!(storage.bucket_name, "customer-archive".into());
+        assert_eq!(storage.endpoint, Some("http://127.0.0.1:9000".into()));
+        assert_eq!(storage.region, Some("us-east-1".into()));
+        assert_eq!(storage.force_path_style, Some(true));
+        assert!(storage.access_key_id.is_none());
+        assert!(storage.secret_access_key.is_none());
+    }
+
     #[tokio::test]
     async fn setup_update_never_initializes_an_untracked_deployment() {
         let name = format!("missing-setup-{}", uuid::Uuid::new_v4());
@@ -529,6 +655,86 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_access_can_be_selected_during_initial_setup() {
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::PreflightsFailed,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            let mut settings = StackSettings::default();
+            apply_endpoint_access_override(
+                &mut settings,
+                Some(EndpointAccess::Private),
+                status,
+                false,
+            )
+            .expect("initial setup can select private access");
+            assert_eq!(settings.endpoint_access, EndpointAccess::Private);
+        }
+    }
+
+    #[test]
+    fn endpoint_access_is_fixed_before_the_first_release_finishes_provisioning() {
+        let mut settings = StackSettings {
+            endpoint_access: EndpointAccess::Private,
+            ..Default::default()
+        };
+        for status in [
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            apply_endpoint_access_override(
+                &mut settings,
+                Some(EndpointAccess::Internet),
+                status,
+                false,
+            )
+            .expect_err("completed setup is fixed even without a running release");
+            assert_eq!(settings.endpoint_access, EndpointAccess::Private);
+        }
+    }
+
+    #[test]
+    fn endpoint_access_refresh_preserves_the_stored_choice() {
+        for status in [
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::WaitingForMachines,
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::Updating,
+            DeploymentStatus::UpdateFailed,
+        ] {
+            for (stored, requested) in [
+                (EndpointAccess::Private, EndpointAccess::Internet),
+                (EndpointAccess::Internet, EndpointAccess::Private),
+            ] {
+                let mut settings = StackSettings {
+                    endpoint_access: stored,
+                    ..Default::default()
+                };
+                let error =
+                    apply_endpoint_access_override(&mut settings, Some(requested), status, true)
+                        .expect_err("completed setup cannot change endpoint access");
+                assert!(error
+                    .to_string()
+                    .contains("Endpoint access cannot change after setup"));
+                assert_eq!(settings.endpoint_access, stored);
+                apply_endpoint_access_override(&mut settings, Some(stored), status, true)
+                    .expect("refresh accepts the stored choice");
+                apply_endpoint_access_override(&mut settings, None, status, true)
+                    .expect("refresh can omit the choice");
+                assert_eq!(settings.endpoint_access, stored);
+            }
+        }
+    }
+
+    #[test]
     fn failed_setup_states_are_prepared_before_retrying() {
         for status in [
             DeploymentStatus::UpdatePending,
@@ -537,7 +743,6 @@ mod tests {
             DeploymentStatus::UpdateFailed,
             DeploymentStatus::RefreshFailed,
             DeploymentStatus::InitialSetupFailed,
-            DeploymentStatus::ProvisioningFailed,
         ] {
             assert!(requires_direct_setup_preparation(&status), "{status:?}");
         }
@@ -549,6 +754,235 @@ mod tests {
         ] {
             assert!(!requires_direct_setup_preparation(&status), "{status:?}");
         }
+    }
+
+    fn installed_deployment(status: &str, desired_release_id: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "id": "dep_demo", "name": "demo", "platform": "machines", "status": status,
+            "deploymentGroupId": "dg_demo", "deploymentProtocolVersion": 1,
+            "projectId": "prj_demo", "workspaceId": "ws_demo", "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z", "currentReleaseId": "rel_installed",
+            "desiredReleaseId": desired_release_id, "stackSettings": {},
+            "stackState": alien_core::StackState::new(Platform::Machines),
+            "runtimeMetadata": alien_core::RuntimeMetadata::default(),
+        })
+    }
+
+    async fn run_machines_setup(server: &MockServer) -> Result<SetupRunOutcome> {
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        push_initial_setup(
+            &client,
+            "dep_demo",
+            Platform::Machines,
+            None,
+            ClientConfig::Machines,
+            None,
+            &server.base_url(),
+            "deployment-token",
+            None,
+            None,
+            Some("setup-revision-2"),
+        )
+        .await
+    }
+
+    /// A setup run on a running deployment with no pending update used to re-enter initial
+    /// setup and hand the deployment back at `provisioning`, where nothing drives it. It must
+    /// leave the deployment alone: no lock, no reconcile, no status change.
+    #[tokio::test]
+    async fn setup_with_no_pending_update_leaves_an_installed_deployment_untouched() {
+        for status in ["running", "refresh-failed"] {
+            let server = MockServer::start_async().await;
+            let deployment = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200)
+                        .json_body(installed_deployment(status, None));
+                })
+                .await;
+            let lock_or_write = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path_contains("/v1/sync/");
+                    then.status(500);
+                })
+                .await;
+
+            let outcome = run_machines_setup(&server)
+                .await
+                .expect("a settled deployment needs no setup");
+
+            assert_eq!(outcome, SetupRunOutcome::NothingPending, "{status}");
+            deployment.assert_hits_async(1).await;
+            lock_or_write.assert_hits_async(0).await;
+        }
+    }
+
+    /// The pending update can finish while setup waits for the lock. The locked read then
+    /// shows nothing to apply, so setup releases the lock without writing any state.
+    #[tokio::test]
+    async fn setup_releases_the_lock_when_the_update_finished_while_it_waited() {
+        let server = MockServer::start_async().await;
+        let pending = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200)
+                    .json_body(installed_deployment("running", Some("rel_target")));
+            })
+            .await;
+        let settled = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200)
+                    .json_body(installed_deployment("running", None));
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                // Long enough for the update to finish (the pending read to go) meanwhile.
+                then.status(200)
+                    .delay(std::time::Duration::from_millis(300))
+                    .json_body(serde_json::json!({"deployments": [{
+                        "deployment": {"id": "dep_demo"},
+                        "executionClaim": {"operationId": "op_applied", "attemptId": "attempt_1"}
+                    }]}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/release")
+                    .json_body_partial(
+                        serde_json::json!({
+                            "deploymentId": "dep_demo",
+                            "executionClaim": {"operationId": "op_applied", "attemptId": "attempt_1"}
+                        })
+                        .to_string(),
+                    );
+                then.status(200);
+            })
+            .await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile");
+                then.status(500);
+            })
+            .await;
+
+        let (outcome, ()) = tokio::join!(run_machines_setup(&server), async {
+            while acquire.hits_async().await == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            pending.delete_async().await;
+        });
+
+        assert_eq!(
+            outcome.expect("setup should release the lock and return"),
+            SetupRunOutcome::NothingPending
+        );
+        settled.assert_hits_async(1).await;
+        acquire.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
+        reconcile.assert_hits_async(0).await;
+    }
+
+    /// A manager can remove the record on the `Deleted` checkpoint and still answer 500 (work
+    /// after its commit failed). The final reconcile then finds the record gone, so the
+    /// teardown that finished is reported as finished.
+    #[tokio::test]
+    async fn destroy_succeeds_when_the_manager_removed_the_record_but_failed_the_checkpoint() {
+        let server = MockServer::start_async().await;
+        let mut teardown_required = installed_deployment("teardown-required", None);
+        teardown_required["currentReleaseId"] = serde_json::Value::Null;
+        let deployment = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(teardown_required);
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/acquire")
+                    .json_body_partial(r#"{"acquireMode":"setup-teardown"}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"deployments": [{
+                        "deployment": {"id": "dep_demo"}, "executionClaim": null
+                    }]}));
+            })
+            .await;
+        let progress = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"teardown-required"}}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"success": true, "current": null}));
+            })
+            .await;
+        let failed_commit = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                // Long enough for the record to go before the error arrives.
+                then.status(500)
+                    .delay(std::time::Duration::from_millis(300))
+                    .json_body(serde_json::json!({
+                        "code": "INTERNAL_ERROR", "message": "Internal server error",
+                        "retryable": true, "internal": true
+                    }));
+            })
+            .await;
+        let record_gone = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"status":"deleted"}}"#);
+                then.status(404).json_body(serde_json::json!({
+                    "code": "NOT_FOUND", "message": "Deployment not found",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(404).json_body(serde_json::json!({
+                    "code": "NOT_FOUND", "message": "Deployment not found",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+
+        let (result, ()) = tokio::join!(
+            push_deletion(
+                &client,
+                "dep_demo",
+                Platform::Machines,
+                ClientConfig::Machines
+            ),
+            async {
+                while failed_commit.hits_async().await == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                failed_commit.delete_async().await;
+            }
+        );
+
+        result.expect("a finished teardown whose record is gone must succeed");
+        deployment.assert_hits_async(2).await;
+        acquire.assert_hits_async(1).await;
+        assert!(progress.hits_async().await >= 1);
+        record_gone.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
     }
 
     #[test]
@@ -866,6 +1300,63 @@ mod tests {
     }
 
     #[test]
+    fn kubernetes_cli_declares_cluster_ownership() {
+        let existing = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--namespace",
+            "customer-app",
+        ]);
+        let settings =
+            load_stack_settings(&existing, Platform::Kubernetes, Platform::Kubernetes, None)
+                .expect("existing-cluster settings should load");
+        let cluster = settings.kubernetes.unwrap().cluster.unwrap();
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::External);
+        assert_eq!(cluster.namespace.as_deref(), Some("customer-app"));
+
+        let managed = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--base-platform",
+            "aws",
+        ]);
+        let settings = load_stack_settings(&managed, Platform::Kubernetes, Platform::Aws, None)
+            .expect("managed-cluster settings should load");
+        let cluster = settings.kubernetes.unwrap().cluster.unwrap();
+        assert_eq!(cluster.ownership, KubernetesClusterOwnership::Managed);
+
+        // A TOML base platform reaches this function through network_platform
+        // even when the CLI flag is absent.
+        let settings = load_stack_settings(&existing, Platform::Kubernetes, Platform::Aws, None)
+            .expect("configured base platform should manage the cluster");
+        assert_eq!(
+            settings.kubernetes.unwrap().cluster.unwrap().ownership,
+            KubernetesClusterOwnership::Managed
+        );
+
+        let external_endpoint = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--public-endpoint",
+            "gateway.web=https://example.com",
+        ]);
+        let settings = load_stack_settings(
+            &external_endpoint,
+            Platform::Kubernetes,
+            Platform::Kubernetes,
+            None,
+        )
+        .expect("external ingress settings should load");
+        assert_eq!(
+            settings.kubernetes.unwrap().exposure,
+            Some(KubernetesExposureSettings::Disabled)
+        );
+    }
+
+    #[test]
     fn sdk_stack_settings_serializes_explicit_deployment_model() {
         let settings = StackSettings {
             deployment_model: DeploymentModel::Pull,
@@ -1078,6 +1569,29 @@ api = "https://old.example.test"
     }
 
     #[test]
+    fn public_endpoint_flag_accepts_kubernetes_platform() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "kubernetes",
+            "--public-endpoint",
+            "gateway.web=https://gateway.example.test",
+        ]);
+
+        let public_endpoints = load_public_endpoints(&args, Platform::Kubernetes, None)
+            .expect("kubernetes should accept external public endpoints")
+            .expect("public endpoints should exist");
+
+        assert_eq!(
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("web"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
     fn public_endpoint_names_must_be_declared() {
         let daemon = alien_core::Daemon::new("gateway".to_string())
             .code(alien_core::DaemonCode::Image {
@@ -1103,7 +1617,8 @@ api = "https://old.example.test"
                 "https://gateway.example.test".to_string(),
             )]),
         )]);
-        validate_public_endpoint_names(&valid, &stack).expect("gateway exposes a public endpoint");
+        validate_public_endpoint_names(&valid, &stack, true)
+            .expect("gateway exposes a public endpoint");
 
         let invalid = HashMap::from([(
             "gateway".to_string(),
@@ -1112,9 +1627,50 @@ api = "https://old.example.test"
                 "https://missing.example.test".to_string(),
             )]),
         )]);
-        let error = validate_public_endpoint_names(&invalid, &stack)
+        let error = validate_public_endpoint_names(&invalid, &stack, true)
             .expect_err("missing endpoint should fail");
         assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn external_kubernetes_ingress_requires_all_declared_endpoints() {
+        let daemon = alien_core::Daemon::new("gateway".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "admin".to_string(),
+                port: 8081,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        let partial = HashMap::from([(
+            "gateway".to_string(),
+            HashMap::from([(
+                "api".to_string(),
+                "https://gateway.example.test".to_string(),
+            )]),
+        )]);
+
+        let error = validate_public_endpoint_names(&partial, &stack, true)
+            .expect_err("external ingress would leave admin unreachable");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.to_string().contains("gateway.admin"));
+        validate_public_endpoint_names(&partial, &stack, false)
+            .expect("other platforms allow partial mappings");
     }
 
     #[test]
@@ -1339,6 +1895,7 @@ machine = "m8i.xlarge"
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }
     }
@@ -1368,21 +1925,57 @@ apiKey = "secret-value"
         let config = load_deploy_config(&args)
             .expect("config should load")
             .expect("config should exist");
-        let values = collect_deployer_input_values(
-            &[
-                stack_input("region", StackInputKind::String, true),
-                stack_input("apiKey", StackInputKind::Secret, true),
-            ],
-            &[],
-            &[],
-            Some(&config),
-        )
-        .expect("input values should parse");
+        let inputs = [
+            stack_input("region", StackInputKind::String, true),
+            stack_input("apiKey", StackInputKind::Secret, true),
+        ];
+        let error = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+            .expect_err("a deployer secret value in the config is refused");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error.message.contains("'apiKey' is a deployer secret"),
+            "{}",
+            error.message
+        );
 
-        assert_eq!(values.get("region"), Some(&serde_json::json!("us-east-1")));
+        // Without the secret, a required deployer secret is neither asked for
+        // nor sent: only the plain input reaches the platform.
+        let config = DeployConfigFile {
+            secret_inputs: None,
+            ..config
+        };
+        let values = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+            .expect("input values should parse");
         assert_eq!(
-            values.get("apiKey"),
-            Some(&serde_json::json!("secret-value"))
+            values,
+            HashMap::from([("region".to_string(), serde_json::json!("us-east-1"))])
+        );
+    }
+
+    #[test]
+    fn deployer_secret_values_are_refused_on_every_flag() {
+        let inputs = [stack_input("apiKey", StackInputKind::Secret, true)];
+        for (input_values, secret_input_values) in [
+            (vec!["apiKey=secret-value".to_string()], vec![]),
+            (vec![], vec!["apiKey=secret-value".to_string()]),
+        ] {
+            let error =
+                collect_deployer_input_values(&inputs, &input_values, &secret_input_values, None)
+                    .expect_err("a deployer secret value is refused");
+            assert!(
+                error.message.contains("'apiKey' is a deployer secret"),
+                "{}",
+                error.message
+            );
+        }
+        // Even without stack metadata to recognise the input.
+        let error =
+            collect_deployer_input_values(&[], &[], &["apiKey=secret-value".to_string()], None)
+                .expect_err("a secret value is refused without metadata");
+        assert!(
+            error.message.contains("deployer secret"),
+            "{}",
+            error.message
         );
     }
 
@@ -1424,7 +2017,7 @@ region = "old"
     #[test]
     fn required_stack_inputs_fail_non_interactively() {
         let error = collect_deployer_input_values(
-            &[stack_input("apiKey", StackInputKind::Secret, true)],
+            &[stack_input("region", StackInputKind::String, true)],
             &[],
             &[],
             None,
@@ -1433,6 +2026,48 @@ region = "old"
 
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("Missing deployer input"));
+    }
+
+    #[tokio::test]
+    async fn config_errors_do_not_expose_secret_values() {
+        for text in [
+            "[secretInputs]\npassword = \"canary-secret\" trailing\n",
+            "[secretInputs]\npassword = [\"canary-secret\"]\n",
+        ] {
+            let mut file = tempfile::NamedTempFile::new().expect("create config");
+            file.write_all(text.as_bytes()).expect("write config");
+            let args = UpArgs::parse_from([
+                "democtl",
+                "--setup-update",
+                "--deployment-id",
+                "dep_demo",
+                "--update-operation-id",
+                "op_demo",
+                "--release-id",
+                "rel_demo",
+                "--config",
+                file.path().to_str().expect("UTF-8 path"),
+                "--validate-only",
+            ]);
+
+            let error = up_command(args, None).await.expect_err("invalid config");
+            assert_eq!(error.code, "CONFIGURATION_ERROR");
+            assert!(!error.retryable);
+            assert!(error.source.is_none(), "raw parser cause must be discarded");
+            assert!(error.message.contains(file.path().to_str().unwrap()));
+            assert!(error.message.contains("line 2, column"));
+            assert!(error
+                .message
+                .contains("secretInputs values must be strings"));
+            for rendered in [
+                error.to_string(),
+                format!("{error:?}"),
+                serde_json::to_string(&error).expect("serialize error"),
+            ] {
+                assert!(!rendered.contains("canary-secret"));
+                assert!(!rendered.contains("password ="));
+            }
+        }
     }
 
     #[test]
@@ -1488,6 +2123,35 @@ private_subnet_ids = ["subnet-private"]
 
         validate_deploy_config(&args, None, Some(&config))
             .expect("AWS network is valid for Kubernetes with an AWS base platform");
+    }
+
+    #[test]
+    fn validate_only_accepts_exact_setup_config_without_tracking_name() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+            platform = "machines"
+            [externalBindings.archive]
+            type = "storage"
+            service = "s3"
+            bucketName = "customer-archive"
+        "#,
+        )
+        .unwrap();
+        let args = UpArgs::parse_from([
+            "democtl",
+            "--setup-update",
+            "--deployment-id",
+            "dep_demo",
+            "--update-operation-id",
+            "op_demo",
+            "--release-id",
+            "rel_demo",
+            "--config",
+            "deployment.toml",
+            "--validate-only",
+        ]);
+        validate_deploy_config(&args, None, Some(&config))
+            .expect("an exact existing target needs no local tracking name");
     }
 
     #[test]
@@ -1548,6 +2212,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         output::success("Deployment config is valid.");
         return Ok(());
     }
+    if args.setup_update && args.deployment_id.is_some() {
+        return setup_update::run(&args, embedded_config, deploy_config.as_ref()).await;
+    }
     // Resolve token and platform from args, embedded config, or tracked deployment
     let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
     let token = resolved.token;
@@ -1564,6 +2231,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     if args.setup_update {
+        if deploy_config.as_ref().is_some_and(|config| {
+            config.external_bindings.is_some()
+                || config.inputs.is_some()
+                || config.secret_inputs.is_some()
+                || config.network.is_some()
+                || config.compute.is_some()
+                || config.updates.is_some()
+                || config.telemetry.is_some()
+                || config.public_endpoints.is_some()
+        }) || !args.input_values.is_empty()
+            || !args.secret_input_values.is_empty()
+        {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "setup-update".to_string(),
+                message: "Saving setup choices requires explicit --deployment-id, --update-operation-id, and --release-id targeting.".to_string(),
+            }));
+        }
         // An update must address an installed identity. Never initialize a new
         // deployment or resolve today's default manager for this command.
         let tracker = DeploymentTracker::new()?;
@@ -1585,7 +2269,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .as_deref()
             .unwrap_or(&tracked.manager_url);
         let setup_client = create_manager_client(&token, manager_url)?;
-        run_push_model(
+        let outcome = run_push_model(
             &setup_client,
             &tracked.deployment_id,
             platform,
@@ -1598,7 +2282,11 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             embedded_config.and_then(|config| config.setup_revision.as_deref()),
         )
         .await?;
-        output::success("Setup applied. The existing runtime will continue the requested update.");
+        if outcome == SetupRunOutcome::Applied {
+            output::success(
+                "Setup applied. The existing runtime will continue the requested update.",
+            );
+        }
         return Ok(());
     }
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
@@ -1801,6 +2489,11 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             setup_revision,
             applied_setup_revision.as_deref(),
         )
+        && setup_run_has_pending_update(
+            parse_deployment_status(&current_deployment.status)?,
+            current_deployment.current_release_id.is_some(),
+            current_deployment.desired_release_id.as_deref(),
+        )
     {
         output::info("Refreshing setup-owned infrastructure for this CLI revision...");
         // Keep setup authority on the client; the separate deployment token
@@ -1908,7 +2601,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 })
             })?;
         let stack = fetch_release_stack_by_id(&client, release_id, platform).await?;
-        validate_public_endpoint_names(public_endpoints, &stack)?;
+        validate_public_endpoint_names(public_endpoints, &stack, platform == Platform::Kubernetes)?;
     }
 
     if current_deployment.status == "running"
@@ -2049,7 +2742,11 @@ fn validate_deploy_config(
         .as_deref()
         .or(config.base_platform.as_deref());
     let base_platform = parse_base_platform(platform, base_platform)?;
-    if platform != Platform::Local && args.name.as_deref().or(config.name.as_deref()).is_none() {
+    let existing_target = args.setup_update && args.deployment_id.is_some();
+    if platform != Platform::Local
+        && !existing_target
+        && args.name.as_deref().or(config.name.as_deref()).is_none()
+    {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
             message: "--name or config field `name` is required for non-local deployments."
@@ -2295,6 +2992,7 @@ async fn fetch_release_stack_by_id(
 fn validate_public_endpoint_names(
     public_endpoints: &PublicEndpointUrls,
     stack: &Stack,
+    require_complete: bool,
 ) -> Result<()> {
     let valid_endpoints = public_endpoint_names(stack);
     for (resource_id, endpoints) in public_endpoints {
@@ -2317,6 +3015,29 @@ fn validate_public_endpoint_names(
                 field: "public-endpoint".to_string(),
                 message: format!(
                     "Endpoint '{key}' is not declared by the stack. Available public endpoints: {available}"
+                ),
+            }));
+        }
+    }
+    // Supplying an external URL disables chart-owned ingress for the whole
+    // Kubernetes stack. Reject a partial mapping before installing Helm: the
+    // remaining endpoints would otherwise have no public route.
+    if require_complete {
+        let supplied: BTreeSet<String> = public_endpoints
+            .iter()
+            .flat_map(|(resource_id, endpoints)| {
+                endpoints
+                    .keys()
+                    .map(move |name| format!("{resource_id}.{name}"))
+            })
+            .collect();
+        let missing: Vec<_> = valid_endpoints.difference(&supplied).cloned().collect();
+        if !missing.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "public-endpoint".to_string(),
+                message: format!(
+                    "External Kubernetes ingress requires a URL for every public endpoint. Missing: {}",
+                    missing.join(", ")
                 ),
             }));
         }
@@ -2402,16 +3123,26 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
             ),
         },
     )?;
-    let config =
-        toml::from_str(&text)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: format!(
-                    "Failed to parse deployment config '{}' (resolved as '{}')",
-                    path.display(),
-                    resolved_path.display()
-                ),
-            })?;
+    let config = toml::from_str(&text).map_err(|error: toml::de::Error| {
+        let location = error
+            .span()
+            .and_then(|span| text.get(..span.start))
+            .map(|prefix| {
+                let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                format!(" at line {line}, column {column}")
+            })
+            .unwrap_or_default();
+        // Parser errors retain source excerpts and can quote secret values even in
+        // their message. Discard the cause at this boundary, including for Debug/JSON.
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Invalid deployment config '{}' (resolved as '{}'){location}. Check TOML syntax (quotes, delimiters, and table headers) and field types; secretInputs values must be strings. Source details are omitted to protect secrets.",
+                path.display(),
+                resolved_path.display()
+            ),
+        })
+    })?;
     Ok(Some(config))
 }
 
@@ -2495,12 +3226,12 @@ fn load_public_endpoints(
     }
 
     match platform {
-        Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+        Platform::Local | Platform::Machines | Platform::Kubernetes => Ok(Some(public_endpoints)),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
-                    "--public-endpoint is currently supported only for local or machines deployments, got '{}'",
+                    "--public-endpoint is currently supported only for local, machines, or kubernetes deployments, got '{}'",
                     platform.as_str()
                 ),
             }))
@@ -2686,6 +3417,14 @@ fn load_stack_settings(
     network_platform: Platform,
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<StackSettings> {
+    if let Some(secret) = args.external_bindings_secret.as_deref() {
+        if platform != Platform::Kubernetes || secret.trim().is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "external-bindings-secret".to_string(),
+                message: "A nonempty external bindings Secret name is supported only for Kubernetes deployments".to_string(),
+            }));
+        }
+    }
     let mut settings = StackSettings::default();
 
     // The manager owns the deployment model for cloud platforms (push) and
@@ -2696,6 +3435,27 @@ fn load_stack_settings(
     // initial setup has no local platform services.
     if platform == Platform::Local {
         settings.deployment_model = DeploymentModel::Pull;
+    }
+    if platform == Platform::Kubernetes {
+        // A CLI install without a base cloud uses the cluster named by the
+        // selected kubeconfig context. With a base cloud, setup creates one.
+        let external_public_endpoints = !args.public_endpoints.is_empty()
+            || deploy_config
+                .and_then(|config| config.public_endpoints.as_ref())
+                .is_some_and(|endpoints| !endpoints.is_empty());
+        settings.kubernetes = Some(KubernetesSettings {
+            cluster: Some(KubernetesClusterSettings {
+                ownership: if network_platform != Platform::Kubernetes {
+                    KubernetesClusterOwnership::Managed
+                } else {
+                    KubernetesClusterOwnership::External
+                },
+                namespace: args.namespace.clone(),
+                cloud: None,
+            }),
+            // The supplied URL already has customer-owned ingress and TLS.
+            exposure: external_public_endpoints.then_some(KubernetesExposureSettings::Disabled),
+        });
     }
 
     if let Some(config) = deploy_config {
@@ -2708,9 +3468,19 @@ fn load_stack_settings(
         if let Some(telemetry) = config.telemetry {
             settings.telemetry = telemetry;
         }
+        if platform == Platform::Machines {
+            if let Some(bindings) = &config.external_bindings {
+                setup_update::validate_machines_binding_credentials(bindings)?;
+            }
+        }
+        settings.external_bindings = config.external_bindings.clone();
         if let Some(compute) = config.compute.clone() {
             settings.compute = Some(compute);
         }
+    }
+
+    if let Some(access) = args.network.endpoint_access {
+        settings.endpoint_access = access;
     }
 
     if args.network.network_mode != NetworkMode::Auto {
@@ -2898,24 +3668,28 @@ fn collect_deployer_input_values(
     secret_input_values: &[String],
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    let mut raw_values = HashMap::<String, String>::new();
-
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
-        for (id, value) in config_inputs {
-            raw_values.insert(id.clone(), value.clone());
-        }
+    // No deployer secret value may reach the platform, so refuse every way of
+    // passing one before reading anything else.
+    let config_secret_ids = deploy_config
+        .and_then(|config| config.secret_inputs.as_ref())
+        .into_iter()
+        .flat_map(|secret_inputs| secret_inputs.keys().cloned());
+    let flag_secret_ids = secret_input_values
+        .iter()
+        .map(|input| parse_stack_input_arg(input, "--secret-input").map(|(id, _)| id))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(id) = config_secret_ids.chain(flag_secret_ids).next() {
+        return Err(deployer_secret_value_error(inputs, &id));
     }
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.secret_inputs.as_ref()) {
+
+    let mut raw_values = HashMap::<String, String>::new();
+    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
         for (id, value) in config_inputs {
             raw_values.insert(id.clone(), value.clone());
         }
     }
     for input in input_values {
         let (id, value) = parse_stack_input_arg(input, "--input")?;
-        raw_values.insert(id, value);
-    }
-    for input in secret_input_values {
-        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
         raw_values.insert(id, value);
     }
 
@@ -2927,15 +3701,26 @@ fn collect_deployer_input_values(
     }
 
     for id in raw_values.keys() {
-        if !inputs.iter().any(|input| input.id == *id) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("Unknown or unavailable deployer stack input '{id}'."),
-            }));
+        match inputs.iter().find(|input| input.id == *id) {
+            None => {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: format!("Unknown or unavailable deployer stack input '{id}'."),
+                }));
+            }
+            Some(input) if is_deployer_secret_input(input) => {
+                return Err(deployer_secret_value_error(inputs, id));
+            }
+            Some(_) => {}
         }
     }
 
-    for input in inputs.iter().filter(|input| input.required) {
+    // Deployer secrets are never asked for: the deployment reports them
+    // missing until they are written into the secret store.
+    for input in inputs
+        .iter()
+        .filter(|input| input.required && !is_deployer_secret_input(input))
+    {
         if raw_values.contains_key(&input.id) {
             continue;
         }
@@ -2943,19 +3728,8 @@ fn collect_deployer_input_values(
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
                 message: format!(
-                    "Missing deployer input: {}. Pass {} {}=... or add [{}] to deployment.toml.",
-                    input.label,
-                    if matches!(input.kind, StackInputKind::Secret) {
-                        "--secret-input"
-                    } else {
-                        "--input"
-                    },
-                    input.id,
-                    if matches!(input.kind, StackInputKind::Secret) {
-                        "secretInputs"
-                    } else {
-                        "inputs"
-                    }
+                    "Missing deployer input: {}. Pass --input {}=... or add [inputs] to deployment.toml.",
+                    input.label, input.id,
                 ),
             }));
         }
@@ -2973,11 +3747,22 @@ fn collect_deployer_input_values(
     Ok(values)
 }
 
+fn deployer_secret_value_error(inputs: &[StackInputDefinition], id: &str) -> AlienError<ErrorData> {
+    let name = inputs
+        .iter()
+        .find(|input| input.id == id)
+        .map_or(id, |input| input.label.as_str());
+    AlienError::new(ErrorData::ValidationError {
+        field: "input".to_string(),
+        message: deployer_secret_value_refusal(name),
+    })
+}
+
 fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: flag.trim_start_matches("--").to_string(),
-            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+            message: format!("Invalid {flag} format. Use id=value"),
         }));
     };
     if id.trim().is_empty() {
@@ -3316,6 +4101,7 @@ fn supports_hosted_compute_update(status: &str) -> bool {
             | "initial-setup-failed"
             | "provisioning"
             | "waiting-for-machines"
+            | "waiting-for-secrets"
             | "provisioning-failed"
     )
 }
@@ -3496,6 +4282,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Ok(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -3523,6 +4310,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
         DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+        DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",
@@ -3548,9 +4336,18 @@ struct InitResult {
     deployment_token: Option<String>,
 }
 
+fn kubernetes_resource_prefix(token: &str, name: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"alien-kubernetes-setup-prefix-v1\0");
+    hash.update(token.as_bytes());
+    hash.update([0]);
+    hash.update(name.as_bytes());
+    format!("k{}", hex::encode(&hash.finalize()[..12]))
+}
+
 async fn initialize_deployment(
     client: &ServerClient,
-    _token: &str,
+    token: &str,
     platform: Platform,
     base_platform: Option<Platform>,
     name: &str,
@@ -3560,6 +4357,14 @@ async fn initialize_deployment(
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
+        // Helm needs the runtime prefix before it creates workload identities.
+        // Register the same prefix with the manager so its StackState and the
+        // chart agree even before the Operator's first sync.
+        // A setup link may be retried after registration but before Helm
+        // finishes. Reuse the same prefix so Manager can resume the existing
+        // deployment and its chart-owned ServiceAccounts keep their names.
+        resource_prefix: (platform == Platform::Kubernetes)
+            .then(|| kubernetes_resource_prefix(token, name)),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
@@ -3568,7 +4373,9 @@ async fn initialize_deployment(
         input_values: input_values.into_iter().collect(),
         scope: None,
         permission: None,
-        setup_method: None,
+        // The Kubernetes CLI installs the Operator with Helm. Runtime work
+        // starts inside that Operator, so this must use Helm's setup handoff.
+        setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
     };
 
     let response = match client.initialize().body(body).send().await {
@@ -3662,6 +4469,7 @@ async fn run_pull_model(
                 deployment_id,
                 deployment_name,
                 stack_settings,
+                public_endpoints,
             )
             .await
         }
@@ -3927,9 +4735,10 @@ async fn run_kubernetes_pull_model(
     deployment_id: &str,
     deployment_name: &str,
     stack_settings: &StackSettings,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
-    let stack = fetch_kubernetes_release_stack(client, deployment_id).await?;
+    let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
     let namespace = args
         .namespace
         .clone()
@@ -3950,8 +4759,11 @@ async fn run_kubernetes_pull_model(
         token,
         deployment_id,
         deployment_name,
+        &resource_prefix,
         stack_settings,
         &operator_image,
+        args.external_bindings_secret.as_deref(),
+        public_endpoints,
     )?;
 
     helm_upgrade_install(
@@ -3976,7 +4788,7 @@ async fn run_kubernetes_pull_model(
 async fn fetch_kubernetes_release_stack(
     client: &ServerClient,
     deployment_id: &str,
-) -> Result<Stack> {
+) -> Result<(Stack, String)> {
     let deployment = client
         .get_deployment()
         .id(deployment_id)
@@ -3987,6 +4799,22 @@ async fn fetch_kubernetes_release_stack(
             message: "Failed to get deployment from manager".to_string(),
         })?
         .into_inner();
+
+    // Helm creates workload identities before the Operator starts. Their names
+    // must use the prefix assigned to this deployment, not the Helm release name.
+    let resource_prefix = deployment
+        .stack_state
+        .as_ref()
+        .and_then(|state| state.get("resourcePrefix"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|prefix| !prefix.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "Deployment has no resource prefix for Kubernetes ServiceAccounts"
+                    .to_string(),
+            })
+        })?
+        .to_string();
 
     let release_id = deployment
         .desired_release_id
@@ -4014,11 +4842,12 @@ async fn fetch_kubernetes_release_stack(
         })
     })?;
 
-    serde_json::from_value(stack_value)
+    let stack = serde_json::from_value(stack_value)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to parse Kubernetes stack from release '{release_id}'"),
-        })
+        })?;
+    Ok((stack, resource_prefix))
 }
 
 fn render_kubernetes_helm_chart(
@@ -4079,8 +4908,11 @@ fn write_kubernetes_helm_values(
     token: &str,
     deployment_id: &str,
     deployment_name: &str,
+    resource_prefix: &str,
     stack_settings: &StackSettings,
     operator_image: &str,
+    external_bindings_secret: Option<&str>,
+    public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<PathBuf> {
     let (repository, tag) = split_image_tag(operator_image)?;
     let mut helm_settings = stack_settings.clone();
@@ -4107,7 +4939,10 @@ fn write_kubernetes_helm_values(
             }
         },
         "stackSettings": helm_settings,
+        "serviceAccountPrefix": resource_prefix,
+        "publicEndpoints": public_endpoints.cloned().unwrap_or_default(),
         "infrastructure": null,
+        "infrastructureExistingSecret": external_bindings_secret.unwrap_or(""),
     });
     let values_path = chart_dir.join("alien-deploy-values.json");
     let contents = serde_json::to_string_pretty(&values)
@@ -4404,16 +5239,8 @@ async fn run_push_model(
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
-) -> Result<()> {
-    let credential_platform = base_platform.unwrap_or(platform);
-    let client_config = ClientConfig::from_std_env(credential_platform)
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: format!(
-                "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
-                credential_platform
-            ),
-        })?;
+) -> Result<SetupRunOutcome> {
+    let client_config = setup_client_config(base_platform.unwrap_or(platform)).await?;
 
     push_initial_setup(
         client,
@@ -4431,6 +5258,19 @@ async fn run_push_model(
     .await
 }
 
+async fn setup_client_config(platform: Platform) -> Result<ClientConfig> {
+    if platform == Platform::Machines {
+        return Ok(ClientConfig::Machines);
+    }
+    ClientConfig::from_std_env(platform)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to load {platform} credentials from environment. Ensure the required environment variables are set."
+            ),
+        })
+}
+
 fn apply_external_bindings_from_stack_settings(
     config: &mut DeploymentConfig,
     stack_settings: &StackSettings,
@@ -4440,11 +5280,22 @@ fn apply_external_bindings_from_stack_settings(
     }
 }
 
+/// What a push-model setup run did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupRunOutcome {
+    /// Setup ran and handed the deployment to the manager (or finished it).
+    Applied,
+    /// The deployment is installed and settled with no update pending, so
+    /// setup did not run and its status was left unchanged.
+    NothingPending,
+}
+
 /// Run the push-model initial setup flow for a deployment.
 ///
 /// Fetches deployment and release state from the manager, acquires a sync lock,
 /// steps the deployment through InitialSetup until it reaches Provisioning (or a
 /// terminal state), reconciles state back to the manager, and releases the lock.
+/// An installed deployment with no pending update is left untouched.
 ///
 /// This is used by both `alien-deploy deploy` (push model) and `alien-test` (e2e setup).
 pub async fn push_initial_setup(
@@ -4459,7 +5310,38 @@ pub async fn push_initial_setup(
     network_args: Option<&NetworkArgs>,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
     setup_revision: Option<&str>,
-) -> Result<()> {
+) -> Result<SetupRunOutcome> {
+    push_initial_setup_targeted()
+        .client(client)
+        .deployment_id(deployment_id)
+        .platform(platform)
+        .maybe_base_platform(base_platform)
+        .client_config(client_config)
+        .maybe_management_config(management_config)
+        .manager_base_url(manager_base_url)
+        .deployment_token(deployment_token)
+        .maybe_network_args(network_args)
+        .maybe_on_progress(on_progress)
+        .maybe_setup_revision(setup_revision)
+        .call()
+        .await
+}
+
+#[bon::builder]
+async fn push_initial_setup_targeted(
+    client: &ServerClient,
+    deployment_id: &str,
+    platform: Platform,
+    base_platform: Option<Platform>,
+    client_config: ClientConfig,
+    management_config: Option<alien_core::ManagementConfig>,
+    manager_base_url: &str,
+    deployment_token: &str,
+    network_args: Option<&NetworkArgs>,
+    on_progress: Option<alien_deployment::runner::ProgressCallback>,
+    setup_revision: Option<&str>,
+    expected_target: Option<&setup_update::SetupUpdateTarget>,
+) -> Result<SetupRunOutcome> {
     let setup_management_config = management_config.clone();
 
     // Get deployment from manager
@@ -4476,6 +5358,14 @@ pub async fn push_initial_setup(
 
     // Reconstruct DeploymentState from flat API response
     let status = parse_deployment_status(&deployment.status)?;
+    if !setup_run_has_pending_update(
+        status,
+        deployment.current_release_id.is_some(),
+        deployment.desired_release_id.as_deref(),
+    ) {
+        report_nothing_pending(status);
+        return Ok(SetupRunOutcome::NothingPending);
+    }
 
     let stack_state = deployment
         .stack_state
@@ -4602,6 +5492,14 @@ pub async fn push_initial_setup(
     })?;
 
     let setup_attempt = async {
+        if let Some(target) = expected_target {
+            target.validate_claim(&acquired_deployment)?;
+            if acquired_deployment.deployment.get("deploymentConfig").is_none() {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "The exact setup claim did not include authoritative deployment configuration".to_string(),
+                }));
+            }
+        }
         if let Some(acquired_config) = acquired_deployment
             .deployment
             .get("deploymentConfig")
@@ -4631,7 +5529,9 @@ pub async fn push_initial_setup(
             }
 
             config.manager_url = Some(manager_base_url.to_string());
-            config.deployment_token = Some(deployment_token.to_string());
+            if expected_target.is_none() {
+                config.deployment_token = Some(deployment_token.to_string());
+            }
             if let Some(management_config) = &setup_management_config {
                 config.management_config = Some(management_config.clone());
             }
@@ -4653,7 +5553,29 @@ pub async fn push_initial_setup(
             })?
             .into_inner();
 
+        if let Some(target) = expected_target {
+            target.validate_release(deployment.desired_release_id.as_deref())?;
+        }
+
         let status = parse_deployment_status(&deployment.status)?;
+        // The pending update can complete between the first read and the lock.
+        if !setup_run_has_pending_update(
+            status,
+            deployment.current_release_id.is_some(),
+            deployment.desired_release_id.as_deref(),
+        ) {
+            state.status = status;
+            return Ok(None);
+        }
+
+        // Apply the choice only after acquiring the lock and refreshing status,
+        // so a setup that completed while we waited cannot change reachability.
+        apply_endpoint_access_override(
+            &mut config.stack_settings,
+            network_args.and_then(|args| args.endpoint_access),
+            status,
+            deployment.current_release_id.is_some(),
+        )?;
 
         // Reconstruct release identity from the state protected by the acquired
         // lock. Setup refreshes of an existing deployment must preserve the
@@ -4708,29 +5630,27 @@ pub async fn push_initial_setup(
                     message: "A running deployment has no prepared setup metadata".to_string(),
                 })
             })?;
-            state.runtime_metadata = Some(
-                alien_deployment::prepare_direct_setup_update(
-                    target_stack,
-                    stack_state,
-                    &config,
-                    &client_config,
-                    existing_metadata,
-                )
-                .await
-                .context(ErrorData::DeploymentFailed {
-                    operation: "prepare direct setup update".to_string(),
-                })?,
-            );
+            let runtime_metadata = alien_deployment::prepare_direct_setup_update(
+                target_stack,
+                stack_state,
+                &config,
+                &client_config,
+                existing_metadata,
+            )
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "prepare direct setup update".to_string(),
+            })?;
             let stack_state = state.stack_state.as_mut().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "A setup update requires stack state".to_string(),
                 })
             })?;
-            stack_state
-                .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+            alien_deployment::retry_failed_setup_resources(stack_state, &runtime_metadata, &config)
                 .context(ErrorData::DeploymentFailed {
                     operation: "retry failed setup-owned resources".to_string(),
                 })?;
+            state.runtime_metadata = Some(runtime_metadata);
             state.status = DeploymentStatus::InitialSetup;
         }
 
@@ -4754,7 +5674,7 @@ pub async fn push_initial_setup(
             delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
         };
 
-        Ok::<_, AlienError<ErrorData>>(
+        Ok::<_, AlienError<ErrorData>>(Some(
             shared_run_step_loop(
                 &mut state,
                 &mut config,
@@ -4766,12 +5686,27 @@ pub async fn push_initial_setup(
                 on_progress.as_ref(),
             )
             .await,
-        )
+        ))
     }
     .await;
 
     let runner_result = match setup_attempt {
-        Ok(runner_result) => runner_result,
+        Ok(Some(runner_result)) => runner_result,
+        Ok(None) => {
+            // Nothing was stepped, so there is no state to reconcile.
+            release_deployment(
+                client,
+                deployment_id,
+                &session,
+                acquired_deployment.execution_claim.as_ref(),
+            )
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "release sync lock".to_string(),
+            })?;
+            report_nothing_pending(state.status);
+            return Ok(SetupRunOutcome::NothingPending);
+        }
         Err(error) => {
             if let Err(release_error) = release_deployment(
                 client,
@@ -4823,7 +5758,7 @@ pub async fn push_initial_setup(
     match result.loop_result.outcome {
         LoopOutcome::Success => {
             output::success("Deployment is running.");
-            Ok(())
+            Ok(SetupRunOutcome::Applied)
         }
         LoopOutcome::Failure => Err(AlienError::new(ErrorData::DeploymentFailed {
             operation: format!(
@@ -4837,9 +5772,48 @@ pub async fn push_initial_setup(
                     "Setup complete. Your deployment is being provisioned and will be ready shortly.",
                 );
             }
-            Ok(())
+            Ok(SetupRunOutcome::Applied)
         }
     }
+}
+
+fn report_nothing_pending(status: DeploymentStatus) {
+    let next = if status == DeploymentStatus::RefreshFailed {
+        " Retry the deployment to repeat its installed release."
+    } else {
+        ""
+    };
+    output::success(&format!(
+        "Nothing to update: the deployment is {} with no pending update.{next}",
+        deployment_status_str(status)
+    ));
+}
+
+fn apply_endpoint_access_override(
+    settings: &mut StackSettings,
+    requested: Option<EndpointAccess>,
+    status: DeploymentStatus,
+    has_current_release: bool,
+) -> Result<()> {
+    let Some(access) = requested else {
+        return Ok(());
+    };
+    let initial_setup = !has_current_release
+        && matches!(
+            status,
+            DeploymentStatus::Pending
+                | DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetup
+                | DeploymentStatus::InitialSetupFailed
+        );
+    if access != settings.endpoint_access && !initial_setup {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "endpoint-access".to_string(),
+            message: "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.".to_string(),
+        }));
+    }
+    settings.endpoint_access = access;
+    Ok(())
 }
 
 fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
@@ -4851,7 +5825,6 @@ fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
             | DeploymentStatus::UpdateFailed
             | DeploymentStatus::RefreshFailed
             | DeploymentStatus::InitialSetupFailed
-            | DeploymentStatus::ProvisioningFailed
     )
 }
 

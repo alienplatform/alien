@@ -23,13 +23,33 @@ let value: QueueAccessRequestResponse = {
     },
   },
   remediationPlanId: "<id>",
+  agentSessionId: "<id>",
   title: "<value>",
   reason: "<value>",
   commands: [],
-  operationPattern: null,
+  operationPattern: "<value>",
   maxRisk: "mutating",
-  status: "queued",
-  approvedUntil: null,
+  debugGrant: null,
+  status: "revoked",
+  approvedUntil: "<value>",
+  createdAt: "1728064373891",
+  queuedBy: "<value>",
+  queuedAt: "<value>",
+  approvedBy: {
+    method: "<value>",
+    actorId: "<id>",
+    at: "<value>",
+  },
+  deniedBy: {
+    actorId: "<id>",
+    at: "<value>",
+  },
+  revokedBy: {
+    actorKind: "user",
+    actorId: "<id>",
+    at: "<value>",
+    reason: "<value>",
+  },
   kubectlApprove: "<value>",
 };
 ```
@@ -45,11 +65,19 @@ let value: QueueAccessRequestResponse = {
 | `deploymentId`                                                                                           | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `deployment`                                                                                             | [operations.QueueAccessRequestDeployment](../../models/operations/queueaccessrequestdeployment.md)       | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
 | `remediationPlanId`                                                                                      | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `agentSessionId`                                                                                         | *string*                                                                                                 | :heavy_check_mark:                                                                                       | The investigation whose remediation plan proposed this request, if a plan did.                           |
 | `title`                                                                                                  | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `reason`                                                                                                 | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `commands`                                                                                               | [operations.QueueAccessRequestCommand](../../models/operations/queueaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `operationPattern`                                                                                       | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `maxRisk`                                                                                                | [operations.QueueAccessRequestMaxRisk](../../models/operations/queueaccessrequestmaxrisk.md)             | :heavy_check_mark:                                                                                       | How risky an operation is (declared by the plugin metadata).                                             |
+| `debugGrant`                                                                                             | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `status`                                                                                                 | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                        | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `approvedUntil`                                                                                          | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `createdAt`                                                                                              | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `queuedBy`                                                                                               | *string*                                                                                                 | :heavy_check_mark:                                                                                       | Who passed the engineer gate; the requester for a plan-less request.                                     |
+| `queuedAt`                                                                                               | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `approvedBy`                                                                                             | [operations.QueueAccessRequestApprovedBy](../../models/operations/queueaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                       | How and when the customer gate was passed. Null until approved.                                          |
+| `deniedBy`                                                                                               | [operations.QueueAccessRequestDeniedBy](../../models/operations/queueaccessrequestdeniedby.md)           | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `revokedBy`                                                                                              | [operations.QueueAccessRequestRevokedBy](../../models/operations/queueaccessrequestrevokedby.md)         | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `kubectlApprove`                                                                                         | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |

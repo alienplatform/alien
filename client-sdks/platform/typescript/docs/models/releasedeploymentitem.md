@@ -8,7 +8,7 @@ import { ReleaseDeploymentItem } from "@alienplatform/platform-api/models";
 let value: ReleaseDeploymentItem = {
   id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   name: "<value>",
-  status: "update-failed",
+  status: "updating",
   platform: "gcp",
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",

@@ -18,6 +18,19 @@ use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::deployment_store::*;
 
+/// Setup JSON for the `deployment_groups.setup` column; NULL when empty.
+fn setup_json(setup: &DeploymentGroupSetup) -> Result<Option<String>, AlienError> {
+    if setup.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(setup)
+        .map(Some)
+        .into_alien_error()
+        .context(GenericError {
+            message: "Failed to serialize deployment group setup".to_string(),
+        })
+}
+
 fn import_source_to_string(source: &ImportSourceKind) -> String {
     serde_json::to_value(source)
         .ok()
@@ -54,6 +67,48 @@ impl SqliteDeploymentStore {
 
     pub fn new(db: Arc<SqliteDatabase>) -> Self {
         Self { db }
+    }
+
+    /// Replace user environment variables without deleting the deployment or its resources.
+    /// Callers must own the standalone database and stop its execution loop first.
+    pub async fn replace_environment_variables(
+        &self,
+        id: &str,
+        variables: &[EnvironmentVariable],
+    ) -> Result<(), AlienError> {
+        let json = serde_json::to_string(variables)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize deployment environment variables".to_string(),
+            })?;
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::EnvironmentVariables, json)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
+    }
+
+    /// Move an explicitly selected local deployment without rewriting resource state.
+    /// The caller must exclusively own the stopped database during migration.
+    pub async fn reassign_local_deployment_group(
+        &self,
+        id: &str,
+        group_id: &str,
+    ) -> Result<(), AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::DeploymentGroupId, group_id)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::Platform).eq("local"))
+            .to_string(SqliteQueryBuilder);
+        let affected = self.db.execute_returning_rows_affected(&sql).await?;
+        if affected != 1 {
+            return Err(AlienError::new(GenericError {
+                message: format!("Expected one local deployment to migrate; updated {affected}"),
+            }));
+        }
+        Ok(())
     }
 
     fn should_preserve_retry_requested(
@@ -295,6 +350,16 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(6, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
+            setup: match p.optional_string(7, "setup")? {
+                Some(json) => {
+                    serde_json::from_str(&json)
+                        .into_alien_error()
+                        .context(GenericError {
+                            message: "Failed to parse deployment group setup".to_string(),
+                        })?
+                }
+                None => Default::default(),
+            },
         })
     }
 }
@@ -302,8 +367,8 @@ impl SqliteDeploymentStore {
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentState, DeploymentStatus, Platform, StackSettings,
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        DeploymentState, DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, Platform,
+        StackSettings, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
 
@@ -407,6 +472,29 @@ mod tests {
             updated_at: Some(now),
             error: None,
         }
+    }
+
+    #[test]
+    fn deployment_debug_redacts_sensitive_values() {
+        let mut deployment = deployment_record("running");
+        deployment.input_values.insert(
+            "apiToken".to_string(),
+            serde_json::json!("sentinel-secret-value"),
+        );
+        deployment.user_environment_variables = Some(vec![EnvironmentVariable {
+            name: "SECRET_TOKEN".to_string(),
+            value: "sentinel-environment-secret".to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: None,
+        }]);
+
+        let debug = format!("{deployment:?}");
+
+        assert!(debug.contains("input_values: \"[REDACTED]\""));
+        assert!(!debug.contains("apiToken"));
+        assert!(!debug.contains("sentinel-secret-value"));
+        assert!(!debug.contains("SECRET_TOKEN"));
+        assert!(!debug.contains("sentinel-environment-secret"));
     }
 }
 
@@ -1518,6 +1606,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         Ok(ReconcileOutcome {
             record,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
         })
     }
 
@@ -1580,6 +1669,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 DeploymentGroups::MaxDeployments,
                 DeploymentGroups::DeploymentCount,
                 DeploymentGroups::CreatedAt,
+                DeploymentGroups::Setup,
             ])
             .values_panic([
                 id.clone().into(),
@@ -1587,6 +1677,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.max_deployments.into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                setup_json(&params.setup)?.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -1600,6 +1691,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             max_deployments: params.max_deployments,
             deployment_count: 0,
             created_at: now,
+            setup: params.setup,
         })
     }
 
@@ -1619,6 +1711,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 DeploymentGroups::MaxDeployments,
                 DeploymentGroups::DeploymentCount,
                 DeploymentGroups::CreatedAt,
+                DeploymentGroups::Setup,
             ])
             .values_panic([
                 id.into(),
@@ -1626,6 +1719,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.max_deployments.into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                setup_json(&params.setup)?.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -1639,6 +1733,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             max_deployments: params.max_deployments,
             deployment_count: 0,
             created_at: now,
+            setup: params.setup,
         })
     }
 
@@ -1677,6 +1772,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             .expr_as(
                 Expr::col((DeploymentGroups::Table, DeploymentGroups::ProjectId)),
                 sea_query::Alias::new("project_id"),
+            )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::Setup)),
+                sea_query::Alias::new("setup"),
             )
             .from(DeploymentGroups::Table)
             .join(
@@ -1757,6 +1856,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Expr::col((DeploymentGroups::Table, DeploymentGroups::ProjectId)),
                 sea_query::Alias::new("project_id"),
             )
+            .expr_as(
+                Expr::col((DeploymentGroups::Table, DeploymentGroups::Setup)),
+                sea_query::Alias::new("setup"),
+            )
             .from(DeploymentGroups::Table)
             .join(
                 sea_query::JoinType::LeftJoin,
@@ -1787,5 +1890,131 @@ impl DeploymentStore for SqliteDeploymentStore {
             results.push(Self::parse_deployment_group(&row)?);
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod gcp_project_consumer_tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use alien_core::{
+        EnvironmentInfo, GcpEnvironmentInfo, Platform, RuntimeMetadata, StackSettings, StackState,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    };
+
+    use super::SqliteDeploymentStore;
+    use crate::{
+        auth::Subject,
+        stores::sqlite::SqliteDatabase,
+        traits::{
+            deployment_store::{
+                CreateDeploymentGroupParams, CreateImportedDeploymentParams, DeploymentGroupSetup,
+            },
+            DeploymentStore,
+        },
+    };
+
+    const SHARED_PROJECT: &str = "111111111111";
+
+    async fn create_gcp_deployment(
+        store: &SqliteDeploymentStore,
+        group_id: &str,
+        name: &str,
+        project_number: &str,
+        status: &str,
+    ) -> String {
+        store
+            .create_with_state(
+                &Subject::system(),
+                CreateImportedDeploymentParams {
+                    name: name.to_string(),
+                    deployment_group_id: group_id.to_string(),
+                    platform: Platform::Gcp,
+                    deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings::default(),
+                    stack_state: StackState::new(Platform::Gcp),
+                    environment_info: Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                        project_number: project_number.to_string(),
+                        project_id: format!("project-{project_number}"),
+                        region: "us-central1".to_string(),
+                    })),
+                    runtime_metadata: RuntimeMetadata::default(),
+                    status: status.to_string(),
+                    current_release_id: None,
+                    desired_release_id: None,
+                    import_source: None,
+                    setup_metadata: None,
+                    setup_target: "test".to_string(),
+                    setup_fingerprint: "test".to_string(),
+                    setup_fingerprint_version: 1,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: HashMap::new(),
+                },
+            )
+            .await
+            .expect("create GCP deployment")
+            .id
+    }
+
+    /// The question a GCP revoke asks before removing a project's shared Cloud Run grant.
+    #[tokio::test]
+    async fn only_another_deployment_in_the_same_project_keeps_the_shared_grant() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("manager.db");
+        let db = Arc::new(
+            SqliteDatabase::new(path.to_str().expect("utf-8 path"))
+                .await
+                .expect("open database"),
+        );
+        let store = SqliteDeploymentStore::new(db);
+        let group = store
+            .create_deployment_group(
+                &Subject::system(),
+                CreateDeploymentGroupParams {
+                    name: "group".to_string(),
+                    max_deployments: 10,
+                    setup: DeploymentGroupSetup::default(),
+                },
+            )
+            .await
+            .expect("create deployment group");
+
+        let deleting =
+            create_gcp_deployment(&store, &group.id, "deleting", SHARED_PROJECT, "running").await;
+        create_gcp_deployment(&store, &group.id, "elsewhere", "222222222222", "running").await;
+        // A record a store keeps after deletion (status `deleted`) no longer pulls images.
+        create_gcp_deployment(&store, &group.id, "deleted", SHARED_PROJECT, "deleted").await;
+
+        assert!(
+            !store
+                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .await
+                .expect("consumer check"),
+            "neither the deployment itself, one in another project, nor a deleted one shares the grant"
+        );
+
+        let sibling =
+            create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT, "running").await;
+        assert!(
+            store
+                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .await
+                .expect("consumer check"),
+            "a sibling in the same project still pulls through the grant"
+        );
+
+        store
+            .delete_deployment(&Subject::system(), &sibling)
+            .await
+            .expect("delete sibling");
+        assert!(
+            !store
+                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .await
+                .expect("consumer check"),
+            "a removed sibling no longer shares the grant"
+        );
     }
 }

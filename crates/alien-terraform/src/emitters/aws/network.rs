@@ -2,7 +2,10 @@
 //!
 //! Three modes:
 //!
-//! * `UseDefault` — emit nothing (controller falls back to default VPC).
+//! * `UseDefault` — declare the account's default VPC and subnets as data
+//!   sources. The shared network helpers (`vpc_id_expr`,
+//!   `private_subnet_ids_expr`) resolve to them, so any emitter placing
+//!   resources in this network can reference them.
 //! * `ByoVpcAws` — emit nothing (existing network IDs are passed via variables; the
 //!   variables themselves are added to `variables.tf` via the
 //!   generator's per-target variables list).
@@ -29,13 +32,11 @@ impl TfEmitter for AwsNetworkEmitter {
         let label = required_label(ctx)?;
 
         match &network.settings {
-            // Other consumers, notably EKS, emit their own default-VPC data sources with
-            // service-specific filtering. Only setup-owned Postgres needs the generic lookup
-            // here; emitting it for every static default network would overwrite those blocks.
-            NetworkSettings::UseDefault if stack_has_setup_postgres(ctx) => {
-                Ok(default_network_data(label, None))
-            }
-            NetworkSettings::UseDefault => Ok(TfFragment::empty()),
+            // Every consumer of a static default network (setup-owned databases, managed EKS,
+            // compute clusters) reads the VPC through `helpers::vpc_id_expr` and friends, which
+            // resolve to these data sources unconditionally. Declaring them only for some
+            // consumers leaves the others referencing undeclared addresses.
+            NetworkSettings::UseDefault => Ok(default_network_data(label, None)),
             NetworkSettings::ByoVpcAws { .. } => {
                 // Declare the availability-zones data source so the
                 // `availabilityZones` field in import data resolves —
@@ -53,7 +54,7 @@ impl TfEmitter for AwsNetworkEmitter {
                 availability_zones,
             } => {
                 let mut fragment = create_topology(ctx, label, cidr.clone(), *availability_zones);
-                if stack_has_setup_postgres(ctx) {
+                if stack_needs_default_network_data(ctx) {
                     fragment.extend(default_network_data(
                         label,
                         Some("var.network_mode == \"use-default\" ? 1 : 0"),
@@ -192,14 +193,28 @@ impl TfEmitter for AwsNetworkEmitter {
     }
 }
 
-fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack.resources().any(|(_id, entry)| {
+fn stack_has_managed_eks(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_, entry)| {
         entry.lifecycle == alien_core::ResourceLifecycle::Frozen
             && entry
                 .config
-                .downcast_ref::<alien_core::Postgres>()
-                .is_some()
+                .downcast_ref::<alien_core::KubernetesCluster>()
+                .is_some_and(|cluster| {
+                    cluster.provider == alien_core::KubernetesClusterProvider::Eks
+                        && cluster.ownership == alien_core::KubernetesClusterOwnership::Managed
+                })
     })
+}
+
+fn stack_needs_default_network_data(ctx: &EmitContext<'_>) -> bool {
+    stack_has_managed_eks(ctx)
+        || ctx.stack.resources().any(|(_, entry)| {
+            entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                && entry
+                    .config
+                    .downcast_ref::<alien_core::Postgres>()
+                    .is_some()
+        })
 }
 
 /// Data sources used by setup-owned resources when the customer chooses the account's default
@@ -262,10 +277,19 @@ fn create_topology(
     let mut fragment = TfFragment::default();
     let cidr = cidr.unwrap_or_else(|| "10.42.0.0/16".to_string());
 
+    let mut zones = vec![attr("state", Expression::String("available".to_string()))];
+    if stack_has_managed_eks(ctx) {
+        // Filter before taking the requested number of zones, so the shared
+        // network cannot leave EKS with only one supported availability zone.
+        zones.push(attr(
+            "exclude_zone_ids",
+            expr::raw("var.unsupported_availability_zone_ids"),
+        ));
+    }
     fragment.data_blocks.push(crate::block::data_block(
         "aws_availability_zones",
         "available",
-        [attr("state", Expression::String("available".to_string()))],
+        zones,
     ));
 
     fragment.resource_blocks.push(resource_block(

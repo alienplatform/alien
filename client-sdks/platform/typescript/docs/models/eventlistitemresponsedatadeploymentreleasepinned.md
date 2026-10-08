@@ -16,6 +16,7 @@ let value: EventListItemResponseDataDeploymentReleasePinned = {
 
 | Field                                       | Type                                        | Required                                    | Description                                 |
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
+| `actor`                                     | *models.EventListItemResponseActorUnion5*   | :heavy_minus_sign:                          | N/A                                         |
 | `deploymentId`                              | *string*                                    | :heavy_check_mark:                          | ID of the deployment                        |
 | `pinnedReleaseId`                           | *string*                                    | :heavy_check_mark:                          | ID of the release that is now pinned        |
 | `previousPinnedReleaseId`                   | *string*                                    | :heavy_minus_sign:                          | ID of the previously pinned release, if any |

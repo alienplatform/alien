@@ -23,7 +23,7 @@
 //! and diagnostics/remediation ceiling remain authoritative. Re-render and
 //! reapply the setup-owned Role/ClusterRole when enabled plugins change.
 
-use alien_error::AlienError;
+use alien_error::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::{ErrorData, Result, RiskTier};
@@ -79,111 +79,45 @@ impl KubernetesPermissions {
     /// Validate before emitting permissions, even when constructed directly in
     /// Rust rather than loaded through `PluginManifest::parse_and_validate`.
     pub fn validate(&self, tier: RiskTier) -> Result<()> {
-        if self.schema_version != 1 {
-            return invalid("unsupported Kubernetes permission schemaVersion; expected 1");
-        }
-        if self.rules.is_empty() {
-            return invalid("Kubernetes permission rules must not be empty");
-        }
-        for rule in &self.rules {
-            if !rule.api_group.is_empty() && !valid_api_group(&rule.api_group) {
-                return invalid("Kubernetes API groups must be DNS subdomains");
-            }
-            let mut parts = rule.resource.split('/');
-            let resource = parts.next().unwrap_or_default();
-            let subresource = parts.next();
-            if !valid_resource(resource) {
-                return invalid("Kubernetes resources must be DNS-1035 labels");
-            }
-            if resource == "secrets"
-                || parts.next().is_some()
-                || subresource.is_some_and(|sub| !matches!(sub, "log" | "scale" | "status"))
-            {
-                return invalid("Kubernetes Secrets and privileged subresources are not supported");
-            }
-            if rule.verbs.is_empty() {
-                return invalid("Kubernetes permission verbs must not be empty");
-            }
-            for verb in &rule.verbs {
-                let read = matches!(verb.as_str(), "get" | "list" | "watch");
-                let remediation =
-                    (rule.api_group.is_empty() && rule.resource == "pods" && verb == "delete")
-                        || (rule.api_group == "apps"
-                            && matches!(
-                                rule.resource.as_str(),
-                                "deployments/scale" | "statefulsets/scale" | "replicasets/scale"
-                            )
-                            && verb == "patch");
-                if !read && (!remediation || tier == RiskTier::ReadOnly) {
-                    return invalid(
-                        "unsupported Kubernetes verb/resource or write in read-only operation",
-                    );
-                }
-            }
-            for name in &rule.resource_names {
-                // Concrete path-segment names only; reject Helm expressions too.
-                if !valid_token(name) {
-                    return invalid("Kubernetes resourceNames must be concrete names");
-                }
-            }
-            validate_label(&rule.reason, "reason")?;
-        }
-        Ok(())
+        let permissions = alien_permissions::operations::KubernetesPermissions {
+            schema_version: self.schema_version,
+            rules: self
+                .rules
+                .iter()
+                .map(|rule| alien_permissions::operations::KubernetesRule {
+                    api_group: rule.api_group.clone(),
+                    resource: rule.resource.clone(),
+                    verbs: rule.verbs.clone(),
+                    resource_names: rule.resource_names.clone(),
+                    reason: rule.reason.clone(),
+                })
+                .collect(),
+        };
+        alien_permissions::operations::kubernetes::validate(&permissions, tier.as_str(), None)
+            .context(ErrorData::ManifestInvalid {
+                reason: "invalid Kubernetes permissions".into(),
+            })
     }
-}
-
-fn valid_api_group(value: &str) -> bool {
-    // Kubernetes DNS-1123 subdomain validation limits the whole name to 253
-    // bytes and checks each label's syntax. Single-label builtins are valid.
-    value.len() <= 253 && value.split('.').all(valid_token)
-}
-
-fn valid_resource(value: &str) -> bool {
-    value.len() <= 63
-        && valid_token(value)
-        && !value.contains('.')
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-}
-
-fn valid_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 253
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
-        })
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value
-            .bytes()
-            .last()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn validate_label(value: &str, field: &str) -> Result<()> {
-    if value.trim().is_empty()
-        || value.len() > 1024
-        // YAML parsers recognize Unicode line/paragraph separators as line
-        // breaks too, although Rust does not classify them as control characters.
-        || value.chars().any(|character| {
-            character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
-        })
-        || value.contains("{{")
-        || value.contains("}}")
-    {
-        return invalid(&format!("Kubernetes permission {field} must be nonempty single-line text without template expressions"));
-    }
-    Ok(())
-}
-
-fn invalid<T>(reason: &str) -> Result<T> {
-    Err(AlienError::new(ErrorData::ManifestInvalid {
-        reason: reason.to_owned(),
-    }))
+    let attribution = alien_permissions::operations::Attribution {
+        plugin: if field == "plugin" {
+            value.into()
+        } else {
+            "plugin".into()
+        },
+        operation: if field == "operation" {
+            value.into()
+        } else {
+            "operation".into()
+        },
+    };
+    alien_permissions::operations::kubernetes::validate_attribution(Some(&attribution)).context(
+        ErrorData::ManifestInvalid {
+            reason: format!("invalid Kubernetes permission {field}"),
+        },
+    )
 }
 
 #[cfg(test)]

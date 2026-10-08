@@ -257,6 +257,8 @@ async fn typescript_source_image_shapes_per_compute_type() {
         cache_url: None,
         override_base_image: worker_base_image,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     build_stack(stack, &settings)
@@ -434,6 +436,7 @@ export default {{
         build_target: host_target,
         runtime_platform_name: "local".to_string(),
         debug_mode: false,
+        pull_base_images: false,
         workload: WorkloadKind::Container,
     };
 

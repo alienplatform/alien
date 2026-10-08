@@ -2,6 +2,8 @@ import {
   type ComputeCluster as ComputeClusterConfig,
   ComputeClusterSchema,
   type MachineProfile,
+  type PermissionProfile,
+  type Platform,
   type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
@@ -12,6 +14,7 @@ export type {
   ComputeChoiceRange as GeneratedComputeChoiceRange,
   ComputeCluster as ComputeClusterConfig,
   MachineProfile,
+  PermissionProfile,
 } from "./generated/index.js"
 export {
   CapacityGroupScalePolicySchema,
@@ -23,6 +26,9 @@ export {
 
 /**
  * Hardware requirements for a compute pool.
+ * On Kubernetes, CPU, memory, and storage describe administrator-managed node
+ * capacity. Architecture constrains Pod placement. GPU and nested virtualization
+ * requirements are rejected because this resource cannot guarantee them there.
  */
 export type ComputePoolRequirements = {
   cpu: number | string
@@ -44,6 +50,7 @@ export type ComputeChoiceRange =
       default: number
     }
 
+/** Machine counts and node autoscaling apply to cloud fleets. Kubernetes uses existing node capacity. */
 export type ComputePoolScale =
   | {
       type: "fixed"
@@ -58,7 +65,9 @@ export type ComputePoolScale =
 export type ComputePoolInput = {
   requirements: ComputePoolRequirements
   scale: ComputePoolScale
-  /** Number of provider failure domains across which the pool must be spread. */
+  /** Allow containers created after installation to use this pool. Only one pool may opt in. */
+  dynamicContainers?: boolean
+  /** Cloud fleet failure-domain spread. Advisory on existing Kubernetes clusters. */
   failureDomainSpread?: number
 }
 
@@ -72,6 +81,16 @@ export type ComputePoolInput = {
  *
  * Application source declares portable pool requirements. Provider machine
  * names are selected later through deployment settings.
+ *
+ * On Kubernetes, declare the same Frozen resource to describe logical pools in
+ * the deployment namespace. Alien verifies namespace access and pool references,
+ * then applies architecture constraints to static and dynamic container Pods.
+ * Source builds use one architecture per stack. Workers and pools without an
+ * explicit architecture inherit that build constraint for Pod scheduling.
+ * It creates no nodes. Hardware sizes, machine counts, autoscaling, and requested
+ * failure-domain spread remain the cluster administrator's responsibility.
+ * Provider instance types, selected zones, custom container CIDRs, GPU, and
+ * nested virtualization requirements are unsupported and fail validation.
  */
 export class ComputeCluster {
   private _config: Partial<ComputeClusterConfig> = {
@@ -90,7 +109,22 @@ export class ComputeCluster {
     return "compute-cluster"
   }
 
+  /** Grants the node identity access to explicitly named resources only. */
+  public nodePermissions(
+    permissions: PermissionProfile,
+    options?: { platforms: Platform[] },
+  ): this {
+    this._config.nodePermissions = permissions
+    this._config.nodePermissionsPlatforms = options?.platforms
+    return this
+  }
+
   public pool(groupId: string, config: ComputePoolInput): this {
+    if (config.dynamicContainers) {
+      if (this._config.dynamicContainerPool !== undefined) {
+        throw new Error("Only one compute pool may accept dynamic containers")
+      }
+    }
     if (
       config.failureDomainSpread !== undefined &&
       (!Number.isInteger(config.failureDomainSpread) ||
@@ -112,6 +146,9 @@ export class ComputeCluster {
       this._config.failureDomainSpread ??= {}
       this._config.failureDomainSpread[groupId] = config.failureDomainSpread
     }
+    if (config.dynamicContainers) {
+      this._config.dynamicContainerPool = groupId
+    }
     return this
   }
 
@@ -129,6 +166,14 @@ export class ComputeCluster {
    * Builds and validates the cluster configuration.
    */
   public build(): Resource {
+    if (
+      this._config.dynamicContainerPool !== undefined &&
+      !this._config.capacityGroups?.some(
+        group => group.groupId === this._config.dynamicContainerPool,
+      )
+    ) {
+      throw new Error("Dynamic container pool must be declared in the compute cluster")
+    }
     const config = ComputeClusterSchema.parse(this._config)
     return new Resource({
       type: "compute-cluster",

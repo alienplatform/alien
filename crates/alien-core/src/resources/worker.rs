@@ -49,6 +49,18 @@ pub enum ToolchainConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         binary_name: Option<String>,
     },
+    /// Python application installed from a locked uv project
+    #[serde(rename_all = "camelCase")]
+    Python {
+        /// Python version used by the runtime image (defaults to 3.12)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        python_version: Option<String>,
+        /// Workspace package to install (omit for a single-package project)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package: Option<String>,
+        /// Process argv used to start the application
+        command: Vec<String>,
+    },
     /// Docker build from Dockerfile
     #[serde(rename_all = "camelCase")]
     Docker {

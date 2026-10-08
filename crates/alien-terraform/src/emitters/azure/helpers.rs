@@ -56,6 +56,16 @@ pub fn downcast<'a, T: ResourceDefinition>(
     })
 }
 
+/// The Terraform label of the stack's remote management resource, whose identity management
+/// grants bind to. `None` when the stack has none.
+pub fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == alien_core::RemoteStackManagement::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
+}
+
 /// Look up the precomputed Terraform label for the current emitter context.
 pub fn required_label<'a>(ctx: &'a EmitContext<'_>) -> Result<&'a str> {
     ctx.name_for(ctx.resource_id).ok_or_else(|| {
@@ -87,9 +97,18 @@ pub fn resource_prefix_template(suffix: &str) -> Expression {
 /// the readable deployment-prefixed name when it fits; otherwise retain a
 /// deterministic prefix and append an 8-character hash of the full name.
 pub fn container_registry_task_name_template(suffix: &str) -> Expression {
-    let full_name = format!("${{local.resource_prefix}}-{suffix}");
+    bounded_name(&format!("\"${{local.resource_prefix}}-{suffix}\""), 50)
+}
+
+/// Bound an HCL name expression to `max_len` characters. The readable name is
+/// kept when it fits; otherwise a deterministic prefix is trimmed of trailing
+/// hyphens and an 8-character hash of the full name is appended, so the result
+/// stays unique and never ends in a hyphen.
+pub fn bounded_name(name_expr: &str, max_len: usize) -> Expression {
+    const HASH_LEN: usize = 8;
+    let prefix_len = max_len - HASH_LEN - 1;
     expr::raw(format!(
-        "length(\"{full_name}\") <= 50 ? \"{full_name}\" : format(\"%s-%s\", trim(substr(\"{full_name}\", 0, 41), \"-\"), substr(sha1(\"{full_name}\"), 0, 8))"
+        "length({name_expr}) <= {max_len} ? {name_expr} : format(\"%s-%s\", trim(substr({name_expr}, 0, {prefix_len}), \"-\"), substr(sha1({name_expr}), 0, {HASH_LEN}))"
     ))
 }
 
@@ -265,29 +284,51 @@ pub fn emit_role_definition_and_assignments(
     context: &PermissionContext,
     seen_predefined_assignments: &mut HashSet<(String, String)>,
 ) -> Result<()> {
-    // Skip when the set declares no Azure grants — `None` OR an explicit empty list. A set can
-    // intentionally grant nothing on Azure while still granting on other clouds (e.g.
-    // `postgres/data-access`, whose connection secret is read through the shared deployment vault's
-    // `vault/data-read`, so it carries an empty `azure` list by design). An empty list reaching
-    // the generator would otherwise fail-fast with "produced no Azure bindings".
-    // Skipped for the same reason when no Azure grant declares a stack binding. A grant can be
-    // deliberately resource-only — `sandbox/execute`, whose Data Owner role reaches inside every
-    // session in a sibling sandbox group at the only stack-level scope Azure RBAC can express — and
-    // asking the generator for a target the set does not declare is a hard error rather than an
-    // empty plan.
-    if permission_set
-        .platforms
-        .azure
-        .as_ref()
-        .map(|bindings| bindings.is_empty() || bindings.iter().all(|b| b.binding.stack.is_none()))
-        .unwrap_or(true)
+    emit_role_definition_and_assignments_for_target(
+        fragment,
+        sa_label,
+        service_account_id,
+        BindingTarget::Stack,
+        principal_id_expr,
+        permission_set,
+        context,
+        seen_predefined_assignments,
+    )
+}
+
+/// Emit grants for the chosen target using the supplied scope context and principal.
+/// Resource callers must supply a unique target-aware `sa_label`. The deduplication
+/// set belongs to one principal and may be shared across that principal's targets.
+/// Missing resource-target support is an error; an explicitly empty grant list emits nothing.
+pub fn emit_role_definition_and_assignments_for_target(
+    fragment: &mut TfFragment,
+    sa_label: &str,
+    service_account_id: &str,
+    target: BindingTarget,
+    principal_id_expr: Expression,
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    seen_predefined_assignments: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    // Preserve the stack wrapper's intentional no-grant/undeclared-stack skip.
+    // Resource calls use the generator's target validation, including its
+    // explicit-empty-list behavior, instead of silently dropping unsupported targets.
+    if matches!(target, BindingTarget::Stack)
+        && permission_set
+            .platforms
+            .azure
+            .as_ref()
+            .map(|bindings| {
+                bindings.is_empty() || bindings.iter().all(|b| b.binding.stack.is_none())
+            })
+            .unwrap_or(true)
     {
         return Ok(());
     }
 
     let generator = AzureRuntimePermissionsGenerator::new();
     let grant_plan = generator
-        .generate_grant_plan(permission_set, BindingTarget::Stack, context)
+        .generate_grant_plan(permission_set, target, context)
         .context(ErrorData::GenericError {
             message: format!(
                 "failed to generate Azure grant plan for permission set '{}'",
@@ -295,19 +336,51 @@ pub fn emit_role_definition_and_assignments(
             ),
         })?;
 
+    // Custom role assignable scopes are management groups, subscriptions, or
+    // resource groups. A narrower assignment scope is not a valid definition
+    // scope. Refuse the entire plan before writing any fragment or dedup state.
+    if target == BindingTarget::Resource
+        && grant_plan.custom_roles.iter().any(|role| {
+            role.role_definition.assignable_scopes.is_empty()
+                || role
+                    .role_definition
+                    .assignable_scopes
+                    .iter()
+                    .any(|scope| !valid_custom_role_parent_scope(scope))
+        })
+    {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!("Azure resource permission set '{}' requires a supported custom-role assignable scope (management group, subscription, or resource group)", permission_set.id),
+        }));
+    }
+
+    let assignment_owner = match target {
+        BindingTarget::Stack => service_account_id,
+        BindingTarget::Resource => sa_label,
+    };
     for custom_role in &grant_plan.custom_roles {
         let role_segment = custom_role_segment(&custom_role.key);
         let role_label = stack_custom_role_label(sa_label, &role_segment);
-        let role_name = format!("${{local.resource_prefix}}-{service_account_id}-{role_segment}");
+        let role_name = format!("${{local.resource_prefix}}-{assignment_owner}-{role_segment}");
 
-        fragment.resource_blocks.push(role_definition_block(
-            &role_label,
-            expr::raw(&format!("\"{role_name}\"")),
-            expr::raw(&format!(
-                "uuidv5(\"oid\", \"deployment:azure:role-def:{role_name}\")"
-            )),
-            custom_role.role_definition.clone(),
-        ));
+        let definition_scope = match target {
+            BindingTarget::Stack => expr::raw("\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\""),
+            BindingTarget::Resource => expr::template(custom_role.role_definition.assignable_scopes.first()
+                .ok_or_else(|| AlienError::new(ErrorData::GenericError {
+                    message: format!("Azure custom role '{}' has no assignable scope", custom_role.key),
+                }))?.clone()),
+        };
+        fragment
+            .resource_blocks
+            .push(role_definition_block_with_scope(
+                &role_label,
+                expr::raw(&format!("\"{role_name}\"")),
+                expr::raw(&format!(
+                    "uuidv5(\"oid\", \"deployment:azure:role-def:{role_name}\")"
+                )),
+                custom_role.role_definition.clone(),
+                definition_scope,
+            ));
     }
 
     for binding in &grant_plan.bindings {
@@ -330,12 +403,31 @@ pub fn emit_role_definition_and_assignments(
             [
                 attr(
                     "name",
-                    expr::raw(&format!(
-                        "uuidv5(\"oid\", \"deployment:azure:role-assign:{}:{}:${{{}}}\")",
-                        service_account_id,
-                        role_segment,
-                        render_expression_for_uuidv5(&principal_id_expr)
-                    )),
+                    match target {
+                        BindingTarget::Stack => expr::raw(&format!(
+                            "uuidv5(\"oid\", \"deployment:azure:role-assign:{}:{}:${{{}}}\")",
+                            assignment_owner,
+                            role_segment,
+                            render_expression_for_uuidv5(&principal_id_expr)
+                        )),
+                        BindingTarget::Resource => Expression::FuncCall(Box::new(
+                            hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("uuidv5"))
+                                .arg(Expression::String("oid".to_string()))
+                                .arg(Expression::FuncCall(Box::new(
+                                    hcl::expr::FuncCall::builder(hcl::Identifier::sanitized(
+                                        "format",
+                                    ))
+                                    .arg(Expression::String(
+                                        "deployment:azure:role-assign:%s:%s:%s".to_string(),
+                                    ))
+                                    .arg(Expression::String(assignment_owner.to_string()))
+                                    .arg(Expression::String(role_segment.clone()))
+                                    .arg(principal_id_expr.clone())
+                                    .build(),
+                                )))
+                                .build(),
+                        )),
+                    },
                 ),
                 attr("scope", expr::template(binding.scope.clone())),
                 attr("role_definition_id", role_definition_id),
@@ -436,7 +528,7 @@ fn resource_scoped_permission_refs<'a>(
     refs
 }
 
-fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
+pub fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
     permission_set
         .platforms
         .azure
@@ -571,11 +663,37 @@ fn setup_resource_custom_roles(
         .collect())
 }
 
+fn valid_custom_role_parent_scope(scope: &str) -> bool {
+    let Some(scope) = scope.strip_prefix('/') else {
+        return false;
+    };
+    let segments: Vec<_> = scope.split('/').collect();
+    match segments.as_slice() {
+        ["subscriptions", subscription] => !subscription.is_empty(),
+        ["subscriptions", subscription, "resourceGroups", group] => {
+            !subscription.is_empty() && !group.is_empty()
+        }
+        ["providers", "Microsoft.Management", "managementGroups", group] => !group.is_empty(),
+        _ => false,
+    }
+}
+
 fn role_definition_block(
     label: &str,
     name: Expression,
     role_definition_id: Expression,
     role_definition: alien_permissions::generators::AzureRoleDefinition,
+) -> hcl::Block {
+    role_definition_block_with_scope(label, name, role_definition_id, role_definition,
+        expr::raw("\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\""))
+}
+
+fn role_definition_block_with_scope(
+    label: &str,
+    name: Expression,
+    role_definition_id: Expression,
+    role_definition: alien_permissions::generators::AzureRoleDefinition,
+    scope: Expression,
 ) -> hcl::Block {
     resource_block(
         "azurerm_role_definition",
@@ -583,12 +701,7 @@ fn role_definition_block(
         [
             attr("name", name),
             attr("role_definition_id", role_definition_id),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                ),
-            ),
+            attr("scope", scope),
             attr("description", expr::template(role_definition.description)),
             nested(block(
                 "permissions",
@@ -672,7 +785,7 @@ fn custom_role_segment(key: &str) -> String {
         .unwrap_or_else(|| "custom".to_string())
 }
 
-fn azure_resource_role_key_segment(key: &str) -> String {
+pub fn azure_resource_role_key_segment(key: &str) -> String {
     key.rsplit(':')
         .next()
         .map(|segment| {
@@ -722,7 +835,7 @@ fn is_worker_command_transport_permission(resource_type: &str, permission_set_id
 
 /// Sanitise a permission-set id like `storage/object-admin` into a
 /// Terraform label segment (`storage_object_admin`).
-fn sanitize_role_label(input: &str) -> String {
+pub fn sanitize_role_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         if ch.is_ascii_alphanumeric() {
@@ -760,5 +873,233 @@ fn traversal_root(expr: &Expression) -> String {
     match expr {
         Expression::Variable(v) => v.as_str().to_string(),
         other => format!("{:?}", other),
+    }
+}
+
+#[cfg(test)]
+mod target_assignment_tests {
+    use super::*;
+
+    fn attribute<'a>(block: &'a hcl::Block, name: &str) -> &'a Expression {
+        &block
+            .body
+            .attributes()
+            .find(|attribute| attribute.key.as_str() == name)
+            .expect("required attribute")
+            .expr
+    }
+
+    fn context(resource: &str) -> PermissionContext {
+        PermissionContext::new()
+            .with_subscription_id("subscription")
+            .with_resource_group("data")
+            .with_storage_account_name("archiveaccount")
+            .with_resource_name(resource)
+            .with_stack_prefix("example")
+    }
+
+    #[test]
+    fn stack_wrapper_matches_explicit_stack_output() {
+        let builtin = alien_permissions::get_permission_set("storage/data-write").unwrap();
+        let mut custom = builtin.clone();
+        let grant = &mut custom.platforms.azure.as_mut().unwrap()[0].grant;
+        grant.predefined_roles = None;
+        grant.data_actions = Some(vec![
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write".to_string(),
+        ]);
+        for set in [builtin, &custom] {
+            let mut legacy = TfFragment::default();
+            let mut explicit = TfFragment::default();
+            let principal = Expression::String("principal".to_string());
+            let mut legacy_seen = HashSet::new();
+            let mut explicit_seen = HashSet::new();
+            emit_role_definition_and_assignments(
+                &mut legacy,
+                "account",
+                "account",
+                0,
+                principal.clone(),
+                set,
+                &context("objects"),
+                &mut legacy_seen,
+            )
+            .unwrap();
+            emit_role_definition_and_assignments_for_target(
+                &mut explicit,
+                "account",
+                "account",
+                BindingTarget::Stack,
+                principal,
+                set,
+                &context("objects"),
+                &mut explicit_seen,
+            )
+            .unwrap();
+            assert!(!legacy.resource_blocks.is_empty());
+            assert_eq!(legacy.resource_blocks, explicit.resource_blocks);
+            assert_eq!(legacy_seen, explicit_seen);
+        }
+    }
+
+    #[test]
+    fn resource_grants_keep_exact_scopes_principal_and_distinct_target_labels() {
+        let builtin = alien_permissions::get_permission_set("storage/data-write").unwrap();
+        for principal in [
+            Expression::String("executing-principal".to_string()),
+            expr::traversal(["azurerm_user_assigned_identity", "node", "principal_id"]),
+        ] {
+            let set = builtin;
+            let mut fragment = TfFragment::default();
+            let mut seen = HashSet::new();
+            let mut names = Vec::new();
+            for (label, resource) in [("node_archive", "archive"), ("node_backup", "backup")] {
+                let context = context(resource);
+                let plan = AzureRuntimePermissionsGenerator::new()
+                    .generate_grant_plan(set, BindingTarget::Resource, &context)
+                    .unwrap();
+                assert_eq!(plan.bindings.len(), 1);
+                let expected_scope = format!("/subscriptions/subscription/resourceGroups/data/providers/Microsoft.Storage/storageAccounts/archiveaccount/blobServices/default/containers/{resource}");
+                assert_eq!(plan.bindings[0].scope, expected_scope);
+                let start = fragment.resource_blocks.len();
+                emit_role_definition_and_assignments_for_target(
+                    &mut fragment,
+                    label,
+                    "node",
+                    BindingTarget::Resource,
+                    principal.clone(),
+                    set,
+                    &context,
+                    &mut seen,
+                )
+                .unwrap();
+                let emitted = &fragment.resource_blocks[start..];
+                let assignments: Vec<_> = emitted
+                    .iter()
+                    .filter(|block| block.labels()[0].as_str() == "azurerm_role_assignment")
+                    .collect();
+                assert_eq!(assignments.len(), 1);
+                assert_eq!(
+                    attribute(assignments[0], "scope"),
+                    &expr::template(&expected_scope)
+                );
+                assert_eq!(attribute(assignments[0], "principal_id"), &principal);
+                let Expression::FuncCall(uuid) = attribute(assignments[0], "name") else {
+                    panic!("assignment name must be a Terraform function");
+                };
+                assert_eq!(uuid.name.name.as_str(), "uuidv5");
+                assert_eq!(uuid.args[0], Expression::String("oid".to_string()));
+                let Expression::FuncCall(seed) = &uuid.args[1] else {
+                    panic!("UUID seed must format typed arguments");
+                };
+                assert_eq!(seed.name.name.as_str(), "format");
+                assert_eq!(seed.args[1], Expression::String(label.to_string()));
+                assert_eq!(seed.args[3], principal);
+                names.push(attribute(assignments[0], "name").clone());
+                let AzureRoleDefinitionRef::Predefined { role_definition_id } =
+                    &plan.bindings[0].role_definition
+                else {
+                    panic!("storage data grants use predefined roles");
+                };
+                assert_eq!(emitted.len(), 1);
+                assert_eq!(
+                    attribute(assignments[0], "role_definition_id"),
+                    &expr::template(role_definition_id)
+                );
+            }
+            assert_ne!(names[0], names[1]);
+            let labels: HashSet<_> = fragment
+                .resource_blocks
+                .iter()
+                .map(|block| block.labels()[1].as_str())
+                .collect();
+            assert_eq!(labels.len(), fragment.resource_blocks.len());
+        }
+    }
+
+    #[test]
+    fn custom_container_role_is_refused_without_partial_fragment_writes() {
+        let builtin = alien_permissions::get_permission_set("storage/data-write").unwrap();
+        let mut unsupported = builtin.clone();
+        let grant = &mut unsupported.platforms.azure.as_mut().unwrap()[0].grant;
+        grant.predefined_roles = None;
+        grant.data_actions = Some(vec![
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write".to_string(),
+        ]);
+        let mut fragment = TfFragment::default();
+        let mut seen = HashSet::new();
+        emit_role_definition_and_assignments_for_target(
+            &mut fragment,
+            "node_archive",
+            "node",
+            BindingTarget::Resource,
+            Expression::String("principal".to_string()),
+            builtin,
+            &context("archive"),
+            &mut seen,
+        )
+        .unwrap();
+        let before = fragment.resource_blocks.clone();
+        let seen_before = seen.clone();
+        let error = emit_role_definition_and_assignments_for_target(
+            &mut fragment,
+            "node_custom",
+            "node",
+            BindingTarget::Resource,
+            Expression::String("principal".to_string()),
+            &unsupported,
+            &context("archive"),
+            &mut seen,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("assignable scope"));
+        assert_eq!(fragment.resource_blocks, before);
+        assert_eq!(seen, seen_before);
+        for invalid in ["", "subscriptions/sub", "/subscriptions/", "/subscriptions/sub/resourceGroups/", "/subscriptions/sub/resourceGroups/data/providers/Microsoft.Storage/storageAccounts/account"] {
+            assert!(!valid_custom_role_parent_scope(invalid));
+        }
+        for valid in [
+            "/subscriptions/sub",
+            "/subscriptions/sub/resourceGroups/data",
+            "/providers/Microsoft.Management/managementGroups/group",
+        ] {
+            assert!(valid_custom_role_parent_scope(valid));
+        }
+    }
+
+    #[test]
+    fn resource_target_support_is_explicit_and_empty_grants_add_nothing() {
+        let mut set = alien_permissions::get_permission_set("storage/data-read")
+            .unwrap()
+            .clone();
+        let mut fragment = TfFragment::default();
+        let mut seen = HashSet::new();
+        set.platforms.azure.as_mut().unwrap()[0].binding.resource = None;
+        assert!(emit_role_definition_and_assignments_for_target(
+            &mut fragment,
+            "node_objects",
+            "node",
+            BindingTarget::Resource,
+            Expression::String("principal".to_string()),
+            &set,
+            &context("objects"),
+            &mut seen
+        )
+        .is_err());
+        assert!(fragment.resource_blocks.is_empty());
+        assert!(seen.is_empty());
+        set.platforms.azure = Some(vec![]);
+        emit_role_definition_and_assignments_for_target(
+            &mut fragment,
+            "node_objects",
+            "node",
+            BindingTarget::Resource,
+            Expression::String("principal".to_string()),
+            &set,
+            &context("objects"),
+            &mut seen,
+        )
+        .unwrap();
+        assert!(fragment.resource_blocks.is_empty());
+        assert!(seen.is_empty());
     }
 }

@@ -4,10 +4,12 @@
 //! The Subject's `workspace_id` is always `"default"` here; we don't gate on
 //! it. Authz boils down to role × scope.
 
+use crate::auth::remote_binding_capability;
 use crate::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use crate::traits::deployment_store::{DeploymentGroupRecord, DeploymentRecord};
 use crate::traits::release_store::ReleaseRecord;
 use crate::traits::TelemetrySignal;
+use alien_core::remote_bindings::RemoteBindingKind;
 
 /// OSS policy: any authenticated token can read any release / deployment-group
 /// it has scope on. Mutations require a write role. Sync/telemetry endpoints
@@ -23,10 +25,28 @@ impl OssAuthz {
             && matches!(s.role, Role::WorkspaceAdmin | Role::WorkspaceMember)
     }
 
+    /// The project roles that may write, as `can_create_release` grants them. A sync writes
+    /// deployment state and reads its environment, so a viewer is refused.
+    fn is_project_writer(s: &Subject) -> bool {
+        matches!(
+            s.role,
+            Role::WorkspaceAdmin | Role::WorkspaceMember | Role::ProjectDeveloper
+        )
+    }
+
     /// Capability roles share the project scope without its reads. A deny-list so every other
     /// project-scoped subject keeps the reads it has today.
     fn project_reader(s: &Subject) -> bool {
-        s.role != Role::ImageRepositoryProvisioner
+        !matches!(
+            s.role,
+            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher | Role::TunnelCaller
+        )
+    }
+
+    /// Group-scoped reads and sync belong to the group's own tokens, not to
+    /// capabilities scoped to the group (a tunnel caller).
+    fn group_member(s: &Subject) -> bool {
+        s.role != Role::TunnelCaller
     }
 
     /// True if the subject has *any* read authority on the project. Used for
@@ -55,13 +75,24 @@ impl Authz for OssAuthz {
         // OSS single-tenant: any valid token reads any release. Deployment
         // tokens included — agents need their target release to deploy. A
         // commands capability is deliberately inert outside command routes.
-        !matches!(s.scope, Scope::Commands { .. } | Scope::Telemetry { .. })
-            && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
+        !matches!(
+            s.scope,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. }
+        ) && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
             && Self::project_reader(s)
     }
 
     fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
         self.can_read_release(s, release)
+    }
+
+    fn can_manage_release_channels(&self, s: &Subject) -> bool {
+        // Whoever may publish releases may choose where they go.
+        self.can_create_release(s, "default")
+    }
+
+    fn can_read_release_channels(&self, s: &Subject) -> bool {
+        Self::can_act_on_project(s, "default")
     }
 
     // -- Deployments -------------------------------------------------------
@@ -85,12 +116,14 @@ impl Authz for OssAuthz {
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
-            } => deployment_group_id == &deployment.deployment_group_id,
+            } => Self::group_member(s) && deployment_group_id == &deployment.deployment_group_id,
             Scope::Deployment { deployment_id, .. } => {
                 deployment_id == &deployment.id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
-            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
+                false
+            }
         }
     }
 
@@ -108,18 +141,20 @@ impl Authz for OssAuthz {
         )
     }
 
-    fn can_resolve_remote_bindings(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        self.can_update_deployment(s, deployment)
-            || matches!(
-                (&s.scope, s.role),
-                (
-                    Scope::Deployment {
-                        project_id,
-                        deployment_id,
-                    },
-                    Role::RemoteBindingResolver,
-                ) if project_id == &deployment.project_id && deployment_id == &deployment.id
-            )
+    fn can_resolve_remote_binding(
+        &self,
+        s: &Subject,
+        deployment: &DeploymentRecord,
+        kind: RemoteBindingKind,
+        resource_id: &str,
+    ) -> bool {
+        if let Some(allowed) =
+            remote_binding_capability::resolve_decision(s, deployment, kind, resource_id)
+        {
+            return allowed;
+        }
+        remote_binding_capability::write_authority_covers(kind)
+            && self.can_update_deployment(s, deployment)
     }
 
     fn can_delete_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
@@ -148,12 +183,17 @@ impl Authz for OssAuthz {
     fn can_read_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
         match &s.scope {
             Scope::Workspace => true,
-            Scope::Project { .. } => Self::project_reader(s),
+            Scope::Project { project_id } => {
+                Self::project_reader(s) && project_id == &dg.project_id
+            }
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
-            } => deployment_group_id == &dg.id,
-            Scope::Deployment { .. } | Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            } => Self::group_member(s) && deployment_group_id == &dg.id,
+            Scope::Deployment { .. }
+            | Scope::Commands { .. }
+            | Scope::RemoteBindings { .. }
+            | Scope::Telemetry { .. } => false,
         }
     }
 
@@ -213,7 +253,9 @@ impl Authz for OssAuthz {
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
             Scope::DeploymentGroup { .. } => false,
-            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
+                false
+            }
         }
     }
 
@@ -249,10 +291,14 @@ impl Authz for OssAuthz {
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
-            } => deployment_group_id == &deployment.deployment_group_id,
+            } => Self::group_member(s) && deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
-            Scope::Project { .. } => Self::project_reader(s),
-            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
+            Scope::Project { project_id } => {
+                Self::is_project_writer(s) && project_id == &deployment.project_id
+            }
+            Scope::Commands { .. } | Scope::RemoteBindings { .. } | Scope::Telemetry { .. } => {
+                false
+            }
         }
     }
 
@@ -294,6 +340,20 @@ impl Authz for OssAuthz {
 
     fn can_act_on_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         self.can_read_deployment(s, deployment)
+    }
+
+    fn can_call_tunnel(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        if s.role != Role::TunnelCaller {
+            return self.can_dispatch_command(s, deployment);
+        }
+        match &s.scope {
+            Scope::Project { project_id } => project_id == &deployment.project_id,
+            Scope::DeploymentGroup {
+                deployment_group_id,
+                ..
+            } => deployment_group_id == &deployment.deployment_group_id,
+            _ => false,
+        }
     }
 }
 
@@ -483,47 +543,157 @@ mod tests {
     }
 
     #[test]
-    // OSS mints no capability role and denies it everything, provisioning included; an embedder's
-    // Authz is what grants the provisioner its one repository.
-    fn the_image_repository_provisioner_has_no_project_access() {
-        let mut subject = admin();
-        subject.scope = Scope::Project {
-            project_id: "default".to_string(),
-        };
-        subject.role = Role::ImageRepositoryProvisioner;
-        let dep = deployment("d1", "dg-a");
+    // OSS mints no capability role and denies it everything, provisioning and push included; an
+    // embedder's Authz is what grants each role its one operation on one project.
+    fn the_image_capability_roles_have_no_project_access() {
+        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+            let mut subject = admin();
+            subject.scope = Scope::Project {
+                project_id: "default".to_string(),
+            };
+            subject.role = role;
+            let dep = deployment("d1", "dg-a");
 
-        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
-        assert!(!OssAuthz.can_create_release(&subject, "default"));
-        assert!(!OssAuthz.can_read_release(&subject, &release()));
-        assert!(!OssAuthz.can_export_release(&subject, &release()));
-        assert!(!OssAuthz.can_acquire_deployments(&subject, &[dep.clone()]));
-        let command = alien_commands::server::CommandAccessContext {
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            deployment_id: "d1".to_string(),
-            target: alien_core::CommandTarget::new(
-                "daemon-a",
-                alien_core::CommandTargetType::Daemon,
-            ),
-        };
-        assert!(!OssAuthz.can_read_command_context(&subject, &command));
-        assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
-        assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
+            assert!(!OssAuthz.can_read_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_update_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
+            assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+            assert!(!OssAuthz.can_create_release(&subject, "default"));
+            assert!(!OssAuthz.can_read_release(&subject, &release()));
+            assert!(!OssAuthz.can_export_release(&subject, &release()));
+            assert!(!OssAuthz.can_acquire_deployments(&subject, std::slice::from_ref(&dep)));
+            let command = alien_commands::server::CommandAccessContext {
+                workspace_id: "default".to_string(),
+                project_id: "default".to_string(),
+                deployment_id: "d1".to_string(),
+                target: alien_core::CommandTarget::new(
+                    "daemon-a",
+                    alien_core::CommandTargetType::Daemon,
+                ),
+            };
+            assert!(!OssAuthz.can_read_command_context(&subject, &command));
+            assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
+            assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
+        }
     }
 
     #[test]
     fn remote_binding_capability_is_exactly_deployment_scoped() {
         let mut subject = deployment_token("d1");
+        subject.scope = Scope::RemoteBindings {
+            project_id: "default".to_string(),
+            deployment_id: "d1".to_string(),
+            capability: crate::auth::RemoteBindingCapability {
+                kind: crate::auth::RemoteBindingGrant::Sandbox,
+                resource_id: Some("box".to_string()),
+            },
+        };
         subject.role = Role::RemoteBindingResolver;
+        let d1 = deployment("d1", "dg-a");
 
-        assert!(OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d1", "dg-a")));
-        assert!(!OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d2", "dg-a")));
-        assert!(!OssAuthz.can_read_deployment(&subject, &deployment("d1", "dg-a")));
+        assert!(OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &d1,
+            RemoteBindingKind::Sandbox,
+            "box"
+        ));
+        assert!(!OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &d1,
+            RemoteBindingKind::Storage,
+            "box"
+        ));
+        assert!(!OssAuthz.can_resolve_remote_binding(
+            &subject,
+            &deployment("d2", "dg-a"),
+            RemoteBindingKind::Sandbox,
+            "box"
+        ));
+        assert!(!OssAuthz.can_read_deployment(&subject, &d1));
+        assert!(!OssAuthz.can_update_deployment(&subject, &d1));
+    }
+
+    #[test]
+    fn a_project_credential_syncs_only_its_own_projects_deployments() {
+        let mut developer = admin();
+        developer.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        developer.role = Role::ProjectDeveloper;
+        let mut other = deployment("d2", "dg-b");
+        other.project_id = "prj_other".to_string();
+
+        assert!(OssAuthz.can_sync_deployment(&developer, &deployment("d1", "dg-a")));
+        assert!(!OssAuthz.can_sync_deployment(&developer, &other));
+
+        let mut viewer = developer.clone();
+        viewer.role = Role::ProjectViewer;
+        assert!(!OssAuthz.can_sync_deployment(&viewer, &deployment("d1", "dg-a")));
+        assert!(OssAuthz.can_read_deployment(&viewer, &deployment("d1", "dg-a")));
+    }
+
+    #[test]
+    fn a_project_credential_reads_only_its_own_projects_deployment_groups() {
+        let mut viewer = admin();
+        viewer.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        viewer.role = Role::ProjectViewer;
+        let group = |project_id: &str| DeploymentGroupRecord {
+            id: "dg-a".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: project_id.to_string(),
+            name: "dg-a".to_string(),
+            max_deployments: 10,
+            deployment_count: 0,
+            setup: Default::default(),
+            created_at: Utc::now(),
+        };
+
+        assert!(OssAuthz.can_read_deployment_group(&viewer, &group("default")));
+        assert!(!OssAuthz.can_read_deployment_group(&viewer, &group("prj_other")));
+    }
+
+    #[test]
+    fn deployment_writers_resolve_data_bindings_but_never_a_sandbox() {
+        let d1 = deployment("d1", "dg-a");
+        let mut member = admin();
+        member.role = Role::WorkspaceMember;
+        let mut developer = admin();
+        developer.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        developer.role = Role::ProjectDeveloper;
+
+        for subject in [
+            admin(),
+            member,
+            developer,
+            dg_token("dg-a"),
+            deployment_token("d1"),
+        ] {
+            assert!(OssAuthz.can_update_deployment(&subject, &d1), "{subject:?}");
+            for kind in [
+                RemoteBindingKind::Storage,
+                RemoteBindingKind::Key,
+                RemoteBindingKind::Ai,
+            ] {
+                assert!(
+                    OssAuthz.can_resolve_remote_binding(&subject, &d1, kind, "r1"),
+                    "{subject:?} {kind:?}"
+                );
+            }
+            assert!(
+                !OssAuthz.can_resolve_remote_binding(
+                    &subject,
+                    &d1,
+                    RemoteBindingKind::Sandbox,
+                    "box"
+                ),
+                "{subject:?}"
+            );
+        }
     }
 
     #[test]
@@ -681,5 +851,43 @@ mod tests {
         assert!(!OssAuthz.can_read_deployment(&gateway, &dep));
         assert!(!OssAuthz.can_sync_deployment(&gateway, &dep));
         assert!(!OssAuthz.can_push_image(&gateway, "default", "repo"));
+    }
+
+    #[test]
+    fn tunnel_callers_reach_tunnels_and_nothing_else() {
+        let tunnel_caller = |scope: Scope| Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "tok".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope,
+            role: Role::TunnelCaller,
+            bearer_token: String::new(),
+        };
+        let authz = OssAuthz;
+        let all = tunnel_caller(Scope::Project {
+            project_id: "default".to_string(),
+        });
+        let group = tunnel_caller(Scope::DeploymentGroup {
+            project_id: "default".to_string(),
+            deployment_group_id: "dg_a".to_string(),
+        });
+
+        assert!(authz.can_call_tunnel(&all, &deployment("dep_1", "dg_a")));
+        assert!(authz.can_call_tunnel(&all, &deployment("dep_2", "dg_b")));
+        assert!(authz.can_call_tunnel(&group, &deployment("dep_1", "dg_a")));
+        assert!(!authz.can_call_tunnel(&group, &deployment("dep_2", "dg_b")));
+
+        for subject in [&all, &group] {
+            let d = deployment("dep_1", "dg_a");
+            assert!(!authz.can_read_deployment(subject, &d));
+            assert!(!authz.can_update_deployment(subject, &d));
+            assert!(!authz.can_delete_deployment(subject, &d));
+            assert!(!authz.can_sync_deployment(subject, &d));
+            assert!(!authz.can_dispatch_command(subject, &d));
+            assert!(!authz.can_create_release(subject, "default"));
+            assert!(!authz.can_push_image(subject, "default", "repo"));
+            assert!(!authz.can_create_deployment_group(subject, "default"));
+        }
     }
 }

@@ -4,17 +4,21 @@
 //! run against a live deployment — read-only inspection, mutation, or
 //! destructive admin actions gated by declared risk. A plugin author:
 //!
-//! 1. Implements [`plugin::Plugin`] and calls [`plugin::run_plugin`] from
-//!    `main`.
-//! 2. Declares a [`manifest::CanonicalPluginManifest`] (conventionally
-//!    `metadata.json`) describing each operation's params, risk tier,
-//!    required permissions, timeout, retries, verification, and
-//!    sensitive-output handling.
+//! 1. Registers typed handlers with [`TypedOperations`] and calls
+//!    [`run_plugin`] from `main`.
+//! 2. Generates [`CanonicalPluginManifest`] from the registry's
+//!    [`TypedOperations::manifests`], including input/output schemas, risk,
+//!    permissions, timeout, retries, verification, and sensitive-output policy.
 //!
-//! The runtime uses the manifest to generate cloud permissions, CLI help,
-//! access-request prompts, MCP tool schemas, and docs — declare it once,
-//! get all of those for free. See `alien operations init` to scaffold a new
-//! plugin from a template.
+//! The manifest supplies cloud permissions, access-request prompts, MCP tool
+//! schemas, and generated docs. See `alien operations init` to scaffold a plugin.
+//!
+//! [`TypedOperations`] implements the [`Plugin`] trait. Implement [`Plugin`]
+//! yourself only to wrap a registry's [`TypedOperations::execute`] with
+//! per-invocation setup, such as validating operator-supplied endpoint
+//! configuration or bounding the whole invocation with a deadline.
+//! `alien operations check`, `package`, and `publish` require metadata
+//! generated from typed definitions.
 
 pub mod docs;
 pub mod error;

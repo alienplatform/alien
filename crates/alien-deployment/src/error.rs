@@ -148,6 +148,32 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// Required deployer secrets are not in the customer's secret store yet;
+    /// workloads wait for them.
+    #[error(
+        code = "DEPLOYER_SECRETS_MISSING",
+        message = "Waiting for deployer secrets: {summary}",
+        retryable = "true",
+        internal = "false"
+    )]
+    DeployerSecretsMissing {
+        /// One `missing: <label>` / `invalid: <label> (...)` entry per slot
+        summary: String,
+    },
+
+    /// A retry cannot resume these failed resources from where they stopped.
+    #[error(
+        code = "RETRY_CANNOT_RESUME",
+        message = "Retry cannot resume {resources}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    RetryCannotResume {
+        /// Each resource with what it needs instead
+        resources: String,
+    },
+
     /// Required configuration is missing.
     #[error(
         code = "MISSING_CONFIGURATION",
@@ -189,6 +215,17 @@ pub enum ErrorData {
         internal = "inherit"
     )]
     DeploymentCheckpointFailed { message: String },
+
+    /// A request to the manager API failed. Keeps the source's retryable flag and status: a
+    /// network error or a manager that says to retry is retried by the caller, a rejection is not.
+    #[error(
+        code = "MANAGER_REQUEST_FAILED",
+        message = "Manager request failed: {message}",
+        retryable = "inherit",
+        internal = "inherit",
+        http_status_code = "inherit"
+    )]
+    ManagerRequestFailed { message: String },
 
     /// Secret sync to vault failed.
     #[error(

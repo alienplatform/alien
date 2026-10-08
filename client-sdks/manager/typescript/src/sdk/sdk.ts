@@ -10,9 +10,12 @@ import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
 import { Health } from "./health.js";
 import { Leases } from "./leases.js";
+import { Manager } from "./manager.js";
 import { Releases } from "./releases.js";
 import { StackImport } from "./stackimport.js";
 import { Sync } from "./sync.js";
+import { Tokens } from "./tokens.js";
+import { Vault } from "./vault.js";
 import { Whoami } from "./whoami.js";
 
 export class AlienManager extends ClientSDK {
@@ -51,9 +54,19 @@ export class AlienManager extends ClientSDK {
     return (this._deployments ??= new Deployments(this._options));
   }
 
+  private _vault?: Vault;
+  get vault(): Vault {
+    return (this._vault ??= new Vault(this._options));
+  }
+
   private _sync?: Sync;
   get sync(): Sync {
     return (this._sync ??= new Sync(this._options));
+  }
+
+  private _manager?: Manager;
+  get manager(): Manager {
+    return (this._manager ??= new Manager(this._options));
   }
 
   private _releases?: Releases;
@@ -64,6 +77,11 @@ export class AlienManager extends ClientSDK {
   private _stackImport?: StackImport;
   get stackImport(): StackImport {
     return (this._stackImport ??= new StackImport(this._options));
+  }
+
+  private _tokens?: Tokens;
+  get tokens(): Tokens {
+    return (this._tokens ??= new Tokens(this._options));
   }
 
   private _whoami?: Whoami;

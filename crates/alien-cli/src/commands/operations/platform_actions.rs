@@ -16,6 +16,7 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::commands::access_requests::{approval_outcome, not_approved_error, ApprovalOutcome};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
@@ -386,6 +387,9 @@ async fn request_access_then_reinvoke(
             params,
             operation_pattern: None,
             max_risk: None,
+            debug_tool: None,
+            debug_namespace: None,
+            debug_cloud_scope: None,
             title: None,
             reason: None,
             remediation_plan_id: None,
@@ -443,19 +447,12 @@ async fn request_access_then_reinvoke(
             }
         }
 
-        match request.status {
-            alien_platform_api::types::AccessRequestStatus::CustomerApproved => break,
-            alien_platform_api::types::AccessRequestStatus::Rejected
-            | alien_platform_api::types::AccessRequestStatus::Expired => {
-                return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!(
-                        "access request '{}' is '{}', not approved",
-                        created.id, request.status
-                    ),
-                    url: None,
-                }));
+        match approval_outcome(request.status) {
+            ApprovalOutcome::Approved => break,
+            ApprovalOutcome::Closed => {
+                return Err(not_approved_error(&created.id, request.status));
             }
-            _ => {}
+            ApprovalOutcome::Pending => {}
         }
         if std::time::Instant::now() >= deadline {
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
@@ -887,8 +884,10 @@ pub async fn list_task(
 /// manifest schema `alien operations check` validates offline — a bundle
 /// with a broken manifest fails here, before spending time uploading it to
 /// S3, rather than only being caught by the platform's own (looser, string
-/// name/version/tier-only) validation after upload. Returns the raw JSON
-/// value (forwarded verbatim) plus the parsed manifest.
+/// name/version/tier-only) validation after upload. Metadata must come from
+/// typed operation definitions, which always declare input and output
+/// schemas. Returns the raw JSON value (forwarded verbatim) plus the parsed
+/// manifest.
 fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, CanonicalPluginManifest)> {
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
@@ -913,12 +912,46 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, Canonica
             message: "metadata.json is not valid JSON".to_string(),
         },
     )?;
+    let untyped_operations = operations_without_typed_schemas(&value);
+    if !untyped_operations.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "bundle '{}' has operations without valid inputSchema and outputSchema objects: \
+                 {}. {} Then rebuild the \
+                 bundle with `alien operations package`.",
+                path.display(),
+                untyped_operations.join(", "),
+                super::check::TYPED_METADATA_HELP
+            ),
+        }));
+    }
     let manifest = super::check::parse_manifest_for_cli(contents.as_bytes()).context(
         ErrorData::ConfigurationError {
             message: format!("bundle '{}' has an invalid manifest", path.display()),
         },
     )?;
     Ok((value, manifest))
+}
+
+/// Names of operations missing either schema object a typed definition generates.
+fn operations_without_typed_schemas(metadata: &Value) -> Vec<String> {
+    metadata
+        .get("operations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|operation| {
+            !operation.get("inputSchema").is_some_and(Value::is_object)
+                || !operation.get("outputSchema").is_some_and(Value::is_object)
+        })
+        .map(|operation| {
+            let name = operation
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>");
+            format!("'{name}'")
+        })
+        .collect()
 }
 
 fn api_url(base_url: &str, path: &str, workspace: &str, project: &str) -> Result<reqwest::Url> {
@@ -953,14 +986,25 @@ mod tests {
         buf
     }
 
+    fn typed_operation(name: &str) -> Value {
+        serde_json::json!({
+            "name": name,
+            "tier": "mutating",
+            "description": "Vacuum a table.",
+            "inputSchema": { "type": "object" },
+            "outputSchema": { "type": "object" },
+            "permissions": []
+        })
+    }
+
     #[test]
-    fn reads_metadata_from_bundle() {
+    fn reads_typed_metadata_from_bundle() {
         let meta = serde_json::json!({
             "name": "postgres-operations",
             "version": "1.0.0",
             "tier": "mutating",
             "binaries": { "amd64": "postgres-operations-linux-amd64" },
-            "operations": [ { "name": "vacuum" } ]
+            "operations": [typed_operation("vacuum")]
         });
         let bytes = bundle_with_metadata(&meta);
         let (value, parsed) =
@@ -969,19 +1013,67 @@ mod tests {
         assert_eq!(parsed.version, "1.0.0");
         assert_eq!(parsed.tier, alien_operations_sdk::RiskTier::Mutating);
         // The full object is forwarded verbatim (operations[] preserved).
-        assert!(value.get("operations").is_some());
+        assert_eq!(value, meta);
     }
 
     #[test]
-    fn reads_released_legacy_metadata_from_bundle() {
-        let meta: Value = serde_json::from_str(super::super::check::legacy_verification_manifest())
-            .expect("legacy fixture JSON");
+    fn rejects_bundle_metadata_not_generated_from_typed_operations() {
+        let mut meta: Value =
+            serde_json::from_str(super::super::check::legacy_verification_manifest())
+                .expect("legacy fixture JSON");
+        meta["operations"]
+            .as_array_mut()
+            .expect("fixture has operations")
+            .push(typed_operation("vacuum"));
         let bytes = bundle_with_metadata(&meta);
 
-        let (_, parsed) = read_bundle_metadata(&bytes, &PathBuf::from("legacy.zip"))
-            .expect("publish must preserve released legacy manifest support");
-        assert!(parsed.operations[0].input_schema.is_some());
-        assert!(parsed.operations[1].output_schema.is_none());
+        let error = read_bundle_metadata(&bytes, &PathBuf::from("legacy.zip"))
+            .expect_err("publish must require metadata generated from typed operations");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        for expected in [
+            "bundle 'legacy.zip' has operations without valid inputSchema and outputSchema objects: \
+             'status', 'restart'.",
+            "`TypedOperations`",
+            "src/bin/generate-metadata.rs",
+            "alien operations package",
+        ] {
+            assert!(
+                error.message.contains(expected),
+                "missing {expected:?} in: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_bundle_with_null_or_invalid_schema_objects() {
+        for schema in [Value::Null, json!(true), json!([]), json!("schema")] {
+            for field in ["inputSchema", "outputSchema"] {
+                let mut operation = typed_operation("vacuum");
+                operation[field] = schema.clone();
+                let meta = json!({
+                    "name": "postgres-operations",
+                    "version": "1.0.0",
+                    "tier": "mutating",
+                    "binaries": { "amd64": "postgres-operations-linux-amd64" },
+                    "operations": [operation]
+                });
+                let error = read_bundle_metadata(
+                    &bundle_with_metadata(&meta),
+                    &PathBuf::from("invalid-schema.zip"),
+                )
+                .expect_err("publish must require both schema objects");
+                assert_eq!(error.code, "CONFIGURATION_ERROR");
+                assert!(error.message.contains("'vacuum'"), "{error}");
+                assert!(
+                    error
+                        .message
+                        .contains("valid inputSchema and outputSchema objects"),
+                    "{error}"
+                );
+            }
+        }
     }
 
     #[test]

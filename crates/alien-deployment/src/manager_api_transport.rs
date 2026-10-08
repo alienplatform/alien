@@ -160,10 +160,15 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .body(body)
             .send()
             .await
-            .into_sdk_error()
-            .context(alien_error::GenericError {
-                message: "Failed to reconcile step via manager API".to_string(),
-            })?
+            // Reads the body so a structured manager error keeps its own retryable flag.
+            .into_sdk_error_reading_body()
+            .await
+            // Inherits retryable: the runner retries a checkpoint only on a retryable error,
+            // and a network error reaching the manager must not fail the deployment.
+            .context(crate::ErrorData::ManagerRequestFailed {
+                message: "reconcile step".to_string(),
+            })
+            .map_err(AlienError::into_generic)?
             .into_inner();
 
         // If the manager returned a native_image_host, inject it into the config
@@ -420,6 +425,7 @@ fn setup_run_acquire_statuses() -> Vec<String> {
         "initial-setup",
         "initial-setup-failed",
         "waiting-for-machines",
+        "waiting-for-secrets",
         "running",
         "update-failed",
         "refresh-failed",
@@ -446,7 +452,7 @@ pub async fn acquire_setup_delete_deployment(
     ];
 
     for attempt in 1..=MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS {
-        let resp = client
+        let response = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
                 acquire_mode: Some("setup-teardown".to_string()),
@@ -460,10 +466,33 @@ pub async fn acquire_setup_delete_deployment(
             })
             .send()
             .await
-            .into_sdk_error()
-            .context(alien_error::GenericError {
-                message: "Failed to acquire setup teardown sync lock".to_string(),
-            })?;
+            .into_sdk_error();
+        let resp = match response {
+            Ok(response) => response,
+            Err(error) => {
+                // A runtime with setup authority can finish and remove the record
+                // between the delete request and this acquire request.
+                if is_missing_deployment_response(&error) {
+                    let lookup = client
+                        .get_deployment()
+                        .id(deployment_id)
+                        .send()
+                        .await
+                        .into_sdk_error();
+                    if let Err(lookup_error) = lookup {
+                        if is_missing_deployment_response(&lookup_error) {
+                            return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
+                        }
+                        return Err(lookup_error.context(alien_error::GenericError {
+                            message: "Failed to confirm completed deployment deletion".to_string(),
+                        }));
+                    }
+                }
+                return Err(error.context(alien_error::GenericError {
+                    message: "Failed to acquire setup teardown sync lock".to_string(),
+                }));
+            }
+        };
 
         let response = resp.into_inner();
         if let Some(acquired) = response.deployments.into_iter().next() {
@@ -699,6 +728,63 @@ mod tests {
     use chrono::TimeZone;
     use httpmock::prelude::*;
 
+    #[tokio::test]
+    async fn setup_delete_acquire_confirms_a_concurrently_removed_record() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(404).body("removed deployment");
+            })
+            .await;
+        let lookup = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(404).body("removed deployment");
+            })
+            .await;
+        let result = acquire_setup_delete_deployment(
+            &ManagerClient::new(&server.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .expect("confirmed removed record is completed deletion");
+        assert!(matches!(result, SetupDeleteAcquireOutcome::AlreadyDeleted));
+        acquire.assert_async().await;
+        lookup.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn setup_delete_acquire_does_not_hide_a_failed_completion_lookup() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(404).body("missing");
+            })
+            .await;
+        let lookup = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(500).body("backend unavailable");
+            })
+            .await;
+        let error = acquire_setup_delete_deployment(
+            &ManagerClient::new(&server.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .err()
+        .expect("lookup failure must not report deleted");
+        assert_eq!(error.http_status_code, Some(500));
+        acquire.assert_async().await;
+        lookup.assert_async().await;
+    }
+
     #[test]
     fn only_not_found_means_deleted_cleanup_is_already_complete() {
         let mut error = AlienError::new(alien_error::GenericError {
@@ -768,6 +854,89 @@ mod tests {
             .causes
             .iter()
             .any(|cause| cause.message == "Internal server error"));
+    }
+
+    fn running_state() -> DeploymentState {
+        DeploymentState {
+            status: alien_core::DeploymentStatus::Running,
+            platform: alien_core::Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn deployment_config() -> alien_core::DeploymentConfig {
+        alien_core::DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    async fn reconcile_against(base_url: &str) -> AlienError {
+        let transport = ManagerApiTransport::new(ManagerClient::new(base_url), "session-1".into());
+        match transport
+            .reconcile_step(
+                "deployment-1",
+                &running_state(),
+                &deployment_config(),
+                false,
+                None,
+                vec![],
+                vec![],
+            )
+            .await
+        {
+            Ok(_) => panic!("the checkpoint must fail"),
+            Err(error) => error,
+        }
+    }
+
+    /// The runner retries a checkpoint only when its error is retryable, so an unreachable
+    /// manager must come back retryable rather than fail the deployment on one network blip.
+    #[tokio::test]
+    async fn an_unreachable_manager_fails_the_checkpoint_as_retryable() {
+        // Bound and released: nothing listens, so the request is refused.
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a loopback port");
+
+        let error = reconcile_against(&format!("http://{address}")).await;
+
+        assert!(error.retryable, "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_the_manager_rejects_is_not_retried() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                // A 5xx status would be retryable by itself: the manager's own flag decides.
+                then.status(500).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_LEASE_LOST",
+                    "message": "another session holds the lease",
+                    "retryable": false,
+                    "internal": false,
+                }));
+            })
+            .await;
+
+        let error = reconcile_against(&server.base_url()).await;
+
+        assert!(!error.retryable, "{error:?}");
+        assert_eq!(error.http_status_code, Some(500));
     }
 
     #[tokio::test]

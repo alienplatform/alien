@@ -34,7 +34,8 @@ use crate::presigned::PresignedRequest;
 use crate::remote::RemoteStorage;
 use crate::traits::{
     Binding, BindingsProviderApi, Key, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions,
-    Queue, QueueMessage, ScanResult, Storage, Vault,
+    Queue, QueueMessage, ScanResult, Storage, Vault, Worker, WorkerInvokeRequest,
+    WorkerInvokeResponse,
 };
 
 const OBJECT_STORE_NAME: &str = "Alien binding";
@@ -53,6 +54,38 @@ pub(super) trait StorageProviderApi: Send + Sync + fmt::Debug {
 #[async_trait]
 pub(super) trait KeyProviderApi: Send + Sync + fmt::Debug {
     async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>>;
+}
+
+/// The smallest provider surface needed by a refreshable KV handle.
+#[async_trait]
+pub(super) trait KvProviderApi: Send + Sync + fmt::Debug {
+    async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>>;
+}
+
+/// The smallest provider surface needed by a refreshable Queue handle.
+#[async_trait]
+pub(super) trait QueueProviderApi: Send + Sync + fmt::Debug {
+    async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>>;
+}
+
+#[async_trait]
+impl<T> QueueProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
+        BindingsProviderApi::load_queue(self, binding_name).await
+    }
+}
+
+#[async_trait]
+impl<T> KvProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
+        BindingsProviderApi::load_kv(self, binding_name).await
+    }
 }
 
 #[async_trait]
@@ -89,16 +122,12 @@ impl Resolver {
         }
     }
 
-    async fn kv(&self) -> Result<Arc<dyn Kv>> {
-        self.provider.load_kv(&self.binding_name).await
-    }
-
-    async fn queue(&self) -> Result<Arc<dyn Queue>> {
-        self.provider.load_queue(&self.binding_name).await
-    }
-
     async fn vault(&self) -> Result<Arc<dyn Vault>> {
         self.provider.load_vault(&self.binding_name).await
+    }
+
+    async fn worker(&self) -> Result<Arc<dyn Worker>> {
+        self.provider.load_worker(&self.binding_name).await
     }
 }
 
@@ -360,14 +389,20 @@ impl RemoteStorage for RefreshingStorage {
 /// Key-value handle that resolves a fresh-enough provider for every operation.
 #[derive(Debug)]
 pub(super) struct RefreshingKv {
-    resolver: Resolver,
+    provider: Arc<dyn KvProviderApi>,
+    binding_name: String,
 }
 
 impl RefreshingKv {
-    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn KvProviderApi>, binding_name: String) -> Self {
         Self {
-            resolver: Resolver::new(provider, binding_name),
+            provider,
+            binding_name,
         }
+    }
+
+    async fn current(&self) -> Result<Arc<dyn Kv>> {
+        self.provider.load_kv(&self.binding_name).await
     }
 }
 
@@ -376,19 +411,19 @@ impl Binding for RefreshingKv {}
 #[async_trait]
 impl Kv for RefreshingKv {
     async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
-        self.resolver.kv().await?.get(key).await
+        self.current().await?.get(key).await
     }
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<KvPutOptions>) -> Result<bool> {
-        self.resolver.kv().await?.put(key, value, options).await
+        self.current().await?.put(key, value, options).await
     }
 
     async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
-        self.resolver.kv().await?.delete(key, if_version).await
+        self.current().await?.delete(key, if_version).await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        self.resolver.kv().await?.exists(key).await
+        self.current().await?.exists(key).await
     }
 
     async fn scan_prefix(
@@ -397,8 +432,7 @@ impl Kv for RefreshingKv {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<ScanResult> {
-        self.resolver
-            .kv()
+        self.current()
             .await?
             .scan_prefix(prefix, limit, cursor)
             .await
@@ -408,14 +442,22 @@ impl Kv for RefreshingKv {
 /// Queue handle that resolves a fresh-enough provider for every operation.
 #[derive(Debug)]
 pub(super) struct RefreshingQueue {
-    resolver: Resolver,
+    provider: Arc<dyn QueueProviderApi>,
+    binding_name: String,
 }
 
 impl RefreshingQueue {
-    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn QueueProviderApi>, binding_name: String) -> Self {
         Self {
-            resolver: Resolver::new(provider, binding_name),
+            provider,
+            binding_name,
         }
+    }
+}
+
+impl RefreshingQueue {
+    async fn current(&self) -> Result<Arc<dyn Queue>> {
+        self.provider.load_queue(&self.binding_name).await
     }
 }
 
@@ -424,35 +466,31 @@ impl Binding for RefreshingQueue {}
 #[async_trait]
 impl Queue for RefreshingQueue {
     async fn send(&self, queue: &str, message: MessagePayload) -> Result<()> {
-        self.resolver.queue().await?.send(queue, message).await
+        self.current().await?.send(queue, message).await
+    }
+
+    async fn send_batch(
+        &self,
+        queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<crate::traits::QueueSendResult>> {
+        self.current().await?.send_batch(queue, messages).await
     }
 
     async fn receive(&self, queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
-        self.resolver
-            .queue()
-            .await?
-            .receive(queue, max_messages)
-            .await
+        self.current().await?.receive(queue, max_messages).await
     }
 
     async fn ack(&self, queue: &str, receipt_handle: &str) -> Result<()> {
-        self.resolver
-            .queue()
-            .await?
-            .ack(queue, receipt_handle)
-            .await
+        self.current().await?.ack(queue, receipt_handle).await
     }
 
     async fn nack(&self, queue: &str, receipt_handle: &str) -> Result<()> {
-        self.resolver
-            .queue()
-            .await?
-            .nack(queue, receipt_handle)
-            .await
+        self.current().await?.nack(queue, receipt_handle).await
     }
 
     async fn purge(&self, queue: &str) -> Result<()> {
-        self.resolver.queue().await?.purge(queue).await
+        self.current().await?.purge(queue).await
     }
 }
 
@@ -523,6 +561,14 @@ impl Vault for RefreshingVault {
         self.resolver.vault().await?.get_secret(secret_name).await
     }
 
+    async fn secret_presence(&self, secret_name: &str) -> Result<crate::traits::SecretPresence> {
+        self.resolver
+            .vault()
+            .await?
+            .secret_presence(secret_name)
+            .await
+    }
+
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
         self.resolver
             .vault()
@@ -541,5 +587,36 @@ impl Vault for RefreshingVault {
 
     async fn list_secrets(&self) -> Result<Vec<String>> {
         self.resolver.vault().await?.list_secrets().await
+    }
+}
+
+/// Worker handle that resolves a fresh-enough provider for every operation.
+#[derive(Debug)]
+pub(super) struct RefreshingWorker {
+    resolver: Resolver,
+}
+
+impl RefreshingWorker {
+    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+        Self {
+            resolver: Resolver::new(provider, binding_name),
+        }
+    }
+}
+
+impl Binding for RefreshingWorker {}
+
+#[async_trait]
+impl Worker for RefreshingWorker {
+    async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse> {
+        self.resolver.worker().await?.invoke(request).await
+    }
+
+    async fn get_worker_url(&self) -> Result<Option<String>> {
+        self.resolver.worker().await?.get_worker_url().await
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

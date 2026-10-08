@@ -7,9 +7,10 @@
 use alien_core::{
     Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
     BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
-    Platform, ResourceLifecycle, ResourceStatus, Sandbox, SandboxBinding, Storage, StorageBinding,
+    Kv, KvBinding, Platform, Queue, QueueBinding, ResourceLifecycle, ResourceStatus, Sandbox,
+    SandboxBinding, Storage, StorageBinding,
 };
-use alien_error::{Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use axum::{
     extract::{Json, State},
     http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
@@ -21,11 +22,12 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{auth, current_release_resource, load_current_release, AppState};
+use crate::auth::remote_binding_capability;
 use crate::credential_materialization::{
     materialize_remote_binding_lease, MaterializedCredentialLease, RemoteBindingCredentialScope,
 };
 use crate::error::ErrorData;
-use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseStore};
+use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseRecord, ReleaseStore};
 
 /// The remote client refreshes five minutes before this server-provided hint.
 /// One hour matches the maximum supported lifetime for manager-minted cloud credentials.
@@ -78,6 +80,55 @@ pub enum ResolveBindingResponse {
         binding: RemoteGcsStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Send-only Sqs queue and a short-lived credential lease.
+    Sqs {
+        binding: RemoteSqsQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Send-only Pubsub queue and a short-lived credential lease.
+    Pubsub {
+        binding: RemotePubsubQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Send-only Servicebus queue and a short-lived credential lease.
+    Servicebus {
+        binding: RemoteServiceBusQueueBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAzureClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// AWS DynamoDB KV table and an AWS session.
+    Dynamodb {
+        binding: RemoteDynamodbKvBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// GCP Firestore KV collection and an access token.
+    Firestore {
+        binding: RemoteFirestoreKvBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Azure Table Storage KV table and a storage-audience access token.
+    #[serde(rename = "tablestorage")]
+    TableStorage {
+        binding: RemoteTableStorageKvBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAzureClientConfig,
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
@@ -211,7 +262,8 @@ pub struct RemoteAzureSandboxBinding {
     pub region: String,
     /// Resource group the data-plane path is scoped by.
     pub resource_group: String,
-    /// Catalog disk image every sandbox is created from.
+    /// Catalog name or registry image every sandbox is created from. A registry image is
+    /// started from the disk image built from it, found by label in the group.
     pub disk_image: String,
     /// Idle seconds after which a sandbox pauses, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -231,8 +283,8 @@ pub struct RemoteAzureSandboxBinding {
 
 /// Concrete Agent Platform topology returned to remote clients.
 ///
-/// No egress field, unlike the other two clouds: the policy lives on the environment template
-/// named below, so it travels with the template rather than as a flag the client must read.
+/// The egress policy itself lives on the environment template named below; `allow_egress` reports
+/// it so a client can decide without reading the template.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -246,6 +298,11 @@ pub struct RemoteGcpSandboxBinding {
     /// Seconds a sandbox may live, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress, as the template enforces it. Sent only when
+    /// true: released clients reject unknown fields, so a deny binding must stay byte-identical.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "openapi", schema(required = false))]
+    pub allow_egress: bool,
 }
 
 #[derive(Serialize)]
@@ -291,6 +348,65 @@ pub struct RemoteGcpCloudKmsKeyBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteAzureKeyVaultKeyBinding {
     pub key_id: String,
+}
+
+/// Concrete send-only queue topology returned to remote clients.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSqsQueueBinding {
+    pub queue_url: String,
+}
+
+/// Concrete send-only queue topology returned to remote clients.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePubsubQueueBinding {
+    pub topic: String,
+    pub subscription: String,
+}
+
+/// Concrete send-only queue topology returned to remote clients.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServiceBusQueueBinding {
+    pub namespace: String,
+    pub queue_name: String,
+}
+
+/// Concrete DynamoDB KV topology returned to remote clients.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteDynamodbKvBinding {
+    /// DynamoDB table authorized by the credential lease.
+    pub table_name: String,
+    /// AWS region of the table.
+    pub region: String,
+}
+
+/// Concrete Firestore KV topology returned to remote clients.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteFirestoreKvBinding {
+    pub project_id: String,
+    pub database_id: String,
+    /// Firestore collection holding this store's entries.
+    pub collection_name: String,
+}
+
+/// Concrete Azure Table Storage KV topology returned to remote clients.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteTableStorageKvBinding {
+    pub resource_group_name: String,
+    pub account_name: String,
+    /// Table authorized by the credential lease.
+    pub table_name: String,
 }
 
 /// Concrete S3 topology returned to remote clients.
@@ -433,6 +549,18 @@ pub enum RemoteStorageBinding {
     Gcs(RemoteGcsStorageBinding),
 }
 
+enum RemoteQueueBinding {
+    Aws(RemoteSqsQueueBinding),
+    Gcp(RemotePubsubQueueBinding),
+    Azure(RemoteServiceBusQueueBinding),
+}
+
+enum RemoteKvBinding {
+    Aws(RemoteDynamodbKvBinding),
+    Gcp(RemoteFirestoreKvBinding),
+    Azure(RemoteTableStorageKvBinding),
+}
+
 enum RemoteKeyBinding {
     Aws(RemoteAwsKmsKeyBinding),
     Gcp(RemoteGcpCloudKmsKeyBinding),
@@ -453,6 +581,8 @@ enum RemoteSandboxBinding {
 
 enum ResolvedRemoteBinding {
     Storage(RemoteStorageBinding),
+    Kv(RemoteKvBinding),
+    Queue(RemoteQueueBinding),
     Key(RemoteKeyBinding),
     Ai(RemoteAiBinding),
     Sandbox(RemoteSandboxBinding),
@@ -462,6 +592,8 @@ impl ResolvedRemoteBinding {
     fn credential_scope(&self) -> RemoteBindingCredentialScope {
         match self {
             Self::Storage(binding) => binding.credential_scope(),
+            Self::Kv(binding) => binding.credential_scope(),
+            Self::Queue(binding) => binding.credential_scope(),
             Self::Key(binding) => binding.credential_scope(),
             Self::Ai(binding) => binding.credential_scope(),
             Self::Sandbox(binding) => binding.credential_scope(),
@@ -485,6 +617,26 @@ impl RemoteAiBinding {
             Self::Aws(_) => RemoteBindingCredentialScope::AwsAi,
             Self::Gcp(_) => RemoteBindingCredentialScope::GcpAi,
             Self::Azure(_) => RemoteBindingCredentialScope::AzureAi,
+        }
+    }
+}
+
+impl RemoteQueueBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsSqs,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpPubsub,
+            Self::Azure(_) => RemoteBindingCredentialScope::AzureServiceBus,
+        }
+    }
+}
+
+impl RemoteKvBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsDynamodb,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpFirestore,
+            Self::Azure(_) => RemoteBindingCredentialScope::AzureTable,
         }
     }
 }
@@ -645,6 +797,70 @@ impl ResolveBindingResponse {
         }
     }
 
+    fn from_queue_parts(
+        binding: RemoteQueueBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteQueueBinding::Aws(binding), ClientConfig::Aws(client_config)) => Ok(Self::Sqs {
+                binding,
+                client_config: (*client_config).try_into()?,
+                expires_at,
+            }),
+            (RemoteQueueBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => {
+                Ok(Self::Pubsub {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteQueueBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
+                Ok(Self::Servicebus {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote Queue binding and materialized credential platforms do not match",
+            )),
+        }
+    }
+
+    fn from_kv_parts(
+        binding: RemoteKvBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteKvBinding::Aws(binding), ClientConfig::Aws(client_config)) => {
+                Ok(Self::Dynamodb {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteKvBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => {
+                Ok(Self::Firestore {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteKvBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
+                Ok(Self::TableStorage {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote KV binding and materialized credential platforms do not match",
+            )),
+        }
+    }
+
     fn from_key_parts(
         binding: RemoteKeyBinding,
         lease: MaterializedCredentialLease,
@@ -787,13 +1003,37 @@ async fn resolve_binding(
         Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
         Err(error) => return error.into_response(),
     };
+    // Refuse callers with no claim on this deployment before revealing its status or release.
+    if !remote_binding_capability::names_deployment(&subject, &deployment)
+        && !state.authz.can_update_deployment(&subject, &deployment)
+    {
+        return ErrorData::forbidden("Cannot resolve remote bindings for this deployment")
+            .into_response();
+    }
+    // A kind-scoped capability is refused with the same 403 whether the release lacks the
+    // resource or authorization excludes it, so it cannot probe what it may not resolve.
+    let before_authorization = |error: alien_error::AlienError<ErrorData>| -> Response {
+        let client_error = error
+            .http_status_code
+            .is_some_and(|code| (400..500).contains(&code));
+        if client_error && remote_binding_capability::is_kind_scoped(&subject) {
+            tracing::debug!(
+                deployment_id = %deployment.id,
+                reason = %error,
+                "Refusing a kind-scoped remote bindings capability before authorization"
+            );
+            return ErrorData::forbidden("Cannot resolve this remote binding for this deployment")
+                .into_response();
+        }
+        error.into_response()
+    };
     let resource_id = match (&request.resource_id, &request.kind) {
         (Some(resource_id), None) => resource_id.clone(),
         (None, Some(ResolveBindingKind::Ai)) => {
             match unique_current_release_remote_ai(state.release_store.as_ref(), &deployment).await
             {
                 Ok(resource_id) => resource_id,
-                Err(error) => return error.into_response(),
+                Err(error) => return before_authorization(error),
             }
         }
         _ => {
@@ -803,11 +1043,22 @@ async fn resolve_binding(
             .into_response()
         }
     };
+
+    // The kind comes from the release current at use, so authorization sees a
+    // sandbox even when the release gained it after the caller's token was issued.
+    let (release, binding_kind) =
+        match current_release_binding_kind(state.release_store.as_ref(), &deployment, &resource_id)
+            .await
+        {
+            Ok(found) => found,
+            Err(error) => return before_authorization(error),
+        };
+
     if !state
         .authz
-        .can_resolve_remote_bindings(&subject, &deployment)
+        .can_resolve_remote_binding(&subject, &deployment, binding_kind, &resource_id)
     {
-        return ErrorData::forbidden("Cannot resolve remote bindings for this deployment")
+        return ErrorData::forbidden("Cannot resolve this remote binding for this deployment")
             .into_response();
     }
 
@@ -820,16 +1071,23 @@ async fn resolve_binding(
         .into_response();
     }
 
-    let binding_kind = match require_current_release_remote_access(
-        state.release_store.as_ref(),
-        &deployment,
-        &resource_id,
-    )
-    .await
-    {
-        Ok(kind) => kind,
-        Err(error) => return error.into_response(),
-    };
+    if let Err(error) = require_current_release_remote_access(&release, &deployment, &resource_id) {
+        return error.into_response();
+    }
+
+    if binding_kind != alien_core::remote_bindings::RemoteBindingKind::Sandbox {
+        match sandbox_may_share_the_identity(state.release_store.as_ref(), &deployment).await {
+            Ok(false) => {}
+            Ok(true) => {
+                return ErrorData::bad_request(format!(
+                    "Deployment '{}' has a remote sandbox in its desired release or stack state, so its Remote Bindings identity may carry the sandbox's grants; '{resource_id}' cannot be resolved while it does",
+                    deployment.id
+                ))
+                .into_response()
+            }
+            Err(error) => return error.into_response(),
+        }
+    }
 
     if let Err(error) = require_setup_owned_remote_binding(&deployment, &resource_id) {
         return error.into_response();
@@ -838,6 +1096,12 @@ async fn resolve_binding(
     let binding = match binding_kind {
         alien_core::remote_bindings::RemoteBindingKind::Storage => {
             remote_storage_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Storage)
+        }
+        alien_core::remote_bindings::RemoteBindingKind::Queue => {
+            remote_queue_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Queue)
+        }
+        alien_core::remote_bindings::RemoteBindingKind::Kv => {
+            remote_kv_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Kv)
         }
         alien_core::remote_bindings::RemoteBindingKind::Key => {
             remote_key_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Key)
@@ -884,6 +1148,12 @@ async fn resolve_binding(
     let response = match binding {
         ResolvedRemoteBinding::Storage(binding) => {
             ResolveBindingResponse::from_parts(binding, lease, expires_at.clone())
+        }
+        ResolvedRemoteBinding::Queue(binding) => {
+            ResolveBindingResponse::from_queue_parts(binding, lease, expires_at.clone())
+        }
+        ResolvedRemoteBinding::Kv(binding) => {
+            ResolveBindingResponse::from_kv_parts(binding, lease, expires_at.clone())
         }
         ResolvedRemoteBinding::Key(binding) => {
             ResolveBindingResponse::from_key_parts(binding, lease, expires_at.clone())
@@ -1001,6 +1271,7 @@ fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) ->
             | DeploymentStatus::InitialSetupFailed
             | DeploymentStatus::Provisioning
             | DeploymentStatus::WaitingForMachines
+            | DeploymentStatus::WaitingForSecrets
             | DeploymentStatus::ProvisioningFailed
             | DeploymentStatus::DeletePending
             | DeploymentStatus::Deleting
@@ -1012,6 +1283,20 @@ fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) ->
         )
         | None => false,
     }
+}
+
+/// The AWS controller keeps publishing the previous image version while a roll builds and after
+/// one fails, so that binding stays servable. Azure publishes only the current binding; GCP keeps
+/// its old template but rolls under Provisioning/ProvisionFailed, so both still need `Running`.
+fn sandbox_status_allows_remote_bindings(platform: Platform, status: ResourceStatus) -> bool {
+    matches!(
+        (platform, status),
+        (_, ResourceStatus::Running)
+            | (
+                Platform::Aws,
+                ResourceStatus::Updating | ResourceStatus::UpdateFailed
+            )
+    )
 }
 
 fn remote_binding_expiry(
@@ -1030,18 +1315,18 @@ fn remote_binding_expiry(
     Ok(expires_at)
 }
 
-/// Require remote access in the user-authored current release before trusting
-/// controller-published binding parameters in stack state.
-///
-/// Stack state can outlive a release update or come from an older manager that
-/// did not clear `remote_binding_params`. The current release is therefore the
-/// authoritative opt-in source. In particular, desired/prepared release data
-/// must not grant access while an update is still in progress.
-async fn require_current_release_remote_access(
+/// Load the deployment's current release and the binding kind it declares for `resource_id`.
+async fn current_release_binding_kind(
     release_store: &dyn ReleaseStore,
     deployment: &DeploymentRecord,
     resource_id: &str,
-) -> Result<alien_core::remote_bindings::RemoteBindingKind, alien_error::AlienError<ErrorData>> {
+) -> Result<
+    (
+        ReleaseRecord,
+        alien_core::remote_bindings::RemoteBindingKind,
+    ),
+    alien_error::AlienError<ErrorData>,
+> {
     let release_id = deployment.current_release_id.as_deref().ok_or_else(|| {
         ErrorData::bad_request(
             "Deployment has no current release; remote bindings cannot be resolved",
@@ -1055,16 +1340,37 @@ async fn require_current_release_remote_access(
         "remote binding resolution",
     )
     .await?;
-    let (stack, resource) =
-        current_release_resource(&release, deployment, release_id, resource_id)?;
-
-    let definition =
+    let (_, resource) = current_release_resource(&release, deployment, release_id, resource_id)?;
+    let kind =
         alien_core::remote_bindings::remote_binding_definition(&resource.config.resource_type())
             .ok_or_else(|| {
                 ErrorData::bad_request(format!(
                     "Resource '{resource_id}' does not support Remote Bindings"
                 ))
-            })?;
+            })?
+            .kind;
+    Ok((release, kind))
+}
+
+/// Require remote access in the user-authored current release before trusting
+/// controller-published binding parameters in stack state.
+///
+/// Stack state can outlive a release update or come from an older manager that
+/// did not clear `remote_binding_params`. The current release is therefore the
+/// authoritative opt-in source. In particular, desired/prepared release data
+/// must not grant access while an update is still in progress.
+fn require_current_release_remote_access(
+    release: &ReleaseRecord,
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<(), alien_error::AlienError<ErrorData>> {
+    let (stack, resource) =
+        current_release_resource(release, deployment, &release.id, resource_id)?;
+    let is_key =
+        alien_core::remote_bindings::remote_binding_definition(&resource.config.resource_type())
+            .is_some_and(|definition| {
+                definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
+            });
     if !resource.remote_access {
         return Err(ErrorData::bad_request(format!(
             "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
@@ -1077,7 +1383,7 @@ async fn require_current_release_remote_access(
             resource.lifecycle
         )));
     }
-    if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
+    if is_key
         && stack
             .resources
             .values()
@@ -1089,8 +1395,89 @@ async fn require_current_release_remote_access(
             "A remotely published Key must be the deployment's only remoteAccess resource",
         ));
     }
+    // Every resolve hands out the deployment's one shared Remote Bindings identity, so a data
+    // resolve on a release that also publishes a sandbox would carry the sandbox's grants.
+    let remote_entries = stack.resources.values().filter(|entry| entry.remote_access);
+    let publishes_sandbox = remote_entries
+        .clone()
+        .any(|entry| is_sandbox_binding(&entry.config.resource_type()));
+    if publishes_sandbox && remote_entries.count() != 1 {
+        return Err(ErrorData::bad_request(
+            "A remotely published Sandbox must be the deployment's only remoteAccess resource",
+        ));
+    }
 
-    Ok(definition.kind)
+    Ok(())
+}
+
+fn is_sandbox_binding(resource_type: &alien_core::ResourceType) -> bool {
+    alien_core::remote_bindings::remote_binding_definition(resource_type)
+        .is_some_and(|d| d.kind == alien_core::remote_bindings::RemoteBindingKind::Sandbox)
+}
+
+/// Setup grants follow the desired release and stack state before the current release moves, so a
+/// sandbox either of them publishes can already sit on the shared identity a data resolve returns.
+async fn sandbox_may_share_the_identity(
+    release_store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+) -> Result<bool, alien_error::AlienError<ErrorData>> {
+    if deployment.stack_state.as_ref().is_some_and(|state| {
+        state.resources.values().any(|resource| {
+            resource.remote_binding_params.is_some()
+                && is_sandbox_binding(&alien_core::ResourceType::from(
+                    resource.resource_type.clone(),
+                ))
+        })
+    }) {
+        return Ok(true);
+    }
+    let Some(desired_id) = deployment.desired_release_id.as_deref() else {
+        return Ok(false);
+    };
+    if deployment.current_release_id.as_deref() == Some(desired_id) {
+        return Ok(false);
+    }
+    // An unreadable desired release refuses the binding (it may add a sandbox to the identity),
+    // but as a retryable 503 the caller can see: a failed update leaves the deployment here until
+    // the next one. The store error is logged rather than chained so its details stay server-side.
+    let unavailable = |reason: &str| {
+        AlienError::new(ErrorData::RemoteBindingDesiredReleaseUnavailable {
+            deployment_id: deployment.id.clone(),
+            release_id: desired_id.to_string(),
+            reason: reason.to_string(),
+        })
+    };
+    let desired = match release_store
+        .get_release(&crate::auth::Subject::system(), desired_id)
+        .await
+    {
+        Ok(Some(release)) => release,
+        Ok(None) => {
+            tracing::warn!(
+                deployment_id = %deployment.id,
+                release_id = %desired_id,
+                "Desired release not found while resolving a remote binding"
+            );
+            return Err(unavailable("the release was not found"));
+        }
+        Err(error) => {
+            tracing::warn!(
+                deployment_id = %deployment.id,
+                release_id = %desired_id,
+                error = %error,
+                "Failed to load desired release while resolving a remote binding"
+            );
+            return Err(unavailable("the release store request failed"));
+        }
+    };
+    Ok(desired
+        .stacks
+        .get(&deployment.platform)
+        .is_some_and(|stack| {
+            stack.resources.values().any(|entry| {
+                entry.remote_access && is_sandbox_binding(&entry.config.resource_type())
+            })
+        }))
 }
 
 fn remote_storage_binding(
@@ -1165,6 +1552,165 @@ fn remote_storage_binding(
         }
         _ => Err(ErrorData::bad_request(format!(
             "Storage resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
+}
+
+fn remote_queue_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteQueueBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote Queue is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Queue::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not a queue"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: QueueBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("Queue resource '{resource_id}' has an invalid remote binding"),
+            })?;
+    match (deployment.platform, binding) {
+        (Platform::Aws, QueueBinding::Sqs(binding)) => {
+            Ok(RemoteQueueBinding::Aws(RemoteSqsQueueBinding {
+                queue_url: concrete_binding_value(&binding.queue_url, "Queue queue_url")?,
+            }))
+        }
+        (Platform::Gcp, QueueBinding::Pubsub(binding)) => {
+            Ok(RemoteQueueBinding::Gcp(RemotePubsubQueueBinding {
+                topic: concrete_binding_value(&binding.topic, "Queue topic")?,
+                subscription: concrete_binding_value(&binding.subscription, "Queue subscription")?,
+            }))
+        }
+        (Platform::Azure, QueueBinding::Servicebus(binding)) => {
+            Ok(RemoteQueueBinding::Azure(RemoteServiceBusQueueBinding {
+                namespace: concrete_binding_value(&binding.namespace, "Queue namespace")?,
+                queue_name: concrete_binding_value(&binding.queue_name, "Queue queue_name")?,
+            }))
+        }
+        _ => Err(ErrorData::bad_request(format!(
+            "Queue resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
+}
+
+fn remote_kv_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteKvBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote KV is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Kv::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not a KV store"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "KV resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "KV resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "KV resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: KvBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("KV resource '{resource_id}' has an invalid remote binding"),
+            })?;
+    match (deployment.platform, binding) {
+        (Platform::Aws, KvBinding::Dynamodb(binding)) => {
+            Ok(RemoteKvBinding::Aws(RemoteDynamodbKvBinding {
+                table_name: concrete_binding_value(&binding.table_name, "DynamoDB tableName")?,
+                region: concrete_binding_value(&binding.region, "DynamoDB region")?,
+            }))
+        }
+        (Platform::Gcp, KvBinding::Firestore(binding)) => {
+            Ok(RemoteKvBinding::Gcp(RemoteFirestoreKvBinding {
+                project_id: concrete_binding_value(&binding.project_id, "Firestore projectId")?,
+                database_id: concrete_binding_value(&binding.database_id, "Firestore databaseId")?,
+                collection_name: concrete_binding_value(
+                    &binding.collection_name,
+                    "Firestore collectionName",
+                )?,
+            }))
+        }
+        (Platform::Azure, KvBinding::TableStorage(binding)) => {
+            Ok(RemoteKvBinding::Azure(RemoteTableStorageKvBinding {
+                resource_group_name: concrete_binding_value(
+                    &binding.resource_group_name,
+                    "Azure Table Storage resourceGroupName",
+                )?,
+                account_name: concrete_binding_value(
+                    &binding.account_name,
+                    "Azure Table Storage accountName",
+                )?,
+                table_name: concrete_binding_value(
+                    &binding.table_name,
+                    "Azure Table Storage tableName",
+                )?,
+            }))
+        }
+        _ => Err(ErrorData::bad_request(format!(
+            "KV resource '{resource_id}' binding does not match deployment platform '{}'",
             deployment.platform
         ))),
     }
@@ -1355,7 +1901,7 @@ fn remote_sandbox_binding(
     }
     // Frozen or Live: a Frozen sandbox's binding was registered by the setup stack, a Live
     // one's is published by the runtime controller once its image build reaches ACTIVE. Both
-    // arrive through `remote_binding_params`, so the Running check below is the real gate.
+    // arrive through `remote_binding_params`, so the status check below is the real gate.
     if !matches!(
         resource.lifecycle,
         Some(ResourceLifecycle::Frozen | ResourceLifecycle::Live)
@@ -1364,7 +1910,7 @@ fn remote_sandbox_binding(
             "Sandbox resource '{resource_id}' has no lifecycle in the deployment's stack state"
         )));
     }
-    if resource.status != ResourceStatus::Running {
+    if !sandbox_status_allows_remote_bindings(deployment.platform, resource.status) {
         return Err(ErrorData::bad_request(format!(
             "Sandbox resource '{resource_id}' is not running"
         )));
@@ -1451,14 +1997,14 @@ fn remote_sandbox_binding(
             }))
         }
         (Platform::Gcp, SandboxBinding::GcpAgentPlatform(binding)) => {
-            // No egress check here, unlike the two arms above: the binding carries no policy to
-            // re-check, because Agent Platform holds it on the environment template and
-            // `sandbox/remote-execute` grants no template verb to create or replace one.
+            // No egress check here, unlike the two arms above: the template enforces deny, and
+            // `sandbox/remote-execute` grants no template verb, so a remote lease cannot bypass it.
             Ok(RemoteSandboxBinding::Gcp(RemoteGcpSandboxBinding {
                 engine: concrete_binding_value(&binding.engine, "GCP sandbox engine")?,
                 template: concrete_binding_value(&binding.template, "GCP sandbox template")?,
                 region: concrete_binding_value(&binding.region, "GCP sandbox region")?,
                 max_lifetime_seconds: binding.max_lifetime_seconds,
+                allow_egress: binding.allow_egress,
             }))
         }
         _ => Err(ErrorData::bad_request(format!(

@@ -9,6 +9,7 @@ pub mod error;
 pub mod execution_context;
 pub mod git_utils;
 pub mod interaction;
+pub mod manager_profile;
 pub mod output;
 #[cfg(feature = "platform")]
 pub mod platform_deployment_resolver;
@@ -37,14 +38,15 @@ use crate::commands::{
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
-    ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
-    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task, vault_task,
-    whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs,
-    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs,
-    ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
+    destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
+    ensure_server_running_with_env, fetch_all_dev_deployment_live_states, init_task,
+    local_operations_task, logs_task, onboard_task, operations_task,
+    prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
+    upgrade_task, validate_deploy_config, vault_remote_task, vault_task, whoami_task,
+    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
+    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
+    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -56,6 +58,7 @@ use crate::ui::{
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::AlienManager;
+use alien_manager_api::{Client as AlienManagerClient, SdkResultExt as _};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::env;
 use std::io::IsTerminal;
@@ -77,11 +80,11 @@ pub struct Cli {
     #[arg(long, env = "ALIEN_PROJECT", global = true)]
     pub project: Option<String>,
 
-    /// Platform base URL (defaults to https://api.alien.dev)
-    #[arg(long, env = "ALIEN_BASE_URL", global = true)]
+    /// alien.dev API URL (defaults to https://api.alien.dev)
+    #[arg(long, env = "ALIEN_BASE_URL", global = true, hide = true)]
     pub base_url: Option<String>,
 
-    /// Platform API key
+    /// API key (for alien.dev, or with ALIEN_MANAGER_URL for a manager you run)
     #[arg(long, env = "ALIEN_API_KEY", hide_env_values = true, global = true)]
     pub api_key: Option<String>,
 
@@ -89,7 +92,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_browser: bool,
 
-    /// Workspace name
+    /// alien.dev workspace
     #[arg(long, env = "ALIEN_WORKSPACE", global = true)]
     pub workspace: Option<String>,
 }
@@ -185,12 +188,14 @@ pub enum Commands {
     Destroy(DestroyArgs),
     /// Manage vault secrets for a deployment
     Vault(commands::VaultRemoteArgs),
-    /// Invoke remote commands on deployments
+    /// Create and revoke scoped tokens on your manager
+    Tokens(commands::TokensArgs),
+    // No doc comment: it would replace the long help defined on `CommandsArgs`.
     #[command(alias = "command")]
     Commands(CommandsArgs),
     /// Run a local command against a deployment using manager-side credentials
     Debug(DebugArgs),
-    /// Start a standalone alien-manager server
+    /// Run a manager on this machine
     Serve(ServeArgs),
     /// Local development commands
     Dev(DevCommand),
@@ -209,9 +214,7 @@ pub enum Commands {
     #[command(alias = "manager")]
     Managers(ManagersArgs),
 
-    /// Build, test, and manage operations plugins (init, check, test,
-    /// permissions, publish, list). `init`/`check`/`test` work fully
-    /// offline; the rest need a linked platform workspace.
+    // No doc comment: it would replace the long help defined on `OperationsArgs`.
     #[command(alias = "operation")]
     Operations(OperationsArgs),
 
@@ -249,7 +252,7 @@ pub struct ServeArgs {
     #[arg(long, short = 'c')]
     pub config: Option<PathBuf>,
 
-    /// Generate a template alien-manager.toml and exit.
+    /// Write a commented alien-manager.toml to the current directory (or --config) and exit.
     #[arg(long)]
     pub init: bool,
 
@@ -280,7 +283,7 @@ pub struct DevCommand {
     #[arg(long)]
     pub status_file: Option<PathBuf>,
 
-    /// Deployment name for the initial deployment
+    /// Deployment name, or an existing ID / group/name to migrate legacy local state
     #[arg(long, default_value = "default")]
     pub deployment_name: String,
 
@@ -291,6 +294,14 @@ pub struct DevCommand {
     /// Secret environment variables (KEY=VALUE or KEY=VALUE:target1,target2)
     #[arg(long = "secret")]
     pub secret_vars: Vec<String>,
+
+    /// Secret environment variables read from files (KEY=PATH or KEY=PATH:target1,target2)
+    #[arg(long = "secret-file")]
+    pub secret_files: Vec<String>,
+
+    /// Secret environment variables inherited from the CLI environment (KEY=SOURCE_ENV or KEY=SOURCE_ENV:target1,target2)
+    #[arg(long = "secret-env")]
+    pub secret_env_vars: Vec<String>,
 
     #[command(subcommand)]
     pub subcommand: Option<DevSubcommand>,
@@ -400,6 +411,15 @@ pub(crate) fn parse_env_and_secret_vars(
     env_vars: &[String],
     secret_vars: &[String],
 ) -> Result<Vec<CliEnvVar>> {
+    parse_dev_env_and_secret_vars(env_vars, secret_vars, &[], &[])
+}
+
+fn parse_dev_env_and_secret_vars(
+    env_vars: &[String],
+    secret_vars: &[String],
+    secret_files: &[String],
+    secret_env_vars: &[String],
+) -> Result<Vec<CliEnvVar>> {
     let mut parsed = Vec::new();
     for env in env_vars {
         parsed.push(parse_single_env_var(env, false)?);
@@ -407,7 +427,106 @@ pub(crate) fn parse_env_and_secret_vars(
     for secret in secret_vars {
         parsed.push(parse_single_env_var(secret, true)?);
     }
+    for secret_file in secret_files {
+        parsed.push(parse_secret_file(secret_file)?);
+    }
+    for secret_env_var in secret_env_vars {
+        parsed.push(parse_secret_env_var(secret_env_var)?);
+    }
     Ok(parsed)
+}
+
+fn parse_secret_source(input: &str, flag: &str) -> Result<(String, String, Option<Vec<String>>)> {
+    let (name, source_with_targets) = input.split_once('=').ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Invalid {flag} format. Expected KEY=SOURCE or KEY=SOURCE:target1,target2"
+            ),
+        })
+    })?;
+
+    if name.is_empty() || source_with_targets.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Invalid {flag} entry for '{name}': key and source must not be empty"),
+        }));
+    }
+
+    let (source, targets) = match source_with_targets.rsplit_once(':') {
+        Some((source, targets))
+            if !targets.is_empty() && !targets.starts_with('/') && !targets.starts_with('\\') =>
+        {
+            let targets = targets
+                .split(',')
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if targets.is_empty() {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("Invalid {flag} targets for '{name}'"),
+                }));
+            }
+            (source, Some(targets))
+        }
+        _ => (source_with_targets, None),
+    };
+
+    if source.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Invalid {flag} entry for '{name}': key and source must not be empty"),
+        }));
+    }
+
+    Ok((name.to_string(), source.to_string(), targets))
+}
+
+fn parse_secret_file(input: &str) -> Result<CliEnvVar> {
+    let (name, path, target_resources) = parse_secret_source(input, "--secret-file")?;
+    let mut value = std::fs::read_to_string(&path).into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read secret file".to_string(),
+            file_path: path,
+            reason: format!("could not load value for '{name}'"),
+        },
+    )?;
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+
+    Ok(CliEnvVar {
+        name,
+        value,
+        is_secret: true,
+        target_resources,
+    })
+}
+
+fn parse_secret_env_var(input: &str) -> Result<CliEnvVar> {
+    parse_secret_env_var_with(input, |source| std::env::var(source))
+}
+
+fn parse_secret_env_var_with(
+    input: &str,
+    read_env: impl FnOnce(&str) -> std::result::Result<String, std::env::VarError>,
+) -> Result<CliEnvVar> {
+    let (name, source_env, target_resources) = parse_secret_source(input, "--secret-env")?;
+    let value = read_env(&source_env).map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Could not load value for '{name}' from environment variable '{source_env}'"
+            ),
+        })
+    })?;
+
+    Ok(CliEnvVar {
+        name,
+        value,
+        is_secret: true,
+        target_resources,
+    })
 }
 
 pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
@@ -439,10 +558,11 @@ pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEn
 
             if targets.is_empty() {
                 return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: format!(
-                        "Invalid {} format: '{input}'. Targets list is empty after ':'.",
-                        if is_secret { "--secret" } else { "--env" }
-                    ),
+                    message: if is_secret {
+                        format!("Invalid --secret targets for '{name}'")
+                    } else {
+                        format!("Invalid --env format: '{input}'. Targets list is empty after ':'.")
+                    },
                 }));
             }
 
@@ -486,6 +606,53 @@ pub(crate) fn cli_env_vars_to_core(
     )
 }
 
+#[cfg(feature = "platform")]
+/// `alien login --manager`: check the key against the manager, then save it.
+async fn login_to_manager(url: &str, token: Option<String>) -> Result<()> {
+    let url = url.trim_end_matches('/').to_string();
+    let token = match token {
+        Some(token) => token,
+        None if output::can_prompt() => output::prompt_text("API key", None)?,
+        None => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "token".to_string(),
+                message: "Pass --token (or set ALIEN_API_KEY) when not running in a terminal."
+                    .to_string(),
+            }))
+        }
+    };
+    let response = reqwest::Client::new()
+        .get(format!("{url}/v1/whoami"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Could not reach the manager at {url}"),
+            url: Some(url.clone()),
+        })?;
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "The manager at {url} rejected the API key ({})",
+                response.status()
+            ),
+            url: Some(url.clone()),
+        }));
+    }
+    manager_profile::save(&manager_profile::ManagerProfile {
+        url: url.clone(),
+        api_key: token,
+    })?;
+    println!("{}", ui::success_line(&format!("Connected to {url}.")));
+    println!(
+        "{} {}",
+        ui::dim_label("Next"),
+        ui::command("alien release   then   alien onboard <customer>")
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,7 +666,10 @@ mod tests {
 
     #[test]
     fn non_blank_trims_non_blank_values() {
-        assert_eq!(non_blank("  my-project  ".to_string()), Some("my-project".to_string()));
+        assert_eq!(
+            non_blank("  my-project  ".to_string()),
+            Some("my-project".to_string())
+        );
     }
 
     #[test]
@@ -536,6 +706,115 @@ mod tests {
     }
 
     #[test]
+    fn secret_file_reads_value_without_putting_it_in_the_argument() {
+        let secret = "file-secret-that-must-not-appear-in-argv";
+        let path = std::env::temp_dir().join(format!(
+            "alien-secret-file-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, format!("{secret}\n")).expect("secret fixture should be writable");
+
+        let argument = format!("API_TOKEN={}:api,worker", path.display());
+        assert!(!argument.contains(secret));
+        let parsed = parse_secret_file(&argument).expect("secret file should be accepted");
+
+        assert_eq!(parsed.name, "API_TOKEN");
+        assert_eq!(parsed.value, secret);
+        assert!(parsed.is_secret);
+        assert!(!format!("{parsed:?}").contains(secret));
+        assert_eq!(
+            parsed.target_resources,
+            Some(vec!["api".to_string(), "worker".to_string()])
+        );
+        std::fs::remove_file(path).expect("secret fixture should be removable");
+    }
+
+    #[test]
+    fn secret_env_reads_inherited_value_and_preserves_targets() {
+        let secret = "inherited-secret-that-must-not-appear-in-argv";
+        let argument = "API_TOKEN=ALIEN_TEST_API_TOKEN:worker";
+        assert!(!argument.contains(secret));
+
+        let parsed = parse_secret_env_var_with(argument, |source| {
+            assert_eq!(source, "ALIEN_TEST_API_TOKEN");
+            Ok(secret.to_string())
+        })
+        .expect("inherited secret should be accepted");
+
+        assert_eq!(parsed.name, "API_TOKEN");
+        assert_eq!(parsed.value, secret);
+        assert!(parsed.is_secret);
+        assert!(!format!("{parsed:?}").contains(secret));
+        assert_eq!(parsed.target_resources, Some(vec!["worker".to_string()]));
+    }
+
+    #[test]
+    fn secret_source_errors_never_include_loaded_values() {
+        let secret = "secret-that-errors-must-not-render";
+        let error =
+            parse_secret_env_var_with("API_TOKEN=MISSING", |_| Err(std::env::VarError::NotPresent))
+                .expect_err("missing inherited variable should fail");
+
+        assert!(!error.to_string().contains(secret));
+        assert!(error.to_string().contains("API_TOKEN"));
+        assert!(error.to_string().contains("MISSING"));
+    }
+
+    #[test]
+    fn secret_sources_accept_numeric_resource_ids() {
+        let (name, source, targets) =
+            parse_secret_source("API_TOKEN=/run/secrets/token:1234", "--secret-file")
+                .expect("numeric resource ID should be accepted");
+
+        assert_eq!(name, "API_TOKEN");
+        assert_eq!(source, "/run/secrets/token");
+        assert_eq!(targets, Some(vec!["1234".to_string()]));
+    }
+
+    #[test]
+    fn secret_sources_reject_empty_source_before_lookup() {
+        let error = parse_secret_source("API_TOKEN=:api", "--secret-file")
+            .expect_err("empty source should fail validation");
+
+        assert!(error
+            .to_string()
+            .contains("key and source must not be empty"));
+    }
+
+    #[test]
+    fn dev_cli_accepts_non_argument_secret_sources() {
+        let matches = Cli::command()
+            .try_get_matches_from([
+                "alien",
+                "dev",
+                "--secret-file",
+                "FILE_TOKEN=/run/secrets/token:api",
+                "--secret-env",
+                "ENV_TOKEN=SOURCE_TOKEN:worker",
+            ])
+            .expect("secure secret source flags should parse");
+        let (_, dev_matches) = matches.subcommand().expect("dev subcommand should exist");
+
+        assert_eq!(
+            dev_matches
+                .get_many::<String>("secret_files")
+                .expect("secret file should be captured")
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["FILE_TOKEN=/run/secrets/token:api"]
+        );
+        assert_eq!(
+            dev_matches
+                .get_many::<String>("secret_env_vars")
+                .expect("secret env should be captured")
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["ENV_TOKEN=SOURCE_TOKEN:worker"]
+        );
+    }
+
+    #[test]
     fn cli_env_vars_to_core_maps_secret_and_targets() {
         let vars = vec![
             CliEnvVar {
@@ -557,6 +836,60 @@ mod tests {
         assert_eq!(converted[0].var_type, EnvironmentVariableType::Plain);
         assert_eq!(converted[1].var_type, EnvironmentVariableType::Secret);
         assert_eq!(converted[1].target_resources, Some(vec!["api".to_string()]));
+    }
+
+    /// `--deployment` may follow the subcommand, as the vault commands' own examples write it.
+    #[test]
+    fn vault_deployment_flag_parses_after_the_subcommand() {
+        let cli = Cli::try_parse_from([
+            "alien",
+            "vault",
+            "set",
+            "--deployment",
+            "my-deployment",
+            "customer-secrets",
+            "GITHUB_TOKEN",
+            "value",
+        ])
+        .expect("remote vault parses");
+        let Some(Commands::Vault(args)) = cli.command else {
+            panic!("expected the vault command");
+        };
+        assert_eq!(
+            args.deployment().expect("deployment given"),
+            "my-deployment"
+        );
+
+        // clap can't require a global flag, so a missing one is reported by the args.
+        let cli = Cli::try_parse_from(["alien", "vault", "list", "customer-secrets"])
+            .expect("parses without --deployment");
+        let Some(Commands::Vault(args)) = cli.command else {
+            panic!("expected the vault command");
+        };
+        let error = args.deployment().expect_err("--deployment is required");
+        assert!(
+            error.message.contains("--deployment is required"),
+            "{error:?}"
+        );
+
+        let cli = Cli::try_parse_from([
+            "alien",
+            "dev",
+            "vault",
+            "list",
+            "--deployment",
+            "my-deployment",
+            "customer-secrets",
+        ])
+        .expect("dev vault parses");
+        let Some(Commands::Dev(DevCommand {
+            subcommand: Some(DevSubcommand::Vault(args)),
+            ..
+        })) = cli.command
+        else {
+            panic!("expected the dev vault command");
+        };
+        assert_eq!(args.deployment, "my-deployment");
     }
 
     #[test]
@@ -640,7 +973,26 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
 
     // Handle --init: generate template and exit
     if args.init {
-        print!("{}", ManagerTomlConfig::generate_template());
+        let path = args
+            .config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("alien-manager.toml"));
+        if path.exists() {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!("{} already exists; not overwriting it", path.display()),
+            }));
+        }
+        std::fs::write(&path, ManagerTomlConfig::generate_template())
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to write {}", path.display()),
+            })?;
+        println!("{}", success_line(&format!("Wrote {}.", path.display())));
+        println!(
+            "{} {}",
+            dim_label("Next"),
+            command(&format!("alien serve --config {}", path.display()))
+        );
         return Ok(());
     }
 
@@ -670,7 +1022,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let state_dir = config
         .state_dir
         .as_ref()
-        .expect("state_dir is required for standalone mode");
+        .expect("the manager config always resolves a state directory");
     std::fs::create_dir_all(state_dir)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -682,88 +1034,43 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     let db_path = config
         .db_path
         .as_ref()
-        .expect("db_path is required for standalone mode");
+        .expect("the manager config always resolves a database path");
 
     // Create SQLite database and token store first (needed for token bootstrap)
     let db = std::sync::Arc::new(
-        alien_manager::stores::sqlite::SqliteDatabase::new(&db_path.to_string_lossy())
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to initialize database".to_string(),
-            })?,
+        alien_manager::stores::sqlite::SqliteDatabase::new_with_key(
+            &db_path.to_string_lossy(),
+            toml_config.database.encryption_key.as_deref(),
+        )
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to initialize database".to_string(),
+        })?,
     );
     let token_store: std::sync::Arc<dyn alien_manager::traits::TokenStore> =
         std::sync::Arc::new(alien_manager::stores::sqlite::SqliteTokenStore::new(db));
 
-    // Bootstrap admin token — DB is the source of truth.
-    // The plaintext token is only shown on first generation (like AWS/Stripe API keys).
-    let legacy_token_path = state_dir.join("admin-token");
-    let existing_tokens =
-        token_store
-            .list_tokens()
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to list tokens".to_string(),
-            })?;
-    let existing_admin = existing_tokens
-        .iter()
-        .find(|t| t.token_type == TokenType::Admin);
-
-    let generated_token = if existing_admin.is_some() {
-        // Existing admin token in DB — migrate away from legacy plaintext file
-        if legacy_token_path.exists() {
-            let _ = std::fs::remove_file(&legacy_token_path);
-        }
-        None
-    } else if legacy_token_path.exists() {
-        // Legacy migration: read plaintext file, hash into DB, delete file
-        let raw = std::fs::read_to_string(&legacy_token_path)
-            .into_alien_error()
-            .context(ErrorData::FileOperationFailed {
-                operation: "read".to_string(),
-                file_path: legacy_token_path.display().to_string(),
-                reason: "Failed to read legacy admin token".to_string(),
-            })?;
-        let raw = raw.trim().to_string();
-        let key_hash = hash_token(&raw);
-        let key_prefix = raw[..12.min(raw.len())].to_string();
-        token_store
-            .create_token(alien_manager::traits::CreateTokenParams {
-                token_type: TokenType::Admin,
-                key_prefix,
-                key_hash,
-                deployment_group_id: None,
-                deployment_id: None,
-            })
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to migrate admin token".to_string(),
-            })?;
-        let _ = std::fs::remove_file(&legacy_token_path);
-        // Show the token one last time during migration
-        Some(raw)
-    } else {
-        // First run: generate new token, hash into DB, show once
-        let raw = format!(
-            "ax_admin_{}",
-            uuid::Uuid::new_v4().to_string().replace('-', "")
-        );
-        let key_hash = hash_token(&raw);
-        let key_prefix = raw[..12.min(raw.len())].to_string();
-        token_store
-            .create_token(alien_manager::traits::CreateTokenParams {
-                token_type: TokenType::Admin,
-                key_prefix,
-                key_hash,
-                deployment_group_id: None,
-                deployment_id: None,
-            })
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to bootstrap admin token".to_string(),
-            })?;
-        Some(raw)
+    let generated_token = match alien_manager::bootstrap::ensure_admin_token(
+        token_store.as_ref(),
+        state_dir,
+        env::var(alien_manager::bootstrap::ADMIN_TOKEN_ENV).ok(),
+    )
+    .await
+    .context(ErrorData::ServerStartFailed {
+        reason: "Failed to set up the admin token".to_string(),
+    })? {
+        alien_manager::bootstrap::AdminToken::Generated(token) => Some(token),
+        _ => None,
     };
+    config.response_signing_key = alien_manager::bootstrap::response_signing_key(state_dir)
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to set up the response signing key".to_string(),
+        })?;
+    let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(state_dir).context(
+        ErrorData::ServerStartFailed {
+            reason: "Failed to set up the bundle signing key".to_string(),
+        },
+    )?;
 
     // Re-read the admin token record for the prefix (used in subsequent-run display)
     let admin_prefix = if generated_token.is_none() {
@@ -779,6 +1086,12 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Build the server
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
+        .tunnels()
+        .charts(alien_manager::routes::charts::ChartSettings::new(
+            toml_config.operator.image.clone(),
+            toml_config.operator.insecure_registry,
+        ))
+        .bundle_signing_key(bundle_signing_key)
         .with_standalone_defaults(&toml_config)
         .await
         .context(ErrorData::ServerStartFailed {
@@ -830,25 +1143,18 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     }
 
     println!();
-    if let Some(ref token) = generated_token {
-        println!(
-            "  {}",
-            dim_label(&format!("export ALIEN_MANAGER_URL={manager_url}"))
-        );
-        println!("  {}", dim_label(&format!("export ALIEN_API_KEY={token}")));
-    } else {
-        println!(
-            "  {}",
-            dim_label(&format!("export ALIEN_MANAGER_URL={manager_url}"))
-        );
-    }
-
-    println!();
+    let token_hint = generated_token
+        .clone()
+        .unwrap_or_else(|| "<admin-token>".to_string());
+    println!("  {}", dim_label("Connect the CLI (in another terminal):"));
     println!(
-        "  {} {}",
-        dim_label("Next"),
-        command("alien release --platform aws")
+        "  {}",
+        command(&format!(
+            "alien login --manager {manager_url} --token {token_hint}"
+        ))
     );
+    println!();
+    println!("  {} {}", dim_label("Next"), command("alien release"));
     println!("        {}", command("alien onboard <customer-name>"));
     println!();
 
@@ -857,13 +1163,6 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
 
     // Watch deployments until Ctrl+C or server exit
     watch_serve_deployments(deployment_store, server_handle).await
-}
-
-fn hash_token(token: &str) -> String {
-    use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 /// Poll deployment store and render auto-updating deployment cards.
@@ -1024,7 +1323,12 @@ fn deployment_record_to_card(
 async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
     let port = dev_cmd.port;
     let ctx = ExecutionMode::Dev { port };
-    let parsed_env_vars = parse_env_and_secret_vars(&dev_cmd.env_vars, &dev_cmd.secret_vars)?;
+    let parsed_env_vars = parse_dev_env_and_secret_vars(
+        &dev_cmd.env_vars,
+        &dev_cmd.secret_vars,
+        &dev_cmd.secret_files,
+        &dev_cmd.secret_env_vars,
+    )?;
 
     match dev_cmd.subcommand {
         None => {
@@ -1045,7 +1349,10 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         Some(DevSubcommand::Releases(args)) => releases_task(args, ctx).await?,
         Some(DevSubcommand::Whoami(args)) => whoami_task(args, ctx).await?,
         Some(DevSubcommand::Deploy(args)) => deploy_task(args, ctx).await?,
-        Some(DevSubcommand::Destroy(args)) => destroy_task(args, ctx).await?,
+        Some(DevSubcommand::Destroy(args)) => {
+            destroy_local_deployment(port, &args.name, args.force).await?;
+            println!("{}", success_line("Deployment destroyed."));
+        }
         Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
         Some(DevSubcommand::Vault(args)) => vault_task(args, port).await?,
         Some(DevSubcommand::Commands(args)) => commands_task_dev(args, port).await?,
@@ -1085,9 +1392,35 @@ async fn run_dev_session(
         )?;
     }
 
+    let mut manager = None;
     let result = async {
         // Start local services (invisible step — fast, no user-facing progress)
-        ensure_server_running_for_dev_session(port, status_file.clone(), user_env_vars).await?;
+        manager = Some(
+            ensure_server_running_for_dev_session(
+                port,
+                status_file.clone(),
+                user_env_vars,
+                &deployment_name,
+            )
+            .await?,
+        );
+
+        let deployment_name = if deployment_name.starts_with("dep_") {
+            AlienManagerClient::new(&format!("http://localhost:{port}"))
+                .get_deployment()
+                .id(&deployment_name)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to read the migrated local deployment".to_string(),
+                    url: None,
+                })?
+                .name
+                .clone()
+        } else {
+            deployment_name.rsplit('/').next().unwrap().to_string()
+        };
 
         // Step 0: Building
         let is_tty = steps.is_enabled();
@@ -1128,6 +1461,17 @@ async fn run_dev_session(
         Ok::<(), alien_error::AlienError<ErrorData>>(())
     }
     .await;
+
+    let result = match manager {
+        Some(manager) => match (result, manager.shutdown().await) {
+            (Ok(()), shutdown) => shutdown,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(shutdown_error)) => Err(error).context(ErrorData::ServerStartFailed {
+                reason: format!("Local manager shutdown also failed: {shutdown_error}"),
+            }),
+        },
+        None => result,
+    };
 
     if let Some(status_file) = &status_file {
         let status = match &result {
@@ -1200,24 +1544,9 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
     // For DEPLOYMENT_FAILED errors, extract per-resource root causes
     // instead of the generic "Deployment failed: N resource error(s)..." summary.
     if error.get("code").and_then(|v| v.as_str()) == Some("DEPLOYMENT_FAILED") {
-        if let Some(resource_errors) = error
-            .get("context")
-            .and_then(|c| c.get("resource_errors"))
-            .and_then(|v| v.as_array())
-        {
-            let details: Vec<String> = resource_errors
-                .iter()
-                .filter_map(|re| {
-                    let resource_id = re.get("resourceId").and_then(|v| v.as_str())?;
-                    let err = re.get("error")?;
-                    let msg = root_cause_message(err)?;
-                    Some(format!("{resource_id}: {msg}"))
-                })
-                .collect();
-
-            if !details.is_empty() {
-                return Some(details.join("; "));
-            }
+        let details = ui::failed_resources_from_context(error.get("context"));
+        if !details.is_empty() {
+            return Some(details.join("; "));
         }
     }
 
@@ -1226,36 +1555,6 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
         .or_else(|| error.as_str().map(ToOwned::to_owned))
-}
-
-/// Walk the source chain of a serialized AlienError to find the root cause message.
-/// Prefers the deepest non-internal error; falls back to the deepest error overall.
-fn root_cause_message(error: &serde_json::Value) -> Option<String> {
-    let mut deepest_non_internal: Option<&str> = None;
-    let mut deepest: Option<&str> = None;
-    let mut current = error;
-
-    loop {
-        let msg = current.get("message").and_then(|v| v.as_str());
-        let is_internal = current
-            .get("internal")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        if let Some(m) = msg {
-            deepest = Some(m);
-            if !is_internal {
-                deepest_non_internal = Some(m);
-            }
-        }
-
-        match current.get("source") {
-            Some(source) if source.is_object() => current = source,
-            _ => break,
-        }
-    }
-
-    deepest_non_internal.or(deepest).map(ToOwned::to_owned)
 }
 
 async fn watch_dev_deployments_until_ctrl_c(
@@ -1591,14 +1890,45 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         }
     }
 
-    let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
+    // Reported before credentials are resolved, so a missing auth setting can't mask it.
+    if let Some(Commands::Vault(args)) = &cli.command {
+        args.deployment()?;
+    }
+
+    // Connecting to a manager you run doesn't need an execution context.
+    #[cfg(feature = "platform")]
+    if let Some(Commands::Platform(PlatformCommand::Login(args))) = &cli.command {
+        if let Some(url) = &args.manager {
+            return login_to_manager(url, args.token.clone()).await;
+        }
+        // Signing in to alien.dev replaces a saved manager.
+        manager_profile::clear()?;
+    }
+    #[cfg(feature = "platform")]
+    if let Some(Commands::Platform(PlatformCommand::Logout(_))) = &cli.command {
+        if manager_profile::clear()? {
+            println!("{}", ui::success_line("Disconnected from your manager."));
+        }
+    }
+
+    let saved_manager = if env::var("ALIEN_MANAGER_URL").is_ok() {
+        None
+    } else {
+        manager_profile::load()?
+    };
+    let ctx = if let Some(profile) = saved_manager {
+        ExecutionMode::Standalone {
+            server_url: profile.url,
+            api_key: cli.api_key.clone().unwrap_or(profile.api_key),
+        }
+    } else if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
         let api_key = cli
             .api_key
             .clone()
             .or_else(|| env::var("ALIEN_API_KEY").ok())
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: "ALIEN_API_KEY is required when ALIEN_MANAGER_URL is set.".to_string(),
+                    message: "Set ALIEN_API_KEY along with ALIEN_MANAGER_URL, or run `alien login --manager <url>`.".to_string(),
                 })
             })?;
 
@@ -1623,7 +1953,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         #[cfg(not(feature = "platform"))]
         {
             return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: "No manager URL configured. Export ALIEN_MANAGER_URL=http://localhost:8080 to target a standalone manager.".to_string(),
+                message: "No manager configured. Run `alien login --manager <url>`, or set ALIEN_MANAGER_URL and ALIEN_API_KEY.".to_string(),
             }));
         }
     };
@@ -1657,6 +1987,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
+            Some(Commands::Tokens(args)) => commands::tokens_task(args, ctx).await?,
             Some(Commands::Commands(args)) => commands_task(args, ctx).await?,
             Some(Commands::Debug(args)) => debug_task(args, ctx).await?,
             Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,

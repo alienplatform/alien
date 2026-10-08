@@ -1,7 +1,8 @@
 mod common;
 
 use alien_permissions::{
-    generators::AwsRuntimePermissionsGenerator, get_permission_set, BindingTarget,
+    generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
+    get_permission_set, BindingTarget, PermissionContext,
 };
 use common::*;
 use insta::assert_json_snapshot;
@@ -131,6 +132,45 @@ fn compute_cluster_bootstraps_only_the_default_autoscaling_service_role() {
                 })
             );
         }
+    }
+}
+
+#[test]
+fn postgres_bootstraps_only_the_default_rds_service_role() {
+    // RDS creates this role on the first cluster in an account. The runtime
+    // must not be able to create service-linked roles for other services.
+    // https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAM.ServiceLinkedRoles.html
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                get_permission_set("postgres/provision").expect("permission set exists"),
+                target,
+                &create_test_context(),
+            )
+            .expect("Postgres permissions should render");
+        let grants = policy
+            .statement
+            .iter()
+            .filter(|statement| {
+                statement
+                    .action
+                    .iter()
+                    .any(|action| action == "iam:CreateServiceLinkedRole")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(grants.len(), 1, "{target}");
+        assert_eq!(grants[0].effect, "Allow");
+        assert_eq!(grants[0].action, ["iam:CreateServiceLinkedRole"]);
+        assert_eq!(
+            grants[0].resource,
+            ["arn:aws:iam::123456789012:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"]
+        );
+        assert_eq!(
+            serde_json::to_value(&grants[0].condition).unwrap(),
+            serde_json::json!({
+                "StringEquals": { "iam:AWSServiceName": "rds.amazonaws.com" }
+            })
+        );
     }
 }
 
@@ -629,28 +669,64 @@ fn test_container_provision_can_mutate_compacted_load_balancer_names() {
 }
 
 #[test]
-fn test_compute_cluster_management_can_pass_stack_prefixed_instance_roles() {
-    let generator = AwsRuntimePermissionsGenerator::new();
-    let permission_set =
-        get_permission_set("compute-cluster/management").expect("permission set exists");
-    let context = create_test_context();
-
-    let result = generator
-        .generate_policy(permission_set, BindingTarget::Stack, &context)
-        .expect("Should generate AWS policy successfully");
-
-    let pass_role_statement = result
-        .statement
-        .iter()
-        .find(|statement| statement.action.contains(&"iam:PassRole".to_string()))
-        .expect("compute-cluster management should grant PassRole");
-
-    assert!(
-        pass_role_statement
-            .resource
-            .contains(&"arn:aws:iam::123456789012:role/my-stack-*".to_string()),
-        "PassRole must cover CloudFormation-generated compute instance role names"
-    );
+fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
+    for id in ["compute-cluster/management", "compute-cluster/provision"] {
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let generated = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set(id).expect("permission set exists"),
+                    target,
+                    &create_test_context(),
+                )
+                .expect("compute permissions should render");
+            let serialized = serde_json::to_string(&generated).unwrap();
+            let policy: AwsIamPolicy = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(policy, generated);
+            for (action, resource) in [
+                (
+                    "iam:GetInstanceProfile",
+                    "arn:aws:iam::123456789012:instance-profile/*",
+                ),
+                ("iam:GetRole", "arn:aws:iam::123456789012:role/my-stack-*"),
+                ("iam:PassRole", "arn:aws:iam::123456789012:role/my-stack-*"),
+            ] {
+                let grants = policy
+                    .statement
+                    .iter()
+                    .filter(|statement| {
+                        statement.action.iter().any(|candidate| candidate == action)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(grants.len(), 1, "{id} / {target} / {action}");
+                let grant = grants[0];
+                assert_eq!(grant.effect, "Allow");
+                assert_eq!(grant.action, [action]);
+                assert_eq!(grant.resource, [resource]);
+                assert!(grant.not_resource.is_empty());
+                assert!(grant.condition.is_none());
+            }
+            // The existing service-linked-role bootstrap is the only IAM write.
+            for action in policy
+                .statement
+                .iter()
+                .flat_map(|statement| &statement.action)
+            {
+                assert!(!action.starts_with("sts:"), "{id} / {target} / {action}");
+                if action.starts_with("iam:") {
+                    assert!(
+                        matches!(
+                            action.as_str(),
+                            "iam:GetInstanceProfile"
+                                | "iam:GetRole"
+                                | "iam:PassRole"
+                                | "iam:CreateServiceLinkedRole"
+                        ),
+                        "unexpected IAM action: {id} / {target} / {action}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -825,4 +901,171 @@ fn condition_equals(
         .and_then(|condition| condition.get("StringEquals"))
         .and_then(|values| values.get(key))
         .is_some_and(|value| value == expected)
+}
+
+/// The guard only ever refuses, and only roles carrying the tags setup creates sandbox roles
+/// with; PassRole stays allowed so the build role can still reach an image build.
+#[test]
+fn the_sandbox_setup_roles_guard_denies_role_writes_on_setup_tagged_roles() {
+    let guard = get_permission_set(alien_permissions::SANDBOX_SETUP_ROLES_GUARD)
+        .expect("the guard is registered");
+    assert!(
+        guard.platforms.gcp.is_none() && guard.platforms.azure.is_none(),
+        "the guard is AWS only"
+    );
+    let context = PermissionContext::new()
+        .with_stack_prefix("acme")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-east-1");
+
+    let policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(guard, BindingTarget::Stack, &context)
+        .expect("the guard renders at stack scope");
+
+    assert_eq!(policy.statement.len(), 1);
+    let statement = &policy.statement[0];
+    assert_eq!(statement.effect, "Deny");
+    assert_eq!(
+        statement.action,
+        [
+            "iam:DeleteRole",
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:AttachRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePermissionsBoundary",
+            "iam:DeleteRolePermissionsBoundary",
+            "iam:UpdateRole",
+            "iam:TagRole",
+            "iam:UntagRole",
+        ]
+    );
+    assert_eq!(statement.resource, ["*"]);
+    assert_eq!(
+        serde_json::to_value(&statement.condition).unwrap(),
+        serde_json::json!({
+            "StringEquals": {
+                "aws:ResourceTag/managed-by": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+            }
+        })
+    );
+}
+
+/// Whether a `*` wildcard pattern matches `text`.
+fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == text,
+        Some((head, rest)) => {
+            text.starts_with(head)
+                && (0..=text.len() - head.len())
+                    .any(|skip| wildcard_matches(rest, &text[head.len() + skip..]))
+        }
+    }
+}
+
+/// Any role write a set grants the management identity on a pattern its own role matches is one it
+/// could use to rewrite that role, so the guard must deny it there.
+#[test]
+fn the_management_role_guard_covers_every_role_write_that_reaches_the_management_role() {
+    let management_role = "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management";
+    let guard = get_permission_set(alien_permissions::MANAGEMENT_ROLE_GUARD)
+        .expect("the guard is registered");
+    let guard_statement = &guard.platforms.aws.as_ref().expect("the guard is AWS")[0];
+    assert!(!guard_statement.effect.is_allow());
+    assert_eq!(
+        guard_statement.binding.stack.as_ref().unwrap().resources,
+        [management_role]
+    );
+    let denied = guard_statement.grant.actions.as_ref().unwrap();
+
+    // Reads, a pass, and a create (which fails on a name already taken) leave the role as it is.
+    let is_role_write = |action: &str| {
+        action.starts_with("iam:")
+            && action.contains("Role")
+            && ![
+                "iam:Get",
+                "iam:List",
+                "iam:PassRole",
+                "iam:Create",
+                "iam:Simulate",
+            ]
+            .iter()
+            .any(|read| action.starts_with(read))
+    };
+    let mut reaching = Vec::new();
+    for id in alien_permissions::list_permission_set_ids() {
+        // The set that creates this role; setup holds it, never management, because the
+        // management resource is always setup-owned.
+        if id == "remote-stack-management/provision" {
+            continue;
+        }
+        let set = get_permission_set(id).unwrap();
+        for permission in set.platforms.aws.iter().flatten() {
+            if !permission.effect.is_allow() {
+                continue;
+            }
+            let Some(stack) = &permission.binding.stack else {
+                continue;
+            };
+            if !stack
+                .resources
+                .iter()
+                .any(|pattern| wildcard_matches(pattern, management_role))
+            {
+                continue;
+            }
+            for action in permission.grant.actions.iter().flatten() {
+                if is_role_write(action) {
+                    reaching.push(format!("{id}: {action}"));
+                    assert!(
+                        denied.contains(action),
+                        "{id} grants {action} on a pattern the management role matches, and the \
+                         guard does not deny it"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        !reaching.is_empty(),
+        "the sets this guard exists for still grant role writes on role/<prefix>-*"
+    );
+}
+
+/// IAM takes exactly one of `Resource` and `NotResource`, and a tag-on-create grant must render
+/// as the second alone: an empty `Resource` beside it would make the document invalid.
+#[rstest]
+#[case::stack_binding(BindingTarget::Stack)]
+#[case::resource_binding(BindingTarget::Resource)]
+fn the_sandbox_tag_on_create_renders_as_not_resource_only(#[case] binding_target: BindingTarget) {
+    let permission_set = get_permission_set("sandbox/provision").expect("sandbox/provision");
+    let policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(permission_set, binding_target, &create_test_context())
+        .expect("policy generates");
+    let document = serde_json::to_value(&policy).expect("serializes");
+    let tag_on_create: Vec<&serde_json::Value> = document["Statement"]
+        .as_array()
+        .expect("statements")
+        .iter()
+        .filter(|statement| statement.get("NotResource").is_some())
+        .collect();
+
+    assert_eq!(
+        tag_on_create.len(),
+        2,
+        "runtime and setup builds each tag on create"
+    );
+    for statement in tag_on_create {
+        assert_eq!(
+            statement["Action"],
+            serde_json::json!(["lambda:TagResource"])
+        );
+        assert_eq!(
+            statement["NotResource"],
+            serde_json::json!(["arn:*:lambda:*:*:*"])
+        );
+        assert!(statement.get("Resource").is_none(), "{statement}");
+    }
 }

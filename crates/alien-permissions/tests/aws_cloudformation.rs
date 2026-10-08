@@ -203,6 +203,41 @@ fn test_aws_cloudformation_compute_management_can_use_setup_security_group() {
     );
 }
 
+#[rstest]
+#[case::stack(BindingTarget::Stack)]
+#[case::resource(BindingTarget::Resource)]
+fn test_frozen_postgres_management_lists_instances_without_resource_scope(
+    #[case] binding_target: BindingTarget,
+) {
+    let permission_set = get_permission_set("postgres/management").expect("permission set exists");
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(
+            permission_set,
+            binding_target,
+            &create_cloudformation_context(),
+        )
+        .expect("management policy should generate");
+
+    let instance_reads: Vec<_> = policy
+        .statement
+        .iter()
+        .filter(|statement| statement.action.contains(&json!("rds:DescribeDBInstances")))
+        .collect();
+    assert_eq!(instance_reads.len(), 1);
+    assert_eq!(instance_reads[0].resource, vec![json!("*")]);
+    assert!(!instance_reads[0]
+        .action
+        .contains(&json!("rds:ModifyDBInstance")));
+
+    let instance_modifications: Vec<_> = policy
+        .statement
+        .iter()
+        .filter(|statement| statement.action.contains(&json!("rds:ModifyDBInstance")))
+        .collect();
+    assert_eq!(instance_modifications.len(), 1);
+    assert!(!instance_modifications[0].resource.contains(&json!("*")));
+}
+
 #[test]
 fn test_aws_cloudformation_compute_management_cannot_mutate_instance_role_policy() {
     let generator = AwsCloudFormationPermissionsGenerator::new();
@@ -436,4 +471,27 @@ fn test_aws_cloudformation_managing_account_id_substitution() {
     let expected_resource =
         json!({"Fn::Sub": "arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*"});
     assert_eq!(ecr_statement.resource[0], expected_resource);
+}
+
+/// The CloudFormation form of the tag-on-create grant: `NotResource` alone, its partition left a
+/// wildcard so the exclusion holds in every partition.
+#[test]
+fn the_sandbox_tag_on_create_renders_as_not_resource_only() {
+    let permission_set = get_permission_set("sandbox/provision").expect("sandbox/provision");
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(permission_set, BindingTarget::Stack, &create_test_context())
+        .expect("policy generates");
+    let document = serde_json::to_value(&policy).expect("serializes");
+    let tag_on_create: Vec<&serde_json::Value> = document["Statement"]
+        .as_array()
+        .expect("statements")
+        .iter()
+        .filter(|statement| statement.get("NotResource").is_some())
+        .collect();
+
+    assert_eq!(tag_on_create.len(), 2);
+    for statement in tag_on_create {
+        assert!(statement.get("Resource").is_none(), "{statement}");
+        assert_eq!(statement["NotResource"], json!(["arn:*:lambda:*:*:*"]));
+    }
 }

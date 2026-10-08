@@ -13,33 +13,33 @@ let value: DataLocal2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "warning",
+        reason: "collection-failed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "updating",
-    partial: true,
+    health: "unknown",
+    lifecycle: "deleting",
+    partial: false,
     stale: false,
   },
-  triggerCount: 963366,
+  triggerCount: 852008,
   backend: "local",
 };
 ```
 
 ## Fields
 
-| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `commandSupported`                                               | *boolean*                                                        | :heavy_check_mark:                                               | N/A                                                              |
-| `cpu`                                                            | *operations.CpuUnion2*                                           | :heavy_minus_sign:                                               | N/A                                                              |
-| `events`                                                         | [operations.Event2](../../models/operations/event2.md)[]         | :heavy_check_mark:                                               | N/A                                                              |
-| `imagePathPresent`                                               | *boolean*                                                        | :heavy_check_mark:                                               | N/A                                                              |
-| `memory`                                                         | *operations.MemoryUnion2*                                        | :heavy_minus_sign:                                               | N/A                                                              |
-| `pid`                                                            | *number*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
-| `process`                                                        | *operations.ProcessUnion*                                        | :heavy_minus_sign:                                               | N/A                                                              |
-| `readinessProbeOk`                                               | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |
-| `status`                                                         | [operations.DataStatus9](../../models/operations/datastatus9.md) | :heavy_check_mark:                                               | N/A                                                              |
-| `triggerCount`                                                   | *number*                                                         | :heavy_check_mark:                                               | N/A                                                              |
-| `backend`                                                        | *"local"*                                                        | :heavy_check_mark:                                               | N/A                                                              |
+| Field                                                                                                                  | Type                                                                                                                   | Required                                                                                                               | Description                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `commandSupported`                                                                                                     | *boolean*                                                                                                              | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `cpu`                                                                                                                  | *operations.CpuUnion2*                                                                                                 | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `events`                                                                                                               | [operations.Event2](../../models/operations/event2.md)[]                                                               | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `imagePathPresent`                                                                                                     | *boolean*                                                                                                              | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `memory`                                                                                                               | *operations.MemoryUnion2*                                                                                              | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `pid`                                                                                                                  | *number*                                                                                                               | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `process`                                                                                                              | *operations.ProcessUnion*                                                                                              | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `readinessProbeOk`                                                                                                     | *boolean*                                                                                                              | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `status`                                                                                                               | [operations.GetResourceDeploymentDetailDataStatus9](../../models/operations/getresourcedeploymentdetaildatastatus9.md) | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `triggerCount`                                                                                                         | *number*                                                                                                               | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `backend`                                                                                                              | *"local"*                                                                                                              | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |

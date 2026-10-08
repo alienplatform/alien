@@ -136,7 +136,7 @@ fn overlay_manager_service_account(
     target_cluster_data_added: &mut bool,
     cluster_label: Option<&str>,
 ) -> Option<Expression> {
-    let manager_service_account_name = "${local.resource_prefix}-manager-sa".to_string();
+    let manager_service_account_name = terraform_service_account_name_expr("manager");
     for (resource_id, entry) in stack.resources() {
         if entry
             .config
@@ -168,7 +168,19 @@ fn overlay_manager_service_account(
 }
 
 fn terraform_service_account_name_expr(permission_profile: &str) -> String {
-    format!("${{local.resource_prefix}}-{permission_profile}-sa")
+    // Match kubernetes_service_account_name: normalize each part, retain a fallback,
+    // then truncate the combined DNS label. The prefix is selected at install time.
+    let profile = Expression::String(permission_profile.to_string()).to_string();
+    let normalize = |input: &str| {
+        format!(
+            "coalesce(trim(lower(replace({input}, \"/[^a-zA-Z0-9]+/\", \"-\")), \"-\"), \"alien\")"
+        )
+    };
+    format!(
+        "${{trim(substr(format(\"%s-%s-sa\", {}, {}), 0, 63), \"-\")}}",
+        normalize("local.resource_prefix"),
+        normalize(profile.trim()),
+    )
 }
 
 fn kubernetes_cluster_label(
@@ -506,4 +518,59 @@ fn has_block(fragment: &TfFragment, terraform_type: &str) -> bool {
             .first()
             .is_some_and(|label| label.as_str() == terraform_type)
     })
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn terraform_identity_name_matches_runtime_dns_name() {
+        let directory = tempfile::tempdir().unwrap();
+        for (prefix, profile) in [
+            ("e2e-01".to_string(), "execution".to_string()),
+            ("My_App!".to_string(), "Writer#Profile".to_string()),
+            ("--".to_string(), "!!!".to_string()),
+            ("a".repeat(55), "b".repeat(40)),
+            ("prefix-".repeat(12), "profile".to_string()),
+            ("İ-é".to_string(), "team_Ü".to_string()),
+        ] {
+            std::fs::write(
+                directory.path().join("main.tf"),
+                format!(
+                    "locals {{ resource_prefix = {} }}\n",
+                    serde_json::json!(prefix)
+                ),
+            )
+            .unwrap();
+            let expression = terraform_service_account_name_expr(&profile);
+            let raw_expression = expression
+                .strip_prefix("${")
+                .unwrap()
+                .strip_suffix('}')
+                .unwrap();
+            let mut child = Command::new("terraform")
+                .arg("console")
+                .current_dir(directory.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("Terraform is required for identity contract test");
+            writeln!(child.stdin.take().unwrap(), "{raw_expression}").unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let actual: String = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                actual,
+                alien_core::kubernetes_service_account_name(&prefix, &profile)
+            );
+        }
+    }
 }

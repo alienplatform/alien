@@ -12,9 +12,88 @@
 
 List the release channels configured for a project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listReleaseChannels" method="get" path="/v1/release-channels" -->
+<!-- UsageSnippet language="typescript" operationID="listReleaseChannels" method="get" path="/v1/release-channels" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.releaseChannels.list({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releaseChannelsList } from "@alienplatform/platform-api/funcs/releaseChannelsList.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await releaseChannelsList(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releaseChannelsList failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleaseChannelsList,
+  useReleaseChannelsListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleaseChannelsList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleaseChannelsList,
+  invalidateAllReleaseChannelsList,
+} from "@alienplatform/platform-api/react-query/releaseChannelsList.js";
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listReleaseChannels" method="get" path="/v1/release-channels" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -64,6 +143,34 @@ async function run() {
 run();
 ```
 
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useReleaseChannelsList,
+  useReleaseChannelsListSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchReleaseChannelsList,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateReleaseChannelsList,
+  invalidateAllReleaseChannelsList,
+} from "@alienplatform/platform-api/react-query/releaseChannelsList.js";
+```
+
 ### Parameters
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
@@ -88,9 +195,85 @@ run();
 
 Create a release channel for a project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="createReleaseChannel" method="post" path="/v1/release-channels" -->
+<!-- UsageSnippet language="typescript" operationID="createReleaseChannel" method="post" path="/v1/release-channels" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.releaseChannels.create({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    requestBody: {
+      name: "<value>",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releaseChannelsCreate } from "@alienplatform/platform-api/funcs/releaseChannelsCreate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await releaseChannelsCreate(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    requestBody: {
+      name: "<value>",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releaseChannelsCreate failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useReleaseChannelsCreateMutation
+} from "@alienplatform/platform-api/react-query/releaseChannelsCreate.js";
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="createReleaseChannel" method="post" path="/v1/release-channels" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -146,6 +329,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useReleaseChannelsCreateMutation
+} from "@alienplatform/platform-api/react-query/releaseChannelsCreate.js";
 ```
 
 ### Parameters
@@ -224,6 +424,23 @@ async function run() {
 }
 
 run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useReleaseChannelsDeleteMutation
+} from "@alienplatform/platform-api/react-query/releaseChannelsDelete.js";
 ```
 
 ### Parameters

@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  ContainerImageIdentity,
+  ContainerImageIdentity$Outbound,
+  ContainerImageIdentity$outboundSchema,
+} from "./containerimageidentity.js";
+import {
   HeartbeatCollectionIssue,
   HeartbeatCollectionIssue$Outbound,
   HeartbeatCollectionIssue$outboundSchema,
@@ -35,6 +40,13 @@ export type ObservedResourceSample = {
   deploymentId?: string | null | undefined;
   displayName: string;
   health: ObservedHealth;
+  /**
+   * Distinct container images the resource's running instances report, when
+   *
+   * @remarks
+   * the provider exposes them.
+   */
+  images?: Array<ContainerImageIdentity> | undefined;
   labels?: { [k: string]: string } | undefined;
   lifecycle: ProviderLifecycleState;
   message?: string | null | undefined;
@@ -75,6 +87,7 @@ export type ObservedResourceSample$Outbound = {
   deploymentId?: string | null | undefined;
   displayName: string;
   health: string;
+  images?: Array<ContainerImageIdentity$Outbound> | undefined;
   labels?: { [k: string]: string } | undefined;
   lifecycle: string;
   message?: string | null | undefined;
@@ -102,6 +115,7 @@ export const ObservedResourceSample$outboundSchema: z.ZodType<
   deploymentId: z.nullable(z.string()).optional(),
   displayName: z.string(),
   health: ObservedHealth$outboundSchema,
+  images: z.array(ContainerImageIdentity$outboundSchema).optional(),
   labels: z.record(z.string(), z.string()).optional(),
   lifecycle: ProviderLifecycleState$outboundSchema,
   message: z.nullable(z.string()).optional(),

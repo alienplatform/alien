@@ -14,6 +14,7 @@ use crate::Platform;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::any::Any;
 use std::fmt::Debug;
 
@@ -25,13 +26,15 @@ pub enum SandboxCode {
     /// A prebuilt container image used as the sandbox root filesystem.
     #[serde(rename_all = "camelCase")]
     Image {
-        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).
-        ///
-        /// Two backends narrow it in opposite directions: AWS wants an `s3://` bundle, Azure a
-        /// bare catalog name such as `ubuntu`. Each refuses the other's shape while planning.
+        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`). AWS wants an
+        /// `s3://` bundle; Azure takes a catalog name such as `ubuntu` or an amd64 registry
+        /// image, told apart by syntax. Each refuses what it cannot take while planning.
         image: String,
     },
-    /// Source built into a sandbox image at deploy time.
+    /// A Dockerfile `alien build` builds into the sandbox's base image.
+    ///
+    /// AWS only, and docker only: the base image is a root filesystem, not a binary laid on one.
+    /// `alien release` pushes it and the bundle layers the sandbox agent on afterwards.
     #[serde(rename_all = "camelCase")]
     Source {
         /// The source directory to build from
@@ -136,6 +139,10 @@ pub enum SandboxEgress {
     ///
     /// Routed traffic only. Link-local is not outbound and no backend's egress control reaches
     /// it, so this is not a boundary against instance metadata.
+    ///
+    /// Nor, on AWS, against DNS: while the connector VPC has DNS support on, a session resolves
+    /// names through that VPC's resolver, which no security group filters, so a query name can
+    /// carry data out.
     Deny,
     /// Unrestricted outbound access to the public internet, and none to private ranges or the
     /// deployment's own network.
@@ -146,8 +153,10 @@ pub enum SandboxEgress {
     Allow,
     /// Outbound access only to the listed hostnames.
     ///
-    /// Azure alone expresses it: its egress proxy matches on host pattern. The others filter by
-    /// CIDR or carry a single switch, and both would approximate the list rather than keep it.
+    /// Azure matches host patterns. With `privilegedSupervisor`, AWS resolves the names at
+    /// startup, pins their public IPv4 addresses in /etc/hosts, and filters by those addresses.
+    /// Other services sharing an allowed address are reachable; addresses remain pinned for the
+    /// session lifetime. Backends without either enforcement path refuse this mode.
     #[serde(rename_all = "camelCase")]
     AllowDomains {
         /// Hostnames the sandbox may reach
@@ -187,8 +196,10 @@ pub struct SandboxLifecyclePolicy {
     /// never applied. AWS caps it at 8 hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
-    /// Idle period after which the sandbox is paused, where the platform supports it
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Idle period after which the sandbox is paused, where the platform supports it.
+    ///
+    /// Stored state written before the rename calls this `idleSuspendSeconds`.
+    #[serde(alias = "idleSuspendSeconds", skip_serializing_if = "Option::is_none")]
     pub idle_pause_seconds: Option<u32>,
 }
 
@@ -216,7 +227,8 @@ pub struct SandboxCapabilities {
     pub snapshot: bool,
     /// Egress can be restricted to a hostname allowlist
     pub domain_egress_rules: bool,
-    /// Whether a declared `deny` is actually enforced, rather than accepted and dropped
+    /// Whether a declared `deny` is actually enforced, rather than accepted and dropped.
+    /// It covers routed traffic; the `deny` mode says where DNS still resolves.
     pub egress_deny: bool,
     /// The platform enforces the declared cpu, memory and disk ceilings
     pub enforced_limits: bool,
@@ -254,6 +266,8 @@ impl SandboxCapabilities {
                 pause_resume: true,
                 snapshot: false,
                 domain_egress_rules: false,
+                // Routed egress only: while the connector VPC has DNS support on, a session
+                // resolves names through its resolver, which no security group filters.
                 egress_deny: true,
                 enforced_limits: true,
                 // Nothing in the API bounds process count.
@@ -376,8 +390,9 @@ impl SandboxCapabilities {
             jobs: true,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
-            // `:pause` and `:resume` preserve the running container.
-            pause_resume: true,
+            // `:resume` can return a fresh container while reporting success, so a pause does not
+            // keep the sandbox's state.
+            pause_resume: false,
             // The create path never sends `sandbox_environment_snapshot`, so no sandbox state is
             // reachable through the trait; declared false until the client carries it.
             snapshot: false,
@@ -484,6 +499,15 @@ impl SandboxCapability {
     }
 }
 
+/// Opt-in supervisor-owned network enforcement. Caller requests cannot change this identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxPrivilegedSupervisor {
+    /// Nonzero numeric uid and primary gid for every command, including the image entrypoint.
+    pub command_uid: u32,
+}
+
 /// An isolated environment for running untrusted code, created at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -510,7 +534,15 @@ pub struct Sandbox {
     pub limits: Option<SandboxLimits>,
     /// Outbound network policy
     pub egress: SandboxEgress,
-    /// Sandbox lifetime ceiling and idle behaviour
+    /// Have Alien's agent install the declared egress policy before running any image code.
+    /// Unsupported backends refuse this at plan time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privileged_supervisor: Option<SandboxPrivilegedSupervisor>,
+    /// Sandbox lifetime ceiling and idle behaviour.
+    ///
+    /// Stored state written before the rename calls this `session`. A stack state or release
+    /// that old must stay readable, otherwise its deployment can no longer be updated or deleted.
+    #[serde(alias = "session")]
     pub lifecycle: SandboxLifecyclePolicy,
     /// Ports eligible for a preview capability. An application reaches its sandbox through the
     /// provider, so it cannot widen its own ingress at runtime; a holder of a remote binding's
@@ -538,7 +570,7 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
         resource
             .config
             .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+            .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
     })
 }
 
@@ -549,6 +581,35 @@ impl Sandbox {
     /// Returns the sandbox's unique identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Cloud routing stays open when the agent owns enforcement.
+    pub fn cloud_egress(&self) -> &SandboxEgress {
+        if self.privileged_supervisor.is_some() {
+            &SandboxEgress::Allow
+        } else {
+            &self.egress
+        }
+    }
+
+    /// Startup contract for the privileged agent; never supplied by an exec caller.
+    pub fn supervisor_environment(&self) -> std::collections::BTreeMap<String, String> {
+        let mut env = std::collections::BTreeMap::new();
+        if let Some(supervisor) = &self.privileged_supervisor {
+            env.insert(
+                "ALIEN_SANDBOX_EXEC_UID".to_string(),
+                supervisor.command_uid.to_string(),
+            );
+            env.insert(
+                "ALIEN_SANDBOX_EXEC_GID".to_string(),
+                supervisor.command_uid.to_string(),
+            );
+            env.insert(
+                "ALIEN_SANDBOX_EGRESS".to_string(),
+                serde_json::to_string(&self.egress).expect("egress serializes"),
+            );
+        }
+        env
     }
 
     /// The declared ceilings, or the defaults a platform applies when none were named.
@@ -565,19 +626,59 @@ impl Sandbox {
     /// Runs at plan time so an unenforceable limit or an unsupported egress mode fails before
     /// anything is provisioned, rather than at the first exec.
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
-        let capabilities = SandboxCapabilities::for_platform(platform)?;
+        let mut capabilities = SandboxCapabilities::for_platform(platform)?;
+        if let Some(supervisor) = &self.privileged_supervisor {
+            if platform != Platform::Aws {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "privilegedSupervisor".to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
+            if supervisor.command_uid == 0 || supervisor.command_uid == u32::MAX {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "privilegedSupervisor.commandUid".to_string(),
+                    value: supervisor.command_uid.to_string(),
+                    reason: "must be a non-root Linux uid other than the invalid uid sentinel"
+                        .to_string(),
+                }));
+            }
+            if let SandboxEgress::AllowDomains { domains } = &self.egress {
+                for domain in domains {
+                    let hostname = domain.strip_suffix('.').unwrap_or(domain);
+                    if hostname.len() > 253
+                        || !hostname.split('.').all(|label| {
+                            !label.is_empty()
+                                && label.len() <= 63
+                                && label
+                                    .bytes()
+                                    .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                                && !label.starts_with('-')
+                                && !label.ends_with('-')
+                        })
+                    {
+                        return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                            resource_id: self.id.clone(), field: "egress.domains".to_string(), value: domain.clone(),
+                            reason: "privileged supervisor allowlists require exact DNS hostnames; wildcards are unsupported".to_string(),
+                        }));
+                    }
+                }
+            }
+            capabilities.domain_egress_rules = true;
+        }
 
-        // No backend builds a sandbox image from source: an empty image string schedules a pod
-        // that can never run, the silent no-op the capability contract forbids — the failure
-        // has to land here instead.
-        if let SandboxCode::Source { .. } = &self.code {
+        // `alien build` builds an AWS sandbox's base image, so source is a declaration there and
+        // the emitters refuse it only if it reaches them unbuilt. Everywhere else the image is
+        // pulled as declared, and an empty image string would schedule a pod that can never run.
+        if matches!(&self.code, SandboxCode::Source { .. }) && platform != Platform::Aws {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
                 field: "code".to_string(),
                 value: "source".to_string(),
-                reason: "no sandbox backend builds an image from source yet; give code.image a \
-                         prebuilt reference"
-                    .to_string(),
+                reason: format!(
+                    "no sandbox backend builds an image from source on {platform}; give \
+                     code.image a prebuilt reference"
+                ),
             }));
         }
 
@@ -592,7 +693,7 @@ impl Sandbox {
 
         // Read before the limits, because the image is declared whether or not any are.
         if platform == Platform::Azure {
-            self.azure_catalog_image()?;
+            self.azure_image()?;
         }
 
         let Some(limits) = self.limits.as_ref() else {
@@ -651,21 +752,10 @@ impl Sandbox {
         self.validate_capabilities(&capabilities, platform)
     }
 
-    /// The catalog disk image Azure creates a sandbox from.
-    ///
-    /// Azure names a public catalog entry rather than pulling a reference, so a registry path,
-    /// tag or digest has nowhere to go. An allowlist, because the answer to "what else could be
-    /// in there" is a name the data plane rejects at the first sandbox, long after the apply.
-    pub fn azure_catalog_image(&self) -> Result<&str> {
-        let refused = |value: &str, reason: &str| {
-            AlienError::new(ErrorData::SandboxLimitInvalid {
-                resource_id: self.id.clone(),
-                field: "code.image".to_string(),
-                value: value.to_string(),
-                reason: reason.to_string(),
-            })
-        };
-
+    /// What Azure creates this sandbox from: a catalog name or a registry image, told apart by
+    /// [`classify_azure_sandbox_image`]. Refused while planning, because a value the data plane
+    /// rejects would otherwise surface at the first sandbox, long after the apply.
+    pub fn azure_image(&self) -> Result<AzureSandboxImage<'_>> {
         let SandboxCode::Image { image } = &self.code else {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -675,21 +765,21 @@ impl Sandbox {
             }));
         };
 
-        let image = image.trim();
-        if image.is_empty() {
-            return Err(refused(image, "a sandbox has to name an image"));
-        }
-        if !image
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Err(refused(
-                image,
-                "Azure creates a sandbox from a public catalog disk image, so code.image must be \
-                 a bare catalog name such as 'ubuntu'",
-            ));
-        }
-        Ok(image)
+        classify_azure_sandbox_image(image).ok_or_else(|| {
+            let image = image.trim();
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "code.image".to_string(),
+                value: image.to_string(),
+                reason: if image.is_empty() {
+                    "a sandbox has to name an image".to_string()
+                } else {
+                    "Azure creates a sandbox from a catalog name such as 'ubuntu' or from a \
+                     registry image such as 'docker.io/library/python:3.14-slim'"
+                        .to_string()
+                },
+            })
+        })
     }
 
     /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
@@ -1025,6 +1115,12 @@ impl ResourceDefinition for Sandbox {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // A create adopts an existing image with the same name, and deleting it deletes that image,
+        // which this deployment may never have built.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         Vec::new()
     }
@@ -1071,6 +1167,65 @@ impl ResourceDefinition for Sandbox {
         serde_json::to_value(self)
     }
 }
+
+/// What an Azure sandbox starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AzureSandboxImage<'a> {
+    /// A public catalog disk image, such as `ubuntu`, which the data plane names directly.
+    Catalog(&'a str),
+    /// A registry image, which the controller builds into a disk image in the sandbox's group
+    /// before any sandbox can start from it.
+    Registry(&'a str),
+}
+
+impl<'a> AzureSandboxImage<'a> {
+    /// The declared value, trimmed.
+    pub fn as_str(&self) -> &'a str {
+        match self {
+            Self::Catalog(value) | Self::Registry(value) => value,
+        }
+    }
+}
+
+/// Label key the controller writes on every disk image it builds, and the provider finds it by.
+pub const AZURE_DISK_IMAGE_LABEL: &str = "alienImage";
+
+/// Classifies a declared `code.image` for Azure, or `None` when it is neither kind. A bare
+/// `[A-Za-z0-9._-]+` is checked first and always a catalog name; anything else must carry `/`,
+/// `:` or `@` and parse as an OCI reference.
+pub fn classify_azure_sandbox_image(image: &str) -> Option<AzureSandboxImage<'_>> {
+    let image = image.trim();
+    if image.is_empty() {
+        return None;
+    }
+    if image
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Some(AzureSandboxImage::Catalog(image));
+    }
+    (image.contains(|c| matches!(c, '/' | ':' | '@')) && OCI_REFERENCE.is_match(image))
+        .then_some(AzureSandboxImage::Registry(image))
+}
+
+/// The label value naming the disk image built from `reference`: a digest, since a label value
+/// may not carry a reference's `/`, `:` and `@`.
+pub fn azure_disk_image_label(reference: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(reference.trim().as_bytes()));
+    digest[..32].to_string()
+}
+
+/// The distribution reference grammar: `[host[:port]/]path[:tag][@digest]`.
+static OCI_REFERENCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    let domain_component = r"(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])";
+    let domain = format!(r"{domain_component}(?:\.{domain_component})*(?::[0-9]+)?");
+    let path_component = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+    let name = format!(r"(?:{domain}/)?{path_component}(?:/{path_component})*");
+    let tag = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}";
+    let digest = r"[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,}";
+    regex::Regex::new(&format!(r"^{name}(?::{tag})?(?:@{digest})?$"))
+        .expect("the OCI reference grammar compiles")
+});
 
 /// The one token a sandbox bundle URI may carry, replaced with the deploying region.
 ///
@@ -1152,6 +1307,104 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
     })
 }
 
+/// Where a private ECR image's region comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EcrImageRegion<'a> {
+    /// A region named in the host.
+    Literal(&'a str),
+    /// [`BUNDLE_REGION_TOKEN`] in the host: the region the deployment renders.
+    Deployment,
+}
+
+/// The ECR repository a private image reference is pulled from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EcrImageRepository<'a> {
+    pub account_id: &'a str,
+    pub region: EcrImageRegion<'a>,
+    /// The repository name, which may carry `/`; never a tag or digest.
+    pub repository: &'a str,
+}
+
+impl EcrImageRepository<'_> {
+    /// The repository's ARN, with `region` standing in for a region the host leaves to the
+    /// deployment. The partition is the deployment's: a GovCloud host ends `.amazonaws.com` too.
+    pub fn arn(&self, partition: &str, region: &str) -> String {
+        let region = match self.region {
+            EcrImageRegion::Literal(region) => region,
+            EcrImageRegion::Deployment => region,
+        };
+        format!(
+            "arn:{partition}:ecr:{region}:{}:repository/{}",
+            self.account_id, self.repository
+        )
+    }
+}
+
+/// Reads `privateBaseImage` as the one repository a build role may pull from.
+///
+/// The name is interpolated into an IAM ARN, so it is held to ECR's own repository grammar: that
+/// refuses `*` and `?`, which would widen the grant, and `$` and braces, which a CloudFormation
+/// `Sub` or a Terraform template would read as an expression.
+pub fn parse_ecr_image_repository(
+    image: &str,
+) -> std::result::Result<EcrImageRepository<'_>, String> {
+    let refuse = |reason: &str| format!("privateBaseImage '{image}' {reason}");
+    let (host, path) = image
+        .split_once('/')
+        .ok_or_else(|| refuse("names no repository"))?;
+    let (account_id, rest) = host.split_once(".dkr.ecr.").ok_or_else(|| {
+        refuse("is not served by a private ECR registry (<account>.dkr.ecr.<region>.amazonaws.com)")
+    })?;
+    // `.com.cn` first: a China host ends with the shorter suffix too.
+    let region = rest
+        .strip_suffix(".amazonaws.com.cn")
+        .or_else(|| rest.strip_suffix(".amazonaws.com"))
+        .ok_or_else(|| refuse("is not served by a private ECR registry (<account>.dkr.ecr.<region>.amazonaws.com)"))?;
+    if account_id.len() != 12 || !account_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(refuse("names no 12-digit account in its registry host"));
+    }
+    let region = if region == BUNDLE_REGION_TOKEN {
+        EcrImageRegion::Deployment
+    } else if !region.is_empty()
+        && region
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        EcrImageRegion::Literal(region)
+    } else {
+        return Err(refuse(&format!(
+            "names no region in its registry host; give one or {BUNDLE_REGION_TOKEN}"
+        )));
+    };
+
+    let repository = match path.split_once('@') {
+        Some((repository, _digest)) => repository,
+        None => match path.rsplit_once('/') {
+            Some((parent, last)) => match last.split_once(':') {
+                Some((name, _tag)) => &path[..parent.len() + 1 + name.len()],
+                None => path,
+            },
+            None => path.split_once(':').map_or(path, |(name, _tag)| name),
+        },
+    };
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && segment.bytes().all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+            })
+    };
+    if !repository.split('/').all(valid_segment) {
+        return Err(refuse(
+            "names a repository outside ECR's grammar (lowercase letters, digits, '.', '_', '-', and '/' between them)",
+        ));
+    }
+    Ok(EcrImageRepository {
+        account_id,
+        region,
+        repository,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1175,6 +1428,87 @@ mod tests {
             &crate::Stack::new("empty".to_string()).build(),
             false,
         ));
+    }
+
+    /// The vectors' `repositoryKey`: registry host and repository, never the tag or digest, so a
+    /// new tag keeps the key. A reference the parser refuses stays whole.
+    fn repository_key(image: &str) -> String {
+        match parse_ecr_image_repository(image) {
+            Ok(parsed) => {
+                let host = image.split_once('/').map_or(image, |(host, _)| host);
+                format!("{host}/{}", parsed.repository)
+            }
+            Err(_) => image.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_private_base_image_names_one_repository() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/ecr-image-repository-parity.json"
+        ))
+        .expect("the ECR repository vectors must be JSON");
+        let field = |case: &serde_json::Value, name: &str| {
+            case[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("vector must carry {name}: {case}"))
+                .to_string()
+        };
+
+        for case in vectors["accepted"].as_array().expect("accepted vectors") {
+            let image = field(case, "image");
+            let region = field(case, "region");
+            let region = if region == BUNDLE_REGION_TOKEN {
+                EcrImageRegion::Deployment
+            } else {
+                EcrImageRegion::Literal(&region)
+            };
+            assert_eq!(
+                parse_ecr_image_repository(&image),
+                Ok(EcrImageRepository {
+                    account_id: &field(case, "accountId"),
+                    region,
+                    repository: &field(case, "repository"),
+                }),
+                "{image}"
+            );
+            assert_eq!(
+                repository_key(&image),
+                field(case, "repositoryKey"),
+                "{image}"
+            );
+        }
+
+        for case in vectors["refused"].as_array().expect("refused vectors") {
+            let image = field(case, "image");
+            assert!(
+                parse_ecr_image_repository(&image).is_err(),
+                "{image} must be refused"
+            );
+            assert_eq!(
+                repository_key(&image),
+                field(case, "repositoryKey"),
+                "{image}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repository_arn_takes_the_deployment_region_only_where_the_host_leaves_it() {
+        let regional =
+            parse_ecr_image_repository("123456789012.dkr.ecr.{region}.amazonaws.com/team/base:1")
+                .expect("parses");
+        let pinned =
+            parse_ecr_image_repository("123456789012.dkr.ecr.eu-west-1.amazonaws.com/team/base:1")
+                .expect("parses");
+        assert_eq!(
+            regional.arn("aws-us-gov", "us-gov-west-1"),
+            "arn:aws-us-gov:ecr:us-gov-west-1:123456789012:repository/team/base"
+        );
+        assert_eq!(
+            pinned.arn("aws", "us-east-1"),
+            "arn:aws:ecr:eu-west-1:123456789012:repository/team/base"
+        );
     }
 
     /// A wildcard reaching the grant would widen it past the bundle, and it widens the Frozen
@@ -1406,8 +1740,8 @@ mod tests {
             "the only ingress is :execute; no port-scoped capability"
         );
         assert!(
-            row.pause_resume,
-            ":pause and :resume preserve the container"
+            !row.pause_resume,
+            ":resume can return a fresh container, so a pause keeps no state"
         );
         assert!(
             !row.snapshot,
@@ -1752,10 +2086,8 @@ mod tests {
             .expect("the ceiling itself is allowed");
     }
 
-    /// An image reference Azure cannot honour is refused while planning, not at the first sandbox.
-    ///
-    /// `code.image`'s own documentation gives a tag and a registry path as examples — exactly
-    /// what Azure cannot take, so this is the shape a customer is most likely to declare.
+    /// An image Azure can take neither as a catalog name nor as a registry image is refused while
+    /// planning, not at the first sandbox.
     #[test]
     fn an_image_azure_cannot_pull_is_refused_while_planning() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
@@ -1763,15 +2095,8 @@ mod tests {
         // image is ever read.
         sandbox.limits = None;
 
-        for image in [
-            "ubuntu:24.04",
-            "ghcr.io/myorg/sandbox:latest",
-            "ubuntu@sha256:abc",
-            "",
-            "   ",
-            "ubuntu latest",
-            "ubuntu?x",
-        ] {
+        // A digest too short to be one, blanks, a space and a query string.
+        for image in ["ubuntu@sha256:abc", "", "   ", "ubuntu latest", "ubuntu?x"] {
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
             };
@@ -1779,11 +2104,6 @@ mod tests {
                 .validate_for_platform(Platform::Azure)
                 .expect_err("an image Azure has nowhere to put is refused");
             assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "image '{image}'");
-
-            // The same declaration is ordinary everywhere that pulls a reference.
-            sandbox
-                .validate_for_platform(Platform::Kubernetes)
-                .expect("a registry reference is what every other backend takes");
         }
 
         for image in ["ubuntu", "ubuntu-22.04", "debian_slim"] {
@@ -1795,16 +2115,92 @@ mod tests {
                 .unwrap_or_else(|error| panic!("'{image}' is a catalog name: {error}"));
         }
 
+        for image in [
+            "ubuntu:24.04",
+            "ghcr.io/myorg/sandbox:latest",
+            "docker.io/library/python:3.14-slim",
+            "localhost:5000/team/agent@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d",
+        ] {
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+            };
+            sandbox
+                .validate_for_platform(Platform::Azure)
+                .unwrap_or_else(|error| panic!("'{image}' is a registry image: {error}"));
+        }
+
         // Surrounding space is trimmed rather than carried into the create body.
         sandbox.code = SandboxCode::Image {
             image: " ubuntu ".to_string(),
         };
         assert_eq!(
             sandbox
-                .azure_catalog_image()
+                .azure_image()
                 .expect("a padded name is still a name"),
-            "ubuntu"
+            AzureSandboxImage::Catalog("ubuntu")
         );
+    }
+
+    /// Every value the catalog allowlist `[A-Za-z0-9._-]+` accepts stays a catalog name, so a
+    /// declaration that planned under it keeps its meaning. Exhaustive to three characters, then a
+    /// fixed-seed sample of longer ones, some with surrounding space.
+    #[test]
+    fn every_value_the_catalog_allowlist_accepted_is_still_a_catalog_name() {
+        const ALPHABET: &[u8] =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-";
+
+        let assert_catalog = |value: &str| {
+            assert_eq!(
+                classify_azure_sandbox_image(value),
+                Some(AzureSandboxImage::Catalog(value.trim())),
+                "'{value}'"
+            );
+        };
+
+        for a in ALPHABET {
+            assert_catalog(&String::from_utf8(vec![*a]).unwrap());
+            for b in ALPHABET {
+                assert_catalog(&String::from_utf8(vec![*a, *b]).unwrap());
+                for c in ALPHABET {
+                    assert_catalog(&String::from_utf8(vec![*a, *b, *c]).unwrap());
+                }
+            }
+        }
+
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..20_000 {
+            let len = 4 + (next() % 60) as usize;
+            let mut value: String = (0..len)
+                .map(|_| ALPHABET[(next() % ALPHABET.len() as u64) as usize] as char)
+                .collect();
+            if next() % 4 == 0 {
+                value = format!("  {value}\t");
+            }
+            assert_catalog(&value);
+        }
+    }
+
+    /// The label is how the provider finds the image the controller built, so both must derive
+    /// the same one; it also has to fit a label value, which a raw reference does not.
+    #[test]
+    fn the_disk_image_label_is_stable_and_label_safe() {
+        let label = azure_disk_image_label("docker.io/library/python:3.14-slim");
+        assert_eq!(
+            label,
+            azure_disk_image_label(" docker.io/library/python:3.14-slim ")
+        );
+        assert_ne!(
+            label,
+            azure_disk_image_label("docker.io/library/python:3.13-slim")
+        );
+        assert_eq!(label.len(), 32);
+        assert!(label.chars().all(|c| c.is_ascii_hexdigit()), "{label}");
     }
 
     /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
@@ -1904,11 +2300,11 @@ mod tests {
         );
     }
 
-    /// `Source` is a public part of the type that no backend builds: an empty image string
-    /// schedules a pod that can never run, so the refusal has to happen at plan time and on
-    /// every platform, not in one emitter.
+    /// `alien build` builds an AWS sandbox's base image, so source is a declaration there. On
+    /// every other platform the image is pulled as declared, and an unbuilt source would schedule
+    /// a pod that can never run, so the refusal still has to happen at plan time.
     #[test]
-    fn source_code_is_refused_everywhere_rather_than_producing_a_broken_manifest() {
+    fn source_code_is_refused_off_aws_rather_than_producing_a_broken_manifest() {
         let sandbox = Sandbox::new("agent".to_string())
             .code(SandboxCode::Source {
                 src: "./sandbox".to_string(),
@@ -1925,8 +2321,11 @@ mod tests {
             })
             .build();
 
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("an AWS sandbox base image is built by `alien build`");
+
         for platform in [
-            Platform::Aws,
             Platform::Azure,
             Platform::Gcp,
             Platform::Kubernetes,
@@ -1934,11 +2333,15 @@ mod tests {
         ] {
             let error = sandbox
                 .validate_for_platform(platform)
-                .expect_err("no backend builds a sandbox image from source");
+                .expect_err("no backend builds a sandbox image from source here");
             assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
             assert!(
                 error.to_string().contains("code.image"),
                 "the refusal must say what to write instead: {error}"
+            );
+            assert!(
+                error.to_string().contains(&platform.to_string()),
+                "the refusal must name the platform that cannot build it: {error}"
             );
         }
     }
@@ -1953,6 +2356,44 @@ mod tests {
         assert_eq!(quantity_mib("1Ti"), Some(1024 * 1024));
         assert_eq!(millicores("1"), Some(1000));
         assert_eq!(millicores("500m"), Some(500));
+    }
+
+    #[test]
+    fn privileged_supervisor_fixes_identity_and_requires_an_enforceable_backend() {
+        let mut sandbox = sandbox_with(
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+            vec![],
+        );
+        sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("AWS can enforce the policy in the agent");
+        assert_eq!(sandbox.cloud_egress(), &SandboxEgress::Allow);
+        assert_eq!(
+            sandbox.supervisor_environment()["ALIEN_SANDBOX_EXEC_UID"],
+            "60001"
+        );
+        for platform in [
+            Platform::Local,
+            Platform::Kubernetes,
+            Platform::Azure,
+            Platform::Gcp,
+        ] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("cannot grant a privilege boundary the backend lacks");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            assert!(error.message.contains("privilegedSupervisor"));
+        }
+        for uid in [0, u32::MAX] {
+            sandbox.privileged_supervisor.as_mut().unwrap().command_uid = uid;
+            let error = sandbox
+                .validate_for_platform(Platform::Aws)
+                .expect_err("invalid uid must fail at plan time");
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+        }
     }
 
     #[test]
@@ -2090,5 +2531,58 @@ mod tests {
             None,
             "a host list has no boolean and must not be approximated"
         );
+    }
+
+    /// A sandbox resource as a stack state recorded it before `session` became `lifecycle` and
+    /// `idleSuspendSeconds` became `idlePauseSeconds`. Such a state is still what a deployment
+    /// that old holds, and reading it is the first step of updating or deleting that deployment.
+    #[test]
+    fn stack_state_written_before_the_lifecycle_rename_still_reads() {
+        let stored: crate::StackResourceState = serde_json::from_value(serde_json::json!({
+            "type": "sandbox",
+            "config": {
+                "id": "sandbox",
+                "code": {
+                    "type": "image",
+                    "image": "s3://example-bundles/analysis/v1/bundle.zip"
+                },
+                "type": "sandbox",
+                "egress": { "mode": "allow" },
+                "session": { "maxLifetimeSeconds": 28800, "idleSuspendSeconds": 600 }
+            },
+            "status": "running",
+            "outputs": {
+                "type": "sandbox",
+                "identifier": "arn:aws:lambda:us-east-2:123456789012:microvm-image:example-sandbox",
+                "parentName": "arn:aws:lambda:us-east-2:123456789012:microvm-image:example-sandbox"
+            },
+            "lifecycle": "frozen",
+            "dependencies": [
+                { "id": "management", "type": "remote-stack-management" },
+                { "id": "access", "type": "resource-access" }
+            ],
+            "controllerPlatform": "aws"
+        }))
+        .expect("a stack state written before the rename must still deserialize");
+
+        let expected = Sandbox::new("sandbox".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://example-bundles/analysis/v1/bundle.zip".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(28_800),
+                idle_pause_seconds: Some(600),
+            })
+            .build();
+        assert_eq!(stored.config.downcast_ref::<Sandbox>(), Some(&expected));
+
+        let rewritten = serde_json::to_value(&stored.config).expect("the sandbox serializes");
+        assert_eq!(
+            rewritten["lifecycle"],
+            serde_json::json!({ "maxLifetimeSeconds": 28800, "idlePauseSeconds": 600 }),
+            "the next write stores the current names"
+        );
+        assert!(rewritten.get("session").is_none());
     }
 }

@@ -8,16 +8,16 @@ use alien_aws_clients::iam::{
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
-    Container, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
-    ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs, Worker,
+    AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster, Container, HeartbeatBackend,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData,
+    ServiceAccountHeartbeatStatus, ServiceAccountOutputs, Worker, standard_resource_tags,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
-    generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
+    generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
 };
 use chrono::Utc;
 
@@ -291,6 +291,21 @@ impl AwsServiceAccountController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let previous = ctx.previous_resource_config::<ServiceAccount>()?;
+        // Frozen compatibility has already verified the installed explicit grants.
+        // Capturing their metadata changes no AWS role policy, and runtime does
+        // not need IAM write access to record it.
+        if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::ImportedHandoff
+            && previous.resource_permission_sets.is_empty()
+            && !config.resource_permission_sets.is_empty()
+            && previous.id == config.id
+            && previous.stack_permission_sets == config.stack_permission_sets
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -820,24 +835,19 @@ impl AwsServiceAccountController {
                     service: principal_value,
                 },
                 action: "sts:AssumeRole".to_string(),
+                condition: None,
             });
         }
 
-        // Statement for other IAM roles (impersonators)
+        // IAM resolves role principals at policy creation time. These roles may still be
+        // provisioning (or be recreated later), so constrain the account principal by
+        // exact role ARNs instead. This also requires the caller's sts:AssumeRole grant;
+        // it does not grant assumption to arbitrary identities in the account.
         if !role_arns.is_empty() {
-            let principal_value = if role_arns.len() == 1 {
-                TrustPolicyPrincipalValue::Single(role_arns[0].clone())
-            } else {
-                TrustPolicyPrincipalValue::Multiple(role_arns)
-            };
-
-            statements.push(TrustPolicyStatement {
-                effect: "Allow".to_string(),
-                principal: TrustPolicyPrincipal::Aws {
-                    aws: principal_value,
-                },
-                action: "sts:AssumeRole".to_string(),
-            });
+            statements.push(role_trust_statement(
+                &ctx.get_aws_config()?.account_id,
+                role_arns,
+            ));
         }
 
         // Create the complete trust policy document
@@ -935,6 +945,7 @@ impl AwsServiceAccountController {
                         effect: "Allow".to_string(),
                         action: vec!["ecr:GetAuthorizationToken".to_string()],
                         resource: vec!["*".to_string()],
+                        not_resource: Vec::new(),
                         condition: None,
                     });
                     all_statements.push(AwsIamStatement {
@@ -945,6 +956,7 @@ impl AwsServiceAccountController {
                             "ecr:GetDownloadUrlForLayer".to_string(),
                         ],
                         resource: vec![format!("arn:aws:ecr:*:{}:repository/*", mgmt_account)],
+                        not_resource: Vec::new(),
                         condition: None,
                     });
                 }
@@ -1075,4 +1087,105 @@ fn emit_aws_service_account_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+/// Trust only the named roles without requiring them to exist when setup creates the policy.
+fn role_trust_statement(account_id: &str, role_arns: Vec<String>) -> TrustPolicyStatement {
+    TrustPolicyStatement {
+        effect: "Allow".to_string(),
+        principal: TrustPolicyPrincipal::Aws {
+            aws: TrustPolicyPrincipalValue::Single(format!("arn:aws:iam::{account_id}:root")),
+        },
+        action: "sts:AssumeRole".to_string(),
+        condition: Some(serde_json::json!({
+            "ArnEquals": { "aws:PrincipalArn": role_arns }
+        })),
+    }
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+
+    #[test]
+    fn role_trust_requires_an_exact_allowed_role_in_the_same_account() {
+        let roles = vec![
+            "arn:aws:iam::123456789012:role/test-compute-role".to_string(),
+            "arn:aws:iam::123456789012:role/test-execution-sa".to_string(),
+        ];
+        let policy = serde_json::to_value(role_trust_statement("123456789012", roles.clone()))
+            .expect("trust statement should serialize");
+        assert_eq!(
+            policy,
+            serde_json::json!({
+                "Effect": "Allow",
+                "Principal": {"AWS": "arn:aws:iam::123456789012:root"},
+                "Action": "sts:AssumeRole",
+                "Condition": {"ArnEquals": {"aws:PrincipalArn": roles}}
+            })
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{MockPlatformServiceProvider, controller_test::SingleControllerExecutor};
+    use alien_core::permissions::PermissionProfile;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn legacy_grant_capture_avoids_iam_only_for_imported_handoffs() {
+        let profile = PermissionProfile::new().resource("objects", ["storage/data-read"]);
+        let captured =
+            ServiceAccount::from_permission_profile("reader-sa".to_string(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap();
+        for authority in [
+            alien_core::InitialSetupAuthority::ImportedHandoff,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        ] {
+            let direct_setup = authority == alien_core::InitialSetupAuthority::DirectSetup;
+            let mut legacy = captured.clone();
+            legacy.resource_permission_sets.clear();
+            let controller = AwsServiceAccountController {
+                state: AwsServiceAccountState::Ready,
+                role_arn: Some("arn:aws:iam::123456789012:role/reader-sa".to_string()),
+                role_name: Some("reader-sa".to_string()),
+                stack_permissions_applied: true,
+                ..Default::default()
+            };
+            let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_delete_role_policy()
+                .times(usize::from(direct_setup))
+                .returning(|_, _| Ok(()));
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .times(usize::from(direct_setup))
+                .returning(move |_| Ok(iam.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(legacy)
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(authority)
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.update(captured.clone()).unwrap();
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor.status(),
+                if direct_setup {
+                    ResourceStatus::Provisioning
+                } else {
+                    ResourceStatus::Running
+                }
+            );
+        }
+    }
 }

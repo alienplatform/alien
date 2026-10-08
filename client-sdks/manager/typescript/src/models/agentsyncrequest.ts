@@ -4,10 +4,20 @@
 
 import * as z from "zod/v4";
 import {
+  DynamicContainerReport,
+  DynamicContainerReport$Outbound,
+  DynamicContainerReport$outboundSchema,
+} from "./dynamiccontainerreport.js";
+import {
   ExecutionClaim,
   ExecutionClaim$Outbound,
   ExecutionClaim$outboundSchema,
 } from "./executionclaim.js";
+import {
+  ObservedApplicationReport,
+  ObservedApplicationReport$Outbound,
+  ObservedApplicationReport$outboundSchema,
+} from "./observedapplicationreport.js";
 import {
   ObservedInventoryBatch,
   ObservedInventoryBatch$Outbound,
@@ -35,10 +45,7 @@ import {
 } from "./resourceheartbeat.js";
 
 /**
- * Inbound sync payload that adds optional receipts without expanding the
- *
- * @remarks
- * public [`AgentSyncRequest`] struct literal.
+ * Body of `POST /v1/sync`.
  */
 export type AgentSyncRequest = {
   capabilities?: Array<OperatorCapabilityReport> | undefined;
@@ -61,6 +68,15 @@ export type AgentSyncRequest = {
   resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
+  /**
+   * Absent for Operators that predate container tunnels.
+   */
+  supportsTunnels?: boolean | undefined;
+  application?: ObservedApplicationReport | null | undefined;
+  /**
+   * Absent for older Operators. This report has no secret values.
+   */
+  dynamicContainers?: Array<DynamicContainerReport> | null | undefined;
   operatorImage?: OperatorImageReport | null | undefined;
 };
 
@@ -76,6 +92,9 @@ export type AgentSyncRequest$Outbound = {
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
+  supportsTunnels?: boolean | undefined;
+  application?: ObservedApplicationReport$Outbound | null | undefined;
+  dynamicContainers?: Array<DynamicContainerReport$Outbound> | null | undefined;
   operatorImage?: OperatorImageReport$Outbound | null | undefined;
 };
 
@@ -95,6 +114,10 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string().optional(),
   supportsExecutionClaims: z.boolean().optional(),
+  supportsTunnels: z.boolean().optional(),
+  application: z.nullable(ObservedApplicationReport$outboundSchema).optional(),
+  dynamicContainers: z.nullable(z.array(DynamicContainerReport$outboundSchema))
+    .optional(),
   operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
 });
 

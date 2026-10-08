@@ -24,11 +24,18 @@ const value: models.DaemonHeartbeatDataAws = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 429918,
   backend: "aws",
@@ -56,11 +63,18 @@ const value: models.DaemonHeartbeatDataGcp = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 685429,
   backend: "gcp",
@@ -93,11 +107,18 @@ const value: models.DaemonHeartbeatDataAzure = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 821001,
   backend: "azure",
@@ -124,11 +145,18 @@ const value: models.DaemonHeartbeatDataMachines = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 588890,
   backend: "machines",
@@ -151,11 +179,18 @@ const value: models.DaemonHeartbeatDataKubernetes = {
   pods: [],
   replicas: {},
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "kubernetes",
 };
@@ -170,12 +205,20 @@ const value: models.DaemonHeartbeatDataLocal = {
   imagePathPresent: true,
   runtimeId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };
 ```
+

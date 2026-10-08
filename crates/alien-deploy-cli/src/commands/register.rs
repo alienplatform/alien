@@ -1,22 +1,28 @@
 //! Register an externally-provisioned stack with a manager.
 //!
-//! Today's only flow: read CloudFormation Stack Outputs via
-//! `DescribeStacks` from the customer's local AWS credentials and POST
-//! the resolved import payload to the manager's `/v1/stack/import`
-//! endpoint.
+//! Reads CloudFormation Stack Outputs via `DescribeStacks` from the
+//! deployer's local AWS credentials. Hosted registration goes through the
+//! Platform import boundary; an explicit manager URL selects standalone mode.
 //!
 //! Future flows (Terraform `alien_deployment` provider, Helm boot path)
 //! land alongside under the same subcommand surface keyed on
 //! `--import <kind>`.
 
+use std::collections::HashMap;
+
 use crate::error::{ErrorData, Result};
 use alien_core::{
+    deployer_secret_value_refusal,
+    embedded_config::DeployCliConfig,
     import::{ImportSourceKind, ImportedResource, StackImportRequest},
     ManagementConfig, Platform, ResourceType, StackSettings,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
+
+use super::up::resolve_base_url_option;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -27,8 +33,10 @@ use serde_json::Value as JsonValue;
         --import cloudformation \\
         --stack-name acme-prod \\
         --region us-east-1 \\
-        --manager-url https://manager.example.com \\
-        --token dg_..."
+        --base-url https://api.alien.dev \\
+        --token dg_... \\
+        --input region=us-east-1 \\
+        --input-json replicas=3"
 )]
 pub struct RegisterArgs {
     /// Source the resolved import payload comes from.
@@ -50,16 +58,33 @@ pub struct RegisterArgs {
     #[arg(long, env = "AWS_REGION", default_value = "us-east-1")]
     pub region: String,
 
-    /// Manager URL the resolved payload is POSTed to.
+    /// Standalone manager URL. Omit for hosted registration through Platform.
     #[arg(long, env = "ALIEN_MANAGER_URL")]
-    pub manager_url: String,
+    pub manager_url: Option<String>,
+
+    /// Platform API URL for hosted registration. Defaults to the URL embedded
+    /// in a packaged CLI, then https://api.alien.dev.
+    #[arg(long, env = "ALIEN_BASE_URL")]
+    pub base_url: Option<String>,
 
     /// Deployment token authorizing the import.
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: String,
 
-    /// Print the resolved payload to stdout instead of POSTing it.
-    /// Useful for debugging or for piping into `curl`.
+    /// String stack input for registration (id=value). Repeat for multiple inputs.
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Typed JSON stack input for registration (id=<json>). Repeat for multiple inputs.
+    #[arg(long = "input-json")]
+    pub json_input_values: Vec<String>,
+
+    /// Refused: deployer secrets are written into your own secret store, never
+    /// passed to Alien. Kept so an old invocation fails with what to do instead.
+    #[arg(long = "secret-input-file", hide = true)]
+    pub secret_input_files: Vec<String>,
+
+    /// Print a diagnostic payload to stdout instead of POSTing it.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -69,13 +94,19 @@ pub enum ImportKind {
     Cloudformation,
 }
 
-pub async fn register_command(args: RegisterArgs) -> Result<()> {
+pub async fn register_command(
+    args: RegisterArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
     match args.import {
-        ImportKind::Cloudformation => register_cloudformation(args).await,
+        ImportKind::Cloudformation => register_cloudformation(args, embedded_config).await,
     }
 }
 
-async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
+async fn register_cloudformation(
+    args: RegisterArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
     let stack_name = args.stack_name.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "--stack-name is required for --import cloudformation".to_string(),
@@ -84,21 +115,45 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
 
     let deployment_name = args.name.clone().unwrap_or_else(|| stack_name.clone());
 
+    let input_values = collect_registration_inputs(
+        &args.input_values,
+        &args.json_input_values,
+        &args.secret_input_files,
+    )?;
+    let target = resolve_registration_target(
+        args.manager_url.as_deref(),
+        args.base_url.as_ref(),
+        embedded_config,
+    )?;
+
     let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
-    let request = build_import_request(&outputs, &args.token, &deployment_name, &stack_name)?;
+    let request = build_import_request(&outputs, &deployment_name, &stack_name, input_values)?;
 
     if args.dry_run {
-        let json = serde_json::to_string_pretty(&request)
+        let body = serialize_registration_request(&target, &request)?;
+        let json = serde_json::to_string_pretty(&body)
             .into_alien_error()
             .context(ErrorData::JsonError {
-                operation: "serialize stack import request".to_string(),
-                reason: "Failed to serialize import request".to_string(),
+                operation: "serialize stack registration request".to_string(),
+                reason: "Failed to serialize stack registration request".to_string(),
             })?;
         println!("{json}");
         return Ok(());
     }
 
-    let url = format!("{}/v1/stack/import", args.manager_url.trim_end_matches('/'));
+    let request_body = serialize_registration_request(&target, &request)?;
+    let (url, operation, destination) = match &target {
+        RegistrationTarget::Platform(base_url) => (
+            format!("{base_url}/v1/deployments/import"),
+            "POST /v1/deployments/import",
+            "Platform",
+        ),
+        RegistrationTarget::StandaloneManager(manager_url) => (
+            format!("{manager_url}/v1/stack/import"),
+            "POST /v1/stack/import",
+            "standalone manager",
+        ),
+    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -112,28 +167,201 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", args.token))
-        .json(&request)
+        .json(&request_body)
         .send()
         .await
         .into_alien_error()
         .context(ErrorData::HttpError {
-            operation: "POST /v1/stack/import".to_string(),
+            operation: operation.to_string(),
             url: url.clone(),
-            reason: "Manager request failed".to_string(),
+            reason: format!("{destination} request failed"),
         })?;
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
         return Err(AlienError::new(ErrorData::HttpError {
-            operation: "POST /v1/stack/import".to_string(),
+            operation: operation.to_string(),
             url,
-            reason: format!("Manager returned {status}: {body}"),
+            reason: format!("{destination} returned {status}: {body}"),
         }));
     }
 
-    println!("Imported stack '{stack_name}' into manager at {url}");
+    println!("Registered stack '{stack_name}' through {destination} at {url}");
     println!("{body}");
+    Ok(())
+}
+
+enum RegistrationTarget {
+    Platform(String),
+    StandaloneManager(String),
+}
+
+fn resolve_registration_target(
+    manager_url: Option<&str>,
+    base_url: Option<&String>,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<RegistrationTarget> {
+    match (manager_url, base_url) {
+        (Some(manager_url), _) => Ok(RegistrationTarget::StandaloneManager(
+            manager_url.trim_end_matches('/').to_string(),
+        )),
+        (None, Some(base_url)) => Ok(RegistrationTarget::Platform(
+            base_url.trim_end_matches('/').to_string(),
+        )),
+        (None, None) => Ok(RegistrationTarget::Platform(
+            resolve_base_url_option(None, embedded_config)
+                .trim_end_matches('/')
+                .to_string(),
+        )),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardImportRequest<'a> {
+    mode: &'static str,
+    source: ForwardImportSource<'a>,
+    input_values: &'a HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardImportSource<'a> {
+    deployment_name: &'a str,
+    resource_prefix: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_kind: Option<ImportSourceKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_metadata: Option<&'a JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_id: Option<&'a str>,
+    platform: Platform,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_platform: Option<Platform>,
+    region: &'a str,
+    setup_target: &'a str,
+    setup_import_format_version: u32,
+    setup_fingerprint: &'a str,
+    setup_fingerprint_version: u32,
+    stack_settings: &'a StackSettings,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    management_config: Option<&'a ManagementConfig>,
+    resources: &'a [ImportedResource],
+}
+
+fn serialize_registration_request(
+    target: &RegistrationTarget,
+    request: &StackImportRequest,
+) -> Result<JsonValue> {
+    match target {
+        RegistrationTarget::Platform(_) => serde_json::to_value(ForwardImportRequest {
+            mode: "forward",
+            source: ForwardImportSource {
+                deployment_name: &request.deployment_name,
+                resource_prefix: &request.resource_prefix,
+                source_kind: request.source_kind,
+                setup_metadata: request.setup_metadata.as_ref(),
+                release_id: request.release_id.as_deref(),
+                platform: request.platform,
+                base_platform: request.base_platform,
+                region: &request.region,
+                setup_target: &request.setup_target,
+                setup_import_format_version: request.setup_import_format_version,
+                setup_fingerprint: &request.setup_fingerprint,
+                setup_fingerprint_version: request.setup_fingerprint_version,
+                stack_settings: &request.stack_settings,
+                management_config: request.management_config.as_ref(),
+                resources: &request.resources,
+            },
+            input_values: &request.input_values,
+        }),
+        RegistrationTarget::StandaloneManager(_) => serde_json::to_value(request),
+    }
+    .into_alien_error()
+    .context(ErrorData::JsonError {
+        operation: "serialize stack registration request".to_string(),
+        reason: "Failed to serialize stack registration request".to_string(),
+    })
+}
+
+fn collect_registration_inputs(
+    input_values: &[String],
+    json_input_values: &[String],
+    secret_input_files: &[String],
+) -> Result<HashMap<String, JsonValue>> {
+    // No deployer secret value may reach the platform: refuse before any
+    // secret file is read.
+    if let Some(input) = secret_input_files.first() {
+        let (id, _) = parse_input_assignment(input, "--secret-input-file")?;
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "secret-input-file".to_string(),
+            message: deployer_secret_value_refusal(&id),
+        }));
+    }
+
+    let mut values = HashMap::new();
+    for input in input_values {
+        let (id, value) = parse_input_assignment(input, "--input")?;
+        insert_registration_input(&mut values, id, JsonValue::String(value))?;
+    }
+    for input in json_input_values {
+        let (id, raw_value) = parse_input_assignment(input, "--input-json")?;
+        let value = serde_json::from_str(&raw_value)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: format!("parse --input-json value for '{id}'"),
+                reason: format!("Stack input '{id}' is not valid JSON"),
+            })?;
+        if !is_supported_stack_input_value(&value) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input-json".to_string(),
+                message: format!(
+                    "Stack input '{id}' must be a string, number, boolean, or array of strings"
+                ),
+            }));
+        }
+        insert_registration_input(&mut values, id, value)?;
+    }
+
+    Ok(values)
+}
+
+fn is_supported_stack_input_value(value: &JsonValue) -> bool {
+    matches!(
+        value,
+        JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_)
+    ) || matches!(value, JsonValue::Array(values) if values.iter().all(JsonValue::is_string))
+}
+
+fn parse_input_assignment(input: &str, flag: &str) -> Result<(String, String)> {
+    let Some((id, value)) = input.split_once('=') else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: use id=value"),
+        }));
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: input id is required"),
+        }));
+    }
+    Ok((id.to_string(), value.to_string()))
+}
+
+fn insert_registration_input(
+    values: &mut HashMap<String, JsonValue>,
+    id: String,
+    value: JsonValue,
+) -> Result<()> {
+    if values.insert(id.clone(), value).is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "input".to_string(),
+            message: format!("Stack input '{id}' was provided more than once"),
+        }));
+    }
     Ok(())
 }
 
@@ -267,9 +495,9 @@ fn parse_json_output(key: &str, value: &str) -> Result<JsonValue> {
 
 fn build_import_request(
     outputs: &CfnOutputs,
-    token: &str,
     deployment_name: &str,
     stack_name: &str,
+    input_values: HashMap<String, JsonValue>,
 ) -> Result<StackImportRequest> {
     let source_kind: ImportSourceKind = match outputs.source_kind.as_deref() {
         Some("cloudformation") => ImportSourceKind::CloudFormation,
@@ -343,11 +571,12 @@ fn build_import_request(
             reason: "DeploymentManagementConfig has unexpected shape".to_string(),
         })?;
 
-    let stack_settings_value = outputs.stack_settings.clone().ok_or_else(|| {
+    let mut stack_settings_value = outputs.stack_settings.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "DeploymentStackSettings output not found in stack".to_string(),
         })
     })?;
+    normalize_cloudformation_stack_settings(&mut stack_settings_value)?;
     let stack_settings: StackSettings = serde_json::from_value(stack_settings_value)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -363,12 +592,16 @@ fn build_import_request(
             }));
         };
         for item in items {
-            let imported: ImportedResourceWire = serde_json::from_value(item.clone())
+            let mut imported: ImportedResourceWire = serde_json::from_value(item.clone())
                 .into_alien_error()
                 .context(ErrorData::JsonError {
                     operation: "deserialize ImportedResource".to_string(),
                     reason: "DeploymentResources item has unexpected shape".to_string(),
                 })?;
+            normalize_cloudformation_import_data(
+                &imported.resource_type,
+                &mut imported.import_data,
+            )?;
             resources.push(ImportedResource {
                 id: imported.id,
                 resource_type: ResourceType::from(imported.resource_type),
@@ -386,7 +619,7 @@ fn build_import_request(
 
     Ok(StackImportRequest {
         setup_import_format_version,
-        deployment_group_token: token.to_string(),
+        deployment_group_token: String::new(),
         deployment_name: deployment_name.to_string(),
         resource_prefix,
         source_kind: Some(source_kind),
@@ -400,9 +633,82 @@ fn build_import_request(
         setup_fingerprint_version,
         stack_settings,
         management_config: Some(management_config),
-        input_values: Default::default(),
+        input_values,
         resources,
     })
+}
+
+/// CloudFormation resolves `Number` parameter references inside
+/// `Fn::ToJsonString` as JSON strings. Convert only the numeric fields the
+/// generated StackSettings contract sources from those parameters.
+fn normalize_cloudformation_stack_settings(value: &mut JsonValue) -> Result<()> {
+    normalize_u32_string(value, "/network/availability_zones")?;
+
+    let Some(pools) = value
+        .pointer_mut("/compute/pools")
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return Ok(());
+    };
+    for (pool_id, pool) in pools {
+        for field in ["machines", "min", "max"] {
+            let Some(field_value) = pool.get_mut(field) else {
+                continue;
+            };
+            normalize_u32_value(field_value, &format!("compute.pools.{pool_id}.{field}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_u32_string(value: &mut JsonValue, pointer: &str) -> Result<()> {
+    if let Some(field) = value.pointer_mut(pointer) {
+        normalize_u32_value(field, pointer.trim_start_matches('/'))?;
+    }
+    Ok(())
+}
+
+fn normalize_u32_value(value: &mut JsonValue, field: &str) -> Result<()> {
+    let JsonValue::String(text) = value else {
+        return Ok(());
+    };
+    let number = text.parse::<u32>().map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "DeploymentStackSettings field '{field}' is not a valid unsigned integer"
+            ),
+        })
+    })?;
+    *value = JsonValue::from(number);
+    Ok(())
+}
+
+/// `AWS::NoValue` becomes `null` inside an `Fn::ToJsonString` list. Generated
+/// network lists gate only their trailing availability-zone entries, so
+/// trim trailing nulls while rejecting an interior null as malformed output.
+fn normalize_cloudformation_import_data(
+    resource_type: &str,
+    import_data: &mut JsonValue,
+) -> Result<()> {
+    if resource_type != "network" {
+        return Ok(());
+    }
+    for field in ["publicSubnetIds", "privateSubnetIds", "availabilityZones"] {
+        let Some(values) = import_data.get_mut(field).and_then(JsonValue::as_array_mut) else {
+            continue;
+        };
+        while values.last().is_some_and(JsonValue::is_null) {
+            values.pop();
+        }
+        if values.iter().any(JsonValue::is_null) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "CloudFormation network import field '{field}' contains a non-trailing null"
+                ),
+            }));
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -416,6 +722,8 @@ struct ImportedResourceWire {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
     use super::*;
     use alien_core::AwsManagementConfig;
 
@@ -446,7 +754,7 @@ mod tests {
     #[test]
     fn cloudformation_import_request_preserves_base_platform() {
         let request =
-            build_import_request(&base_outputs(), "dg_token", "app", "stack").expect("request");
+            build_import_request(&base_outputs(), "app", "stack", HashMap::new()).expect("request");
 
         assert_eq!(request.platform, Platform::Kubernetes);
         assert_eq!(request.base_platform, Some(Platform::Aws));
@@ -473,9 +781,9 @@ mod tests {
     fn a_declined_resource_is_absent_from_the_import_request() {
         let request = build_import_request(
             &outputs_with_resources(DECLINED_RESOURCE_PAYLOAD),
-            "dg_token",
             "app",
             "stack",
+            HashMap::new(),
         )
         .expect("a payload with a declined resource omitted should import");
 
@@ -495,15 +803,226 @@ mod tests {
     fn a_null_entry_fails_the_import_rather_than_being_skipped() {
         let error = build_import_request(
             &outputs_with_resources(r#"[null,{"id":"jobs","type":"queue","importData":{}}]"#),
-            "dg_token",
             "app",
             "stack",
+            HashMap::new(),
         )
         .expect_err("a null entry must not be silently dropped");
 
         assert!(
             format!("{error:?}").contains("deserialize ImportedResource"),
             "expected the typed importer to reject the null: {error:?}"
+        );
+    }
+
+    #[test]
+    fn registration_inputs_preserve_explicit_types() {
+        let collected = collect_registration_inputs(
+            &["region=us-east-1".to_string()],
+            &[
+                "replicas=3".to_string(),
+                "enabled=true".to_string(),
+                "zones=[\"a\",\"b\"]".to_string(),
+            ],
+            &[],
+        )
+        .expect("typed inputs should be collected");
+
+        assert_eq!(collected["region"], serde_json::json!("us-east-1"));
+        assert_eq!(collected["replicas"], serde_json::json!(3));
+        assert_eq!(collected["enabled"], serde_json::json!(true));
+        assert_eq!(collected["zones"], serde_json::json!(["a", "b"]));
+    }
+
+    #[test]
+    fn secret_input_files_are_refused_before_they_are_read() {
+        let secret = "secret-that-must-not-leave-the-host";
+        let mut file = tempfile::NamedTempFile::new().expect("secret fixture");
+        writeln!(file, "{secret}").expect("write secret fixture");
+
+        let error = collect_registration_inputs(
+            &["region=us-east-1".to_string()],
+            &[],
+            &[format!("apiKey={}", file.path().display())],
+        )
+        .expect_err("a secret input file is refused");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(
+            error.message.contains("'apiKey' is a deployer secret"),
+            "{}",
+            error.message
+        );
+        assert!(!format!("{error:?}").contains(secret));
+
+        // Refused without touching the file system at all.
+        let error = collect_registration_inputs(&[], &[], &["apiKey=/does/not/exist".to_string()])
+            .expect_err("refused before the path is opened");
+        assert!(
+            error.message.contains("deployer secret"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn platform_forward_request_preserves_typed_inputs_without_manager_credentials() {
+        let secret = "private-value";
+        let inputs = HashMap::from([
+            ("region".to_string(), serde_json::json!("us-east-1")),
+            ("apiKey".to_string(), serde_json::json!(secret)),
+        ]);
+        let request =
+            build_import_request(&base_outputs(), "app", "stack", inputs).expect("request");
+
+        let body = serialize_registration_request(
+            &RegistrationTarget::Platform("https://api.example.test".to_string()),
+            &request,
+        )
+        .expect("serialize Platform forward import");
+
+        assert_eq!(body["mode"], "forward");
+        assert_eq!(body["source"]["deploymentName"], "app");
+        assert_eq!(body["source"]["basePlatform"], "aws");
+        assert_eq!(body["inputValues"]["apiKey"], secret);
+        assert_eq!(body["inputValues"]["region"], "us-east-1");
+        assert!(body.get("deploymentGroupToken").is_none());
+        assert!(body["source"].get("deploymentGroupToken").is_none());
+    }
+
+    #[test]
+    fn manager_url_wins_over_a_base_url() {
+        let base_url = "https://api.example.test".to_string();
+        let target = resolve_registration_target(
+            Some("https://manager.example.test"),
+            Some(&base_url),
+            None,
+        )
+        .expect("manager selection should remain explicit");
+
+        let RegistrationTarget::StandaloneManager(url) = target else {
+            panic!("manager URL must take precedence over a base URL");
+        };
+        assert_eq!(url, "https://manager.example.test");
+    }
+
+    #[test]
+    fn registration_inputs_reject_json_outside_the_platform_contract() {
+        for unsupported in ["null", "{}", "[1,2]", "[\"a\",2]"] {
+            let error = collect_registration_inputs(&[], &[format!("value={unsupported}")], &[])
+                .err()
+                .expect("unsupported JSON must fail before registration");
+
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert!(error.message.contains("array of strings"));
+        }
+    }
+
+    #[test]
+    fn duplicate_registration_input_is_rejected_across_sources() {
+        let result = collect_registration_inputs(
+            &["replicas=3".to_string()],
+            &["replicas=3".to_string()],
+            &[],
+        );
+        let error = match result {
+            Ok(_) => panic!("duplicates must not depend on argument ordering"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("provided more than once"));
+    }
+
+    #[test]
+    fn resolved_cloudformation_outputs_normalize_typed_settings_and_subnet_lists() {
+        let mut outputs = base_outputs();
+        outputs.stack_settings = Some(serde_json::json!({
+            "network": {
+                "type": "create",
+                "cidr": "10.20.0.0/16",
+                "availability_zones": "2"
+            },
+            "compute": {
+                "pools": {
+                    "general": {
+                        "mode": "autoscale",
+                        "min": "1",
+                        "max": "3",
+                        "machine": "m7g.large"
+                    },
+                    "jobs": {
+                        "mode": "fixed",
+                        "machines": "2",
+                        "machine": "m7g.xlarge"
+                    }
+                }
+            }
+        }));
+        outputs.resources_chunks = vec![serde_json::json!([{
+            "id": "network",
+            "type": "network",
+            "importData": {
+                "vpcId": "vpc-123",
+                "publicSubnetIds": ["subnet-public-a", "subnet-public-b", null],
+                "privateSubnetIds": ["subnet-private-a", "subnet-private-b", null],
+                "availabilityZones": ["us-east-1a", "us-east-1b", null]
+            }
+        }])];
+
+        let request = build_import_request(&outputs, "app", "stack", HashMap::new())
+            .expect("resolved CloudFormation outputs should satisfy the typed import contract");
+        let settings = serde_json::to_value(&request.stack_settings).expect("stack settings");
+        assert_eq!(settings["network"]["availability_zones"], 2);
+        assert_eq!(settings["compute"]["pools"]["general"]["min"], 1);
+        assert_eq!(settings["compute"]["pools"]["general"]["max"], 3);
+        assert_eq!(settings["compute"]["pools"]["jobs"]["machines"], 2);
+        assert_eq!(
+            request.resources[0].import_data["publicSubnetIds"],
+            serde_json::json!(["subnet-public-a", "subnet-public-b"])
+        );
+        assert_eq!(
+            request.resources[0].import_data["privateSubnetIds"],
+            serde_json::json!(["subnet-private-a", "subnet-private-b"])
+        );
+        assert_eq!(
+            request.resources[0].import_data["availabilityZones"],
+            serde_json::json!(["us-east-1a", "us-east-1b"])
+        );
+    }
+
+    #[test]
+    fn malformed_cloudformation_numeric_setting_still_fails() {
+        let mut outputs = base_outputs();
+        outputs.stack_settings = Some(serde_json::json!({
+            "network": {"type": "create", "availability_zones": "two"}
+        }));
+
+        let error = build_import_request(&outputs, "app", "stack", HashMap::new())
+            .expect_err("non-numeric text must not be coerced");
+        assert!(
+            format!("{error:?}").contains("network/availability_zones"),
+            "the error should identify the malformed field: {error:?}"
+        );
+    }
+
+    #[test]
+    fn interior_network_null_still_fails() {
+        let mut outputs = base_outputs();
+        outputs.resources_chunks = vec![serde_json::json!([{
+            "id": "network",
+            "type": "network",
+            "importData": {
+                "publicSubnetIds": ["subnet-public-a", null, "subnet-public-c"],
+                "privateSubnetIds": ["subnet-private-a"]
+            }
+        }])];
+
+        let error = build_import_request(&outputs, "app", "stack", HashMap::new())
+            .expect_err("an interior null is not a declined trailing AZ");
+        assert!(
+            format!("{error:?}").contains("non-trailing null"),
+            "the malformed array should fail explicitly: {error:?}"
         );
     }
 }

@@ -29,7 +29,6 @@ const ENCRYPTION_KEY_SHA256: &str =
 const GOOD_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator:local";
 const NOT_READY_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator-not-ready:local";
 const OPERATOR_FIXTURE_BASE_IMAGE: &str = "alpine/k8s:1.32.0";
-const LOG_COLLECTOR_BASE_IMAGE: &str = "fluent/fluent-bit:3.2";
 const LOG_COLLECTOR_IMAGE: &str = "alien-product-lifecycle-collector:local";
 const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "alien-product-lifecycle-runtime";
 const GOOD_RUNTIME_IMAGE_TAG: &str = "local";
@@ -89,24 +88,35 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     let terraform_failure_chart_dir = temp.path().join("terraform-failure-chart");
     let operator_fixture_dir = temp.path().join("operator-fixture");
     let not_ready_operator_fixture_dir = temp.path().join("operator-fixture-not-ready");
-    let log_collector_fixture_dir = temp.path().join("log-collector-fixture");
     let runtime_fixture_dir = temp.path().join("runtime-fixture");
     fs::create_dir_all(&operator_fixture_dir).expect("create Operator fixture directory");
     fs::create_dir_all(&not_ready_operator_fixture_dir)
         .expect("create not-ready Operator fixture directory");
-    fs::create_dir_all(&log_collector_fixture_dir).expect("create log-collector fixture directory");
     fs::create_dir_all(&runtime_fixture_dir).expect("create runtime fixture directory");
     fs::write(
         operator_fixture_dir.join("Dockerfile"),
         r#"FROM __OPERATOR_FIXTURE_BASE_IMAGE__
 RUN mkdir -p /www && printf ready > /www/ready && chmod -R a+rX /www
 USER 1000:1000
+COPY start.sh /start.sh
 ENTRYPOINT []
-CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch configmap \"$OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP\" --type=merge -p '{\"metadata\":{\"labels\":{\"alien.dev/remote-operator-identity-phase\":\"initialized\"}},\"immutable\":true}' && python3 -m http.server 8081 --directory /www"]
+CMD ["/bin/sh", "/start.sh"]
 "#
-        .replace("__OPERATOR_FIXTURE_BASE_IMAGE__", OPERATOR_FIXTURE_BASE_IMAGE),
+        .replace(
+            "__OPERATOR_FIXTURE_BASE_IMAGE__",
+            OPERATOR_FIXTURE_BASE_IMAGE,
+        ),
     )
     .expect("write Operator readiness fixture Dockerfile");
+    fs::write(
+        operator_fixture_dir.join("start.sh"),
+        r#"#!/bin/sh
+set -eu
+kubectl --namespace="$KUBERNETES_NAMESPACE" patch configmap "$OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP" --type=merge -p '{"metadata":{"labels":{"alien.dev/remote-operator-identity-phase":"initialized"}},"immutable":true}'
+exec python3 -m http.server 8081 --directory /www
+"#,
+    )
+    .expect("write Operator startup fixture");
     fs::write(
         not_ready_operator_fixture_dir.join("Dockerfile"),
         format!("FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT []\nCMD [\"sleep\", \"3600\"]\n"),
@@ -119,25 +129,7 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
         ),
     )
     .expect("write runtime fixture Dockerfile");
-    fs::write(
-        log_collector_fixture_dir.join("Dockerfile"),
-        format!("FROM {LOG_COLLECTOR_BASE_IMAGE}\nCOPY marker /alien-e2e-marker\n"),
-    )
-    .expect("write log-collector fixture Dockerfile");
-    fs::write(log_collector_fixture_dir.join("marker"), "lifecycle-e2e\n")
-        .expect("write log-collector fixture marker");
     run_ok("docker", ["pull", OPERATOR_FIXTURE_BASE_IMAGE], None);
-    run_ok("docker", ["pull", LOG_COLLECTOR_BASE_IMAGE], None);
-    run_ok(
-        "docker",
-        [
-            "build",
-            "--tag",
-            LOG_COLLECTOR_IMAGE,
-            path_str(&log_collector_fixture_dir),
-        ],
-        None,
-    );
     run_ok(
         "docker",
         [
@@ -185,17 +177,6 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
             "load",
             "docker-image",
             GOOD_RUNTIME_IMAGE,
-            "--name",
-            "alien-product-lifecycle",
-        ],
-        None,
-    );
-    run_ok(
-        "kind",
-        [
-            "load",
-            "docker-image",
-            LOG_COLLECTOR_IMAGE,
             "--name",
             "alien-product-lifecycle",
         ],
@@ -268,6 +249,38 @@ spec:
     };
 
     run_ok("kubectl", ["create", "namespace", &helm_namespace], None);
+    let collector_fixture_dir = temp.path().join("collector-fixture");
+    fs::create_dir_all(&collector_fixture_dir).expect("create collector fixture directory");
+    fs::write(
+        collector_fixture_dir.join("Dockerfile"),
+        format!(
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT [\"/bin/sh\", \"-c\", \"exec sleep 3600\", \"collector\"]\n"
+        ),
+    )
+    .expect("write collector fixture Dockerfile");
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            LOG_COLLECTOR_IMAGE,
+            path_str(&collector_fixture_dir),
+        ],
+        None,
+    );
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
+            LOG_COLLECTOR_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
+    );
+    verify_collector_selector_upgrade(temp.path(), &good_chart_dir, &helm_namespace);
+
     let installer_role = temp.path().join("product-installer-role.yaml");
     fs::write(
         &installer_role,
@@ -704,6 +717,63 @@ rules:
         "2m",
     );
     run_ok("helm", bridged_enable.iter().map(String::as_str), None);
+    let operator_name =
+        remote_operator_record_name(&helm_namespace, bridge_release, "remote-operator");
+    let daemonsets = run_ok(
+        "kubectl",
+        [
+            "get",
+            "daemonsets",
+            "--namespace",
+            &helm_namespace,
+            "--output=json",
+        ],
+        None,
+    );
+    let daemonsets: serde_json::Value =
+        serde_json::from_str(&daemonsets.stdout).expect("parse namespace DaemonSets");
+    assert!(
+        daemonsets["items"].as_array().is_some_and(Vec::is_empty),
+        "Pod log collection must not install a node DaemonSet: {daemonsets:?}"
+    );
+    let pod_log_access = run_ok(
+        "kubectl",
+        [
+            "auth",
+            "can-i",
+            "get",
+            "pods",
+            "--subresource=log",
+            "--namespace",
+            &helm_namespace,
+            &format!("--as=system:serviceaccount:{helm_namespace}:{operator_name}"),
+        ],
+        None,
+    );
+    assert_eq!(pod_log_access.stdout.trim(), "yes");
+    let operator = run_ok(
+        "kubectl",
+        [
+            "get",
+            "deployment",
+            &operator_name,
+            "--namespace",
+            &helm_namespace,
+            "--output=json",
+        ],
+        None,
+    );
+    let operator: serde_json::Value =
+        serde_json::from_str(&operator.stdout).expect("parse remote Operator Deployment");
+    let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_array()
+        .expect("remote Operator environment");
+    assert!(env
+        .iter()
+        .any(|entry| { entry["name"] == "OPERATOR_POD_LOG_LABEL_KEY" && entry["value"] == "app" }));
+    assert!(env.iter().any(|entry| {
+        entry["name"] == "OPERATOR_POD_LOG_LABEL_VALUE" && entry["value"] == "selected"
+    }));
     run_fails(
         "helm",
         [
@@ -1160,7 +1230,10 @@ rules:
         &good_chart_dir,
         true,
         0,
-        "30s",
+        // Recreate terminates the old PVC holder before the rollback Pod can
+        // start. Give Helm time to finish that second rollout after the
+        // deliberately unready upgrade has timed out.
+        "2m",
     );
     failed_enable.push("--set=runtime.probes.readiness.enabled=true".to_string());
     run_fails(
@@ -1603,6 +1676,21 @@ spec:
         ],
         None,
     );
+    // --no-hooks deliberately retains Remote Operator records, but normal
+    // runtime storage must finish deletion before testing a fresh installation.
+    // Otherwise the encryption-key guard correctly rejects the terminating PVC.
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{helm_release}-runtime-data"),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=2m",
+        ],
+        None,
+    );
     let mut disabled_reinstall = helm_install_args(
         &helm_release,
         &helm_namespace,
@@ -1615,11 +1703,18 @@ spec:
             *argument = "--set=remoteOperator.enabled=false".to_string();
         }
     }
-    run_fails(
+    let rejected_reinstall = run_fails(
         "helm",
         disabled_reinstall.iter().map(String::as_str),
         None,
         "a disabled same-name reinstall must reject lifecycle records retained by --no-hooks",
+    );
+    assert!(
+        rejected_reinstall
+            .diagnostic
+            .contains("Retained Remote Operator lifecycle records already exist"),
+        "reinstall must fail for retained lifecycle records: {}",
+        rejected_reinstall.diagnostic
     );
     run_ok(
         "kubectl",
@@ -1674,6 +1769,146 @@ spec:
         "2m",
     );
     run_ok("helm", rotation.iter().map(String::as_str), None);
+
+    // Remove only the Remote Operator from the running product release, then
+    // restore it from the kept identity.
+    let mut removal = rotation.clone();
+    for argument in &mut removal {
+        if argument == "--set=remoteOperator.enabled=true" {
+            *argument = "--set=remoteOperator.enabled=false".to_string();
+        }
+    }
+    let unconfirmed_removal = run_fails(
+        "helm",
+        removal.iter().map(String::as_str),
+        None,
+        "disabling a completed Remote Operator must require explicit confirmation",
+    );
+    assert!(
+        unconfirmed_removal.diagnostic.contains(&format!(
+            "--set remoteOperator.enabled=false --set-string remoteOperator.confirmRemoval={helm_release}"
+        )),
+        "{}",
+        unconfirmed_removal.diagnostic
+    );
+    let mut wrong_removal = removal.clone();
+    wrong_removal.push("--set-string=remoteOperator.confirmRemoval=another-release".to_string());
+    let wrong_removal = run_fails(
+        "helm",
+        wrong_removal.iter().map(String::as_str),
+        None,
+        "a confirmation naming another release must not remove the Remote Operator",
+    );
+    assert!(
+        wrong_removal
+            .diagnostic
+            .contains("Set it to the exact release name to remove the Remote Operator"),
+        "{}",
+        wrong_removal.diagnostic
+    );
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "deployment",
+            remote_operator_resource_name.as_str(),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    removal.push(format!(
+        "--set-string=remoteOperator.confirmRemoval={helm_release}"
+    ));
+    let removed = run_ok("helm", removal.iter().map(String::as_str), None);
+    assert_output_contains(&removed, "STATUS: deployed");
+    assert_output_contains(
+        &removed,
+        &format!("PersistentVolumeClaim {remote_operator_resource_name}-identity"),
+    );
+    assert_output_contains(
+        &removed,
+        &format!("remoteOperator.confirmRemoval={helm_release} on later upgrades"),
+    );
+    // Removing a completed identity is the one disabled revision without a
+    // rollback guard, so it stays a valid rollback target.
+    let removal_hooks = run_ok(
+        "helm",
+        [
+            "get",
+            "hooks",
+            helm_release.as_str(),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    assert!(
+        !removal_hooks.stdout.contains("pre-rollback"),
+        "{}",
+        removal_hooks.stdout
+    );
+    for kind in ["deployment", "serviceaccount"] {
+        let remaining = run_ok(
+            "kubectl",
+            [
+                "get",
+                kind,
+                remote_operator_resource_name.as_str(),
+                "--namespace",
+                &helm_namespace,
+                "--ignore-not-found",
+                "--output=name",
+            ],
+            None,
+        );
+        assert!(
+            remaining.stdout.trim().is_empty(),
+            "removal must delete the Remote Operator {kind}: {}",
+            remaining.diagnostic
+        );
+    }
+    let kept_pvc_policy = run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--output=jsonpath={.metadata.annotations.helm\\.sh/resource-policy}",
+        ],
+        None,
+    );
+    assert_eq!(kept_pvc_policy.stdout.trim(), "keep");
+    for record in [
+        remote_operator_resource_name.clone(),
+        format!("{remote_operator_resource_name}-initialized"),
+        format!("{remote_operator_resource_name}-complete"),
+    ] {
+        run_ok(
+            "kubectl",
+            ["get", "configmap", &record, "--namespace", &helm_namespace],
+            None,
+        );
+    }
+    // Later product upgrades keep the confirmation while the Operator stays removed.
+    run_ok("helm", removal.iter().map(String::as_str), None);
+    // Restoring clears the confirmation and reuses the kept identity without bootstrap.
+    run_ok("helm", rotation.iter().map(String::as_str), None);
+    run_ok(
+        "kubectl",
+        [
+            "rollout",
+            "status",
+            "deployment",
+            remote_operator_resource_name.as_str(),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=2m",
+        ],
+        None,
+    );
 
     run_fails(
         "helm",
@@ -2355,6 +2590,265 @@ fn product_chart(image: &str) -> HelmChart {
     product_chart_with_scope(image, OperatorScope::Namespace)
 }
 
+fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespace: &str) {
+    let previous_chart = temp.join("previous-collector-chart");
+    let mut legacy = product_chart(GOOD_OPERATOR_IMAGE);
+    // Reproduce the names and selectors emitted before collector label isolation.
+    for (path, contents) in &mut legacy.files {
+        if path == "templates/_helpers.tpl" {
+            *contents = contents.replace(
+                    "set $labels \"app.kubernetes.io/name\" (include \"deployment.logCollectorNameLabel\" .)",
+                    "set $labels \"app.kubernetes.io/name\" (include \"deployment.name\" .)",
+                );
+        } else if path == "templates/remote-operator.yaml" {
+            let collector_name_label = "'app.kubernetes.io/name': 'log-collector'";
+            assert!(
+                contents.contains(collector_name_label),
+                "legacy collector label must be replaced"
+            );
+            *contents = contents
+                .replace(collector_name_label, "'app.kubernetes.io/name': 'operator'")
+                .replace(
+                    "deployment.remoteOperatorLogCollectorDaemonSetName",
+                    "deployment.remoteOperatorLogCollectorName",
+                );
+        } else if path == "templates/whitelabeled-log-collector-daemonset.yaml" {
+            *contents = contents
+                .replace(
+                    "deployment.logCollectorDaemonSetName",
+                    "deployment.logCollectorName",
+                )
+                .replace(
+                    "app.kubernetes.io/name: {{ include \"deployment.logCollectorNameLabel\" . }}",
+                    "app.kubernetes.io/name: {{ include \"deployment.name\" . }}",
+                );
+        }
+    }
+    write_chart(&previous_chart, &legacy);
+    let previous_chart = std::env::var_os("ALIEN_PREVIOUS_COLLECTOR_CHART_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(previous_chart);
+
+    for remote_enabled in [false, true] {
+        let release = if remote_enabled {
+            "collector-upgrade-remote"
+        } else {
+            "collector-upgrade-runtime"
+        };
+        let credentials = format!("{release}-remote");
+        run_ok(
+            "kubectl",
+            [
+                "create",
+                "secret",
+                "generic",
+                &credentials,
+                "--namespace",
+                namespace,
+                "--from-literal=sync-token=sync-collector-upgrade",
+                &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+                "--from-literal=collector-token=collector-upgrade",
+            ],
+            None,
+        );
+        let mut args = helm_upgrade_args(release, namespace, &previous_chart, true, 0, "2m");
+        args[0] = "install".to_string();
+        args.push("--set=remoteOperator.enabled=false".to_string());
+        args.push("--set=heartbeat.collection.nodes.enabled=false".to_string());
+        run_ok("helm", &args, None);
+        args[0] = "upgrade".to_string();
+        args.push(format!("--set=remoteOperator.enabled={remote_enabled}"));
+        args.push("--set=logCollector.mode=nodeAgent".to_string());
+        args.push(
+            "--set-string=logCollector.image.repository=alien-product-lifecycle-collector"
+                .to_string(),
+        );
+        args.push("--set-string=logCollector.image.tag=local".to_string());
+        args.push("--set=logCollector.image.pullPolicy=IfNotPresent".to_string());
+        run_ok("helm", &args, None);
+        let old_daemonsets = kubernetes_resource_json(namespace, "daemonsets", None);
+        assert_eq!(old_daemonsets["items"].as_array().unwrap().len(), 1);
+        let old_daemonset = &old_daemonsets["items"][0];
+        let old_name = old_daemonset["metadata"]["name"].as_str().unwrap();
+        let collector_resource_name = old_daemonset["spec"]["template"]["spec"]
+            ["serviceAccountName"]
+            .as_str()
+            .unwrap();
+        let dependency_kinds = ["configmap", "serviceaccount", "role", "rolebinding"];
+        let dependencies_before: Vec<_> = dependency_kinds
+            .iter()
+            .map(|kind| kubernetes_resource_json(namespace, kind, Some(collector_resource_name)))
+            .collect();
+        let receiver_name = if remote_enabled {
+            remote_operator_record_name(namespace, release, "remote-operator")
+        } else {
+            release.to_string()
+        };
+        let receiver_before =
+            kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        let selector = receiver_before["spec"]["selector"]["matchLabels"]
+            .as_object()
+            .unwrap();
+        let old_labels = old_daemonset["spec"]["template"]["metadata"]["labels"]
+            .as_object()
+            .unwrap();
+        assert!(
+            selector
+                .iter()
+                .all(|(key, value)| old_labels.get(key) == Some(value)),
+            "previous chart must reproduce the overlapping selector"
+        );
+        let pvc_name = if remote_enabled {
+            format!("{receiver_name}-identity")
+        } else {
+            format!("{release}-runtime-data")
+        };
+        let pvc_before = kubernetes_resource_json(namespace, "pvc", Some(&pvc_name));
+
+        args[2] = path_str(current_chart).to_string();
+        args.push("--set=remoteOperator.bootstrapIdentity=false".to_string());
+        run_ok("helm", &args, None);
+        let receiver_after =
+            kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        assert_eq!(
+            receiver_before["metadata"]["uid"],
+            receiver_after["metadata"]["uid"]
+        );
+        assert_eq!(
+            receiver_before["spec"]["selector"],
+            receiver_after["spec"]["selector"]
+        );
+        let pvc_after = kubernetes_resource_json(namespace, "pvc", Some(&pvc_name));
+        assert_eq!(pvc_before["metadata"]["uid"], pvc_after["metadata"]["uid"]);
+        let new_daemonsets = kubernetes_resource_json(namespace, "daemonsets", None);
+        assert_eq!(new_daemonsets["items"].as_array().unwrap().len(), 1);
+        let new_daemonset = &new_daemonsets["items"][0];
+        let new_name = new_daemonset["metadata"]["name"].as_str().unwrap();
+        assert_ne!(old_name, new_name);
+        assert_eq!(
+            new_daemonset["spec"]["template"]["spec"]["serviceAccountName"],
+            collector_resource_name
+        );
+        for (kind, before) in dependency_kinds.iter().zip(&dependencies_before) {
+            let after = kubernetes_resource_json(namespace, kind, Some(collector_resource_name));
+            assert_eq!(
+                before["metadata"]["uid"], after["metadata"]["uid"],
+                "collector {kind} must be preserved"
+            );
+        }
+        assert_ne!(
+            old_daemonset["spec"]["selector"],
+            new_daemonset["spec"]["selector"]
+        );
+        run_ok(
+            "kubectl",
+            [
+                "rollout",
+                "status",
+                &format!("daemonset/{new_name}"),
+                "--namespace",
+                namespace,
+                "--timeout=2m",
+            ],
+            None,
+        );
+        run_ok("kubectl", ["wait", "--for=delete", "pod", "--namespace", namespace,
+            &format!("--selector=app.kubernetes.io/name={},app.kubernetes.io/instance={},app.kubernetes.io/component={}",
+                old_labels["app.kubernetes.io/name"].as_str().unwrap(),
+                old_labels["app.kubernetes.io/instance"].as_str().unwrap(),
+                old_labels["app.kubernetes.io/component"].as_str().unwrap()), "--timeout=2m"], None);
+        let selector_arg = selector
+            .iter()
+            .map(|(key, value)| format!("{key}={}", value.as_str().unwrap()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let pods = run_ok(
+            "kubectl",
+            [
+                "get",
+                "pods",
+                "--namespace",
+                namespace,
+                &format!("--selector={selector_arg}"),
+                "--output=json",
+            ],
+            None,
+        );
+        let pods: serde_json::Value =
+            serde_json::from_str(&pods.stdout).expect("receiver Pods JSON");
+        assert_eq!(pods["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            pods["items"][0]["spec"]["containers"][0]["name"],
+            "operator"
+        );
+        let endpoints = kubernetes_resource_json(namespace, "endpoints", Some(&receiver_name));
+        let addresses = endpoints["subsets"]
+            .as_array()
+            .expect("receiver endpoint subsets");
+        assert_eq!(addresses.len(), 1);
+        assert_eq!(addresses[0]["addresses"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            addresses[0]["addresses"][0]["targetRef"]["name"],
+            pods["items"][0]["metadata"]["name"]
+        );
+        for arg in &mut args {
+            if arg == "--set=logCollector.mode=nodeAgent" {
+                *arg = "--set=logCollector.mode=podApi".to_string();
+            }
+        }
+        run_ok("helm", &args, None);
+        let receiver = kubernetes_resource_json(namespace, "deployment", Some(&receiver_name));
+        let env = receiver["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            env.iter()
+                .find(|entry| entry["name"] == "OPERATOR_POD_LOG_LEGACY_DAEMONSET")
+                .expect("previous collector migration gate")["value"],
+            old_name,
+        );
+        assert_eq!(
+            env.iter()
+                .find(|entry| entry["name"] == "OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET")
+                .expect("replacement collector migration gate")["value"],
+            new_name,
+        );
+        assert!(
+            kubernetes_resource_json(namespace, "daemonsets", None)["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        run_ok(
+            "helm",
+            [
+                "uninstall",
+                release,
+                "--namespace",
+                namespace,
+                "--wait",
+                "--timeout=2m",
+            ],
+            None,
+        );
+        run_ok(
+            "kubectl",
+            ["delete", "secret", &credentials, "--namespace", namespace],
+            None,
+        );
+    }
+    run_ok("kubectl", ["delete", "crd", CRD_NAME], None);
+}
+
+fn kubernetes_resource_json(namespace: &str, kind: &str, name: Option<&str>) -> serde_json::Value {
+    let mut args = vec!["get", kind, "--namespace", namespace, "--output=json"];
+    if let Some(name) = name {
+        args.push(name);
+    }
+    let output = run_ok("kubectl", args, None);
+    serde_json::from_str(&output.stdout).expect("Kubernetes resource JSON")
+}
+
 fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
     let stack = Stack::new("product-lifecycle".to_string()).build();
     let registry = HelmRegistry::built_in();
@@ -2374,6 +2868,8 @@ fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
                 log_collector: Some(OperatorLogCollectorOptions {
                     image: LOG_COLLECTOR_IMAGE,
                     token: "",
+                    pod_label_key: Some("app"),
+                    pod_label_value: Some("selected"),
                 }),
                 stack_settings: None,
                 project_name: "product-lifecycle",
@@ -2382,7 +2878,6 @@ fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
                 label_domain: None,
                 scope,
                 label_selector: None,
-                kubernetes_operations_enabled: true,
                 custom_operation_permissions: &[],
                 permission: OperatorPermission::Remediation,
                 format: OperatorOutputFormat::HelmTemplate,
@@ -2413,6 +2908,8 @@ fn helm_upgrade_args(
         helm_rollback_on_failure_flag().to_string(),
         format!("--timeout={timeout}"),
         "--set-string=management.url=https://management.example.test".to_string(),
+        "--set=logCollector.enabled=true".to_string(),
+        "--set=logCollector.mode=podApi".to_string(),
         "--set=remoteOperator.enabled=true".to_string(),
         format!("--set=remoteOperator.bootstrapIdentity={bootstrap_identity}"),
         format!("--set=remoteOperator.syncTokenRevision={token_revision}"),
@@ -2698,6 +3195,15 @@ fn write_chart(directory: &Path, chart: &HelmChart) {
 }
 
 fn remote_operator_record_name(namespace: &str, release: &str, record: &str) -> String {
+    remote_operator_name_with_limit(namespace, release, record, 21)
+}
+
+fn remote_operator_name_with_limit(
+    namespace: &str,
+    release: &str,
+    record: &str,
+    prefix_limit: usize,
+) -> String {
     let digest = format!(
         "{:x}",
         Sha256::digest(format!("{namespace}/{release}").as_bytes())
@@ -2715,7 +3221,7 @@ fn remote_operator_record_name(namespace: &str, release: &str, record: &str) -> 
     }
     let release_prefix = normalized_release
         .chars()
-        .take(21)
+        .take(prefix_limit)
         .collect::<String>()
         .trim_matches('-')
         .to_string();

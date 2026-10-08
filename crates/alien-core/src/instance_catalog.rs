@@ -468,7 +468,7 @@ static CATALOG: &[InstanceTypeSpec] = &[
         ephemeral_storage_bytes: 20 * GI,
         gpu: None,
     },
-    // Compute Optimized (c7g — ARM Graviton3, up to 2xlarge / 8 vCPU)
+    // Compute Optimized (c7g — ARM Graviton3, c8g — ARM Graviton4)
     InstanceTypeSpec {
         name: "c7g.medium",
         platform: Platform::Aws,
@@ -480,7 +480,27 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "c8g.medium",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::Arm64,
+        vcpu: 1,
+        memory_bytes: 2 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "c7g.large",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::Arm64,
+        vcpu: 2,
+        memory_bytes: 4 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "c8g.large",
         platform: Platform::Aws,
         family: InstanceFamily::ComputeOptimized,
         architecture: Architecture::Arm64,
@@ -510,6 +530,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "c8g.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::Arm64,
+        vcpu: 4,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "c8i.xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::ComputeOptimized,
@@ -530,6 +560,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "c8g.2xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::Arm64,
+        vcpu: 8,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "c8i.2xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::ComputeOptimized,
@@ -541,6 +581,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
     },
     InstanceTypeSpec {
         name: "c7g.4xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::ComputeOptimized,
+        architecture: Architecture::Arm64,
+        vcpu: 16,
+        memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "c8g.4xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::ComputeOptimized,
         architecture: Architecture::Arm64,
@@ -1213,6 +1263,18 @@ pub fn find_instance_type(platform: Platform, name: &str) -> Option<&'static Ins
     CATALOG
         .iter()
         .find(|spec| spec.platform == platform && spec.name == name)
+}
+
+/// Whether a capacity group may move from AWS machine `old` to `new` without setup: both are
+/// catalog machines of one CPU architecture, so the stack's images still run on the new one.
+pub fn is_same_architecture_aws_machine(old: &str, new: &str) -> bool {
+    match (
+        find_instance_type(Platform::Aws, old),
+        find_instance_type(Platform::Aws, new),
+    ) {
+        (Some(old), Some(new)) => old.architecture == new.architecture,
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------

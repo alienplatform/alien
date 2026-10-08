@@ -17,7 +17,6 @@ The **Release qualification** check then:
 
 - builds and smoke-tests every native addon, binary, and container image;
 - packs every Cargo and npm package;
-- creates the changelog, archives, and checksums;
 - records the source Git tree plus every artifact checksum and image digest.
 
 Qualification artifacts are retained for 30 days. If they expire, rerun
@@ -51,10 +50,12 @@ existing version only when its crates.io checksum matches.
 If publication stops, fix the external failure and rerun the same publish
 action. Never prepare another version to recover a partial release.
 
-The immutable Git tag and GitHub release are created only after package
-registries, images, and versioned binary objects have accepted the qualified
-artifacts. Homebrew is updated last because its formula references the GitHub
-release assets. After every destination succeeds, the workflow atomically
-updates `channels/stable`; clients resolve that one pointer before downloading
-immutable versioned binaries. Stable releases never update a collection of
-independent `latest` objects.
+The immutable Git tag is created only after package registries, images, and
+versioned binary objects have accepted the qualified artifacts.
+
+This workflow does not publish the `alien` CLI, its npm package, the GitHub
+release, the Homebrew formula, or the `channels/stable` pointer. The official
+CLI distribution publishes those from the release tag: it builds `alien`,
+creates the immutable GitHub release with the changelog (rendered from
+`cliff.toml`) and the archives of `alien` plus this release's binaries, then
+updates Homebrew and, last, `channels/stable`.

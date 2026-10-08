@@ -19,13 +19,13 @@ let value: SyncReconcileRequestData1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "timed-out",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unknown",
-    lifecycle: "stopped",
+    lifecycle: "stopping",
     partial: true,
     stale: false,
   },
@@ -45,5 +45,5 @@ let value: SyncReconcileRequestData1 = {
 | `nodeStatuses`                                                                   | [models.NodeStatus](../models/nodestatus.md)[]                                   | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `podCounts`                                                                      | [models.PodCounts](../models/podcounts.md)                                       | :heavy_check_mark:                                                               | N/A                                                                              |
 | `region`                                                                         | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.SyncReconcileRequestStatus24](../models/syncreconcilerequeststatus24.md) | :heavy_check_mark:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.ResourceHeartbeatStatus24](../models/resourceheartbeatstatus24.md)       | :heavy_check_mark:                                                               | N/A                                                                              |
 | `version`                                                                        | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |

@@ -1,7 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
-    ownership_policy_for_resource_type, Platform, ResourceLifecycle, Sandbox, Stack, Storage,
+    ownership_policy_for_resource_type, Container, Daemon, Platform, ResourceLifecycle, Sandbox,
+    SandboxCode, Stack, Storage, Worker,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
@@ -78,31 +79,50 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
             // Setup builds a Frozen image before the deployment registers, and only registration
             // tells the registry which customer account to open the base image's repository to.
             if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
-                if sandbox.private_base_image.is_some()
-                    && resource_entry.lifecycle == ResourceLifecycle::Frozen
-                {
-                    errors.push(format!(
-                        "Sandbox '{}' declares a private base image, which requires the Live \
-                         lifecycle; a Frozen image is built before the registry can grant the \
-                         customer's account access to it",
-                        resource_id
-                    ));
+                if resource_entry.lifecycle == ResourceLifecycle::Frozen {
+                    if sandbox.private_base_image.is_some() {
+                        errors.push(format!(
+                            "Sandbox '{}' declares a private base image, which requires the Live \
+                             lifecycle; a Frozen image is built before the registry can grant the \
+                             customer's account access to it",
+                            resource_id
+                        ));
+                    }
+                    // Refused on the declaration rather than on the field it becomes: the release
+                    // pushes a source build to the project's own repository, so it is private by
+                    // the time anything reads it, and by then setup has already tried to pull.
+                    if matches!(&sandbox.code, SandboxCode::Source { .. }) {
+                        errors.push(format!(
+                            "Sandbox '{}' is built from source, which requires the Live \
+                             lifecycle; the release pushes it to a private repository the \
+                             registry cannot open to a customer account setup has not yet \
+                             reported",
+                            resource_id
+                        ));
+                    }
                 }
             }
 
-            // A linked sandbox's binding carries `imageArn` and `imageVersion`, both required
-            // fields of `AwsSandboxBinding`. A Live sandbox has neither until its controller
-            // has built, so the emitted binding would fail to deserialize at startup.
+            // Setup-rendered consumers need the complete binding while the package is applied.
+            // A Live sandbox has no image ARN/version until its runtime controller finishes.
+            // Containers, Daemons and Workers are runtime-provisioned: their controllers wait for
+            // dependencies and resolve the completed sandbox binding from controller state.
             for link in alien_core::links_of(&resource_entry.config) {
                 let Some(target) = stack.resources.get(link.id()) else {
                     continue;
                 };
                 if target.config.downcast_ref::<Sandbox>().is_some()
                     && target.lifecycle == ResourceLifecycle::Live
+                    && resource_entry.config.downcast_ref::<Container>().is_none()
+                    && resource_entry.config.downcast_ref::<Daemon>().is_none()
+                    && resource_entry.config.downcast_ref::<Worker>().is_none()
                 {
                     errors.push(format!(
                         "Resource '{}' links sandbox '{}', which uses the Live lifecycle; its \
-                         image is built after setup, so setup cannot bind to it",
+                         image is built after setup, but this resource requires its binding \
+                         during setup. Add the sandbox with `remoteAccess` and reach it through a \
+                         remote binding, or give it a base image that needs no build so it can stay \
+                         Frozen and be linked",
                         resource_id,
                         link.id()
                     ));
@@ -150,8 +170,9 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode, Key,
-        ResourceEntry, ResourceLifecycle, ResourceRef, ResourceSpec, Storage, Worker, WorkerCode,
+        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode, Daemon,
+        DaemonCode, Key, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceSpec, Storage,
+        Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -185,6 +206,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -216,6 +239,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -251,6 +276,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -295,6 +322,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -335,6 +364,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -365,6 +396,8 @@ mod tests {
             );
 
             let stack = Stack {
+                dynamic_container_repositories: Vec::new(),
+                dynamic_container_image_resources: Vec::new(),
                 id: "test-stack".to_string(),
                 resources,
                 permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -401,6 +434,8 @@ mod tests {
             },
         );
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -452,6 +487,54 @@ mod tests {
         }
     }
 
+    /// The release makes a source build private, so the declaration is refused rather than the
+    /// field it becomes — by the time that field exists, setup has already tried to pull.
+    #[tokio::test]
+    async fn source_is_refused_on_a_frozen_sandbox() {
+        let with_source = |lifecycle| {
+            let mut stack = sandbox_stack(lifecycle);
+            let entry = stack.resources.get_mut("agents").expect("sandbox entry");
+            let mut sandbox = entry
+                .config
+                .downcast_ref::<alien_core::Sandbox>()
+                .expect("sandbox config")
+                .clone();
+            sandbox.code = SandboxCode::Source {
+                src: "./sandbox".to_string(),
+                toolchain: alien_core::ToolchainConfig::Docker {
+                    dockerfile: None,
+                    target: None,
+                    build_args: None,
+                },
+            };
+            entry.config = alien_core::Resource::new(sandbox);
+            stack
+        };
+
+        let frozen = FrozenResourceLifecycleCheck
+            .check(&with_source(ResourceLifecycle::Frozen), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(!frozen.success);
+        assert!(
+            frozen
+                .errors
+                .iter()
+                .any(|error| error.contains("built from source")),
+            "the refusal must name the declaration: {:?}",
+            frozen.errors
+        );
+
+        let live = FrozenResourceLifecycleCheck
+            .check(&with_source(ResourceLifecycle::Live), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(
+            live.success,
+            "Live is where a source build belongs: {live:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_private_base_image_is_refused_on_a_frozen_sandbox() {
         let with_private_base = |lifecycle| {
@@ -488,17 +571,14 @@ mod tests {
         assert!(live.success, "{:?}", live.errors);
     }
 
-    /// A Worker's binding to a sandbox carries `imageArn` and `imageVersion`, both required fields
-    /// of `AwsSandboxBinding`. A Live sandbox has neither at setup time, so the binding would fail
-    /// to deserialize at Worker startup instead of at plan time — the wrong end to discover it.
+    /// A Build is rendered by setup, and a binding to a sandbox carries `imageArn` and
+    /// `imageVersion`, both required fields of `AwsSandboxBinding`. A Live sandbox has neither
+    /// while setup applies, so the link is refused at plan time.
     #[tokio::test]
-    async fn linking_a_live_sandbox_is_refused_at_plan_time() {
+    async fn a_setup_rendered_consumer_cannot_link_a_live_sandbox() {
         let mut stack = sandbox_stack(ResourceLifecycle::Live);
-        let worker = alien_core::Worker::new("api".to_string())
+        let build = Build::new("image-build".to_string())
             .permissions("execution".to_string())
-            .code(alien_core::WorkerCode::Image {
-                image: "example.com/api:latest".to_string(),
-            })
             .link(
                 &alien_core::Sandbox::new("agents".to_string())
                     .code(alien_core::SandboxCode::Image {
@@ -513,10 +593,10 @@ mod tests {
             )
             .build();
         stack.resources.insert(
-            "api".to_string(),
+            "image-build".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(worker),
-                lifecycle: ResourceLifecycle::Live,
+                config: alien_core::Resource::new(build),
+                lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
                 enabled_when: None,
@@ -534,10 +614,87 @@ mod tests {
                 .errors
                 .iter()
                 .any(|error| error.contains("links sandbox 'agents'")
-                    && error.contains("setup cannot bind to it")),
+                    && error.contains("requires its binding during setup")),
             "the refusal must name the link and why: {:?}",
             result.errors
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_provisioned_consumers_may_link_a_live_sandbox() {
+        let linked_sandbox = || {
+            alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://example-artifacts/agents/bundle.zip".to_string(),
+                })
+                .egress(alien_core::SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("execution".to_string())
+            .link(&linked_sandbox())
+            .build();
+        let daemon = Daemon::new("scheduler".to_string())
+            .code(DaemonCode::Image {
+                image: "example.com/scheduler:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&linked_sandbox())
+            .build();
+
+        let worker = alien_core::Worker::new("handler".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/handler:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&linked_sandbox())
+            .build();
+
+        for (id, resource) in [
+            ("api", alien_core::Resource::new(container)),
+            ("scheduler", alien_core::Resource::new(daemon)),
+            ("handler", alien_core::Resource::new(worker)),
+        ] {
+            let mut stack = sandbox_stack(ResourceLifecycle::Live);
+            stack.resources.insert(
+                id.to_string(),
+                ResourceEntry {
+                    config: resource,
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("the check runs");
+
+            assert!(
+                result.success,
+                "runtime-provisioned consumer '{id}' should resolve the Live Sandbox binding after the dependency is ready: {:?}",
+                result.errors
+            );
+        }
     }
 
     /// The same link against a Frozen sandbox is exactly what ships today.
@@ -643,6 +800,8 @@ mod tests {
             },
         );
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),

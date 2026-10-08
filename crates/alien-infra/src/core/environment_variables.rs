@@ -1,16 +1,21 @@
 use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
+#[cfg(feature = "local")]
+use alien_bindings::{BindingsProviderApi as _, Vault};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
     daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
     public_url_host, render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
     worker_runtime_environment_contract, Container, Daemon, EnvironmentVariable,
-    EnvironmentVariableType, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
+    EnvironmentVariableType, Resource, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
     RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
     ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
-    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON, ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_PUBLIC_ENDPOINTS_JSON, ENV_ALIEN_SECRETS,
+    ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
 };
+#[cfg(feature = "local")]
+use alien_error::ContextError;
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -18,18 +23,39 @@ use std::collections::{BTreeMap, HashMap};
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
+/// Whether a failed resource's recorded config and its desired config describe the same create
+/// or update, so a retry may resume the saved checkpoint instead of re-planning it.
+///
+/// Deployer-secret metadata injected into workload environments (`ALIEN_DEPLOYER_SECRETS` and
+/// the `deployerSecrets` list inside `ALIEN_SECRETS`) is ignored: it follows the secret store
+/// (a slot filled, a value rewritten under a new version), not a release. A resumed flow keeps
+/// running on the recorded metadata, and once it is Running the planner's exact diff applies
+/// the new metadata with an update. Every retry path uses this one comparison.
+pub fn retry_config_unchanged(recorded: &Resource, desired: &Resource) -> bool {
+    without_deployer_secret_metadata(recorded) == without_deployer_secret_metadata(desired)
+}
+
+fn without_deployer_secret_metadata(resource: &Resource) -> Resource {
+    fn strip(environment: &mut HashMap<String, String>) {
+        environment.remove(ENV_ALIEN_DEPLOYER_SECRETS);
+        if let Some(secrets) = environment.get_mut(ENV_ALIEN_SECRETS) {
+            if let Ok(serde_json::Value::Object(mut config)) =
+                serde_json::from_str::<serde_json::Value>(secrets)
+            {
+                config.remove("deployerSecrets");
+                *secrets = serde_json::Value::Object(config).to_string();
             }
-        }),
+        }
     }
+    let mut resource = resource.clone();
+    if let Some(worker) = resource.downcast_mut::<Worker>() {
+        strip(&mut worker.environment);
+    } else if let Some(container) = resource.downcast_mut::<Container>() {
+        strip(&mut container.environment);
+    } else if let Some(daemon) = resource.downcast_mut::<Daemon>() {
+        strip(&mut daemon.environment);
+    }
+    resource
 }
 
 pub(crate) fn applicable_secret_environment_variables<'a>(
@@ -39,8 +65,93 @@ pub(crate) fn applicable_secret_environment_variables<'a>(
     variables
         .iter()
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .filter(|var| alien_core::targets_resource(&var.target_resources, resource_id))
         .collect()
+}
+
+/// Replaces a local workload's `ALIEN_DEPLOYER_SECRETS` list with the values
+/// the developer set in the local `secrets` vault (`alien dev vault set`), read
+/// as the process starts so a changed value is picked up by the next restart.
+/// Returns the names it set; a required secret that is not set fails the start
+/// with "missing: <label>", an optional one stays unset.
+#[cfg(feature = "local")]
+pub(crate) async fn resolve_local_deployer_secrets(
+    ctx: &ResourceControllerContext<'_>,
+    env_vars: &mut HashMap<String, String>,
+) -> Result<Vec<String>> {
+    let Some(deployer_secrets) = env_vars.remove(alien_core::ENV_ALIEN_DEPLOYER_SECRETS) else {
+        return Ok(Vec::new());
+    };
+    let deployer_secrets: Vec<alien_core::DeployerSecretEnv> =
+        serde_json::from_str(&deployer_secrets)
+            .into_alien_error()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "{} is not a deployer secret list",
+                    alien_core::ENV_ALIEN_DEPLOYER_SECRETS
+                ),
+                resource_id: None,
+            })?;
+    if deployer_secrets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let bindings_provider = ctx
+        .service_provider
+        .get_local_bindings_provider()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::LocalServicesNotAvailable {
+                service_name: "bindings_provider".to_string(),
+            })
+        })?;
+    let vault = bindings_provider
+        .load_vault(alien_core::SECRETS_VAULT_ID)
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to load the local secrets vault".to_string(),
+            resource_id: None,
+        })?;
+    read_deployer_secrets(vault.as_ref(), deployer_secrets, env_vars).await
+}
+
+/// Reads each deployer secret from `vault` into `env_vars` and returns the
+/// names it set. A required secret that is not set fails with
+/// "missing: <label>"; an optional one stays unset.
+#[cfg(feature = "local")]
+async fn read_deployer_secrets(
+    vault: &dyn Vault,
+    deployer_secrets: Vec<alien_core::DeployerSecretEnv>,
+    env_vars: &mut HashMap<String, String>,
+) -> Result<Vec<String>> {
+    let mut names = Vec::with_capacity(deployer_secrets.len());
+    for secret in deployer_secrets {
+        match vault.get_secret(&secret.vault_key).await {
+            Ok(value) => {
+                env_vars.insert(secret.name.clone(), value);
+                names.push(secret.name);
+            }
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_bindings::ErrorData::VaultSecretNotFound { .. })
+                ) =>
+            {
+                if secret.required {
+                    return Err(AlienError::new(ErrorData::DeployerSecretMissing {
+                        label: secret.label,
+                        secret_name: secret.secret_name,
+                    }));
+                }
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::ResourceConfigInvalid {
+                    message: format!("Failed to read deployer secret '{}'", secret.label),
+                    resource_id: None,
+                }))
+            }
+        }
+    }
+    Ok(names)
 }
 
 pub fn direct_monitoring_auth_headers(
@@ -634,6 +745,111 @@ impl EnvironmentVariableBuilder {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(feature = "local")]
+    mod local_deployer_secrets {
+        use super::*;
+        use alien_bindings::providers::vault::LocalVault;
+        use alien_core::DeployerSecretEnv;
+
+        fn secret(name: &str, vault_key: &str, label: &str, required: bool) -> DeployerSecretEnv {
+            DeployerSecretEnv {
+                name: name.to_string(),
+                vault_key: vault_key.to_string(),
+                secret_name: format!("secrets/{vault_key}"),
+                vault_name: None,
+                label: label.to_string(),
+                required,
+                version: None,
+            }
+        }
+
+        fn vault(dir: &tempfile::TempDir) -> LocalVault {
+            LocalVault::new("secrets".to_string(), dir.path().to_path_buf())
+        }
+
+        #[tokio::test]
+        async fn a_missing_required_secret_blocks_the_start() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut env = HashMap::new();
+
+            let error = read_deployer_secrets(
+                &vault(&dir),
+                vec![secret(
+                    "DATABASE_PASSWORD",
+                    "input-database-password",
+                    "Database password",
+                    true,
+                )],
+                &mut env,
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(error.code, "DEPLOYER_SECRET_MISSING");
+            assert!(
+                error.message.starts_with("missing: Database password"),
+                "{}",
+                error.message
+            );
+            assert!(!env.contains_key("DATABASE_PASSWORD"));
+        }
+
+        #[tokio::test]
+        async fn a_missing_optional_secret_stays_unset() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut env = HashMap::new();
+
+            let names = read_deployer_secrets(
+                &vault(&dir),
+                vec![secret(
+                    "LICENSE_KEY",
+                    "input-license-key",
+                    "License key",
+                    false,
+                )],
+                &mut env,
+            )
+            .await
+            .unwrap();
+
+            assert!(names.is_empty());
+            assert!(!env.contains_key("LICENSE_KEY"));
+        }
+
+        #[tokio::test]
+        async fn every_start_reads_the_current_value() {
+            let dir = tempfile::tempdir().unwrap();
+            let secrets = vec![secret(
+                "DATABASE_PASSWORD",
+                "input-database-password",
+                "Database password",
+                true,
+            )];
+            vault(&dir)
+                .set_secret("input-database-password", "first")
+                .await
+                .unwrap();
+
+            let mut env = HashMap::new();
+            let names = read_deployer_secrets(&vault(&dir), secrets.clone(), &mut env)
+                .await
+                .unwrap();
+            assert_eq!(names, vec!["DATABASE_PASSWORD".to_string()]);
+            assert_eq!(env["DATABASE_PASSWORD"], "first");
+
+            // Rotation: the next start sees the new value.
+            vault(&dir)
+                .set_secret("input-database-password", "rotated")
+                .await
+                .unwrap();
+            let mut env = HashMap::new();
+            read_deployer_secrets(&vault(&dir), secrets, &mut env)
+                .await
+                .unwrap();
+            assert_eq!(env["DATABASE_PASSWORD"], "rotated");
+        }
+    }
 
     #[test]
     fn test_bindings_tracked_for_k8s_processing() {

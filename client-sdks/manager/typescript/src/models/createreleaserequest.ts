@@ -15,6 +15,13 @@ import {
 } from "./stackbyplatform.js";
 
 export type CreateReleaseRequest = {
+  /**
+   * Channel the release advances; `production` when absent. Deployments
+   *
+   * @remarks
+   * following the channel roll out to it.
+   */
+  channel?: string | null | undefined;
   gitMetadata?: GitMetadata | null | undefined;
   /**
    * Project this release belongs to. Required. The standalone server
@@ -41,6 +48,7 @@ export type CreateReleaseRequest = {
 
 /** @internal */
 export type CreateReleaseRequest$Outbound = {
+  channel?: string | null | undefined;
   gitMetadata?: GitMetadata$Outbound | null | undefined;
   projectId: string;
   stack: StackByPlatform$Outbound;
@@ -51,6 +59,7 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   CreateReleaseRequest$Outbound,
   CreateReleaseRequest
 > = z.object({
+  channel: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
   projectId: z.string(),
   stack: StackByPlatform$outboundSchema,

@@ -70,6 +70,139 @@ const value: models.ResolveBindingResponseGcs = {
 };
 ```
 
+### `models.ResolveBindingResponseSqs`
+
+```typescript
+const value: models.ResolveBindingResponseSqs = {
+  binding: {
+    queueUrl: "https://caring-piglet.org",
+  },
+  clientConfig: {
+    accountId: "<id>",
+    credentials: {
+      accessKeyId: "<id>",
+      expiresAt: "1744601542027",
+      secretAccessKey: "<value>",
+      sessionToken: "<value>",
+      type: "sessionCredentials",
+    },
+    region: "<value>",
+  },
+  expiresAt: "1745152955992",
+  service: "sqs",
+};
+```
+
+### `models.ResolveBindingResponsePubsub`
+
+```typescript
+const value: models.ResolveBindingResponsePubsub = {
+  binding: {
+    subscription: "<value>",
+    topic: "<value>",
+  },
+  clientConfig: {
+    credentials: {
+      token: "<value>",
+      type: "accessToken",
+    },
+    projectId: "<id>",
+    region: "<value>",
+  },
+  expiresAt: "1759634152713",
+  service: "pubsub",
+};
+```
+
+### `models.ResolveBindingResponseServicebus`
+
+```typescript
+const value: models.ResolveBindingResponseServicebus = {
+  binding: {
+    namespace: "<value>",
+    queueName: "<value>",
+  },
+  clientConfig: {
+    credentials: {
+      token: "<value>",
+      type: "accessToken",
+    },
+    subscriptionId: "<id>",
+    tenantId: "<id>",
+  },
+  expiresAt: "1756357009080",
+  service: "servicebus",
+};
+```
+
+### `models.ResolveBindingResponseDynamodb`
+
+```typescript
+const value: models.ResolveBindingResponseDynamodb = {
+  binding: {
+    region: "<value>",
+    tableName: "<value>",
+  },
+  clientConfig: {
+    accountId: "<id>",
+    credentials: {
+      accessKeyId: "<id>",
+      expiresAt: "1744601542027",
+      secretAccessKey: "<value>",
+      sessionToken: "<value>",
+      type: "sessionCredentials",
+    },
+    region: "<value>",
+  },
+  expiresAt: "1760103754317",
+  service: "dynamodb",
+};
+```
+
+### `models.ResolveBindingResponseFirestore`
+
+```typescript
+const value: models.ResolveBindingResponseFirestore = {
+  binding: {
+    collectionName: "<value>",
+    databaseId: "<id>",
+    projectId: "<id>",
+  },
+  clientConfig: {
+    credentials: {
+      token: "<value>",
+      type: "accessToken",
+    },
+    projectId: "<id>",
+    region: "<value>",
+  },
+  expiresAt: "1736089335940",
+  service: "firestore",
+};
+```
+
+### `models.ResolveBindingResponseTablestorage`
+
+```typescript
+const value: models.ResolveBindingResponseTablestorage = {
+  binding: {
+    accountName: "<value>",
+    resourceGroupName: "<value>",
+    tableName: "<value>",
+  },
+  clientConfig: {
+    credentials: {
+      token: "<value>",
+      type: "accessToken",
+    },
+    subscriptionId: "<id>",
+    tenantId: "<id>",
+  },
+  expiresAt: "1743538811558",
+  service: "tablestorage",
+};
+```
+
 ### `models.ResolveBindingResponseKms`
 
 ```typescript
@@ -278,4 +411,3 @@ const value: models.ResolveBindingResponseSandboxGcpAgentPlatform = {
   service: "sandbox-gcp-agent-platform",
 };
 ```
-

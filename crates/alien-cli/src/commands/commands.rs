@@ -32,7 +32,11 @@ EXAMPLES:
     alien commands invoke --deployment acme-corp --command generate-report \\
       --params '{\"startDate\": \"2025-01-01\"}'
 
-See also: https://alien.dev/docs/commands"
+Commands are application RPC handled by your Worker, Container, or Daemon.
+See also: `alien operations --help` for Remote Operator operations, which carry
+a risk tier, approval policy, and access requests.
+
+Docs: https://alien.dev/docs/commands"
 )]
 pub struct CommandsArgs {
     #[command(subcommand)]
@@ -218,6 +222,7 @@ fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
         "initial-setup-failed" => Some(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Some(DeploymentStatus::Provisioning),
         "waiting-for-machines" => Some(DeploymentStatus::WaitingForMachines),
+        "waiting-for-secrets" => Some(DeploymentStatus::WaitingForSecrets),
         "provisioning-failed" => Some(DeploymentStatus::ProvisioningFailed),
         "running" => Some(DeploymentStatus::Running),
         "refresh-failed" => Some(DeploymentStatus::RefreshFailed),
@@ -243,6 +248,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
         DeploymentStatus::WaitingForMachines => "waiting-for-machines",
+        DeploymentStatus::WaitingForSecrets => "waiting-for-secrets",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",

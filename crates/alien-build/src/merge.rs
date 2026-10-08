@@ -8,7 +8,9 @@
 //! into one dir per resource and rewrites the stack to point at it.
 
 use crate::error::{ErrorData, Result};
-use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Stack, Worker, WorkerCode};
+use alien_core::{
+    Container, ContainerCode, Daemon, DaemonCode, Sandbox, SandboxCode, Stack, Worker, WorkerCode,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -280,7 +282,7 @@ fn blank_images(stack: &Stack) -> Stack {
     blanked
 }
 
-/// Read a compute resource's `code.image` (Worker, Container, or Daemon), if it is one.
+/// Read a compute resource's `code.image` (Worker, Container, Daemon, or Sandbox), if it is one.
 fn compute_image(stack: &Stack, resource_id: &str) -> Option<String> {
     let entry = stack.resources().find(|(id, _)| *id == resource_id)?.1;
     if let Some(worker) = entry.config.downcast_ref::<Worker>() {
@@ -295,11 +297,15 @@ fn compute_image(stack: &Stack, resource_id: &str) -> Option<String> {
         if let DaemonCode::Image { image } = &daemon.code {
             return Some(image.clone());
         }
+    } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+        if let SandboxCode::Image { image } = &sandbox.code {
+            return Some(image.clone());
+        }
     }
     None
 }
 
-/// Point a compute resource (Worker, Container, or Daemon) at `image`, converting it to
+/// Point a compute resource (Worker, Container, Daemon, or Sandbox) at `image`, converting it to
 /// `Image` code regardless of its current variant. No-op for non-compute resources.
 ///
 /// Variant-insensitive on purpose — the write counterpart to the variant-sensitive
@@ -318,6 +324,8 @@ fn set_compute_image(stack: &mut Stack, resource_id: &str, image: String) {
         container.code = ContainerCode::Image { image };
     } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
         daemon.code = DaemonCode::Image { image };
+    } else if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
+        sandbox.code = SandboxCode::Image { image };
     }
 }
 
@@ -660,6 +668,50 @@ mod tests {
         let image = compute_image(&merged, "agent").expect("agent should have a merged image dir");
         let merged_dir = PathBuf::from(&image);
         assert!(merged_dir.join("darwin-aarch64.oci.tar").exists());
+        assert!(merged_dir.join("linux-x64.oci.tar").exists());
+    }
+
+    #[test]
+    fn merges_sandbox_artifact_dirs_across_partials() {
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        let write_sandbox_partial = |partial: &str, dir_name: &str, tarball: &str| {
+            let platform_dir = root.path().join(partial).join("build").join("aws");
+            let artifact_dir = platform_dir.join(dir_name);
+            std::fs::create_dir_all(&artifact_dir).unwrap();
+            std::fs::write(artifact_dir.join(tarball), tarball.as_bytes()).unwrap();
+            let image = artifact_dir
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let sandbox = Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image { image })
+                .egress(alien_core::SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("merge-test".to_string())
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            std::fs::write(
+                platform_dir.join("stack.json"),
+                serde_json::to_string_pretty(&stack).unwrap(),
+            )
+            .unwrap();
+        };
+        write_sandbox_partial("arm", "sbx-aaaa1111", "linux-aarch64.oci.tar");
+        write_sandbox_partial("x64", "sbx-bbbb2222", "linux-x64.oci.tar");
+
+        let platforms = merge_build_outputs(root.path(), out.path()).unwrap();
+        assert_eq!(platforms, vec!["aws".to_string()]);
+
+        let merged: Stack = read_stack(&out.path().join("build/aws/stack.json")).unwrap();
+        let image = compute_image(&merged, "sbx").expect("sandbox should have a merged image dir");
+        let merged_dir = PathBuf::from(&image);
+        assert!(merged_dir.join("linux-aarch64.oci.tar").exists());
         assert!(merged_dir.join("linux-x64.oci.tar").exists());
     }
 

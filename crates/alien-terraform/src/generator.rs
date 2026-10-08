@@ -24,8 +24,8 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
-    KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
+    ownership_policy_for_resource_type, ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode,
+    Key, KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
     NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
     SandboxEgress, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
     StackInputProvider, StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
@@ -204,6 +204,11 @@ fn generate_terraform_module_internal(
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
     let mut stack_settings = options.stack_settings.clone();
+    if target.is_kubernetes() {
+        // Logical compute pools use the cluster's existing nodes. Cloud fleet
+        // selections must not become Kubernetes setup inputs or import data.
+        stack_settings.compute = None;
+    }
     if target.is_kubernetes()
         && matches!(
             target.cloud_platform(),
@@ -225,6 +230,7 @@ fn generate_terraform_module_internal(
     let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
+    let mut secrets_vault_binding: Option<Expression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -238,7 +244,12 @@ fn generate_terraform_module_internal(
         // without this an EKS install would provision the MicroVM image, connector, security
         // group and roles of the AWS backend it never uses — and refuse `egress: allow`, which
         // Kubernetes supports, with advice about a platform the customer did not choose.
-        if target.is_kubernetes() && resource_type.as_ref() == Sandbox::RESOURCE_TYPE.as_ref() {
+        // ComputeCluster is also Kubernetes-native: the operator validates its
+        // logical pools without provisioning a second cloud machine fleet.
+        if target.is_kubernetes()
+            && (resource_type == Sandbox::RESOURCE_TYPE
+                || resource_type == ComputeCluster::RESOURCE_TYPE)
+        {
             continue;
         }
 
@@ -301,6 +312,10 @@ fn generate_terraform_module_internal(
         shared_locals.extend(local_contributions);
         per_resource.insert(resource_id.clone(), fragment);
 
+        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
+            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        }
+
         let registration_data = emitter.emit_import_ref(&ctx)?;
         registration_resources.push((
             resource.enabled_when.clone(),
@@ -325,6 +340,11 @@ fn generate_terraform_module_internal(
         dedupe_gcp_support_resources(&mut per_resource)?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
+    // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
+    // Making its subnets depend on those roles creates a Terraform cycle.
+    if target == TerraformTarget::Aws {
+        apply_aws_network_iam_dependency(stack, &mut per_resource);
+    }
     if matches!(platform, alien_core::Platform::Azure) {
         emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
@@ -520,6 +540,7 @@ fn generate_terraform_module_internal(
             target,
             options.registration.as_ref(),
             &stack_inputs,
+            deployer_secret_outputs(stack, target, secrets_vault_binding.as_ref())?,
         ))?,
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
@@ -1030,7 +1051,144 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             }
             upsert_depends_on(resource, &depends_on);
         }
+        // Existing/default network lookups also need the provider API enabled.
+        // Defer those reads until setup completes the network's prerequisites.
+        if entry.config.resource_type() == Network::RESOURCE_TYPE {
+            for data in &mut fragment.data_blocks {
+                upsert_depends_on(data, &depends_on);
+            }
+        }
     }
+}
+
+/// Lambda deletes a worker's Hyperplane ENI with the function's execution
+/// role and its permissions. If those are destroyed first, the ENI stays and
+/// the private subnets and workload security group it sits in can never be
+/// destroyed. The created network's private subnets and security groups
+/// therefore depend on every IAM role and policy, so Terraform destroys IAM
+/// last. IAM resources that already reference the network, such as an IRSA
+/// role trusting a cluster placed in it, are skipped to avoid a cycle.
+fn apply_aws_network_iam_dependency(
+    stack: &Stack,
+    per_resource: &mut IndexMap<String, TfFragment>,
+) {
+    const IAM_TYPES: [&str; 4] = [
+        "aws_iam_role",
+        "aws_iam_role_policy",
+        "aws_iam_role_policy_attachment",
+        "aws_iam_policy",
+    ];
+    let Some(network_id) = stack.resources().find_map(|(resource_id, entry)| {
+        (entry.config.resource_type() == Network::RESOURCE_TYPE).then_some(resource_id)
+    }) else {
+        return;
+    };
+    let holds_worker_enis =
+        |resource: &Block| match resource.labels.first().map(|label| label.as_str()) {
+            Some("aws_subnet") => resource
+                .labels
+                .get(1)
+                .is_some_and(|label| label.as_str().ends_with("_private")),
+            Some("aws_security_group") => true,
+            _ => false,
+        };
+    let targets: Vec<String> = per_resource
+        .get(network_id)
+        .into_iter()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter(|resource| holds_worker_enis(resource))
+        .filter_map(resource_address_text)
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+
+    let rendered: Vec<(String, String)> = per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .filter_map(|resource| {
+            let address = resource_address_text(resource)?;
+            let body = hcl::format::to_string(&resource.body).ok()?;
+            Some((address, body))
+        })
+        .collect();
+    let direct_dependencies: IndexMap<&str, Vec<&str>> = rendered
+        .iter()
+        .map(|(address, body)| {
+            let dependencies = rendered
+                .iter()
+                .map(|(other, _)| other.as_str())
+                .filter(|other| *other != address && references_address(body, other))
+                .collect();
+            (address.as_str(), dependencies)
+        })
+        .collect();
+    let reaches_target = |start: &str| -> bool {
+        let mut pending = vec![start];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(address) = pending.pop() {
+            if !seen.insert(address) {
+                continue;
+            }
+            if targets.iter().any(|target| target == address) {
+                return true;
+            }
+            pending.extend(
+                direct_dependencies
+                    .get(address)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        false
+    };
+    let iam_addresses: Vec<Expression> = rendered
+        .iter()
+        .filter(|(address, _)| {
+            IAM_TYPES
+                .iter()
+                .any(|provider_type| address.starts_with(&format!("{provider_type}.")))
+                && !reaches_target(address)
+        })
+        .filter_map(|(address, _)| {
+            let (provider_type, label) = address.split_once('.')?;
+            Some(expr::traversal([provider_type, label]))
+        })
+        .collect();
+    if iam_addresses.is_empty() {
+        return;
+    }
+    let Some(fragment) = per_resource.get_mut(network_id) else {
+        return;
+    };
+    for resource in &mut fragment.resource_blocks {
+        if holds_worker_enis(resource) {
+            upsert_depends_on(resource, &iam_addresses);
+        }
+    }
+}
+
+fn resource_address_text(resource: &Block) -> Option<String> {
+    if resource.identifier.as_str() != "resource" {
+        return None;
+    }
+    Some(format!(
+        "{}.{}",
+        resource.labels.first()?.as_str(),
+        resource.labels.get(1)?.as_str()
+    ))
+}
+
+/// Whether rendered HCL mentions `address` as a whole reference and not as a
+/// prefix of a longer label.
+fn references_address(body: &str, address: &str) -> bool {
+    body.match_indices(address).any(|(index, _)| {
+        body[index + address.len()..]
+            .chars()
+            .next()
+            .is_none_or(|next| !(next.is_alphanumeric() || next == '_'))
+    })
 }
 
 fn apply_azure_resource_group_dependency(
@@ -1250,63 +1408,42 @@ fn versions_body(
 
     let mut provider_attrs: Vec<Structure> = Vec::new();
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
-        provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
+        provider_attrs.push(attr("aws", provider_requirement("aws")));
         if include_awscc_provider {
-            provider_attrs.push(attr(
-                "awscc",
-                provider_decl_attr("hashicorp/awscc", ">= 1.0"),
-            ));
+            provider_attrs.push(attr("awscc", provider_requirement("awscc")));
         }
         if matches!(target, TerraformTarget::Eks) {
-            provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
+            provider_attrs.push(attr("tls", provider_requirement("tls")));
         }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
-        provider_attrs.push(attr(
-            "google",
-            provider_decl_attr("hashicorp/google", ">= 5.0"),
-        ));
+        provider_attrs.push(attr("google", provider_requirement("google")));
         if include_google_beta_provider {
             // The floor is where `google_vertex_ai_reasoning_engine` exists.
-            provider_attrs.push(attr(
-                "google-beta",
-                provider_decl_attr("hashicorp/google-beta", ">= 6.0"),
-            ));
+            provider_attrs.push(attr("google-beta", provider_requirement("google-beta")));
         }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         // Upper bound deliberate: an open-ended constraint promises every future
         // major works, and azurerm 5 renamed arguments we emit. Raise it once the
         // emitters are ported, rather than letting a release decide for us.
-        provider_attrs.push(attr(
-            "azurerm",
-            provider_decl_attr("hashicorp/azurerm", ">= 3.100, < 5.0"),
-        ));
+        provider_attrs.push(attr("azurerm", provider_requirement("azurerm")));
         if include_azapi_provider {
             // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
             // preview type, and a major bump is free to change what `body` accepts.
-            provider_attrs.push(attr(
-                "azapi",
-                provider_decl_attr("Azure/azapi", ">= 2.6, < 3.0"),
-            ));
+            provider_attrs.push(attr("azapi", provider_requirement("azapi")));
         }
     }
     if include_time_provider {
-        provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
+        provider_attrs.push(attr("time", provider_requirement("time")));
     }
     if include_kubernetes_provider {
-        provider_attrs.push(attr(
-            "kubernetes",
-            provider_decl_attr("hashicorp/kubernetes", ">= 2.30"),
-        ));
+        provider_attrs.push(attr("kubernetes", provider_requirement("kubernetes")));
     }
     if include_helm_provider {
-        provider_attrs.push(attr("helm", provider_decl_attr("hashicorp/helm", ">= 3.0")));
+        provider_attrs.push(attr("helm", provider_requirement("helm")));
     }
-    provider_attrs.push(attr(
-        "random",
-        provider_decl_attr("hashicorp/random", ">= 3.6"),
-    ));
+    provider_attrs.push(attr("random", provider_requirement("random")));
     if let Some(registration) = registration {
         provider_attrs.push(attr(
             &registration.provider_name,
@@ -1331,6 +1468,32 @@ fn versions_body(
     Body::from(vec![Structure::Block(terraform_block)])
 }
 
+/// Every provider the generated stacks can declare: local name, source and version constraint.
+/// `scripts/terraform-provider-mirror.sh` mirrors exactly these for CI, and
+/// `provider_mirror_matches_generator_requirements` keeps the two in sync.
+pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
+    ("aws", "hashicorp/aws", ">= 5.0"),
+    ("awscc", "hashicorp/awscc", ">= 1.0"),
+    ("tls", "hashicorp/tls", ">= 4.0"),
+    ("google", "hashicorp/google", ">= 5.0"),
+    ("google-beta", "hashicorp/google-beta", ">= 6.0"),
+    ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
+    ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),
+    ("time", "hashicorp/time", ">= 0.9"),
+    ("kubernetes", "hashicorp/kubernetes", ">= 2.30"),
+    ("helm", "hashicorp/helm", ">= 3.0"),
+    ("random", "hashicorp/random", ">= 3.6"),
+];
+
+/// The `required_providers` entry for a provider in [`PROVIDER_REQUIREMENTS`].
+fn provider_requirement(name: &str) -> Expression {
+    let (_, source, version) = PROVIDER_REQUIREMENTS
+        .iter()
+        .find(|(provider, _, _)| *provider == name)
+        .unwrap_or_else(|| panic!("provider '{name}' is not in PROVIDER_REQUIREMENTS"));
+    provider_decl_attr(source, version)
+}
+
 fn provider_decl_attr(source: &str, version: &str) -> Expression {
     expr::object([
         ("source", Expression::String(source.to_string())),
@@ -1345,6 +1508,9 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
         .iter()
         .filter(|input| {
             input.provided_by.contains(&StackInputProvider::Deployer)
+                // Deployer secrets are written into the customer's own secret
+                // store, so no variable (and no state) ever holds them.
+                && !alien_core::is_deployer_secret_input(input)
                 && input
                     .platforms
                     .as_ref()
@@ -1352,6 +1518,110 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
         })
         .cloned()
         .collect()
+}
+
+/// One output per deployer secret, naming where the deployer writes its value.
+///
+/// The name comes from the `secrets` vault's binding: a Parameter Store or
+/// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is
+/// a Secret in the deployment's namespace whose name the operator derives, so
+/// the output carries the vault key and the deployment status shows the full
+/// name.
+fn deployer_secret_outputs(
+    stack: &Stack,
+    target: TerraformTarget,
+    secrets_vault_binding: Option<&Expression>,
+) -> Result<Vec<(String, Expression, String)>> {
+    let platform = target.deployment_platform();
+    let inputs: Vec<&StackInputDefinition> = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            alien_core::is_deployer_secret_input(input)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&platform))
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let binding_field = |field: &str| match secrets_vault_binding {
+        Some(Expression::Object(binding)) => binding.iter().find_map(|(key, value)| {
+            matches!(key, hcl::expr::ObjectKey::Identifier(id) if id.as_str() == field)
+                .then(|| value.clone())
+        }),
+        _ => None,
+    };
+    let missing_vault = || {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate_terraform_module".to_string(),
+            reason: format!(
+                "deployer secret inputs live in the '{}' vault, which this module does not \
+                 emit; run the stack through preflights so the vault is added",
+                alien_core::SECRETS_VAULT_ID
+            ),
+        })
+    };
+
+    let mut outputs = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let vault_key = alien_core::deployer_secret_vault_key(&input.id);
+        let (value, description) = if target.is_kubernetes() {
+            (
+                expr::object([("vault_key", Expression::String(vault_key))]),
+                format!(
+                    "Secrets vault key for '{}'; the deployment status shows the Kubernetes \
+                     Secret to create.",
+                    input.label
+                ),
+            )
+        } else if let Some(vault_name) = binding_field("vaultName") {
+            (
+                expr::object([
+                    ("key_vault", vault_name),
+                    (
+                        "name",
+                        Expression::String(alien_core::vault_naming::key_vault_secret_name(
+                            &vault_key,
+                        )),
+                    ),
+                ]),
+                format!(
+                    "Key Vault secret to write the '{}' value into.",
+                    input.label
+                ),
+            )
+        } else {
+            let prefix = binding_field("vaultPrefix").ok_or_else(missing_vault)?;
+            (
+                expr::object([(
+                    "name",
+                    Expression::FuncCall(Box::new(
+                        hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("join"))
+                            .arg(Expression::String("-".to_string()))
+                            .arg(Expression::Array(vec![
+                                prefix,
+                                Expression::String(vault_key),
+                            ]))
+                            .build(),
+                    )),
+                )]),
+                format!("Secret to write the '{}' value into.", input.label),
+            )
+        };
+        outputs.push((
+            format!(
+                "deployer_secret_{}",
+                terraform_stack_input_variable_name(input).trim_start_matches("input_")
+            ),
+            value,
+            description,
+        ));
+    }
+    Ok(outputs)
 }
 
 fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
@@ -1375,22 +1645,7 @@ fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Resul
         }
     }
 
-    let secret_inputs: Vec<&str> = inputs
-        .iter()
-        .filter(|input| input.kind == StackInputKind::Secret)
-        .map(|input| input.id.as_str())
-        .collect();
-    if secret_inputs.is_empty() {
-        return Ok(());
-    }
-
-    Err(AlienError::new(ErrorData::OperationNotSupported {
-        operation: "generate_terraform_module".to_string(),
-        reason: format!(
-            "Terraform deployer-provided secret stack inputs are not enabled because this provider cannot prove values stay out of Terraform state yet. Use the deployment portal, CloudFormation, or deploy CLI for secret inputs, or move these inputs out of the Terraform setup path: {}",
-            secret_inputs.join(", ")
-        ),
-    }))
+    Ok(())
 }
 
 fn stack_input_description(label: &str, description: &str) -> String {
@@ -1509,6 +1764,12 @@ fn variables_body(
             "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections.",
             Some(Expression::String("{}".to_string())),
             true,
+        )));
+        blocks.push(nested(string_enum_variable_block(
+            "endpoint_access",
+            "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.",
+            stack_settings.endpoint_access.as_str(),
+            &["internet", "private"],
         )));
         blocks.push(nested(string_enum_variable_block(
             "updates_mode",
@@ -1923,6 +2184,7 @@ fn advanced_settings_default_json(
         object.remove("updates");
         object.remove("telemetry");
         object.remove("heartbeats");
+        object.remove("endpointAccess");
         if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
             && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
             || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)
@@ -2564,7 +2826,25 @@ fn providers_body(
                         "resource_provider_registrations",
                         Expression::String("none".to_string()),
                     ),
-                    Structure::Block(block("features", [])),
+                    // Track accepted creates before polling so failures remain
+                    // available to Terraform cleanup. Keep group deletion guarded:
+                    // retained key vaults are deliberately detached from state.
+                    nested(block(
+                        "features",
+                        [
+                            attr(
+                                "persist_id_on_create_before_polling_for_completion",
+                                Expression::Bool(true),
+                            ),
+                            nested(block(
+                                "resource_group",
+                                [attr(
+                                    "prevent_deletion_if_contains_resources",
+                                    Expression::Bool(true),
+                                )],
+                            )),
+                        ],
+                    )),
                 ]),
             }));
             if include_azapi_provider {
@@ -2581,7 +2861,7 @@ fn providers_body(
         structures.push(Structure::Block(Block {
             identifier: Identifier::sanitized("provider"),
             labels: vec![BlockLabel::String("kubernetes".to_string())],
-            body: Body::from(kubernetes_provider_body(target)),
+            body: Body::from(kubernetes_provider_body(target, false)),
         }));
     }
     if include_helm_provider {
@@ -2590,7 +2870,7 @@ fn providers_body(
             labels: vec![BlockLabel::String("helm".to_string())],
             body: Body::from(vec![attr(
                 "kubernetes",
-                provider_config_object(kubernetes_provider_body(target)),
+                provider_config_object(kubernetes_provider_body(target, true)),
             )]),
         }));
     }
@@ -2606,7 +2886,7 @@ fn provider_config_object(items: Vec<Structure>) -> Expression {
     }))
 }
 
-fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
+fn kubernetes_provider_body(target: TerraformTarget, for_helm: bool) -> Vec<Structure> {
     match target {
         // EKS: use the `exec` auth plugin instead of
         // `data.aws_eks_cluster_auth.target.token` because that data source
@@ -2618,38 +2898,38 @@ fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
         // generated `kubernetes_kubeconfig` local already uses this pattern
         // for the `kubectl` CLI output; mirroring it here keeps both paths
         // honoring the same auth flow.
-        TerraformTarget::Eks => vec![
-            attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
-            attr(
-                "cluster_ca_certificate",
-                expr::raw("base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)"),
-            ),
-            // `exec` is expressed as an *attribute* (object literal), not a
-            // nested HCL block, because this same body is reused inside the
-            // `helm` provider as `kubernetes = { … }` (object form, which
-            // only takes attributes — `provider_config_object` drops
-            // anything that isn't an Attribute). The kubernetes provider
-            // accepts both block and attribute forms, so attribute form
-            // works in both places.
-            attr(
-                "exec",
-                expr::object([
-                    (
-                        "api_version",
-                        Expression::String(
-                            "client.authentication.k8s.io/v1beta1".to_string(),
-                        ),
+        TerraformTarget::Eks => {
+            let exec = vec![
+                attr(
+                    "api_version",
+                    Expression::String("client.authentication.k8s.io/v1beta1".to_string()),
+                ),
+                attr("command", Expression::String("aws".to_string())),
+                attr(
+                    "args",
+                    expr::raw(
+                        "[\"eks\", \"get-token\", \"--cluster-name\", data.aws_eks_cluster.target.name, \"--region\", var.aws_region]",
                     ),
-                    ("command", Expression::String("aws".to_string())),
-                    (
-                        "args",
-                        expr::raw(
-                            "[\"eks\", \"get-token\", \"--cluster-name\", data.aws_eks_cluster.target.name, \"--region\", var.aws_region]",
-                        ),
+                ),
+            ];
+            let exec = if for_helm {
+                // Helm 3 configures Kubernetes through an object attribute.
+                attr("exec", provider_config_object(exec))
+            } else {
+                // The Kubernetes provider requires a nested exec block.
+                nested(block("exec", exec))
+            };
+            vec![
+                attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
+                attr(
+                    "cluster_ca_certificate",
+                    expr::raw(
+                        "base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)",
                     ),
-                ]),
-            ),
-        ],
+                ),
+                exec,
+            ]
+        }
         TerraformTarget::Gke => vec![
             attr(
                 "host",
@@ -2914,6 +3194,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
@@ -2947,6 +3228,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
@@ -2972,6 +3254,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
   kubernetes = local.deployment_kubernetes_settings
 })"#,
             );
@@ -2983,6 +3266,7 @@ fn stack_settings_expression(
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
   heartbeats = var.heartbeats_mode
+  endpointAccess = var.endpoint_access
 })"#,
             );
         }
@@ -3597,6 +3881,7 @@ fn outputs_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     stack_inputs: &[StackInputDefinition],
+    deployer_secret_outputs: Vec<(String, Expression, String)>,
 ) -> Body {
     let mut outputs = vec![
         (
@@ -3733,10 +4018,12 @@ fn outputs_body(
 
     let blocks: Vec<Structure> = outputs
         .into_iter()
+        .map(|(name, value, description)| (name.to_string(), value, description.to_string()))
+        .chain(deployer_secret_outputs)
         .map(|(name, value, description)| {
             let mut body = vec![
                 attr("value", value),
-                attr("description", Expression::String(description.to_string())),
+                attr("description", Expression::String(description)),
             ];
             if name == "deployment_stack_settings"
                 || name == "deployment_token"
@@ -3747,7 +4034,7 @@ fn outputs_body(
 
             nested(Block {
                 identifier: Identifier::sanitized("output"),
-                labels: vec![BlockLabel::String(name.to_string())],
+                labels: vec![BlockLabel::String(name)],
                 body: Body::from(body),
             })
         })
@@ -3806,7 +4093,7 @@ fn readme_md(
         // approver looking for it.
         let scaffolding = if live_sandboxes
             .iter()
-            .any(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+            .any(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
         {
             "build scaffolding — the build role, egress connector, operator role, and security \
              group —"
@@ -4040,8 +4327,70 @@ fn readme_kubernetes_destroy_order() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// CI serves these providers from a mirror that falls back to the registry only for providers
+    /// it doesn't list, so a constraint changed here without the script would break CI's inits.
+    #[test]
+    fn provider_mirror_matches_generator_requirements() {
+        let script = include_str!("../../../scripts/terraform-provider-mirror.sh");
+        let mirrored: Vec<String> = script
+            .lines()
+            .filter(|line| line.contains("source = ") && line.contains("version = "))
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        let expected: Vec<String> = PROVIDER_REQUIREMENTS
+            .iter()
+            .map(|(name, source, version)| {
+                format!("{name} = {{ source = \"{source}\", version = \"{version}\" }}")
+            })
+            .collect();
+        assert_eq!(mirrored, expected);
+    }
+
     use super::*;
     use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+
+    #[test]
+    fn eks_kubernetes_and_helm_provider_auth_validate() {
+        // Exercise the actual provider schemas. The Kubernetes provider requires
+        // `exec { ... }`, while Helm 3 requires `kubernetes = { exec = { ... } }`.
+        let files = IndexMap::from([
+            (
+                "versions.tf".to_string(),
+                render_body(versions_body(
+                    TerraformTarget::Eks,
+                    None,
+                    false,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                ))
+                .expect("versions should render"),
+            ),
+            (
+                "providers.tf".to_string(),
+                render_body(providers_body(
+                    TerraformTarget::Eks,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                ))
+                .expect("providers should render"),
+            ),
+            (
+                "inputs.tf".to_string(),
+                r#"variable "aws_region" { type = string }
+data "aws_eks_cluster" "target" { name = "validation-only" }
+"#
+                .to_string(),
+            ),
+        ]);
+        crate::test_utils::terraform_validate(&files)
+            .assert_ok("EKS Kubernetes and Helm provider authentication");
+    }
 
     fn product_registration() -> TerraformRegistration {
         TerraformRegistration {
@@ -4131,8 +4480,13 @@ mod tests {
         assert!(registration_body
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
-        let outputs = render_body(outputs_body(TerraformTarget::Aws, Some(&registration), &[]))
-            .expect("outputs");
+        let outputs = render_body(outputs_body(
+            TerraformTarget::Aws,
+            Some(&registration),
+            &[],
+            Vec::new(),
+        ))
+        .expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
         assert!(!outputs.contains("deployment_input_values"));
     }

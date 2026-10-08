@@ -14,9 +14,8 @@ concurrency:
 
 jobs:
   repair:
-    if: >-
-      github.event.pull_request.user.login == 'renovate[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # Keep dependency automation paused until explicitly re-enabled.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -25,11 +24,17 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           persist-credentials: false
 
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - name: Install development tools
+        id: mise
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-tools
+          MISE_DISABLE_TOOLS: rust
         with:
-          node-version: 24
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: node pnpm
+          cache_key: "{{default}}-${{ hashFiles('package.json') }}"
 
       - name: Regenerate pnpm lockfiles
         run: |

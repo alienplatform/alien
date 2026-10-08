@@ -1053,6 +1053,7 @@ async fn apply_render_mutations_with_management_config(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
@@ -1075,6 +1076,7 @@ async fn apply_render_mutations_with_management_config(
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     };
 
     runner
@@ -1101,6 +1103,7 @@ async fn create_release(
             stack: stack_by_platform_sdk,
             git_metadata: None,
             project_id: "default".to_string(),
+            channel: None,
         })
         .send()
         .await
@@ -1121,6 +1124,8 @@ async fn create_deployment_group_token(
                 &uuid::Uuid::new_v4().to_string()[..8]
             ),
             max_deployments: None,
+            environment_variables: Default::default(),
+            input_values: Default::default(),
         })
         .send()
         .await
@@ -1939,6 +1944,7 @@ async fn terraform_kubernetes_stack_for_target(
 
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig {
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
@@ -1961,6 +1967,7 @@ async fn terraform_kubernetes_stack_for_target(
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     };
 
     runner

@@ -738,6 +738,17 @@ pub trait ResourceController: Send + Sync + Debug {
         Ok(false)
     }
 
+    /// Whether the delete flow, at the controller's current state, has removed nothing yet.
+    ///
+    /// When the executor deletes a failed create to replace it, it keeps the create's
+    /// checkpoint only while this holds, so a delete that is then denied can put the create
+    /// back and a reverted config resumes it. Override it for the first delete steps that only
+    /// look things up (or whose delete call has not run yet). The default assumes something
+    /// may already be gone once a delete step succeeded, which is always safe.
+    fn nothing_deleted_yet(&self) -> bool {
+        false
+    }
+
     /// Whether a Running resource must continue its controller state machine
     /// during convergence phases. Most Ready resources are periodic health
     /// checks and should only run in the dedicated Running pass.
@@ -980,6 +991,11 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "local")]
         "LocalDaemonController" => deser!(crate::daemon::LocalDaemonController),
 
+        #[cfg(feature = "kubernetes")]
+        "KubernetesComputeClusterController" => {
+            deser!(crate::compute_cluster::KubernetesComputeClusterController)
+        }
+
         // Container cluster controllers
         #[cfg(feature = "local")]
         "LocalComputeClusterController" => {
@@ -1095,6 +1111,10 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "local")]
         "LocalServiceAccountController" => {
             deser!(crate::service_account::LocalServiceAccountController)
+        }
+        #[cfg(feature = "kubernetes")]
+        "KubernetesServiceAccountController" => {
+            deser!(crate::service_account::KubernetesServiceAccountController)
         }
         #[cfg(feature = "test")]
         "TestServiceAccountController" => {

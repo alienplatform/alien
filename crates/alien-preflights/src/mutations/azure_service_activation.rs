@@ -8,7 +8,7 @@ use alien_core::{
     Stack, StackState,
 };
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::{debug, info};
 
 /// Mutation that adds ServiceActivation resources for required Azure services.
@@ -115,9 +115,10 @@ impl StackMutation for AzureServiceActivationMutation {
 }
 
 impl AzureServiceActivationMutation {
-    /// Get the mapping of service activation ID to service name based on resources in the stack
-    fn get_required_services(&self, stack: &Stack, platform: Platform) -> HashMap<String, String> {
-        let mut services = HashMap::new();
+    /// Get the mapping of service activation ID to service name based on resources in the stack.
+    /// Ordered, because `mutate` inserts in this order and setup renders the stack in it.
+    fn get_required_services(&self, stack: &Stack, platform: Platform) -> BTreeMap<String, String> {
+        let mut services = BTreeMap::new();
         let include_azure_workload_scaffolding = platform == Platform::Azure;
 
         for (_, entry) in &stack.resources {
@@ -276,5 +277,55 @@ mod tests {
         assert!(AzureServiceActivationMutation
             .get_required_services(&stack, Platform::Aws)
             .is_empty());
+    }
+
+    /// Setup renders the stack in insertion order, so the activations must land in the same order
+    /// on every run.
+    #[tokio::test]
+    async fn activations_are_inserted_in_a_fixed_order() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("worker".to_string())
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+
+        let mut orders = Vec::new();
+        for _ in 0..8 {
+            let mutated = AzureServiceActivationMutation
+                .mutate(stack.clone(), &StackState::new(Platform::Azure), &config)
+                .await
+                .expect("mutation applies");
+            let ids: Vec<String> = mutated
+                .resources()
+                .filter(|(_, entry)| entry.config.downcast_ref::<ServiceActivation>().is_some())
+                .map(|(id, _)| id.clone())
+                .collect();
+            orders.push(ids);
+        }
+        assert!(orders[0].len() > 2, "{:?}", orders[0]);
+        let mut sorted = orders[0].clone();
+        sorted.sort();
+        assert_eq!(orders[0], sorted);
+        assert!(orders.iter().all(|order| *order == orders[0]), "{orders:?}");
     }
 }

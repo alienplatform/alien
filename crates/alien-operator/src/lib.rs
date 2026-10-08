@@ -28,7 +28,9 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+pub mod pod_logs;
 pub mod readiness_server;
+pub mod self_update;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -53,6 +55,7 @@ struct OperatorRuntimeOptions {
     readiness_server_port: Option<u16>,
     identity_initialized_config_map: Option<String>,
     runtime_deployment_scope: Option<(String, String)>,
+    pod_log_collection: Option<pod_logs::PodLogCollectionConfig>,
 }
 
 impl OperatorRuntimeOptions {
@@ -61,6 +64,7 @@ impl OperatorRuntimeOptions {
             readiness_server_port: readiness_server_port_from_env()?,
             identity_initialized_config_map: identity_initialized_config_map_from_env()?,
             runtime_deployment_scope: runtime_deployment_scope_from_env()?,
+            pod_log_collection: pod_logs::config_from_env()?,
         })
     }
 }
@@ -229,6 +233,21 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         "Starting operator"
     );
 
+    if runtime_options.pod_log_collection.is_some() {
+        if !matches!(config.platform, Platform::Kubernetes) || config.namespace.is_none() {
+            return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "Pod log collection requires a Kubernetes installation namespace"
+                    .to_string(),
+            }));
+        }
+        if !config.is_telemetry_enabled() {
+            return Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "Pod log collection requires deployment telemetry to be enabled"
+                    .to_string(),
+            }));
+        }
+    }
+
     // Local runtimes are real child processes owned by LocalBindingsProvider.
     // Keep a shutdown handle before moving the service provider into shared
     // operator state so cancellation can drain those children before exit.
@@ -282,6 +301,12 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
+    // Air-gapped: telemetry stays buffered and leaves with `alien-deploy
+    // sync`, which reads this token from the status Secret.
+    let airgap_export_token = config
+        .is_airgapped()
+        .then(|| uuid::Uuid::new_v4().simple().to_string());
+    let otlp_export_token = airgap_export_token.clone();
     let sandbox_broker = sandbox_broker_router(
         &config,
         db.clone(),
@@ -296,6 +321,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             otlp_db,
             otlp_namespace,
             otlp_collector_token,
+            otlp_export_token,
             sandbox_broker,
             otlp_cancel,
         )
@@ -313,6 +339,30 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         }
     });
 
+    // Pull deployments report Kubernetes workload health independently of
+    // deployment reconciliation. The latter clears its target config after a
+    // successful rollout, while this read-only loop can recover from an
+    // Operator restart using the Manager-hydrated deployment state.
+    let kubernetes_heartbeat_handle = if matches!(config.platform, Platform::Kubernetes) {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loops::kubernetes_heartbeats::run_kubernetes_heartbeat_loop(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
+    let pod_log_handle = if let Some(pod_log_config) = runtime_options.pod_log_collection.clone() {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move { pod_logs::run_loop(state, pod_log_config).await }
+        }))
+    } else {
+        None
+    };
+
     // Start sync and telemetry loops only if not airgapped
     let sync_handle = if !config.is_airgapped() {
         Some(tokio::spawn({
@@ -329,6 +379,42 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     } else {
         warn!("Running in airgapped mode - sync loop disabled");
         None
+    };
+
+    // Tunnel loop: serves requests from the manager for the stack's declared
+    // tunnel endpoints over outbound connections. Idle unless the manager
+    // advertises a tunnel URL and the stack declares endpoints.
+    let tunnel_handle = if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes)
+    {
+        Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loops::tunnel::run_tunnel_loop(state).await;
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Air-gapped: targets arrive in bundles, state leaves in status exports.
+    let airgap_handle = match (&config.airgap_target_secret, config.is_airgapped()) {
+        (Some(secret), true) => Some(tokio::spawn({
+            let state = state.clone();
+            let secret = secret.clone();
+            async move { loops::airgap::run_airgap_target_loop(state, secret).await }
+        })),
+        _ => None,
+    };
+    let airgap_status_handle = match (&config.airgap_status_secret, config.is_airgapped()) {
+        (Some(secret), true) => Some(tokio::spawn({
+            let state = state.clone();
+            let secret = secret.clone();
+            let export_token = airgap_export_token
+                .clone()
+                .expect("air-gapped Operators have an export token");
+            async move { loops::airgap::run_airgap_status_loop(state, secret, export_token).await }
+        })),
+        _ => None,
     };
 
     let telemetry_handle = if !config.is_airgapped() {
@@ -465,6 +551,20 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         },
         _ = deployment_handle => Ok(loop_exit(&cancel, "deployment")),
         _ = async {
+            if let Some(h) = kubernetes_heartbeat_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "kubernetes-heartbeats")),
+        _ = async {
+            if let Some(h) = pod_log_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "pod-logs")),
+        _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
             } else {
@@ -485,6 +585,27 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "telemetry")),
+        _ = async {
+            if let Some(h) = tunnel_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "tunnel")),
+        _ = async {
+            if let Some(h) = airgap_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "airgap-targets")),
+        _ = async {
+            if let Some(h) = airgap_status_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Ok(loop_exit(&cancel, "airgap-status")),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();
@@ -804,6 +925,7 @@ mod tests {
                     readiness_server_port: Some(readiness_port),
                     identity_initialized_config_map: None,
                     runtime_deployment_scope: None,
+                    pod_log_collection: None,
                 },
             ),
         )

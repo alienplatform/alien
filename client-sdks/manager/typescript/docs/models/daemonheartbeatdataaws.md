@@ -23,11 +23,18 @@ let value: DaemonHeartbeatDataAws = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "deleted",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 429918,
   backend: "aws",

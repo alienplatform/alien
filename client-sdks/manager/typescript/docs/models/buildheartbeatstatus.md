@@ -9,7 +9,7 @@ let value: BuildHeartbeatStatus = {
   collectionIssues: [
     {
       message: "<value>",
-      reason: "not-installed",
+      reason: "forbidden",
       severity: "info",
       source: "<value>",
     },

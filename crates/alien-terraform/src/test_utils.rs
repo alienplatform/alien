@@ -87,8 +87,27 @@ pub fn terraform_fmt_check(files: &LinterFiles) -> LinterRun {
 
 /// Run `terraform init -backend=false` and `terraform validate`.
 pub fn terraform_validate(files: &LinterFiles) -> LinterRun {
+    terraform_validate_with_format(files, false)
+}
+
+/// Format authored HCL fragments, then initialize providers and validate the module.
+pub fn terraform_fmt_and_validate(files: &LinterFiles) -> LinterRun {
+    terraform_validate_with_format(files, true)
+}
+
+fn terraform_validate_with_format(files: &LinterFiles, format: bool) -> LinterRun {
     run_when_enabled("terraform validate", || {
         let dir = write_files_to_temp_dir(files)?;
+        if format {
+            let formatted = run_command(
+                "terraform",
+                [OsStr::new("fmt"), OsStr::new("-recursive")],
+                Some(dir.path()),
+            )?;
+            if !matches!(formatted.status, LinterStatus::Passed) {
+                return Ok(formatted);
+            }
+        }
         let init = run_command(
             "terraform",
             [OsStr::new("init"), OsStr::new("-backend=false")],
@@ -99,6 +118,26 @@ pub fn terraform_validate(files: &LinterFiles) -> LinterRun {
         }
 
         run_command("terraform", [OsStr::new("validate")], Some(dir.path()))
+    })
+}
+
+/// Execute native Terraform tests, including mocked-provider plan assertions.
+pub fn terraform_test(files: &LinterFiles) -> LinterRun {
+    run_when_enabled("terraform test", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let init = run_command(
+            "terraform",
+            [OsStr::new("init"), OsStr::new("-backend=false")],
+            Some(dir.path()),
+        )?;
+        if !matches!(init.status, LinterStatus::Passed) {
+            return Ok(init);
+        }
+        run_command(
+            "terraform",
+            [OsStr::new("test"), OsStr::new("-no-color")],
+            Some(dir.path()),
+        )
     })
 }
 

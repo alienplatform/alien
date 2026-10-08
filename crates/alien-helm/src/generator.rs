@@ -10,7 +10,10 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, branded_tag_key, import::EmitContext,
+    access_request_crd::AccessRequestCrdNames,
+    branded_tag_key,
+    import::EmitContext,
+    is_deployer_secret_input,
     sync::{OperatorImageReport, OperatorImageSource},
     AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
@@ -20,8 +23,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
+use alien_permissions::operations::kubernetes::OperatorFeature;
 use indexmap::IndexMap;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Generated Helm chart files.
@@ -60,8 +65,11 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 /// Version of the operator RBAC policy enforced by this generator.
 ///
 /// Renderers expose this value so callers can reject manifests produced by a
-/// generator that predates policy-aware Kubernetes operation permissions.
-pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 2;
+/// generator with a different policy. Version 3 replaced the fixed read-only
+/// baseline with the Operator runtime rules. Version 4 binds the dynamic
+/// container Role only to product charts, retaining access for cleanup when
+/// an installed release withdraws image approvals.
+pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
@@ -146,12 +154,9 @@ pub struct OperatorManifestOptions<'a> {
     /// namespaced one can filter within its namespace. `None` manages everything
     /// in scope.
     pub label_selector: Option<&'a str>,
-    /// Whether the installed Operator includes the Kubernetes operations
-    /// plugin. This gates operation-specific RBAC independently of the
-    /// requested permission tier.
-    pub kubernetes_operations_enabled: bool,
-    /// Declared requirements from enabled custom operations only. The
-    /// generator validates these before applying the permission ceiling.
+    /// Declared Kubernetes requirements of every enabled operation, builtin
+    /// or custom. The generator validates these before applying the
+    /// permission ceiling. The Operator's own runtime rules are always added.
     pub custom_operation_permissions: &'a [KubernetesOperationPermissions],
     pub permission: OperatorPermission,
     pub format: OperatorOutputFormat,
@@ -178,8 +183,7 @@ pub enum OperatorImageIdentityOptions<'a> {
 /// chart to use a setup-owned credentials Secret and release-aware object name.
 pub struct ProductOperatorManifestOptions<'a> {
     pub manifest: OperatorManifestOptions<'a>,
-    /// Existing Secret containing `sync-token` and `encryption-key` (and
-    /// `collector-token` when the log collector is enabled).
+    /// Existing Secret containing `sync-token` and `encryption-key`.
     pub credentials_secret_name: &'a str,
     /// Expected lowercase SHA-256 fingerprint of the existing Secret's decoded
     /// `encryption-key`. Product charts normally source this from the reviewed
@@ -192,8 +196,14 @@ pub struct ProductOperatorManifestOptions<'a> {
 }
 
 pub struct OperatorLogCollectorOptions<'a> {
+    /// Image used by the node collector when a product chart selects nodeAgent.
     pub image: &'a str,
+    /// Credential used by the node collector in standalone manifests.
     pub token: &'a str,
+    /// Existing Pod label key to collect. Set together with `pod_label_value`.
+    pub pod_label_key: Option<&'a str>,
+    /// Existing Pod label value to collect. Set together with `pod_label_key`.
+    pub pod_label_value: Option<&'a str>,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -250,8 +260,12 @@ fn generate_helm_chart_internal(
         "values.yaml".to_string(),
         values_yaml(&analysis, &options.stack_settings)?,
     );
-    files.insert("values.schema.json".to_string(), values_schema_json());
+    files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
+    files.insert(
+        "templates/_runtime-identity.tpl".to_string(),
+        include_str!("templates/_runtime-identity.tpl").to_string(),
+    );
     files.insert(
         "templates/serviceaccount.yaml".to_string(),
         serviceaccount_tpl(),
@@ -264,6 +278,10 @@ fn generate_helm_chart_internal(
         clusterrolebinding_tpl(),
     );
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
+    files.insert(
+        "templates/registry-secret.yaml".to_string(),
+        registry_secret_tpl(),
+    );
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert(
@@ -297,7 +315,6 @@ fn generate_helm_chart_internal(
         runtime_cleanup_history_prune_tpl(),
     );
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
-    files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert(
         "templates/cluster-bootstrap.yaml".to_string(),
         cluster_bootstrap_tpl(),
@@ -314,6 +331,16 @@ fn generate_helm_chart_internal(
 
     if let Some((remote_operator, image_identity)) = remote_operator {
         add_remote_operator_files(&mut files, remote_operator, image_identity)?;
+    }
+
+    if let Some(notes) = deployer_secret_notes_tpl(stack) {
+        files
+            .entry("templates/NOTES.txt".to_string())
+            .and_modify(|existing| {
+                existing.push('\n');
+                existing.push_str(&notes);
+            })
+            .or_insert(notes);
     }
 
     // Per-resource extra templates contributed by emitters.
@@ -337,7 +364,11 @@ fn generate_helm_chart_internal(
         "examples/onprem.yaml".to_string(),
         onprem_values_example(&analysis),
     );
-    let mut readme = readme_md(&chart_name, stack);
+    files.insert(
+        "examples/bootstrap.yaml".to_string(),
+        bootstrap_values_example(),
+    );
+    let mut readme = readme_md(&chart_name);
     if has_remote_operator {
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
@@ -376,6 +407,35 @@ fn add_remote_operator_files(
         })
     })?;
     chart.push_str("annotations:\n  alien.dev/remote-operator-lifecycle: \"v2\"\n");
+
+    if let Some(collector) = options.manifest.log_collector.as_ref() {
+        if let (Some(key), Some(value)) = (collector.pod_label_key, collector.pod_label_value) {
+            let values = files.get_mut("values.yaml").ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: "the product chart is missing values.yaml".to_string(),
+                })
+            })?;
+            let default_key = "    podLabelKey: \"\"";
+            let default_value = "    podLabelValue: \"\"";
+            if !values.contains(default_key) || !values.contains(default_value) {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: "the product chart is missing its Pod log selector defaults"
+                        .to_string(),
+                }));
+            }
+            *values = values
+                .replacen(
+                    default_key,
+                    &format!("    podLabelKey: {}", yaml_string(key)),
+                    1,
+                )
+                .replacen(
+                    default_value,
+                    &format!("    podLabelValue: {}", yaml_string(value)),
+                    1,
+                );
+        }
+    }
 
     if let Some(label_domain) = options.manifest.label_domain {
         let values = files.get_mut("values.yaml").ok_or_else(|| {
@@ -425,7 +485,6 @@ fn add_remote_operator_files(
         }
     }
 
-    let requires_collector_token = options.manifest.log_collector.is_some();
     let identity_record = remote_operator_identity_record_tpl(
         options.credentials_secret_name,
         options.credentials_encryption_key_sha256,
@@ -436,6 +495,7 @@ fn add_remote_operator_files(
         Some("{{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"),
         Some("{{ include \"deployment.remoteOperatorLogCollectorName\" . }}"),
         image_identity,
+        true,
     )?;
     let mut crd = None;
     let mut templates = Vec::new();
@@ -514,7 +574,7 @@ fn add_remote_operator_files(
     );
     files.insert(
         "templates/remote-operator-checks.yaml".to_string(),
-        remote_operator_checks_tpl(requires_collector_token),
+        remote_operator_checks_tpl(),
     );
     files.insert(
         "templates/remote-operator-cleanup-job.yaml".to_string(),
@@ -523,6 +583,10 @@ fn add_remote_operator_files(
     files.insert(
         "templates/remote-operator-rollback-guard.yaml".to_string(),
         remote_operator_rollback_guard_tpl(),
+    );
+    files.insert(
+        "templates/NOTES.txt".to_string(),
+        remote_operator_removal_notes_tpl(),
     );
 
     let values = files.get_mut("values.yaml").ok_or_else(|| {
@@ -646,6 +710,11 @@ fn remote_operator_identity_record_tpl(
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
 {{{{- printf "%s-log-collector-%s" $releasePrefix $releaseIdentity }}}}
 {{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLogCollectorDaemonSetName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 19 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-log-collector-v2-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorLifecycleCapabilityName" -}}}}
 {{{{ printf "%s-lifecycle-v2" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
 {{{{- end -}}}}
@@ -658,6 +727,11 @@ fn remote_operator_identity_record_tpl(
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
 {{{{ printf "%s-identity-gate-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorRemovalConfirmed" -}}}}
+{{{{- if and (not .Values.remoteOperator.enabled) (eq (default "" .Values.remoteOperator.confirmRemoval | toString) .Release.Name) -}}}}
+true
+{{{{- end -}}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorRollbackGuardName" -}}}}
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
@@ -911,10 +985,20 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: helm-history
           {{- if eq .Values.remoteOperator.helmHistoryBackend "secret" }}
@@ -928,6 +1012,10 @@ spec:
         - name: verify-history-backend
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -964,14 +1052,28 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: wait-for-identity
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -1033,14 +1135,28 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -1247,7 +1363,9 @@ spec:
 }
 
 fn remote_operator_rollback_guard_tpl() -> String {
-    r#"{{- if not .Values.remoteOperator.enabled }}
+    r#"{{- /* Only a confirmed removal of a completed identity is a guard-free rollback target. */ -}}
+{{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace (include "deployment.remoteOperatorIdentityCompletionName" .) }}
+{{- if not (or .Values.remoteOperator.enabled (and (include "deployment.remoteOperatorRemovalConfirmed" .) $identityCompletion)) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -1263,14 +1381,28 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: rollback-guard
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -1278,9 +1410,83 @@ spec:
               identity_completion={{ include "deployment.remoteOperatorIdentityCompletionName" . | quote }}
               identity_completion_resource="$(kubectl -n {{ .Release.Namespace | quote }} get configmap "$identity_completion" --ignore-not-found=true --output=name)"
               if [ -n "$identity_completion_resource" ]; then
-                echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. Use the explicit uninstall lifecycle instead." >&2
+                echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. To remove only the Remote Operator, upgrade with --set remoteOperator.enabled=false --set-string remoteOperator.confirmRemoval={{ .Release.Name }}" >&2
                 exit 1
               fi
+{{- end }}
+"#
+    .to_string()
+}
+
+/// Install notes naming the Kubernetes Secret each deployer secret goes into.
+/// The Secret name carries the deployment's resource prefix, which the chart
+/// does not know, so the notes give the vault key and point to the deployment
+/// status for the full name.
+fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
+    let inputs: Vec<_> = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            is_deployer_secret_input(input)
+                && input
+                    .platforms
+                    .as_ref()
+                    .is_none_or(|platforms| platforms.contains(&Platform::Kubernetes))
+        })
+        .collect();
+    if inputs.is_empty() {
+        return None;
+    }
+    let mut notes = String::from(
+        "This release reads these secrets from Kubernetes Secrets you create in namespace \
+         {{ .Release.Namespace }}. They are not Helm values: their values never pass through \
+         Helm or the deployment's control plane.\n",
+    );
+    for input in inputs {
+        notes.push_str(&format!(
+            "  - {} ({}): secrets vault key {}\n",
+            input.label,
+            if input.required {
+                "required; workloads that read it wait until it exists"
+            } else {
+                "optional"
+            },
+            alien_core::deployer_secret_vault_key(&input.id),
+        ));
+    }
+    notes.push_str(&format!(
+        "The deployment status shows each Secret's name. Create one with:\n  kubectl create \
+         secret generic <name> --namespace {{{{ .Release.Namespace }}}} --from-literal={}='{}'\n",
+        alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY,
+        alien_core::DEPLOYER_SECRET_VALUE_PLACEHOLDER,
+    ));
+    Some(notes)
+}
+
+fn remote_operator_removal_notes_tpl() -> String {
+    r#"{{- if include "deployment.remoteOperatorRemovalConfirmed" . }}
+{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . }}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . }}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . }}
+Remote Operator was removed from release {{ .Release.Name }}. The other workloads in this release are unchanged.
+
+Kept in namespace {{ .Release.Namespace }} so the Remote Operator can be restored or its registration retired:
+  - PersistentVolumeClaim {{ $identityRecordName }}-identity (the Remote Operator identity)
+  - ConfigMaps {{ $identityRecordName }}, {{ $identityInitializedName }}, {{ $identityCompletionName }} (identity records)
+{{- with .Values.remoteOperator.existingSecret.name }}
+  - Secret {{ . }} (credentials created by setup; this chart does not manage it)
+{{- end }}
+
+Keep remoteOperator.confirmRemoval={{ .Release.Name }} on later upgrades while the Remote Operator stays removed.
+
+To restore the Remote Operator with the same identity, upgrade with:
+  --set remoteOperator.enabled=true --set-string remoteOperator.confirmRemoval=
+and the same remoteOperator.existingSecret values.
+
+To delete the kept identity permanently (restoring then requires the first-time setup again):
+  kubectl --namespace {{ .Release.Namespace }} delete persistentvolumeclaim {{ $identityRecordName }}-identity
+  kubectl --namespace {{ .Release.Namespace }} delete configmap {{ $identityRecordName }} {{ $identityInitializedName }} {{ $identityCompletionName }}
+Uninstalling the release also deletes them.
 {{- end }}
 "#
     .to_string()
@@ -1303,9 +1509,12 @@ remoteOperator:
   # Set true only for the first upgrade that enables Remote Operator after the
   # required disabled install/upgrade, then immediately persist false.
   bootstrapIdentity: false
+  # Set to this release's name together with enabled: false to remove the
+  # Remote Operator from an existing release. Its identity volume and records
+  # are kept. Keep it set while the Operator stays removed; clear it to enable.
+  confirmRemoval: ""
   syncTokenRevision: 0
-  # Rollout marker for the independently rotatable collector token. Setup
-  # tooling should set this to a digest or revision that changes with the token.
+  # Rollout marker for a rotated setup-owned node collector token.
   collectorTokenRevision: ""
   serviceAccountAnnotations: {}
   podLabels: {}
@@ -1333,6 +1542,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
                 "enum": ["secret", "configmap"]
             },
             "bootstrapIdentity": { "type": "boolean" },
+            "confirmRemoval": { "type": "string" },
             "existingSecret": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1350,6 +1560,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
             },
             "syncTokenRevision": { "type": "integer", "minimum": 0 },
             "collectorTokenRevision": {
+                "description": "Node collector credential rollout marker; ignored in podApi mode.",
                 "type": "string",
                 "maxLength": 64,
                 "pattern": "^$|^[0-9a-f]{64}$"
@@ -1362,7 +1573,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
                 "type": "object",
                 "propertyNames": {
                     "not": {
-                        "enum": ["app.kubernetes.io/name", "app.kubernetes.io/instance"]
+                        "enum": ["app.kubernetes.io/name", "app.kubernetes.io/instance", "alien.dev/log-collector-exclude"]
                     }
                 },
                 "additionalProperties": { "type": "string" }
@@ -1393,21 +1604,16 @@ fn remote_operator_values_schema() -> serde_json::Value {
     })
 }
 
-fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
-    let collector_check = if requires_collector_token {
-        r#"{{- $collectorToken := "" -}}
-{{- if hasKey $credentials.data "collector-token" -}}
-  {{- $collectorToken = index $credentials.data "collector-token" | b64dec -}}
-{{- end -}}
-{{- if empty $collectorToken -}}
-  {{- fail "The Remote Operator credentials Secret must contain a non-empty collector-token when log collection is enabled." -}}
-{{- end -}}
-"#
-    } else {
-        ""
-    };
+fn remote_operator_checks_tpl() -> String {
     r#"{{- $secretName := include "deployment.remoteOperatorCredentialsSecretName" . | trim -}}
 {{- $expectedEncryptionKeySha256 := include "deployment.remoteOperatorEncryptionKeySha256" . | trim -}}
+{{- $confirmRemoval := default "" .Values.remoteOperator.confirmRemoval | toString -}}
+{{- if and .Values.remoteOperator.enabled $confirmRemoval -}}
+  {{- fail "remoteOperator.confirmRemoval must be empty when Remote Operator is enabled. Set remoteOperator.confirmRemoval to an empty string to restore the Remote Operator." -}}
+{{- end -}}
+{{- if and $confirmRemoval (ne $confirmRemoval .Release.Name) -}}
+  {{- fail (printf "remoteOperator.confirmRemoval is %q, but this release is %q. Set it to the exact release name to remove the Remote Operator." $confirmRemoval .Release.Name) -}}
+{{- end -}}
 {{- if and .Release.IsInstall .Values.remoteOperator.enabled -}}
   {{- fail "Remote Operator cannot be enabled on the initial Helm install. Install once with remoteOperator.enabled=false so Helm records a rollback-guarded Kubernetes history revision, then enable it in an upgrade with remoteOperator.bootstrapIdentity=true." -}}
 {{- end -}}
@@ -1450,7 +1656,7 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
 {{- end -}}
 {{- end -}}
 {{- if .Values.remoteOperator.enabled -}}
-{{- if not .Values.management.url -}}
+{{- if not (include "deployment.managementUrl" .) -}}
   {{- fail "management.url is required when Remote Operator is enabled." -}}
 {{- end -}}
 {{- $expected := include "deployment.remoteOperatorAccessRequestCrd" . | fromYaml -}}
@@ -1483,7 +1689,15 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
 {{- if ne $actualEncryptionKeySha256 $expectedEncryptionKeySha256 -}}
   {{- fail (printf "Remote Operator credentials Secret %s/%s has encryption-key SHA-256 %s, but setup recorded %s. Refusing identity replacement; restore the original encryption-key." .Release.Namespace $secretName $actualEncryptionKeySha256 $expectedEncryptionKeySha256) -}}
 {{- end -}}
-__COLLECTOR_CHECK__{{- end -}}
+{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") -}}
+  {{- if not (hasKey $credentials.data "collector-token") -}}
+    {{- fail "The Remote Operator credentials Secret must contain collector-token for nodeAgent logging." -}}
+  {{- end -}}
+  {{- if empty (index $credentials.data "collector-token" | b64dec) -}}
+    {{- fail "The Remote Operator credentials Secret must contain a non-empty collector-token for nodeAgent logging." -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if or .Release.IsInstall .Release.IsUpgrade -}}
 {{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
 {{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
@@ -1626,8 +1840,8 @@ __COLLECTOR_CHECK__{{- end -}}
   {{- fail "A prepared Remote Operator retry may reuse only its exact-release owned retained identity PVC. Refusing adoption of another managed resource." -}}
 {{- end -}}
 {{- $safePreparedRollback := and (not .Values.remoteOperator.enabled) $preparedIdentity -}}
-{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityInitialized $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) -}}
-  {{- fail "Disabling Remote Operator on an existing release would delete its identity and managed resources. Uninstall the Remote Operator through the explicit lifecycle flow instead." -}}
+{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityInitialized $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) (not (include "deployment.remoteOperatorRemovalConfirmed" .)) -}}
+  {{- fail (printf "Disabling Remote Operator on an existing release deletes its workload and permissions. To remove only the Remote Operator and keep its identity volume, upgrade with --set remoteOperator.enabled=false --set-string remoteOperator.confirmRemoval=%s" .Release.Name) -}}
 {{- end -}}
 {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "managedResourceExists") (not $identityRecord) -}}
   {{- fail "Remote Operator managed resources exist without the retained identity record. Refusing adoption; restore the original identity record before retrying." -}}
@@ -1643,11 +1857,11 @@ __COLLECTOR_CHECK__{{- end -}}
 {{- end -}}
 {{- end -}}
 "#
-    .replace("__COLLECTOR_CHECK__", collector_check)
+    .to_string()
 }
 
 pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None, None, None, None)
+    generate_operator_manifest_inner(options, None, None, None, None, None, None, false)
 }
 
 /// Generate a standalone Operator manifest carrying an exact image receipt.
@@ -1655,14 +1869,23 @@ pub fn generate_operator_manifest_with_image_identity(
     options: OperatorManifestOptions<'_>,
     image_identity: OperatorImageIdentityOptions<'_>,
 ) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None, None, None, Some(image_identity))
+    generate_operator_manifest_inner(
+        options,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(image_identity),
+        false,
+    )
 }
 
 /// Render a Remote Operator for inclusion in a product Helm chart.
 pub fn generate_product_operator_manifest(
     options: ProductOperatorManifestOptions<'_>,
 ) -> Result<String> {
-    generate_product_operator_manifest_with_identity_marker(options, None, None, None)
+    generate_product_operator_manifest_with_identity_marker(options, None, None, None, false)
 }
 
 /// Render a product Remote Operator manifest carrying an exact image receipt.
@@ -1670,14 +1893,25 @@ pub fn generate_product_operator_manifest_with_image_identity(
     options: ProductOperatorManifestOptions<'_>,
     image_identity: OperatorImageIdentityOptions<'_>,
 ) -> Result<String> {
-    generate_product_operator_manifest_with_identity_marker(options, None, None, Some(image_identity))
+    generate_product_operator_manifest_with_identity_marker(
+        options,
+        None,
+        None,
+        Some(image_identity),
+        false,
+    )
 }
 
+/// `dynamic_containers` binds the dynamic container Role. Only a product chart
+/// passes `true`: it must still reconcile saved workloads after a release
+/// withdraws image approvals. A standalone Remote Operator has no installed
+/// release that could approve an image, so it never receives this access.
 fn generate_product_operator_manifest_with_identity_marker(
     options: ProductOperatorManifestOptions<'_>,
     identity_initialized_config_map: Option<&str>,
     log_collector_name: Option<&str>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
+    dynamic_containers: bool,
 ) -> Result<String> {
     generate_operator_manifest_inner(
         options.manifest,
@@ -1687,6 +1921,7 @@ fn generate_product_operator_manifest_with_identity_marker(
         identity_initialized_config_map,
         log_collector_name,
         image_identity,
+        dynamic_containers,
     )
 }
 
@@ -1698,6 +1933,7 @@ fn generate_operator_manifest_inner(
     identity_initialized_config_map: Option<&str>,
     log_collector_name: Option<&str>,
     image_identity: Option<OperatorImageIdentityOptions<'_>>,
+    dynamic_containers: bool,
 ) -> Result<String> {
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
@@ -1726,6 +1962,7 @@ fn generate_operator_manifest_inner(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{base_name}-operator"));
     let identity_pvc_name = format!("{operator_name}-identity");
+    let integrated_product_chart = log_collector_name.is_some();
     let log_collector_name = log_collector_name
         .map(str::to_string)
         .unwrap_or_else(|| format!("{operator_name}-whitelabeled-log-collector"));
@@ -1785,7 +2022,6 @@ fn generate_operator_manifest_inner(
             &operator_name,
             &labels,
             &crd_names,
-            options.kubernetes_operations_enabled,
             options.permission,
             options.custom_operation_permissions,
         ));
@@ -1800,11 +2036,24 @@ fn generate_operator_manifest_inner(
             &operator_name,
             &labels,
             &crd_names,
-            options.kubernetes_operations_enabled,
             options.permission,
             options.custom_operation_permissions,
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
+    }
+    // Dynamic workloads need write access in this deployment namespace only.
+    // Keep it in a Role even when inventory observation uses a ClusterRole.
+    if dynamic_containers {
+        docs.push(dynamic_container_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
+        docs.push(dynamic_container_rolebinding_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
     }
     if creates_credentials_secret {
         docs.push(operator_secret_doc(
@@ -1839,43 +2088,101 @@ fn generate_operator_manifest_inner(
         &labels,
         stack_settings_json.as_deref(),
         operator_image_report.as_ref(),
+        &log_collector_name,
+        integrated_product_chart,
+        dynamic_containers,
     ));
-    if let Some(log_collector) = options.log_collector.as_ref() {
+    if let Some(log_collector) = options
+        .log_collector
+        .as_ref()
+        .filter(|_| integrated_product_chart)
+    {
+        // Product charts manage workloads under the chart's runtime scope, not
+        // under the separately named Remote Operator Deployment.
+        let default_collector_scope = if identity_initialized_config_map.is_some()
+            && options.format == OperatorOutputFormat::HelmTemplate
+        {
+            (
+                "{{ .Values.logCollector.scope.deploymentLabelKey }}".to_string(),
+                "{{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
+            )
+        } else {
+            (
+                branded_tag_key(
+                    alien_core::access_request_crd::current_kubernetes_label_domain(
+                        options
+                            .label_domain
+                            .unwrap_or(alien_core::DEFAULT_ALIEN_LABEL_DOMAIN),
+                    ),
+                    ALIEN_STACK_TAG_KEY,
+                ),
+                operator_name.clone(),
+            )
+        };
         let mut collector_labels = labels.clone();
+        collector_labels.insert(
+            "app.kubernetes.io/name".to_string(),
+            "log-collector".to_string(),
+        );
         collector_labels.insert(
             "app.kubernetes.io/component".to_string(),
             "whitelabeled-log-collector".to_string(),
         );
-        docs.push(operator_service_doc(namespace, &operator_name, &labels));
-        docs.push(operator_log_collector_service_account_doc(
+        collector_labels.insert(
+            "alien.dev/log-collector-exclude".to_string(),
+            "true".to_string(),
+        );
+        let mut node_docs = Vec::new();
+        node_docs.push(operator_service_doc(namespace, &operator_name, &labels));
+        node_docs.push(operator_log_collector_service_account_doc(
             namespace,
             &log_collector_name,
             &collector_labels,
         ));
-        docs.push(operator_log_collector_role_doc(
+        node_docs.push(operator_log_collector_role_doc(
             namespace,
             &log_collector_name,
             &collector_labels,
         ));
-        docs.push(operator_log_collector_role_binding_doc(
+        node_docs.push(operator_log_collector_role_binding_doc(
             namespace,
             &log_collector_name,
             &collector_labels,
         ));
-        docs.push(operator_log_collector_configmap_doc(
+        node_docs.push(operator_log_collector_configmap_doc(
             namespace,
             &operator_name,
             &log_collector_name,
             namespace,
             &collector_labels,
+            log_collector,
+            (&default_collector_scope.0, &default_collector_scope.1),
+            options.format == OperatorOutputFormat::HelmTemplate,
         ));
-        docs.push(operator_log_collector_daemonset_doc(
+        node_docs.push(operator_log_collector_daemonset_doc(
             namespace,
             &log_collector_name,
             credentials_secret_name,
             log_collector.image,
             &collector_labels,
-            options.format == OperatorOutputFormat::HelmTemplate,
+            options.format,
+        ));
+        for doc in node_docs {
+            docs.push(format!("{{{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}}}\n{doc}{{{{- end }}}}\n"));
+        }
+    }
+    if options.log_collector.is_some() {
+        docs.push(operator_pod_log_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+            options.format,
+        ));
+        docs.push(operator_pod_log_role_binding_doc(
+            namespace,
+            &operator_name,
+            &labels,
+            options.format,
         ));
     }
 
@@ -1925,7 +2232,7 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     ));
 
     append_stack_settings(&mut yaml, options.stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n");
 
     match options.base_platform {
         Some(platform) => yaml.push_str(&format!(
@@ -2068,6 +2375,19 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
         }
     }
 
+    if let Some(collector) = &options.log_collector {
+        match (collector.pod_label_key, collector.pod_label_value) {
+            (None, None) => {}
+            (Some(key), Some(value))
+                if valid_kubernetes_pod_label_key(key) && valid_kubernetes_label_name(value) => {}
+            _ => {
+                return invalid(
+                    "log collector Pod label key and value must be set together and be valid Kubernetes labels",
+                );
+            }
+        }
+    }
+
     // Raw manifests are applied to one concrete cluster, so the install namespace
     // and per-environment identity must be concrete. Helm defers both to install.
     if options.format == OperatorOutputFormat::RawManifest {
@@ -2088,6 +2408,32 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
     }
 
     Ok(())
+}
+
+fn valid_kubernetes_label_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_kubernetes_pod_label_key(value: &str) -> bool {
+    match value.split_once('/') {
+        Some((domain, name)) => {
+            alien_core::access_request_crd::is_valid_kubernetes_label_domain(domain)
+                && valid_kubernetes_label_name(name)
+        }
+        None => valid_kubernetes_label_name(value),
+    }
 }
 
 fn validate_product_operator_options(
@@ -2161,7 +2507,6 @@ fn operator_role_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
@@ -2172,12 +2517,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(
-        crd_names,
-        kubernetes_operations_enabled,
-        permission,
-        custom_operations,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -2210,6 +2550,86 @@ roleRef:
     yaml
 }
 
+fn dynamic_container_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let role_name = dynamic_container_role_name(operator_name);
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        &role_name,
+        labels,
+    );
+    yaml.push_str(&operator_feature_rules(OperatorFeature::DynamicContainers));
+    yaml
+}
+
+/// The `rules:` block of the Role a runtime feature needs, from the same list
+/// the permission review shows.
+fn operator_feature_rules(feature: OperatorFeature) -> String {
+    let mut yaml = String::from("rules:\n");
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules()
+        .into_iter()
+        .filter(|rule| rule.feature == Some(feature))
+    {
+        yaml.push_str(&format!(
+            "  - apiGroups: [{}]\n    resources: [{}]\n    verbs: [{}]\n",
+            yaml_string(&rule.api_group),
+            yaml_string(&rule.resource),
+            rule.verbs
+                .iter()
+                .map(|verb| yaml_string(verb))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    yaml
+}
+
+fn dynamic_container_rolebinding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let role_name = dynamic_container_role_name(operator_name);
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        &role_name,
+        labels,
+    );
+    yaml.push_str(&format!(
+        r#"subjects:
+  - kind: ServiceAccount
+    name: {}
+    namespace: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {}
+"#,
+        yaml_string(operator_name),
+        yaml_string(namespace),
+        yaml_string(&role_name),
+    ));
+    yaml
+}
+
+fn dynamic_container_role_name(operator_name: &str) -> String {
+    if operator_name.contains("{{") {
+        // Product charts resolve the Operator name at Helm render time. Hash
+        // the rendered release identity, not the literal template expression.
+        return "{{ printf \"alien-dc-%s\" (include \"deployment.remoteOperatorResourceName\" . | sha256sum | trunc 24) }}".to_string();
+    }
+    let digest = Sha256::digest(operator_name.as_bytes());
+    let hex = format!("{digest:x}");
+    format!("alien-dc-{}", &hex[..24])
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct OperatorRuleScope {
     api_group: String,
@@ -2226,14 +2646,11 @@ struct OperatorRuleGrant {
 /// Kubernetes operation rules shared by the namespaced `Role` and cluster-wide
 /// `ClusterRole`.
 ///
-/// Base access is read-only inventory (`get/list/watch`; never `secrets`). The
-/// Kubernetes operations plugin adds `pods/log` access. When that plugin is
-/// enabled and the permission ceiling is `Remediation`, it additionally grants
-/// exactly what the initial mutating operations require:
-///   - `pods` `delete` — `restart-pod` (the controller reschedules the pod)
-///   - workload `scale` `patch` — `scale` (the `scale` subresource)
-///
-/// No operation-specific rule is emitted when the plugin is disabled.
+/// The Operator's own runtime rules come from
+/// [`alien_permissions::operations::kubernetes::operator_runtime_rules`], the
+/// same list the permission review shows. Every other workload rule comes from
+/// an enabled operation's declared requirements, filtered by the permission
+/// ceiling: `Diagnostics` keeps read verbs only.
 ///
 /// Plus the access-request custom resource, which the operator creates
 /// (materializing a control-plane access request the customer must authorize)
@@ -2246,11 +2663,10 @@ struct OperatorRuleGrant {
 /// a vendor build grants access to *their* CRD, matching the CRD doc below.
 fn operator_rules(
     names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
-    // Normalize builtin and custom grants together. Names are part of the key:
+    // Normalize runtime and operation grants together. Names are part of the key:
     // sharing a grant never widens a named requirement to all resources.
     let mut rules = BTreeMap::<OperatorRuleScope, OperatorRuleGrant>::new();
     let mut add_rule = |group: &str, resource: &str, resource_names, verbs, reason| {
@@ -2265,95 +2681,38 @@ fn operator_rules(
         grant.reasons.insert(reason);
     };
     let status_resource = format!("{}/status", names.plural);
-    let baseline: &[(&str, &[&str], &[&str], &str)] = &[
+    for rule in alien_permissions::operations::kubernetes::operator_runtime_rules()
+        .into_iter()
+        .filter(|rule| rule.feature.is_none())
+    {
+        add_rule(
+            &rule.api_group,
+            &rule.resource,
+            BTreeSet::new(),
+            rule.verbs.into_iter().collect(),
+            format!("the Operator runtime: {}.", rule.reason),
+        );
+    }
+    let access_requests: [(&str, &[&str], &str); 2] = [
         (
-            "",
-            &[
-                "pods",
-                "services",
-                "configmaps",
-                "persistentvolumeclaims",
-                "events",
-                "endpoints",
-            ],
-            &["get", "list", "watch"],
-            "baseline resource inventory.",
-        ),
-        (
-            "apps",
-            &["deployments", "statefulsets", "daemonsets", "replicasets"],
-            &["get", "list", "watch"],
-            "baseline workload inventory.",
-        ),
-        (
-            "batch",
-            &["jobs", "cronjobs"],
-            &["get", "list", "watch"],
-            "baseline job inventory.",
-        ),
-        (
-            "metrics.k8s.io",
-            &["pods"],
-            &["get", "list", "watch"],
-            "baseline pod metrics.",
-        ),
-        (
-            &names.group,
-            &[&names.plural],
+            &names.plural,
             &["get", "list", "watch", "create", "update", "patch"],
             "access-request materialization and approval observation.",
         ),
         (
-            &names.group,
-            &[&status_resource],
+            &status_resource,
             &["get", "update", "patch"],
             "access-request status reporting.",
         ),
     ];
-    for (group, resources, verbs, reason) in baseline {
-        for resource in *resources {
-            add_rule(
-                group,
-                resource,
-                BTreeSet::new(),
-                verbs
-                    .iter()
-                    .map(|verb| (*verb).to_owned())
-                    .collect::<BTreeSet<_>>(),
-                (*reason).to_owned(),
-            );
-        }
-    }
-    if kubernetes_operations_enabled {
+    for (resource, verbs, reason) in access_requests {
         add_rule(
-            "",
-            "pods/log",
+            &names.group,
+            resource,
             BTreeSet::new(),
-            BTreeSet::from(["get".to_owned()]),
-            "the kubernetes/logs operation.".to_owned(),
+            verbs.iter().map(|verb| (*verb).to_owned()).collect(),
+            reason.to_owned(),
         );
-    }
-    if kubernetes_operations_enabled && permission == OperatorPermission::Remediation {
-        add_rule(
-            "",
-            "pods",
-            BTreeSet::new(),
-            BTreeSet::from(["delete".to_owned()]),
-            "the kubernetes/restart-pod operation.".to_owned(),
-        );
-        for resource in [
-            "deployments/scale",
-            "statefulsets/scale",
-            "replicasets/scale",
-        ] {
-            add_rule(
-                "apps",
-                resource,
-                BTreeSet::new(),
-                BTreeSet::from(["patch".to_owned()]),
-                "the kubernetes/scale operation.".to_owned(),
-            );
-        }
     }
     for operation in custom_operations {
         for rule in &operation.permissions.rules {
@@ -2361,8 +2720,17 @@ fn operator_rules(
                 .verbs
                 .iter()
                 .filter(|verb| {
-                    permission == OperatorPermission::Remediation
-                        || matches!(verb.as_str(), "get" | "list" | "watch")
+                    alien_permissions::operations::kubernetes::grants_verb(
+                        match permission {
+                            OperatorPermission::Diagnostics => {
+                                alien_permissions::operations::KubernetesMode::Diagnostics
+                            }
+                            OperatorPermission::Remediation => {
+                                alien_permissions::operations::KubernetesMode::Remediation
+                            }
+                        },
+                        verb,
+                    )
                 })
                 .cloned()
                 .collect();
@@ -2504,7 +2872,7 @@ spec:
               properties:
                 state:
                   type: string
-                  description: PENDING_APPROVAL | APPROVED | EXPIRED
+                  description: PENDING_APPROVAL | APPROVED | EXPIRED | REVOKED
                 commandCount:
                   type: integer
                   description: Number of commands this grant covers.
@@ -2549,17 +2917,11 @@ fn operator_clusterrole_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
-    kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(
-        crd_names,
-        kubernetes_operations_enabled,
-        permission,
-        custom_operations,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -2634,6 +2996,80 @@ fn operator_identity_pvc_doc(
     yaml
 }
 
+/// Pod-log access stays namespaced even when the Operator inventories a whole
+/// cluster. Workload operations and log collection have separate permissions.
+fn operator_pod_log_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+    format: OperatorOutputFormat,
+) -> String {
+    let name = operator_pod_log_role_name(operator_name, format);
+    let mut yaml = String::new();
+    if format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"podApi\") }}\n");
+    }
+    yaml.push_str(&operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        &name,
+        labels,
+    ));
+    yaml.push_str(&operator_feature_rules(OperatorFeature::PodLogs));
+    if format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("{{- end }}\n");
+    }
+    yaml
+}
+
+fn operator_pod_log_role_binding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+    format: OperatorOutputFormat,
+) -> String {
+    let name = operator_pod_log_role_name(operator_name, format);
+    let mut yaml = String::new();
+    if format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("{{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"podApi\") }}\n");
+    }
+    yaml.push_str(&operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        &name,
+        labels,
+    ));
+    yaml.push_str(&format!(
+        "roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: {}\nsubjects:\n  - kind: ServiceAccount\n    name: {}\n    namespace: {}\n",
+        yaml_string(&name), yaml_string(operator_name), yaml_string(namespace)
+    ));
+    if format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("{{- end }}\n");
+    }
+    yaml
+}
+
+fn operator_pod_log_role_name(operator_name: &str, format: OperatorOutputFormat) -> String {
+    if format == OperatorOutputFormat::HelmTemplate {
+        format!(
+            "{{{{ printf \"%s-%s-pod-logs\" (tpl {} . | trunc 40 | trimSuffix \"-\") (tpl {} . | sha256sum | trunc 8) }}}}",
+            helm_string(operator_name),
+            helm_string(operator_name)
+        )
+    } else {
+        format!(
+            "{}-pod-logs",
+            operator_name
+                .chars()
+                .take(54)
+                .collect::<String>()
+                .trim_end_matches('-')
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn operator_deployment_doc(
     namespace: &str,
@@ -2649,6 +3085,9 @@ fn operator_deployment_doc(
     labels: &BTreeMap<String, String>,
     stack_settings_json: Option<&str>,
     operator_image_report: Option<&OperatorImageReport>,
+    log_collector_name: &str,
+    integrated_product_chart: bool,
+    dynamic_containers: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
     yaml.push_str("spec:\n");
@@ -2662,6 +3101,9 @@ fn operator_deployment_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if options.log_collector.is_some() {
+        yaml.push_str("        alien.dev/log-collector-exclude: 'true'\n");
+    }
     if options.format == OperatorOutputFormat::HelmTemplate {
         yaml.push_str("        {{- with .Values.remoteOperator.podLabels }}\n");
         yaml.push_str("        {{- toYaml . | nindent 8 }}\n");
@@ -2728,6 +3170,11 @@ fn operator_deployment_doc(
     if let Some(label_selector) = label_selector {
         append_env_value(&mut yaml, "OPERATOR_LABEL_SELECTOR", label_selector);
     }
+    // The Operator reports the dynamic-container capability only when its
+    // chart bound the Role for it.
+    if dynamic_containers {
+        append_env_value(&mut yaml, "OPERATOR_DYNAMIC_CONTAINERS", "true");
+    }
     // Use the host chart's standard appVersion so the pasted template does not
     // require a vendor-specific values key. Raw manifests omit it.
     if options.format == OperatorOutputFormat::HelmTemplate {
@@ -2745,6 +3192,14 @@ fn operator_deployment_doc(
     append_env_value(&mut yaml, "OPERATOR_INITIAL_DESIRED_RELEASE", "none");
     append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    if integrated_product_chart {
+        // Identity initialization must bind this Operator to the runtime's
+        // deployment scope before its readiness endpoint becomes healthy.
+        yaml.push_str("            - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY\n");
+        yaml.push_str("              value: {{ default \"alien.dev/deployment\" .Values.logCollector.scope.deploymentLabelKey | quote }}\n");
+        yaml.push_str("            - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE\n");
+        yaml.push_str("              value: {{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | quote }}\n");
+    }
     if supports_readiness {
         append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
         if let Some(config_map_name) = identity_initialized_config_map {
@@ -2755,7 +3210,72 @@ fn operator_deployment_doc(
             );
         }
     }
-    if options.log_collector.is_some() {
+    if let Some(log_collector) = options.log_collector.as_ref() {
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"podApi\") }}\n");
+            yaml.push_str(
+                "            {{- $podLabelKey := .Values.logCollector.scope.podLabelKey }}\n",
+            );
+            yaml.push_str(
+                "            {{- $podLabelValue := .Values.logCollector.scope.podLabelValue }}\n",
+            );
+            yaml.push_str("            {{- if ne (empty $podLabelKey) (empty $podLabelValue) }}\n");
+            yaml.push_str("              {{- fail \"logCollector.scope.podLabelKey and podLabelValue must be set together\" }}\n");
+            yaml.push_str("            {{- end }}\n");
+            yaml.push_str("            - name: OPERATOR_POD_LOG_LABEL_KEY\n");
+            yaml.push_str("              value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}\n");
+            yaml.push_str("            - name: OPERATOR_POD_LOG_LABEL_VALUE\n");
+            let default_scope = if integrated_product_chart {
+                "include \"deployment.fullname\" .".to_string()
+            } else {
+                format!("tpl {} .", helm_string(operator_name))
+            };
+            yaml.push_str(&format!("              value: {{{{ default (default ({default_scope}) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}}}\n"));
+            yaml.push_str("            - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET\n");
+            yaml.push_str(&format!(
+                "              value: {{{{ tpl {} . | quote }}}}\n",
+                helm_string(log_collector_name)
+            ));
+            if integrated_product_chart {
+                yaml.push_str("            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET\n");
+                yaml.push_str("              value: {{ include \"deployment.remoteOperatorLogCollectorDaemonSetName\" . | quote }}\n");
+            }
+            yaml.push_str("            - name: OPERATOR_POD_LOG_MAX_STREAMS\n");
+            yaml.push_str(
+                "              value: {{ default 32 .Values.logCollector.maxStreams | quote }}\n",
+            );
+            yaml.push_str("            {{- end }}\n");
+        } else {
+            let label_key = log_collector
+                .pod_label_key
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    branded_tag_key(
+                        alien_core::access_request_crd::current_kubernetes_label_domain(
+                            options
+                                .label_domain
+                                .unwrap_or(alien_core::DEFAULT_ALIEN_LABEL_DOMAIN),
+                        ),
+                        ALIEN_STACK_TAG_KEY,
+                    )
+                });
+            append_env_value(&mut yaml, "OPERATOR_POD_LOG_LABEL_KEY", &label_key);
+            append_env_value(
+                &mut yaml,
+                "OPERATOR_POD_LOG_LABEL_VALUE",
+                log_collector.pod_label_value.unwrap_or(operator_name),
+            );
+            append_env_value(
+                &mut yaml,
+                "OPERATOR_POD_LOG_LEGACY_DAEMONSET",
+                log_collector_name,
+            );
+        }
+    }
+    if options.log_collector.is_some() && integrated_product_chart {
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}\n");
+        }
         append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
         append_env_value(&mut yaml, "OTLP_PORT", "8080");
         append_env_value(
@@ -2763,6 +3283,14 @@ fn operator_deployment_doc(
             "COLLECTOR_TOKEN_FILE",
             "/etc/operator/secrets/collector-token",
         );
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            append_env_value(
+                &mut yaml,
+                "COLLECTOR_TOKEN_REVISION",
+                "{{ default \"\" .Values.remoteOperator.collectorTokenRevision }}",
+            );
+            yaml.push_str("            {{- end }}\n");
+        }
     }
     if let Some(stack_settings_json) = stack_settings_json {
         append_env_value(&mut yaml, "STACK_SETTINGS", stack_settings_json);
@@ -2790,8 +3318,14 @@ fn operator_deployment_doc(
         yaml.push_str("              containerPort: 8081\n");
     }
     if options.log_collector.is_some() {
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- if and .Values.logCollector.enabled (eq (default \"nodeAgent\" .Values.logCollector.mode) \"nodeAgent\") }}\n");
+        }
         yaml.push_str("            - name: http\n");
         yaml.push_str("              containerPort: 8080\n");
+        if options.format == OperatorOutputFormat::HelmTemplate {
+            yaml.push_str("            {{- end }}\n");
+        }
     }
     if supports_readiness {
         yaml.push_str("          readinessProbe:\n");
@@ -2846,6 +3380,8 @@ fn operator_service_doc(
     yaml.push_str("  type: ClusterIP\n");
     yaml.push_str("  selector:\n");
     append_operator_selector_labels(&mut yaml, labels, 4);
+    // The collector shares the release labels but cannot receive Operator logs.
+    yaml.push_str("    app.kubernetes.io/component: operator\n");
     yaml.push_str("  ports:\n");
     yaml.push_str("    - name: http\n");
     yaml.push_str("      port: 8080\n");
@@ -2911,6 +3447,9 @@ fn operator_log_collector_configmap_doc(
     collector_name: &str,
     observed_namespace: &str,
     labels: &BTreeMap<String, String>,
+    collector: &OperatorLogCollectorOptions<'_>,
+    default_scope: (&str, &str),
+    helm_template: bool,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
     yaml.push_str("data:\n");
@@ -2924,13 +3463,11 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
     yaml.push_str("    [INPUT]\n");
     yaml.push_str("        Name              tail\n");
+    // The Kubernetes filter's default tag parser reads the symlink filename in
+    // /var/log/containers. Files under /var/log/pods cannot supply its metadata.
     yaml.push_str(&format!(
-        "        Path              /var/log/pods/{}_*/*/*.log\n",
+        "        Path              /var/log/containers/*_{}_*.log\n",
         observed_namespace
-    ));
-    yaml.push_str(&format!(
-        "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
-        observed_namespace, collector_name
     ));
     yaml.push_str("        Path_Key          filename\n");
     // Built-in multiline parsers auto-detect the runtime log format: `cri` for
@@ -2953,6 +3490,25 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        Keep_Log            On\n");
     yaml.push_str("        Labels              On\n");
     yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(
+        "        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$\n\n",
+    );
+    let label_key = collector.pod_label_key.unwrap_or(default_scope.0);
+    let label_value = collector.pod_label_value.unwrap_or(default_scope.1);
+    let label_pattern = if helm_template && collector.pod_label_value.is_none() {
+        label_value.to_string()
+    } else {
+        label_value.replace('.', "\\.")
+    };
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                grep\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str(&format!(
+        "        Regex               $kubernetes['labels']['{label_key}'] ^{label_pattern}$\n\n"
+    ));
     yaml.push_str("    [OUTPUT]\n");
     yaml.push_str("        Name          http\n");
     // Without a Match the router never routes the tailed kube.* records to this
@@ -2984,9 +3540,17 @@ fn operator_log_collector_daemonset_doc(
     credentials_secret_name: &str,
     image: &str,
     labels: &BTreeMap<String, String>,
-    include_credential_revision: bool,
+    format: OperatorOutputFormat,
 ) -> String {
-    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, collector_name, labels);
+    let daemonset_name = match format {
+        OperatorOutputFormat::HelmTemplate => {
+            "{{ include \"deployment.remoteOperatorLogCollectorDaemonSetName\" . }}".to_string()
+        }
+        OperatorOutputFormat::RawManifest => format!("{collector_name}-v2"),
+    };
+    let include_credential_revision = format == OperatorOutputFormat::HelmTemplate;
+    let mut yaml =
+        operator_metadata_doc("apps/v1", "DaemonSet", namespace, &daemonset_name, labels);
     yaml.push_str("spec:\n");
     yaml.push_str("  selector:\n");
     yaml.push_str("    matchLabels:\n");
@@ -2995,6 +3559,10 @@ fn operator_log_collector_daemonset_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if include_credential_revision {
+        yaml.push_str("      annotations:\n");
+        yaml.push_str("        checksum/log-collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}\n");
+    }
     yaml.push_str("    spec:\n");
     yaml.push_str(&format!(
         "      serviceAccountName: {}\n",
@@ -3002,10 +3570,22 @@ fn operator_log_collector_daemonset_doc(
     ));
     yaml.push_str("      tolerations:\n");
     yaml.push_str("        - operator: Exists\n");
+    yaml.push_str("      securityContext:\n");
+    yaml.push_str("        seccompProfile:\n");
+    yaml.push_str("          type: RuntimeDefault\n");
     yaml.push_str("      containers:\n");
     yaml.push_str("        - name: collector\n");
     yaml.push_str(&format!("          image: {}\n", yaml_string(image)));
-    yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    if include_credential_revision {
+        yaml.push_str("          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}\n");
+    } else {
+        yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    }
+    yaml.push_str("          securityContext:\n");
+    yaml.push_str("            allowPrivilegeEscalation: false\n");
+    yaml.push_str("            readOnlyRootFilesystem: true\n");
+    yaml.push_str("            capabilities:\n");
+    yaml.push_str("              drop: [ALL]\n");
     yaml.push_str("          args: [\"-c\", \"/collector/etc/collector.conf\"]\n");
     yaml.push_str("          env:\n");
     yaml.push_str("            - name: COLLECTOR_TOKEN\n");
@@ -3037,6 +3617,10 @@ fn operator_log_collector_daemonset_doc(
     yaml.push_str("              readOnly: true\n");
     yaml.push_str("            - name: buffers\n");
     yaml.push_str("              mountPath: /buffers\n");
+    if include_credential_revision {
+        yaml.push_str("          resources:\n");
+        yaml.push_str("            {{- toYaml .Values.logCollector.resources | nindent 12 }}\n");
+    }
     yaml.push_str("      volumes:\n");
     yaml.push_str("        - name: config\n");
     yaml.push_str("          configMap:\n");
@@ -3345,24 +3929,40 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     name: ""
     tokenKey: sync-token
   name: ""
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
   url: ""
-  deploymentId: "dep_replace_me"
+  # Leave unset to create a deployment from the bootstrap token.
+  deploymentId: null
+  setupItem: deployment
   updates: auto
   telemetry: auto
   healthChecks: "on"
+
+inputValues: {}
 
 runtime:
   image:
     repository: registry.example.com/deployment/operator
     tag: latest
     pullPolicy: IfNotPresent
+    # Pull the Operator image with management.token (for an image served by
+    # the manager this chart connects to).
+    pullWithManagementToken: false
+    # Follow the Operator image the manager targets, so upgrades need no helm
+    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    selfUpdate: true
+  # Pull secrets for the Operator and for the application's workloads (added
+  # to their ServiceAccounts), for images in a registry that needs credentials.
   imagePullSecrets: []
   podLabels: {}
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Set this explicitly, or reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Empty generates a key on first install and retains it across upgrades.
+    # Alternatively provide a stable 64-character hex key or an existing Secret.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
@@ -3414,7 +4014,8 @@ runtime:
   data:
     mountPath: /var/lib/deployment-operator
     persistence:
-      enabled: false
+      # Required for bootstrap identity and durable local runtime state.
+      enabled: true
       existingClaim: ""
       storageClassName: ""
       accessModes:
@@ -3448,10 +4049,15 @@ runtime:
 
 logCollector:
   enabled: false
-  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  # podApi: the Operator reads selected Pod logs through the namespaced API.
+  # nodeAgent: a Fluent Bit DaemonSet reads selected Pod logs on each node.
+  mode: nodeAgent
+  maxStreams: 32
+  # nodeAgent only. Generated on first install and retained on upgrade.
+  token: ""
   image:
     repository: fluent/fluent-bit
-    tag: "3.2"
+    tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -3463,11 +4069,29 @@ logCollector:
     deploymentLabelKey: "alien.dev/deployment"
     legacyDeploymentLabelKey: ""
     deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
 
 heartbeat:
   collection:
     nodes:
       enabled: true
+
+airgapped:
+  # No connection to the manager: targets arrive in bundles installed with
+  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
+  enabled: false
+  # Public key (ed25519:...) bundles must be signed with. Set by the first
+  # `alien-deploy sync --trusted-key`, and checked on every later one.
+  bundleSigningKey: ""
+
+tunnel:
+  # Serve requests the control plane sends through the manager to the stack's
+  # declared tunnel endpoints, over the Operator's outbound connection.
+  # false closes the tunnel; nothing else changes.
+  enabled: true
 
 clusterBootstrap:
   metricsServer:
@@ -3513,7 +4137,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -3589,12 +4213,14 @@ fn append_registered_service_accounts(
 
     for name in &analysis.service_accounts {
         yaml.push_str(&format!("  {}:\n", yaml_key(name)));
-        match service_account_identity_for_profile(stack_state, name) {
-            Some(identity) => {
+        match base_platform.and_then(|base| {
+            service_account_identity_for_profile(stack_state, name).map(|identity| (base, identity))
+        }) {
+            Some((base_platform, identity)) => {
                 yaml.push_str("    annotations:\n");
                 yaml.push_str(&format!(
                     "      {}: {}\n",
-                    yaml_key(identity_annotation_key(base_platform)),
+                    yaml_key(identity_annotation_key(Some(base_platform))),
                     yaml_string(identity)
                 ));
             }
@@ -3992,14 +4618,25 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     }
 }
 
-fn values_schema_json() -> String {
-    r##"{
+fn values_schema_json(stack: &Stack) -> Result<String> {
+    let base = r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "inputValues": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
     "management": {
       "type": "object",
       "additionalProperties": false,
@@ -4016,7 +4653,9 @@ fn values_schema_json() -> String {
         },
         "name": { "type": "string" },
         "url": { "type": "string" },
+        "defaultUrl": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
+        "setupItem": { "type": "string" },
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
@@ -4032,7 +4671,9 @@ fn values_schema_json() -> String {
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
             "tag": { "type": "string", "minLength": 1 },
-            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+            "pullWithManagementToken": { "type": "boolean" },
+            "selfUpdate": { "type": "boolean" }
           }
         },
         "imagePullSecrets": {
@@ -4044,14 +4685,18 @@ fn values_schema_json() -> String {
             "properties": { "name": { "type": "string", "minLength": 1 } }
           }
         },
-        "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "podLabels": {
+          "type": "object",
+          "propertyNames": { "not": { "enum": ["app.kubernetes.io/name", "app.kubernetes.io/instance", "alien.dev/log-collector-exclude"] } },
+          "additionalProperties": { "type": "string" }
+        },
         "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
         "automountServiceAccountToken": { "type": "boolean" },
         "encryption": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string" },
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
             "existingSecret": {
               "type": "object",
               "additionalProperties": false,
@@ -4062,7 +4707,7 @@ fn values_schema_json() -> String {
             }
           }
         },
-        "replicas": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -4198,9 +4843,12 @@ fn values_schema_json() -> String {
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "token": { "type": "string" },
+        "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
+        "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
         "image": {
           "type": "object",
+          "description": "Node collector image; ignored in podApi mode.",
           "additionalProperties": false,
           "properties": {
             "repository": { "type": "string", "minLength": 1 },
@@ -4208,7 +4856,7 @@ fn values_schema_json() -> String {
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
           }
         },
-        "resources": { "type": "object" },
+        "resources": { "type": "object", "description": "Node collector resources; ignored in podApi mode." },
         "scope": {
           "type": "object",
           "additionalProperties": false,
@@ -4224,7 +4872,17 @@ fn values_schema_json() -> String {
               "maxLength": 264,
               "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/deployment$"
             },
-            "deploymentLabelValue": { "type": "string" }
+            "deploymentLabelValue": { "type": "string" },
+            "podLabelKey": {
+              "type": "string",
+              "maxLength": 317,
+              "pattern": "^$|^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            },
+            "podLabelValue": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+            }
           }
         }
       }
@@ -4278,6 +4936,7 @@ fn values_schema_json() -> String {
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
       "type": "object",
@@ -4307,6 +4966,21 @@ fn values_schema_json() -> String {
             "tenantId": { "type": "string" }
           }
         }
+      }
+    },
+    "airgapped": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "bundleSigningKey": { "type": "string" }
+      }
+    },
+    "tunnel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
     "heartbeat": {
@@ -4482,12 +5156,12 @@ fn values_schema_json() -> String {
             "deploymentId": { "type": "string", "minLength": 1 }
           }
         },
-        "infrastructure": { "type": "null" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     },
     {
-      "title": "external-bindings initialize path",
-      "required": ["management", "infrastructure"],
+      "title": "initialize path",
+      "required": ["management"],
       "properties": {
         "management": {
           "properties": {
@@ -4495,13 +5169,151 @@ fn values_schema_json() -> String {
           }
         },
         "stackSettings": { "type": ["object", "null"] },
-        "infrastructure": { "type": "object" }
+        "infrastructure": { "type": ["object", "null"] }
       }
     }
   ]
 }
-"##
-    .to_string()
+"##;
+
+    // Deployer secrets are Kubernetes Secrets the deployer creates in the
+    // namespace; with `additionalProperties: false`, a value for one in Helm
+    // values is refused.
+    let deployer_inputs = stack
+        .inputs()
+        .iter()
+        .filter(|input| {
+            input
+                .provided_by
+                .contains(&alien_core::StackInputProvider::Deployer)
+                && !is_deployer_secret_input(input)
+        })
+        .collect::<Vec<_>>();
+    if deployer_inputs.is_empty() && !stack.inputs().iter().any(is_deployer_secret_input) {
+        return Ok(base.to_string());
+    }
+
+    let mut schema: serde_json::Value = serde_json::from_str(base).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse built-in Helm values schema".to_string(),
+        },
+    )?;
+    let input_schema = &mut schema["properties"]["inputValues"];
+    input_schema["additionalProperties"] = serde_json::Value::Bool(false);
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+    for input in deployer_inputs {
+        if input.required && input.default.is_none() {
+            required.push(input.id.clone());
+        }
+        use alien_core::StackInputKind;
+        let kind = match input.kind {
+            StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => "string",
+            StackInputKind::Number => "number",
+            StackInputKind::Integer => "integer",
+            StackInputKind::Boolean => "boolean",
+            StackInputKind::StringList => "array",
+        };
+        let mut field = serde_json::json!({ "type": kind });
+        if matches!(input.kind, StackInputKind::StringList) {
+            field["items"] = serde_json::json!({ "type": "string" });
+        }
+        if let Some(validation) = &input.validation {
+            if let Some(min_length) = validation.min_length {
+                field["minLength"] = serde_json::json!(min_length);
+            }
+            if let Some(max_length) = validation.max_length {
+                field["maxLength"] = serde_json::json!(max_length);
+            }
+            if let Some(pattern) = &validation.pattern {
+                field["pattern"] = serde_json::json!(pattern);
+            }
+            if let Some(values) = &validation.values {
+                field["enum"] = serde_json::json!(values);
+            }
+            if let Some(min_items) = validation.min_items {
+                field["minItems"] = serde_json::json!(min_items);
+            }
+            if let Some(max_items) = validation.max_items {
+                field["maxItems"] = serde_json::json!(max_items);
+            }
+            if matches!(input.kind, StackInputKind::Number | StackInputKind::Integer) {
+                for (bound, key) in [
+                    (validation.min.as_deref(), "minimum"),
+                    (validation.max.as_deref(), "maximum"),
+                ] {
+                    if let Some(bound) = bound {
+                        field[key] =
+                            serde_json::Value::Number(bound.parse().into_alien_error().context(
+                                ErrorData::JsonSerializationFailed {
+                                    reason: format!(
+                                        "invalid numeric bound for input '{}'",
+                                        input.id
+                                    ),
+                                },
+                            )?);
+                    }
+                }
+            }
+            if validation.format.as_deref() == Some("url") {
+                field["format"] = serde_json::json!("uri");
+            }
+        }
+        properties.insert(input.id.clone(), field);
+    }
+    input_schema["properties"] = serde_json::Value::Object(properties);
+    if !required.is_empty() {
+        // The shipped values.yaml is a reviewable template without credentials
+        // or user inputs. Keep it lintable, and require unresolved inputs only
+        // on the initialization path with a management credential. A registered
+        // deployment already has its inputs. Preserve the base schema's oneOf.
+        schema["allOf"] = serde_json::json!([{
+            "anyOf": [
+                {
+                    "required": ["management"],
+                    "properties": {
+                        "management": {
+                            "required": ["token", "existingSecret"],
+                            "properties": {
+                                "token": { "enum": [""] },
+                                "existingSecret": {
+                                    "required": ["name"],
+                                    "properties": { "name": { "enum": [""] } }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "required": ["management"],
+                    "properties": {
+                        "management": {
+                            "required": ["deploymentId"],
+                            "properties": { "deploymentId": { "type": "string", "minLength": 1 } }
+                        }
+                    }
+                },
+                {
+                    "required": ["management", "inputValues"],
+                    "properties": {
+                        "management": {
+                            "anyOf": [
+                                { "required": ["url"], "properties": { "url": { "minLength": 1 } } },
+                                { "required": ["defaultUrl"], "properties": { "defaultUrl": { "minLength": 1 } } }
+                            ],
+                            "properties": { "deploymentId": { "type": "null" } }
+                        },
+                        "inputValues": { "required": required }
+                    }
+                }
+            ]
+        }]);
+    }
+    serde_json::to_string_pretty(&schema)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize Helm input values schema".to_string(),
+        })
 }
 
 fn helpers_tpl() -> String {
@@ -4527,6 +5339,14 @@ fn helpers_tpl() -> String {
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 
+{{- define "deployment.logCollectorName" -}}
+{{- printf "%s-logs" ((include "deployment.fullname" .) | trunc 58 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorDaemonSetName" -}}
+{{- printf "%s-logs-v2" ((include "deployment.fullname" .) | trunc 55 | trimSuffix "-") -}}
+{{- end -}}
+
 {{- define "deployment.labels" -}}
 app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -4534,14 +5354,43 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
+{{- define "deployment.logCollectorNameLabel" -}}
+{{- ternary "node-log-collector" "log-collector" (eq (include "deployment.name" .) "log-collector") -}}
+{{- end -}}
+
+{{- define "deployment.logCollectorLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (include "deployment.logCollectorNameLabel" .) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "deployment.hookLabels" -}}
+{{- $labels := include "deployment.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook")) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
 {{- define "deployment.managerServiceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" . -}}
 {{- $raw := printf "%s-manager-sa" $prefix | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "deployment.serviceAccountPrefix" -}}
+{{- $source := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $normalized := regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (lower $source) "-") "-" | trimAll "-" -}}
+{{- if not (regexMatch "^[a-z]" $normalized) -}}
+{{- $normalized = printf "r-%s" $normalized -}}
+{{- end -}}
+{{- if or (ne $source $normalized) (gt (len $normalized) 40) -}}
+{{- printf "%s-%s" ($normalized | trunc 31 | trimSuffix "-") (sha256sum $source | trunc 8) -}}
+{{- else -}}
+{{- $normalized -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
-{{- $prefix := default (include "deployment.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- $prefix := include "deployment.serviceAccountPrefix" .root -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -4569,8 +5418,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 
+{{- /* Cluster-scoped: the namespace hash keeps installs of the same chart in
+different namespaces of one cluster from colliding. */ -}}
 {{- define "deployment.heartbeatNodeClusterRoleName" -}}
-{{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $suffix := printf "heartbeat-nodes-%s" (sha256sum .Release.Namespace | trunc 8) -}}
+{{- printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
 {{- end -}}
 "#
     .to_string()
@@ -4609,6 +5461,10 @@ metadata:
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+{{- with $.Values.runtime.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 ---
 {{- end }}
 "#
@@ -4624,8 +5480,13 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "secrets", "services", "pods", "pods/log", "persistentvolumeclaims"]
+    resources: ["configmaps", "secrets", "services", "pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get"]
@@ -4751,10 +5612,56 @@ roleRef:
     .to_string()
 }
 
+/// Pull credentials for an Operator image served by the manager: the
+/// registry is the image's host and the password is the install token.
+fn registry_secret_tpl() -> String {
+    r#"{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+{{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
+{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "deployment.fullname" . }}-registry
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+{{- end }}
+"#
+    .to_string()
+}
+
 fn secret_tpl() -> String {
-    r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
+    r#"{{- if .Release.IsUpgrade -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- $currentInputs := "{}" -}}
+  {{- if $existing -}}
+    {{- if hasKey (default dict $existing.data) "input-values.json" -}}
+      {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if ne $currentInputs (toJson .Values.inputValues) -}}
+    {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
+  {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
+{{- end -}}
+{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
+{{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- $collectorToken := .Values.logCollector.token -}}
+{{- if and $nodeCollector (empty $collectorToken) -}}
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
+    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
+    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
+  {{- else -}}
+    {{- $collectorToken = randAlphaNum 48 -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -4767,13 +5674,16 @@ stringData:
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
   {{- end }}
-  {{- if .Values.logCollector.enabled }}
-  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
+  {{- if $nodeCollector }}
+  collector-token: {{ $collectorToken | quote }}
+  {{- end }}
+  {{- if .Values.inputValues }}
+  input-values.json: {{ toJson .Values.inputValues | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -4782,6 +5692,19 @@ stringData:
 
 fn configmap_tpl() -> String {
     r#"{{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
+{{- $stackSettings := deepCopy (default $defaultStackSettings .Values.stackSettings) -}}
+{{- $kubernetes := deepCopy (default dict (get $stackSettings "kubernetes")) -}}
+{{- $cluster := deepCopy (default dict (get $kubernetes "cluster")) -}}
+{{- $requestedNamespace := default .Release.Namespace (get $cluster "namespace") -}}
+{{- if ne $requestedNamespace .Release.Namespace -}}
+  {{- fail "The Kubernetes workload namespace must match the Helm release namespace so the agent can use its chart-owned Secret and ServiceAccount." -}}
+{{- end -}}
+{{- $_ := set $cluster "namespace" .Release.Namespace -}}
+{{- if not (get $cluster "ownership") -}}
+  {{- $_ := set $cluster "ownership" "external" -}}
+{{- end -}}
+{{- $_ := set $kubernetes "cluster" $cluster -}}
+{{- $_ := set $stackSettings "kubernetes" $kubernetes -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -4791,7 +5714,7 @@ metadata:
 data:
   stack.json: |-
 {{ .Files.Get "files/stack.json" | indent 4 }}
-  stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
+  stack-settings.json: {{ toJson $stackSettings | quote }}
   services.json: {{ toJson .Values.services | quote }}
   public-endpoints.json: {{ toJson (default dict .Values.publicEndpoints) | quote }}
 "#
@@ -4903,6 +5826,16 @@ spec:
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: current-history
           {{- if eq $backend "secret" }}
@@ -4918,6 +5851,10 @@ spec:
         - name: prune-unsafe-history
           image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -5111,14 +6048,28 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        {{- include "deployment.hookLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       restartPolicy: Never
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" $cleanup }}:{{ dig "image" "tag" "1.32.0" $cleanup }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" $cleanup }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /bin/sh
             - -ec
@@ -5426,7 +6377,8 @@ spec:
 }
 
 fn deployment_tpl() -> String {
-    r#"apiVersion: apps/v1
+    r#"{{- include "deployment.validateRuntimeIdentity" . -}}
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "deployment.fullname" . }}
@@ -5434,6 +6386,10 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # The operator holds an exclusive lock on its persistent state directory.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
@@ -5442,21 +6398,33 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.runtime.podAnnotations }}
       annotations:
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
+        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        {{- end }}
+        {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- with .Values.runtime.imagePullSecrets }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
+        {{- with .Values.runtime.imagePullSecrets }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $pullWithToken }}
+        - name: {{ include "deployment.fullname" . }}-registry
+        {{- end }}
       {{- end }}
       {{- with .Values.runtime.scheduling.nodeSelector }}
       nodeSelector:
@@ -5519,10 +6487,26 @@ spec:
             - name: AZURE_REGION
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
+            {{- if dig "enabled" false (default dict .Values.airgapped) }}
+            {{- if not .Values.management.deploymentId }}
+              {{- fail "airgapped.enabled needs management.deploymentId (from the bundle)" }}
+            {{- end }}
+            - name: AIRGAP_TARGET_SECRET
+              value: {{ printf "%s-airgap-target" (include "deployment.fullname" .) | quote }}
+            - name: AIRGAP_STATUS_SECRET
+              value: {{ printf "%s-airgap-status" (include "deployment.fullname" .) | quote }}
+            {{- else }}
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ include "deployment.managementUrl" . | quote }}
+            {{- end }}
             - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
+            - name: OPERATOR_RESOURCE_PREFIX
+              value: {{ include "deployment.serviceAccountPrefix" . | quote }}
+            {{- if .Values.management.setupItem }}
+            - name: OPERATOR_SETUP_ITEM
+              value: {{ .Values.management.setupItem | quote }}
+            {{- end }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
@@ -5541,25 +6525,54 @@ spec:
               value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
+            {{- if .Values.inputValues }}
+            - name: STACK_INPUT_VALUES_FILE
+              value: /etc/deployment/input-values/input-values.json
+            {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
+            - name: TUNNEL_ENABLED
+              value: {{ dig "enabled" true (default dict .Values.tunnel) | quote }}
+            {{- if dig "selfUpdate" true .Values.runtime.image }}
+            - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
+              value: {{ include "deployment.fullname" . | quote }}
+            {{- end }}
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
               value: {{ .Values.runtime.api.bindHost | quote }}
-            {{- if .Values.logCollector.enabled }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "podApi") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+            {{- $podLabelKey := .Values.logCollector.scope.podLabelKey }}
+            {{- $podLabelValue := .Values.logCollector.scope.podLabelValue }}
+            {{- if ne (empty $podLabelKey) (empty $podLabelValue) }}
+              {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" }}
+            {{- end }}
+            - name: OPERATOR_POD_LOG_LABEL_KEY
+              value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}
+            - name: OPERATOR_POD_LOG_LABEL_VALUE
+              value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
+            - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
+              value: {{ include "deployment.logCollectorName" . | quote }}
+            - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
+              value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
+            - name: OPERATOR_POD_LOG_MAX_STREAMS
+              value: {{ default 32 .Values.logCollector.maxStreams | quote }}
+            {{- end }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
             - name: COLLECTOR_TOKEN_FILE
               value: /etc/deployment/secrets/collector-token
             {{- end }}
@@ -5590,6 +6603,11 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
+            {{- if .Values.inputValues }}
+            - name: input-values
+              mountPath: /etc/deployment/input-values
+              readOnly: true
+            {{- end }}
             - name: management-token
               mountPath: /etc/deployment/secrets/sync-token
               subPath: sync-token
@@ -5598,13 +6616,13 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if .Values.infrastructure }}
+            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
-            {{- if .Values.logCollector.enabled }}
+            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
             - name: collector-token
               mountPath: /etc/deployment/secrets/collector-token
               subPath: collector-token
@@ -5622,6 +6640,15 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
+        {{- if .Values.inputValues }}
+        - name: input-values
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: input-values.json
+                path: input-values.json
+            defaultMode: 384
+        {{- end }}
         - name: management-token
           secret:
             secretName: {{ include "deployment.managementSecretName" . }}
@@ -5633,16 +6660,16 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if .Values.infrastructure }}
+        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
-            secretName: {{ include "deployment.fullname" . }}
+            secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
             items:
               - key: external-bindings.json
                 path: external-bindings.json
             defaultMode: 384
         {{- end }}
-        {{- if .Values.logCollector.enabled }}
+        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
         - name: collector-token
           secret:
             secretName: {{ include "deployment.fullname" . }}
@@ -5668,7 +6695,7 @@ spec:
 }
 
 fn service_tpl() -> String {
-    r#"{{- if or .Values.runtime.api.enabled .Values.logCollector.enabled }}
+    r#"{{- if or .Values.runtime.api.enabled (and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator)))) }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -5690,14 +6717,14 @@ spec:
 }
 
 fn whitelabeled_log_collector_serviceaccount_tpl() -> String {
-    r#"{{- if .Values.logCollector.enabled }}
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
 automountServiceAccountToken: true
 {{- end }}
 "#
@@ -5705,14 +6732,14 @@ automountServiceAccountToken: true
 }
 
 fn whitelabeled_log_collector_role_tpl() -> String {
-    r#"{{- if .Values.logCollector.enabled }}
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -5723,21 +6750,21 @@ rules:
 }
 
 fn whitelabeled_log_collector_rolebinding_tpl() -> String {
-    r#"{{- if .Values.logCollector.enabled }}
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    name: {{ include "deployment.logCollectorName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
 "#
@@ -5745,14 +6772,21 @@ subjects:
 }
 
 fn whitelabeled_log_collector_configmap_tpl() -> String {
-    r#"{{- if .Values.logCollector.enabled }}
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
+{{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
+{{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
+{{- if ne (empty $podLabelKey) (empty $podLabelValue) -}}
+  {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
+{{- end -}}
+{{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
+{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
 data:
   collector.conf: |
     [SERVICE]
@@ -5765,12 +6799,12 @@ data:
 
     [INPUT]
         Name              tail
-        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        # The Kubernetes filter parses the /var/log/containers symlink filename.
+        Path              /var/log/containers/*_{{ .Release.Namespace }}_*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
-        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        DB                /buffers/{{ include "deployment.logCollectorName" . }}.db
         Mem_Buf_Limit     64MB
         Skip_Long_Lines   On
         Read_from_Head    On
@@ -5785,12 +6819,15 @@ data:
         Labels              On
         Annotations         Off
 
-    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
     [FILTER]
         Name                grep
         Match               kube.*
-        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
-    {{- end }}
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ $logLabelKey }}'] ^{{ $logLabelValue | regexQuoteMeta }}$
 
     [OUTPUT]
         Name          http
@@ -5815,33 +6852,45 @@ data:
 }
 
 fn whitelabeled_log_collector_daemonset_tpl() -> String {
-    r#"{{- if .Values.logCollector.enabled }}
+    r#"{{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  name: {{ include "deployment.logCollectorDaemonSetName" . }}
   labels:
-    {{- include "deployment.labels" . | nindent 4 }}
-    app.kubernetes.io/component: whitelabeled-log-collector
+    {{- include "deployment.logCollectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: log-collector
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.logCollectorNameLabel" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: whitelabeled-log-collector
+      app.kubernetes.io/component: log-collector
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
-        app.kubernetes.io/component: whitelabeled-log-collector
+        {{- include "deployment.logCollectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: log-collector
+        alien.dev/log-collector-exclude: "true"
+      annotations:
+        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
+        checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
-      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      serviceAccountName: {{ include "deployment.logCollectorName" . }}
       tolerations:
         - operator: Exists
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: collector
           image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
           imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           args:
             - -c
             - /collector/etc/collector.conf
@@ -5868,7 +6917,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+            name: {{ include "deployment.logCollectorName" . }}
         - name: varlog
           hostPath:
             path: /var/log
@@ -5960,31 +7009,6 @@ spec:
   egress:
     - {}
   {{- end }}
-{{- end }}
-"#
-    .to_string()
-}
-
-fn app_service_tpl() -> String {
-    r#"{{- range $id, $service := .Values.services }}
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-  labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
-    resource-id: {{ $id | quote }}
-spec:
-  type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
-  selector:
-    app: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-    managed-by: runtime
-    component: {{ $service.component | quote }}
-  ports:
-    - name: http
-      port: {{ default 80 $service.port }}
-      targetPort: {{ default 8080 $service.targetPort }}
----
 {{- end }}
 "#
     .to_string()
@@ -6407,10 +7431,137 @@ stackSettings:
     .to_string()
 }
 
-fn readme_md(chart_name: &str, stack: &Stack) -> String {
+fn bootstrap_values_example() -> String {
+    r#"# Keep this file private. Do not commit installation credentials.
+management:
+  token: "replace-with-bootstrap-token"
+  url: "https://management.example.com"
+
+# Identity storage and encryption are configured automatically.
+# If your cluster has no suitable default storage class, uncomment:
+# runtime:
+#   data:
+#     persistence:
+#       storageClassName: "your-storage-class"
+
+# Add the application inputs required by this chart.
+inputValues: {}
+"#
+    .to_string()
+}
+
+fn readme_md(chart_name: &str) -> String {
+    let namespace = chart_name.chars().take(63).collect::<String>();
+    let namespace = namespace.trim_end_matches('-');
     format!(
-        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, operator-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
-        stack.id()
+        r#"# {chart_name}
+
+## Install
+
+For a managed package, use the installation command supplied by its deployment
+page. The chart supplies storage and encryption defaults; a values file is only
+needed for additional configuration. To prepare an installation manually, copy
+the bootstrap example:
+
+```bash
+cp examples/bootstrap.yaml install-values.yaml
+```
+
+Edit `install-values.yaml` to set a bootstrap token and any application
+`inputValues` required by this chart. Set the management endpoint only when the
+installation service supplies an override or the chart has no endpoint default.
+The chart generates an encryption key on first installation and reuses it on
+upgrades. Keep credentials and any values file containing them private.
+
+```bash
+helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
+```
+
+Managed packages can supply the project's resolved management endpoint as a
+chart default. The installation service supplies an override when the selected
+manager or active custom domain differs from that captured default. Existing
+runtime installations retain their installed endpoint across chart upgrades unless
+`management.url` explicitly supplies a new endpoint. `management.defaultUrl` is
+the package default, used only for an installation without an assigned endpoint.
+The chart does not assume a hosted endpoint. The setup item defaults to `deployment`; override
+`management.setupItem` when your setup link selects another item. Leave
+`management.deploymentId` unset for a new installation. Set it only when
+connecting an already registered
+deployment; see `examples/<target>.yaml` for EKS, GKE, AKS, and on-premises
+bindings and service-account identities.
+
+## Credentials and storage
+
+The bootstrap token is exchanged for a deployment credential on first connection.
+The chart generates an encryption key on first install and reuses the installed
+Secret on upgrades. Explicit keys and existing Secrets remain supported through
+`runtime.encryption.key`, `management.existingSecret`, and
+`runtime.encryption.existingSecret`. Keep the original key: changing it makes
+stored encrypted data unreadable. A missing key must be restored, not regenerated.
+
+Runtime persistence is on by default and required for bootstrap installations.
+The identity, deployment credential, and log cursor survive Pod replacement.
+Keep an existing installation's identity claim unchanged; moving from ephemeral
+storage or to another claim requires migrating the state before an upgrade.
+The chart uses the cluster's default storage class; set
+`runtime.data.persistence.storageClassName` only when needed, or supply
+`runtime.data.persistence.existingClaim`. It does not install a storage driver.
+A Remote Operator uses its own mandatory identity PVC.
+
+## Auto-updates
+
+`management.updates: auto` follows the release channel selected by the setup
+link. Automatic workload updates do not require running Helm again. Helm owns
+the Operator installation and its permissions; upgrade the chart to change those.
+
+`inputValues` register the deployment and cannot change through Helm upgrades;
+edit them in the deployment dashboard and retain the original Helm values.
+Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
+values with the installed Secret. Client-side `helm template --is-upgrade`
+cannot do that.
+
+## Logs
+
+Log collection is off by default. Enable it and choose one mode:
+
+```yaml
+logCollector:
+  enabled: true
+  mode: podApi
+```
+
+`podApi` reads selected Pod logs through the Operator's namespace-scoped
+`pods/log` permission. It adds no collector Pod or node mount. This fits small
+deployments and clusters that restrict node access. The Operator supports 32
+concurrent streams by default (`logCollector.maxStreams`, up to 256) and a
+bounded 64 MiB queue. Kubernetes exposes only retained Pod logs, so rotation
+or a prolonged API outage can lose lines. The runtime Operator keeps
+its resume cursor on the runtime PVC by default. Explicitly configured ephemeral
+runtime storage can replay retained lines after Pod replacement. A Remote
+Operator keeps its cursor on its own mandatory identity PVC.
+
+`nodeAgent` runs a Fluent Bit DaemonSet and reads the selected Pod log files on
+each node. Choose it for larger workloads in clusters that permit read-only
+host log mounts. It uses `logCollector.image` and `logCollector.resources`.
+The chart installs only the selected mode. Scope both modes with
+`logCollector.scope`; switching modes can replay previously forwarded lines.
+If the Remote Operator uses `nodeAgent` and its setup-owned collector token is
+rotated, set `remoteOperator.collectorTokenRevision` to the new token's
+64-character SHA-256 hex digest during the chart upgrade. This restarts both
+the receiver and the DaemonSet with the new credential.
+
+Node collectors use their own `app.kubernetes.io/name` label so
+receiver selectors do not match collector Pods. Charts generated before this
+label change used the receiver's name label. The collector DaemonSets now have
+a `v2` name so `helm upgrade` creates the new DaemonSet and removes the old one
+without changing its immutable selector. Collector ConfigMap, ServiceAccount
+and RBAC names stay the same. The receiver Deployment keeps its existing
+selector and identity. The replacement collector starts with an empty
+log buffer and reads the selected log files from the beginning. When switching
+from nodeAgent to podApi, the Operator checks both collector names and waits for
+their Pods to stop, including when the chart is rendered without cluster access.
+Use an Operator image built with this chart version for that transition.
+"#
     )
 }
 
@@ -6456,6 +7607,10 @@ fn yaml_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn helm_string(value: &str) -> String {
+    serde_json::to_string(value).expect("a string can always be serialized as JSON")
+}
+
 fn ensure_trailing_newline(mut value: String) -> String {
     if !value.ends_with('\n') {
         value.push('\n');
@@ -6491,7 +7646,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -6508,6 +7662,8 @@ mod tests {
             log_collector: Some(OperatorLogCollectorOptions {
                 image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
+                pod_label_key: None,
+                pod_label_value: None,
             }),
             stack_settings: None,
             project_name: "my-saas",
@@ -6516,7 +7672,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -6542,7 +7697,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -6705,7 +7859,7 @@ mod tests {
     }
 
     #[test]
-    fn operator_remediation_adds_only_restart_and_scale_writes() {
+    fn operator_remediation_without_operations_adds_no_workload_writes() {
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -6720,7 +7874,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Remediation,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -6751,10 +7904,6 @@ mod tests {
         assert_eq!(
             writes,
             BTreeSet::from([
-                ("", "pods", "delete"),
-                ("apps", "deployments/scale", "patch"),
-                ("apps", "statefulsets/scale", "patch"),
-                ("apps", "replicasets/scale", "patch"),
                 ("accessrequests.alien", "alienaccessrequests", "create"),
                 ("accessrequests.alien", "alienaccessrequests", "update"),
                 ("accessrequests.alien", "alienaccessrequests", "patch"),
@@ -6793,7 +7942,6 @@ mod tests {
             label_domain: Some("acme.dev"),
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -6948,122 +8096,47 @@ mod tests {
     }
 
     #[test]
-    fn operator_manifest_can_include_log_collector_without_control_plane_credentials() {
+    fn operator_manifest_collects_selected_pod_logs_with_namespaced_read_access() {
         let manifest = operator_test_manifest_with_log_collector();
         let docs = parse_manifest_docs(&manifest);
-        let kinds = docs
-            .iter()
-            .map(|doc| yaml_str(doc, "kind").expect("doc should have kind"))
-            .collect::<Vec<_>>();
-
-        assert!(kinds.contains(&"Service"));
-        assert!(kinds.contains(&"Role"));
-        assert!(kinds.contains(&"RoleBinding"));
-        assert!(kinds.contains(&"DaemonSet"));
-        assert!(manifest.contains("whitelabeled-log-collector"));
-        assert!(manifest.contains("/var/log/pods/demo_"));
-        assert!(manifest.contains("/internal/logs"));
-        assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
-        assert!(manifest.contains("collector-token"));
-        assert!(manifest.contains("fluent/fluent-bit:3.2"));
         let deployment = docs_by_kind(&docs, "Deployment")
             .into_iter()
             .next()
-            .expect("operator manifest should include Deployment");
-        assert_eq!(operator_env_value(&deployment, "STACK_SETTINGS"), None);
-        // The log collector tails pod log FILES on the node, not the API — but
-        // the operator's own RBAC does grant `pods/log` for the on-demand `logs`
-        // operation, so `pods/log` legitimately appears in the operator Role.
-        assert!(manifest.contains("pods/log"));
-        assert!(!manifest.contains("void"));
-
-        let collector_role = docs_by_kind(&docs, "Role")
+            .expect("Operator Deployment");
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_POD_LOG_LABEL_KEY"),
+            Some("alien.dev/deployment")
+        );
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_POD_LOG_LABEL_VALUE"),
+            Some("my-saas-operator")
+        );
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_POD_LOG_LEGACY_DAEMONSET"),
+            Some("my-saas-operator-whitelabeled-log-collector")
+        );
+        assert_eq!(
+            operator_env_value(&deployment, "COLLECTOR_TOKEN_FILE"),
+            None
+        );
+        assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
+        assert!(docs_by_kind(&docs, "Service").is_empty());
+        let log_role = docs_by_kind(&docs, "Role")
             .into_iter()
             .find(|role| {
-                role.get("metadata")
-                    .and_then(|metadata| metadata.get("name"))
-                    .and_then(YamlValue::as_str)
-                    .is_some_and(|name| name.ends_with("-whitelabeled-log-collector"))
+                role["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-pod-logs"))
             })
-            .expect("operator manifest should include collector Role");
-        let resources = collector_role
-            .get("rules")
-            .and_then(YamlValue::as_sequence)
-            .and_then(|rules| rules.first())
-            .and_then(|rule| rule.get("resources"))
-            .and_then(YamlValue::as_sequence)
-            .expect("collector Role should include resources")
-            .iter()
-            .filter_map(YamlValue::as_str)
-            .collect::<Vec<_>>();
-        assert_eq!(resources, vec!["pods"]);
-
-        let daemonset = docs_by_kind(&docs, "DaemonSet")
+            .expect("namespaced Pod log Role");
+        assert_eq!(log_role["rules"][0]["resources"][0], "pods/log");
+        assert_eq!(log_role["rules"][0]["verbs"][0], "get");
+        let binding = docs_by_kind(&docs, "RoleBinding")
             .into_iter()
-            .next()
-            .expect("operator manifest should include collector DaemonSet");
-        let env = daemonset
-            .get("spec")
-            .and_then(|spec| spec.get("template"))
-            .and_then(|template| template.get("spec"))
-            .and_then(|spec| spec.get("containers"))
-            .and_then(YamlValue::as_sequence)
-            .and_then(|containers| containers.first())
-            .and_then(|container| container.get("env"))
-            .and_then(YamlValue::as_sequence)
-            .expect("collector container should include env");
-        let env_names = env
-            .iter()
-            .filter_map(|entry| entry.get("name").and_then(YamlValue::as_str))
-            .collect::<Vec<_>>();
-        assert_eq!(env_names, vec!["COLLECTOR_TOKEN"]);
-    }
-
-    #[test]
-    fn helm_collector_rolls_when_external_credentials_change() {
-        let labels =
-            BTreeMap::from([("app.kubernetes.io/name".to_string(), "operator".to_string())]);
-        let daemonset = operator_log_collector_daemonset_doc(
-            "{{ .Release.Namespace }}",
-            "operator-whitelabeled-log-collector",
-            "operator-credentials",
-            "fluent/fluent-bit:3.2",
-            &labels,
-            true,
-        );
-
-        let files = indexmap::IndexMap::from([
-            (
-                "Chart.yaml".to_string(),
-                "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
-            ),
-            (
-                "values.yaml".to_string(),
-                "remoteOperator:\n  collectorTokenRevision: \"\"\n".to_string(),
-            ),
-            ("templates/collector.yaml".to_string(), daemonset),
-        ]);
-
-        let revisions = ["a".repeat(64), "b".repeat(64)];
-        let rendered = revisions.map(|revision| {
-            let values = format!("remoteOperator:\n  collectorTokenRevision: {revision}\n");
-            let output = crate::test_utils::helm_template(&files, Some(&values));
-            output.assert_ok("collector token rotation");
-            let docs = parse_manifest_docs(&output.stdout);
-            let daemonset = docs_by_kind(&docs, "DaemonSet")
-                .into_iter()
-                .next()
-                .expect("rendered collector DaemonSet");
-            assert_eq!(
-                operator_env_value(&daemonset, "COLLECTOR_TOKEN_REVISION"),
-                Some(revision.as_str())
-            );
-            daemonset["spec"]["template"].clone()
-        });
-        assert_ne!(
-            rendered[0], rendered[1],
-            "rotating only the collector token marker must change the pod template"
-        );
+            .find(|binding| binding["metadata"]["name"] == log_role["metadata"]["name"])
+            .expect("Pod log RoleBinding");
+        assert_eq!(binding["subjects"][0]["name"], "my-saas-operator");
+        assert_eq!(binding["subjects"][0]["namespace"], "demo");
     }
 
     #[test]
@@ -7077,7 +8150,7 @@ mod tests {
 
         assert_eq!(
             operator_env_value(&deployment, "STACK_SETTINGS"),
-            Some(r#"{"updates":"approval-required"}"#)
+            Some(r#"{"endpointAccess":"internet","updates":"approval-required"}"#)
         );
         assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
     }
@@ -7095,12 +8168,12 @@ mod tests {
             None
         );
 
-        // Namespace scope grants a namespaced Role, no cluster-wide RBAC.
+        // Namespace scope grants one inventory Role.
         assert_eq!(docs_by_kind(&docs, "Role").len(), 1);
         assert!(docs_by_kind(&docs, "ClusterRole").is_empty());
 
         // Label scope is cluster-wide: emits the selector env and ClusterRole/
-        // ClusterRoleBinding instead of a namespaced Role.
+        // ClusterRoleBinding.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
@@ -7115,7 +8188,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("app.kubernetes.io/part-of=my-saas"),
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
@@ -7132,7 +8204,7 @@ mod tests {
 
         assert!(
             docs_by_kind(&docs, "Role").is_empty(),
-            "cluster-wide scope must not emit a namespaced Role"
+            "a standalone cluster-scoped Operator binds no namespaced Role"
         );
         let cluster_role = docs_by_kind(&docs, "ClusterRole")
             .into_iter()
@@ -7175,7 +8247,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::HelmTemplate,
         })
@@ -7246,7 +8317,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -7269,7 +8339,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -7290,7 +8359,6 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("   "),
-            kubernetes_operations_enabled: true,
             permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
@@ -7343,9 +8411,25 @@ mod tests {
         include_collector: bool,
         label_domain: Option<&str>,
     ) -> HelmChart {
+        product_chart_for_stack(&sample_stack(), include_collector, label_domain)
+    }
+
+    /// `sample_stack` plus an approved dynamic container repository, which is
+    /// what lets the API schedule containers on the installed release.
+    fn dynamic_container_stack() -> Stack {
+        let mut stack = sample_stack();
+        stack.dynamic_container_repositories = vec!["registry.example.com/dynamic".to_string()];
+        stack
+    }
+
+    fn product_chart_for_stack(
+        stack: &Stack,
+        include_collector: bool,
+        label_domain: Option<&str>,
+    ) -> HelmChart {
         let registry = HelmRegistry::built_in();
         generate_product_helm_chart(
-            &sample_stack(),
+            stack,
             HelmOptions {
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -7353,13 +8437,15 @@ mod tests {
             },
             ProductOperatorManifestOptions {
                 manifest: OperatorManifestOptions {
-                    manager_url: "{{ .Values.management.url }}",
+                    manager_url: r#"{{ include "deployment.managementUrl" . }}"#,
                     group_token: "",
                     encryption_key: "",
                     image: "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     log_collector: include_collector.then_some(OperatorLogCollectorOptions {
-                        image: "fluent/fluent-bit:3.2",
+                        image: "{{ printf \"%s:%s\" .Values.logCollector.image.repository .Values.logCollector.image.tag }}",
                         token: "",
+                        pod_label_key: None,
+                        pod_label_value: None,
                     }),
                     stack_settings: None,
                     project_name: "remote-sample-stack",
@@ -7368,7 +8454,6 @@ mod tests {
                     label_domain,
                     scope: OperatorScope::Namespace,
                     label_selector: None,
-                    kubernetes_operations_enabled: true,
                     custom_operation_permissions: &[],
                     permission: OperatorPermission::Remediation,
                     format: OperatorOutputFormat::HelmTemplate,
@@ -7406,6 +8491,371 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_hooks_pull_with_the_install_pull_secrets() {
+        // A site whose registry needs a password installs with a pull Secret;
+        // the uninstall and upgrade hooks pull the cleanup image from the same
+        // registry, so `helm uninstall` hangs if they don't carry it.
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  imagePullSecrets:
+    - name: site-registry
+  cleanup:
+    onUninstall:
+      image:
+        repository: registry.site.internal/vendor/alpine/k8s
+        tag: "1.32.0"
+"#;
+        let registry = HelmRegistry::built_in();
+        let plain = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        for (label, chart) in [("chart", plain), ("product chart", sample_product_chart())] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+            rendered.assert_ok(label);
+            let mut cleanup_pods = 0;
+            for document in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+                let document = YamlValue::deserialize(document).expect("valid Kubernetes YAML");
+                let pod = match document["kind"].as_str() {
+                    Some("Pod") => &document["spec"],
+                    Some(_) => &document["spec"]["template"]["spec"],
+                    None => continue,
+                };
+                let runs_cleanup_image =
+                    pod["containers"].as_sequence().is_some_and(|containers| {
+                        containers.iter().any(|container| {
+                            container["image"]
+                                .as_str()
+                                .is_some_and(|image| image.starts_with("registry.site.internal/"))
+                        })
+                    });
+                if !runs_cleanup_image {
+                    continue;
+                }
+                cleanup_pods += 1;
+                let secrets: Vec<&str> = pod["imagePullSecrets"]
+                    .as_sequence()
+                    .map(|secrets| secrets.iter().filter_map(|s| s["name"].as_str()).collect())
+                    .unwrap_or_default();
+                assert!(
+                    secrets.contains(&"site-registry"),
+                    "{label}: {} {} runs the cleanup image without the pull Secret",
+                    document["kind"].as_str().unwrap_or_default(),
+                    document["metadata"]["name"].as_str().unwrap_or_default()
+                );
+            }
+            assert!(cleanup_pods > 0, "{label} rendered no cleanup hooks");
+        }
+    }
+
+    #[test]
+    fn helm_setup_inputs_reach_operator_through_a_secret() {
+        let chart = sample_product_chart();
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+  deploymentId: null
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+inputValues:
+  ingestUrl: https://ingest.example.test
+  enabled: true
+  namespaces:
+    - production
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("Helm setup inputs render");
+        let documents = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .collect::<Vec<_>>();
+        let secret = documents
+            .iter()
+            .find(|document| document["kind"] == "Secret")
+            .expect("setup Secret");
+        let input_values: serde_json::Value = serde_json::from_str(
+            secret["stringData"]["input-values.json"]
+                .as_str()
+                .expect("input values are in the Secret"),
+        )
+        .expect("JSON input values");
+        assert_eq!(
+            input_values,
+            serde_json::json!({
+                "ingestUrl": "https://ingest.example.test",
+                "enabled": true,
+                "namespaces": ["production"]
+            })
+        );
+        let configmap = documents
+            .iter()
+            .find(|document| document["kind"] == "ConfigMap")
+            .expect("runtime ConfigMap");
+        assert!(configmap["data"].as_mapping().is_some_and(|data| {
+            data.keys()
+                .all(|key| key.as_str() != Some("input-values.json"))
+        }));
+        let operator = documents
+            .iter()
+            .find(|document| document["kind"] == "Deployment")
+            .expect("Operator Deployment");
+        assert!(
+            operator["spec"]["template"]["metadata"]["annotations"]["checksum/input-values"]
+                .is_null()
+        );
+        let credential_checksum = operator["spec"]["template"]["metadata"]["annotations"]
+            ["checksum/management-credential"]
+            .as_str()
+            .expect("management credential checksum");
+        let rotated_values = values.replace("ax_dg_example", "ax_dg_rotated");
+        let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
+        rotated.assert_ok("Helm credential rotation renders");
+        let rotated_operator = serde_yaml::Deserializer::from_str(&rotated.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .find(|document| document["kind"] == "Deployment")
+            .expect("rotated Operator Deployment");
+        assert_ne!(
+            credential_checksum,
+            rotated_operator["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/management-credential"]
+                .as_str()
+                .expect("rotated management credential checksum"),
+            "changing the Helm management credential must roll the Operator"
+        );
+        let container = &operator["spec"]["template"]["spec"]["containers"][0];
+        assert!(container["env"].as_sequence().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"] == "STACK_INPUT_VALUES_FILE"
+                    && entry["value"] == "/etc/deployment/input-values/input-values.json"
+            })
+        }));
+        assert!(container["volumeMounts"]
+            .as_sequence()
+            .is_some_and(|mounts| {
+                mounts.iter().any(|mount| {
+                    mount["name"] == "input-values"
+                        && mount["mountPath"] == "/etc/deployment/input-values"
+                        && mount["readOnly"].as_bool() == Some(true)
+                })
+            }));
+    }
+
+    #[test]
+    fn helm_mounts_precreated_external_bindings_secret() {
+        let chart = sample_product_chart();
+        let values = r#"
+management:
+  token: ax_dg_example
+  name: prod
+  url: https://manager.example.test
+runtime:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+infrastructureExistingSecret: customer-bindings
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("Helm existing bindings Secret render");
+        let documents = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).expect("valid Kubernetes YAML"))
+            .collect::<Vec<_>>();
+        let operator = documents
+            .iter()
+            .find(|document| document["kind"] == "Deployment")
+            .expect("Operator Deployment");
+        let pod = &operator["spec"]["template"]["spec"];
+        assert!(pod["volumes"].as_sequence().is_some_and(|volumes| {
+            volumes.iter().any(|volume| {
+                volume["name"] == "external-bindings"
+                    && volume["secret"]["secretName"] == "customer-bindings"
+            })
+        }));
+        let container = &pod["containers"][0];
+        assert!(container["env"].as_sequence().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"] == "EXTERNAL_BINDINGS_FILE"
+                    && entry["value"] == "/etc/deployment/secrets/external-bindings.json"
+            })
+        }));
+        assert!(container["volumeMounts"]
+            .as_sequence()
+            .is_some_and(|mounts| {
+                mounts.iter().any(|mount| {
+                    mount["name"] == "external-bindings"
+                        && mount["mountPath"] == "/etc/deployment/secrets/external-bindings.json"
+                })
+            }));
+    }
+
+    #[test]
+    fn helm_rejects_unknown_or_wrongly_typed_deployer_inputs() {
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![alien_core::StackInputDefinition {
+                id: "ingestUrl".to_string(),
+                kind: alien_core::StackInputKind::String,
+                provided_by: vec![alien_core::StackInputProvider::Deployer],
+                required: true,
+                label: "Ingest URL".to_string(),
+                description: "Ingest endpoint".to_string(),
+                placeholder: None,
+                default: None,
+                platforms: Some(vec![Platform::Kubernetes]),
+                validation: Some(alien_core::StackInputValidation {
+                    min_length: None,
+                    max_length: None,
+                    pattern: None,
+                    format: Some("url".to_string()),
+                    min: None,
+                    max: None,
+                    values: None,
+                    min_items: None,
+                    max_items: None,
+                }),
+                generate: None,
+                env: Vec::new(),
+            }])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "input-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        crate::test_utils::helm_lint(&chart.files).assert_ok("lint chart defaults");
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\ninputValues:\n  ingestUrl: https://ingest.example.test\n";
+        crate::test_utils::helm_template(&chart.files, Some(values))
+            .assert_ok("valid input values");
+        let registered = values
+            .replace("  deploymentId: null", "  deploymentId: dep_existing")
+            .replace(
+                "inputValues:\n  ingestUrl: https://ingest.example.test\n",
+                "",
+            );
+        crate::test_utils::helm_template(&chart.files, Some(&registered))
+            .assert_ok("registered deployment keeps its stored inputs");
+        let captured_endpoint = values.replace(
+            "  url: https://manager.example.test",
+            "  defaultUrl: https://manager.example.test",
+        );
+        crate::test_utils::helm_template(&chart.files, Some(&captured_endpoint))
+            .assert_ok("bootstrap with captured management endpoint");
+        let missing_inputs = values.replace("  ingestUrl: https://ingest.example.test\n", "");
+        for invalid in [
+            captured_endpoint.replace("  ingestUrl: https://ingest.example.test\n", ""),
+            missing_inputs.clone(),
+            missing_inputs.replace(
+                "  token: ax_test",
+                "  existingSecret:\n    name: installer-credentials",
+            ),
+            values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
+            values.replace(
+                "ingestUrl: https://ingest.example.test",
+                "ingestUrl: not-a-url",
+            ),
+            values.replace("ingestUrl:", "ingestUrll:"),
+        ] {
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(&invalid));
+            assert!(
+                !rendered.is_ok(),
+                "Helm accepted invalid input values: {invalid}"
+            );
+            assert!(
+                rendered
+                    .stderr
+                    .contains("values don't meet the specifications"),
+                "{}",
+                rendered.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn deployer_secrets_are_kubernetes_secrets_not_helm_values() {
+        let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
+            id: id.to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            provided_by: vec![alien_core::StackInputProvider::Deployer],
+            required,
+            label: label.to_string(),
+            description: String::new(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: None,
+            env: Vec::new(),
+        };
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![
+                secret("databasePassword", "Database password", true),
+                secret("licenseKey", "License key", false),
+            ])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "input-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        crate::test_utils::helm_lint(&chart.files).assert_ok("lint chart defaults");
+
+        // A required deployer secret is not a required Helm value: the
+        // bootstrap installs without it.
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        crate::test_utils::helm_template(&chart.files, Some(values))
+            .assert_ok("install without deployer secret values");
+        let rendered = crate::test_utils::helm_render_notes(&chart.files, values, "shop", "apps");
+        rendered.assert_ok("install notes");
+        let notes = &rendered.stdout;
+        assert!(notes.contains("namespace apps"), "{notes}");
+        assert!(
+            notes.contains("Database password (required; workloads that read it wait until it exists): secrets vault key input-database-password"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("License key (optional): secrets vault key input-license-key"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("kubectl create secret generic <name> --namespace apps --from-literal=value='<VALUE>'"),
+            "{notes}"
+        );
+
+        // Helm values cannot carry the value.
+        let with_value = format!("{values}inputValues:\n  databasePassword: hunter2\n");
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(&with_value));
+        assert!(!rendered.is_ok(), "Helm accepted a deployer secret value");
+        assert!(
+            rendered
+                .stderr
+                .contains("values don't meet the specifications"),
+            "{}",
+            rendered.stderr
+        );
+    }
+
+    #[test]
     fn runtime_cleanup_uses_a_pinned_scope_and_nonblocking_deletes() {
         let registry = HelmRegistry::built_in();
         let chart = generate_helm_chart(
@@ -7426,8 +8876,9 @@ mod tests {
         assert!(!chart.files.contains_key("templates/cleanup-rbac.yaml"));
         let rbac = &chart.files["templates/role.yaml"];
         assert!(rbac.contains(
-            "resources: [\"configmaps\", \"secrets\", \"services\", \"pods\", \"pods/log\", \"persistentvolumeclaims\"]"
+            "resources: [\"configmaps\", \"secrets\", \"services\", \"pods\", \"persistentvolumeclaims\"]"
         ));
+        assert!(rbac.contains("resources: [\"pods/log\"]\n    verbs: [\"get\"]"));
         assert!(rbac.contains("resources: [\"jobs\"]"));
         assert!(rbac.contains("apiGroups: [\"networking.gke.io\"]"));
         assert!(rbac.contains("apiGroups: [\"alb.networking.azure.io\"]"));
@@ -7546,7 +8997,6 @@ mod tests {
         assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v2\""));
         assert!(remote_template.contains(".Values.remoteOperator.enabled"));
         assert!(remote_template.contains("deployment.remoteOperatorResourceName"));
-        assert!(!remote_template.contains("deployment.fullname"));
         assert!(!remote_template.contains("setup-owned"));
         assert!(!remote_template.contains("kind: 'Secret'"));
         let checks = &chart.files["templates/remote-operator-checks.yaml"];
@@ -7666,13 +9116,10 @@ mod tests {
         assert!(initialized_delete < capability_delete);
         assert!(capability_delete < record_delete);
         let rollback_guard = &chart.files["templates/remote-operator-rollback-guard.yaml"];
-        assert!(rollback_guard.contains("if not .Values.remoteOperator.enabled"));
         assert!(rollback_guard.contains("helm.sh/hook\": pre-rollback"));
         assert!(rollback_guard.contains("--ignore-not-found=true --output=name"));
         assert!(rollback_guard.contains("if [ -n \"$identity_completion_resource\" ]"));
-        assert!(rollback_guard.contains("Use the explicit uninstall lifecycle instead"));
         assert!(checks.contains("missing from a partial installation"));
-        assert!(checks.contains("Disabling Remote Operator"));
         assert!(checks.contains("remoteOperator.bootstrapIdentity has already been consumed"));
         assert!(checks.contains("(not .Values.remoteOperator.bootstrapIdentity)"));
         assert!(checks.contains("$encryptionKey | sha256sum"));
@@ -7799,7 +9246,11 @@ mod tests {
         assert_eq!(
             schema["properties"]["remoteOperator"]["properties"]["podLabels"]["propertyNames"]
                 ["not"]["enum"],
-            serde_json::json!(["app.kubernetes.io/name", "app.kubernetes.io/instance"])
+            serde_json::json!([
+                "app.kubernetes.io/name",
+                "app.kubernetes.io/instance",
+                "alien.dev/log-collector-exclude"
+            ])
         );
 
         let reserved_pod_label = crate::test_utils::helm_template(
@@ -8030,6 +9481,53 @@ remoteOperator:
     }
 
     #[test]
+    fn product_pod_logs_follow_branded_runtime_scope() {
+        let mut files =
+            sample_product_chart_with_collector_and_label_domain(true, Some("acme.dev")).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+logCollector:
+  enabled: true
+  mode: podApi
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("branded product Pod logs");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let remote = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                operator_env_value(&deployment, "OPERATOR_POD_LOG_LABEL_KEY").is_some()
+            })
+            .expect("Remote Operator Deployment");
+        assert_eq!(
+            operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_KEY"),
+            Some("acme/deployment")
+        );
+        assert_eq!(
+            operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_VALUE"),
+            Some("customer-one")
+        );
+        assert_eq!(
+            operator_env_value(&remote, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY"),
+            Some("acme/deployment")
+        );
+        assert_eq!(
+            operator_env_value(&remote, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE"),
+            Some("customer-one")
+        );
+        assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
+        assert!(!rendered.stdout.contains("hostPath:"));
+    }
+
+    #[test]
     fn product_chart_omits_cleanup_job_on_first_enabled_render_without_baseline_lifecycle_capability(
     ) {
         let mut files = sample_product_chart().files;
@@ -8096,7 +9594,6 @@ remoteOperator:
 
         assert!(identity_record.contains(".Release.Namespace .Release.Name | sha256sum"));
         assert!(identity_record.contains("deployment.remoteOperatorReleaseIdentity"));
-        assert!(!chart.files["templates/remote-operator.yaml"].contains("deployment.fullname"));
         assert!(checks.contains("$identityCompletion := lookup"));
         assert!(checks.contains("identity volume is missing from a partial installation"));
 
@@ -8127,6 +9624,30 @@ remoteOperator:
             assert!(manifest.contains(&format!("name: {stable_name}")));
             assert!(manifest.contains(&format!("identityRecordName: \"{stable_name}\"")));
             assert!(manifest.contains(&format!("name: {stable_name}-complete")));
+            let documents = parse_manifest_docs(manifest);
+            let deployments = docs_by_kind(&documents, "Deployment");
+            let remote = deployments
+                .iter()
+                .find(|deployment| {
+                    yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                        == Some(stable_name)
+                })
+                .expect("stable Remote Operator Deployment");
+            let runtime = deployments
+                .iter()
+                .find(|deployment| {
+                    yaml_path(deployment, &["metadata", "name"]).and_then(YamlValue::as_str)
+                        != Some(stable_name)
+                })
+                .expect("runtime Deployment");
+            for suffix in ["KEY", "VALUE"] {
+                let env_name = format!("ALIEN_RUNTIME_DEPLOYMENT_LABEL_{suffix}");
+                assert_eq!(
+                    operator_env_value(remote, &env_name),
+                    operator_env_value(runtime, &env_name),
+                    "Remote Operator and runtime must share the rendered label scope"
+                );
+            }
         }
     }
 
@@ -8215,6 +9736,289 @@ remoteOperator:
         assert_ne!(cleanup_name, operator_name);
     }
 
+    type Grant = (String, String, String, Vec<String>);
+
+    /// Every grant of every Role or ClusterRole bound to `service_account`, as
+    /// `(apiGroup, resource, verb, resourceNames)`.
+    fn grants_bound_to(docs: &[YamlValue], service_account: &str) -> BTreeSet<Grant> {
+        let bound: Vec<(&str, &str)> = docs
+            .iter()
+            .filter(|doc| {
+                matches!(
+                    yaml_str(doc, "kind"),
+                    Some("RoleBinding" | "ClusterRoleBinding")
+                )
+            })
+            .filter(|doc| {
+                doc["subjects"].as_sequence().is_some_and(|subjects| {
+                    subjects
+                        .iter()
+                        .any(|subject| subject["name"].as_str() == Some(service_account))
+                })
+            })
+            .map(|doc| {
+                (
+                    doc["roleRef"]["kind"].as_str().unwrap(),
+                    doc["roleRef"]["name"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        let mut grants = BTreeSet::new();
+        for (kind, name) in bound {
+            let role = docs
+                .iter()
+                .find(|doc| yaml_str(doc, "kind") == Some(kind) && doc["metadata"]["name"] == name)
+                .unwrap_or_else(|| panic!("{kind} {name} is bound but not rendered"));
+            for rule in role["rules"].as_sequence().unwrap() {
+                let names: Vec<String> = rule["resourceNames"]
+                    .as_sequence()
+                    .into_iter()
+                    .flatten()
+                    .map(|name| name.as_str().unwrap().to_owned())
+                    .collect();
+                for group in rule["apiGroups"].as_sequence().unwrap() {
+                    for resource in rule["resources"].as_sequence().unwrap() {
+                        for verb in rule["verbs"].as_sequence().unwrap() {
+                            grants.insert((
+                                group.as_str().unwrap().to_owned(),
+                                resource.as_str().unwrap().to_owned(),
+                                verb.as_str().unwrap().to_owned(),
+                                names.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        grants
+    }
+
+    /// What the permission review shows for an install with `features`: the
+    /// runtime rules those features select plus the access-request rules.
+    fn reviewed_grants(features: &[OperatorFeature]) -> BTreeSet<Grant> {
+        let mut grants: BTreeSet<_> =
+            alien_permissions::operations::kubernetes::operator_runtime_rules()
+                .into_iter()
+                .filter(|rule| {
+                    rule.feature
+                        .is_none_or(|feature| features.contains(&feature))
+                })
+                .flat_map(|rule| {
+                    rule.verbs.into_iter().map(move |verb| {
+                        (rule.api_group.clone(), rule.resource.clone(), verb, vec![])
+                    })
+                })
+                .collect();
+        for (resource, verbs) in [
+            (
+                "alienaccessrequests",
+                &["get", "list", "watch", "create", "update", "patch"][..],
+            ),
+            (
+                "alienaccessrequests/status",
+                &["get", "update", "patch"][..],
+            ),
+        ] {
+            for verb in verbs {
+                grants.insert((
+                    "accessrequests.alien".to_owned(),
+                    resource.to_owned(),
+                    (*verb).to_owned(),
+                    vec![],
+                ));
+            }
+        }
+        grants
+    }
+
+    fn product_release_values(log_mode: Option<&str>) -> String {
+        let log_collector = log_mode
+            .map(|mode| format!("logCollector:\n  enabled: true\n  mode: {mode}\n"))
+            .unwrap_or_default();
+        format!(
+            "management:\n  url: https://manager.example.com\n{log_collector}remoteOperator:\n  enabled: true\n  existingSecret:\n    name: setup-owned\n    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        )
+    }
+
+    fn rendered_product_release(chart: HelmChart, values: &str) -> Vec<YamlValue> {
+        let mut files = chart.files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), "customer-one");
+        rendered.assert_ok("product release");
+        parse_manifest_docs(&rendered.stdout)
+    }
+
+    /// The Remote Operator Deployment; a product release also renders the
+    /// stack's own workloads.
+    fn remote_operator_deployment(docs: &[YamlValue]) -> YamlValue {
+        docs_by_kind(docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.contains("-operator"))
+            })
+            .expect("Remote Operator Deployment")
+    }
+
+    #[test]
+    fn standalone_operators_bind_exactly_the_reviewed_grants() {
+        // No log collection: the Operator runtime rules and the access-request CRD.
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        assert_eq!(
+            grants_bound_to(&docs, "my-saas-operator"),
+            reviewed_grants(&[])
+        );
+        let deployment = remote_operator_deployment(&docs);
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_DYNAMIC_CONTAINERS"),
+            None
+        );
+
+        // Pod log collection adds `pods/log get` and nothing else.
+        let docs = parse_manifest_docs(&operator_test_manifest_with_log_collector());
+        assert_eq!(
+            grants_bound_to(&docs, "my-saas-operator"),
+            reviewed_grants(&[OperatorFeature::PodLogs])
+        );
+    }
+
+    #[test]
+    fn product_releases_bind_exactly_the_reviewed_grants() {
+        // The Operator ServiceAccount shares the Remote Operator Deployment's name.
+        // A product release also lets the Operator mark its own identity
+        // ConfigMap initialized; that grant names the one ConfigMap.
+        let bound_grants = |docs: &[YamlValue]| {
+            let deployment = remote_operator_deployment(docs);
+            let operator = deployment["metadata"]["name"].as_str().unwrap();
+            assert!(
+                operator.starts_with("customer-one-remote-operator-"),
+                "{operator}"
+            );
+            let (named, unnamed): (BTreeSet<Grant>, BTreeSet<Grant>) =
+                grants_bound_to(docs, operator)
+                    .into_iter()
+                    .partition(|(_, _, _, names)| !names.is_empty());
+            let identity_marker = format!("{operator}-initialized");
+            assert_eq!(
+                named,
+                ["get", "patch", "update"]
+                    .map(|verb| (
+                        String::new(),
+                        "configmaps".to_owned(),
+                        verb.to_owned(),
+                        vec![identity_marker.clone()]
+                    ))
+                    .into_iter()
+                    .collect()
+            );
+            unnamed
+        };
+        // Product installs retain cleanup access even without approved images.
+        let docs = rendered_product_release(sample_product_chart(), &product_release_values(None));
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&docs),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+
+        // Pod API log collection binds the pod-log Role; the node collector does not.
+        let docs = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
+        );
+        let docs = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("nodeAgent")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers])
+        );
+
+        // Approved images can run with the same retained access used for cleanup.
+        let docs = rendered_product_release(
+            product_chart_for_stack(&dynamic_container_stack(), true, None),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(
+            bound_grants(&docs),
+            reviewed_grants(&[OperatorFeature::DynamicContainers, OperatorFeature::PodLogs])
+        );
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&docs),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+        let dynamic_role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .find(|role| {
+                yaml_path(role, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.starts_with("alien-dc-"))
+            })
+            .expect("dynamic container Role");
+        assert_eq!(dynamic_role["metadata"]["namespace"], "default");
+
+        // Updating the same product release to an empty approval list must keep
+        // every grant and the capability needed to suspend/delete old workloads.
+        let withdrawn = rendered_product_release(
+            sample_product_chart_with_collector(true),
+            &product_release_values(Some("podApi")),
+        );
+        assert_eq!(bound_grants(&withdrawn), bound_grants(&docs));
+        assert_eq!(
+            operator_env_value(
+                &remote_operator_deployment(&withdrawn),
+                "OPERATOR_DYNAMIC_CONTAINERS"
+            ),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn product_dynamic_role_name_follows_the_helm_release() {
+        let mut files = product_chart_for_stack(&dynamic_container_stack(), false, None).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let mut names = Vec::new();
+        for release in ["first-release", "second-release"] {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&files, Some(values), release);
+            rendered.assert_ok("dynamic Role in a product chart");
+            let documents = parse_manifest_docs(&rendered.stdout);
+            let name = docs_by_kind(&documents, "Role")
+                .iter()
+                .filter_map(|doc| yaml_path(doc, &["metadata", "name"]).and_then(YamlValue::as_str))
+                .find(|name| name.starts_with("alien-dc-"))
+                .expect("dynamic Role")
+                .to_string();
+            names.push(name);
+        }
+        assert_ne!(names[0], names[1]);
+    }
+
     #[test]
     fn product_chart_identity_initialization_rbac_names_keep_release_identity_hash() {
         let mut files = sample_product_chart().files;
@@ -8278,43 +10082,131 @@ remoteOperator:
     }
 
     #[test]
-    fn product_chart_collector_names_fit_kubernetes_limits_and_keep_release_identity() {
+    fn product_pod_log_role_names_fit_kubernetes_limits_and_keep_release_identity() {
         let mut files = sample_product_chart_with_collector(true).files;
         files.shift_remove("templates/remote-operator-checks.yaml");
         let values = r#"
 management:
   url: https://manager.example.com
+logCollector:
+  enabled: true
+  mode: podApi
 remoteOperator:
   enabled: true
   existingSecret:
     name: setup-owned
     encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 "#;
-        let render_collector_name = |release_name: &str| {
+        let render_name = |release_name: &str| {
             let rendered =
                 crate::test_utils::helm_template_for_release(&files, Some(values), release_name);
-            rendered.assert_ok("product Remote Operator log collector");
+            rendered.assert_ok("product Pod log role");
             let documents = parse_manifest_docs(&rendered.stdout);
-            let collector_name = docs_by_kind(&documents, "DaemonSet")
+            let role = docs_by_kind(&documents, "Role")
                 .into_iter()
-                .find_map(|document| {
-                    yaml_path(&document, &["metadata", "name"])
-                        .and_then(YamlValue::as_str)
-                        .filter(|name| name.contains("-log-collector-"))
-                        .map(str::to_string)
+                .find(|role| {
+                    role["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-pod-logs"))
                 })
-                .expect("Remote Operator log-collector DaemonSet");
+                .expect("Remote Operator Pod log Role");
+            let role_name = role["metadata"]["name"].as_str().expect("role name");
             assert!(
-                collector_name.len() <= 63,
-                "rendered collector name is too long: {collector_name}"
+                role_name.len() <= 63,
+                "rendered Pod log role name is too long: {role_name}"
             );
-            collector_name
+            assert!(docs_by_kind(&documents, "RoleBinding")
+                .into_iter()
+                .any(|binding| binding["metadata"]["name"] == role["metadata"]["name"]));
+            role_name.to_string()
+        };
+        let shared_prefix = "a".repeat(51);
+        let first = render_name(&format!("{shared_prefix}aa"));
+        let second = render_name(&format!("{shared_prefix}ab"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn product_chart_remote_operator_removal_requires_the_exact_release_name() {
+        let chart = sample_product_chart();
+        let render = |values: &str| {
+            // This compares complete resources; use the same explicit key so
+            // independently rendered first-install Secrets remain comparable.
+            let values = format!(
+                "runtime:\n  encryption:\n    key: {TEST_RUNTIME_ENCRYPTION_KEY}\n{values}"
+            );
+            crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "shop")
+        };
+        let has_rollback_guard = |manifest: &str| {
+            docs_by_kind(&parse_manifest_docs(manifest), "Job")
+                .iter()
+                .any(|job| {
+                    yaml_path(job, &["metadata", "annotations", "helm.sh/hook"])
+                        .and_then(YamlValue::as_str)
+                        == Some("pre-rollback")
+                })
         };
 
-        let shared_prefix = "a".repeat(51);
-        let first = render_collector_name(&format!("{shared_prefix}aa"));
-        let second = render_collector_name(&format!("{shared_prefix}ab"));
-        assert_ne!(first, second);
+        let wrong_release = render("remoteOperator:\n  confirmRemoval: other-release\n");
+        assert!(!wrong_release.is_ok(), "{wrong_release:?}");
+        assert!(
+            wrong_release.stderr.contains(
+                r#"remoteOperator.confirmRemoval is "other-release", but this release is "shop""#
+            ),
+            "{}",
+            wrong_release.stderr
+        );
+
+        let enabled_with_confirmation = render(
+            r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  confirmRemoval: shop
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#,
+        );
+        assert!(!enabled_with_confirmation.is_ok());
+        assert!(
+            enabled_with_confirmation.stderr.contains(
+                "remoteOperator.confirmRemoval must be empty when Remote Operator is enabled"
+            ),
+            "{}",
+            enabled_with_confirmation.stderr
+        );
+
+        // A plain disabled revision refuses rollback over a completed identity.
+        let disabled = render("remoteOperator:\n  enabled: false\n");
+        disabled.assert_ok("disabled product chart");
+        assert!(has_rollback_guard(&disabled.stdout));
+
+        // A confirmation with no completed identity to remove (here, no
+        // cluster at all) keeps the rollback guard, so an install or bridge
+        // upgrade confirmed early never becomes a guard-free rollback target.
+        // The Kind lifecycle test covers removal of a completed identity.
+        let removed = render("remoteOperator:\n  enabled: false\n  confirmRemoval: shop\n");
+        removed.assert_ok("product chart with the Remote Operator removed");
+        let documents = parse_manifest_docs(&removed.stdout);
+        assert!(has_rollback_guard(&removed.stdout));
+        assert!(docs_by_kind(&documents, "Deployment")
+            .iter()
+            .all(|document| {
+                yaml_path(document, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| !name.contains("-remote-operator-"))
+            }));
+        assert!(docs_by_kind(&documents, "Job").iter().any(|job| {
+            yaml_path(job, &["metadata", "annotations", "helm.sh/hook"]).and_then(YamlValue::as_str)
+                == Some("pre-delete")
+        }));
+        assert_eq!(
+            documents,
+            parse_manifest_docs(&disabled.stdout),
+            "removal must leave the product resources exactly as a disabled render"
+        );
     }
 
     #[test]
@@ -8348,14 +10240,12 @@ remoteOperator:
 
     #[test]
     fn product_chart_requires_non_empty_decoded_external_credentials() {
-        let checks = remote_operator_checks_tpl(true);
+        let checks = remote_operator_checks_tpl();
 
         for required_check in [
             "$syncToken := index $credentials.data \"sync-token\" | b64dec",
             "$encryptionKey := index $credentials.data \"encryption-key\" | b64dec",
             "if or (empty $syncToken) (empty $encryptionKey)",
-            "$collectorToken = index $credentials.data \"collector-token\" | b64dec",
-            "if empty $collectorToken",
         ] {
             assert!(
                 checks.contains(required_check),
@@ -8363,7 +10253,8 @@ remoteOperator:
             );
         }
         assert!(checks.contains("non-empty sync-token and encryption-key values"));
-        assert!(checks.contains("non-empty collector-token"));
+        assert!(checks.contains("collector-token for nodeAgent logging"));
+        assert!(checks.contains(".Values.logCollector.enabled"));
     }
 
     #[test]
@@ -8442,7 +10333,7 @@ remoteOperator:
     }
 
     #[test]
-    fn log_collector_enabled_chart_lints_and_templates() {
+    fn selected_pod_logs_render_without_node_collector() {
         let registry = HelmRegistry::built_in();
         let chart = generate_helm_chart(
             &sample_stack(),
@@ -8453,40 +10344,330 @@ remoteOperator:
             },
         )
         .expect("chart should render");
-
         let values = r#"
 logCollector:
   enabled: true
-  token: test-collector-token
+  mode: podApi
   scope:
     deploymentLabelValue: e2e123
 "#;
+        crate::test_utils::helm_template_and_validate(&chart.files, Some(values))
+            .assert_ok("helm template namespaced Pod logs");
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("helm render namespaced Pod logs");
+        let documents = parse_manifest_docs(&rendered.stdout);
+        assert!(docs_by_kind(&documents, "DaemonSet").is_empty());
+        assert!(!rendered.stdout.contains("hostPath:"));
+        assert!(!rendered.stdout.contains("collector-token"));
+        let runtime = docs_by_kind(&documents, "Deployment")
+            .into_iter()
+            .next()
+            .expect("runtime Deployment");
+        assert_eq!(
+            operator_env_value(&runtime, "OPERATOR_POD_LOG_LABEL_KEY"),
+            Some("alien.dev/deployment")
+        );
+        assert_eq!(
+            operator_env_value(&runtime, "OPERATOR_POD_LOG_MAX_STREAMS"),
+            Some("32")
+        );
+        assert_eq!(
+            operator_env_value(&runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
+            Some("e2e123")
+        );
+        let roles = docs_by_kind(&documents, "Role");
+        assert!(roles
+            .iter()
+            .any(|role| role["rules"]
+                .as_sequence()
+                .is_some_and(|rules| rules.iter().any(|rule| {
+                    rule["resources"] == serde_yaml::to_value(["pods/log"]).expect("resource")
+                        && rule["verbs"] == serde_yaml::to_value(["get"]).expect("verb")
+                }))));
+        let changed = crate::test_utils::helm_template(
+            &chart.files,
+            Some(&values.replace(
+                "deploymentLabelValue: e2e123",
+                "deploymentLabelValue: e2e456",
+            )),
+        );
+        changed.assert_ok("changed Pod log scope");
+        let changed_documents = parse_manifest_docs(&changed.stdout);
+        let changed_runtime = docs_by_kind(&changed_documents, "Deployment")
+            .into_iter()
+            .next()
+            .expect("changed runtime Deployment");
+        assert_ne!(
+            runtime["spec"]["template"]["metadata"]["annotations"]["checksum/pod-log-scope"],
+            changed_runtime["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/pod-log-scope"]
+        );
+        assert_eq!(
+            operator_env_value(&changed_runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
+            Some("e2e456")
+        );
+    }
 
-        let files = chart.files.clone();
-        crate::test_utils::helm_template_and_validate(&files, Some(values))
-            .assert_ok("helm template log collector");
-        let rendered = crate::test_utils::helm_template(&files, Some(values));
-        rendered.assert_ok("helm render log collector");
-        assert!(rendered.stdout.contains("kind: DaemonSet"));
-        assert!(rendered.stdout.contains("whitelabeled-log-collector"));
-        assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
-        assert!(rendered.stdout.contains("/var/log/pods/default_"));
-        assert!(rendered.stdout.contains("fluent/fluent-bit:3.2"));
-        assert!(rendered
-            .stdout
-            .contains("$kubernetes['labels']['alien.dev/deployment'] ^e2e123$"));
-        assert!(rendered.stdout.contains("resources: [\"pods\"]"));
-        assert!(rendered
-            .stdout
-            .contains("verbs: [\"get\", \"list\", \"watch\"]"));
-        // The operator grants `pods/log` for the on-demand `logs` operation. In
-        // the helm chart the operator Role folds it into the core `""`-group
-        // rule (see `role_tpl`), so it appears bundled with the other pod-level
-        // resources rather than as a standalone rule.
-        assert!(rendered
-            .stdout
-            .contains("\"pods\", \"pods/log\", \"persistentvolumeclaims\""));
-        assert!(!rendered.stdout.contains("void"));
+    #[test]
+    fn offline_pod_api_render_checks_both_collector_generations() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        for remote_enabled in [false, true] {
+            let values = format!(
+                r#"
+management:
+  url: https://manager.example.test
+logCollector:
+  enabled: true
+  mode: nodeAgent
+remoteOperator:
+  enabled: {remote_enabled}
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let node_agent = crate::test_utils::helm_template(&files, Some(&values));
+            node_agent.assert_ok("render node collector offline");
+            let node_docs = parse_manifest_docs(&node_agent.stdout);
+            let collectors = docs_by_kind(&node_docs, "DaemonSet");
+            assert_eq!(collectors.len(), 1);
+            let replacement_name = collectors[0]["metadata"]["name"].as_str().unwrap();
+            let legacy_name = collectors[0]["spec"]["template"]["spec"]["serviceAccountName"]
+                .as_str()
+                .unwrap();
+            assert_ne!(legacy_name, replacement_name);
+            let pod_api = crate::test_utils::helm_template(
+                &files,
+                Some(&values.replace("mode: nodeAgent", "mode: podApi")),
+            );
+            pod_api.assert_ok("render Pod API collector offline");
+            let pod_docs = parse_manifest_docs(&pod_api.stdout);
+            assert!(docs_by_kind(&pod_docs, "DaemonSet").is_empty());
+            let operators = docs_by_kind(&pod_docs, "Deployment");
+            let readers: Vec<_> = operators
+                .iter()
+                .filter(|deployment| {
+                    operator_env_value(deployment, "OPERATOR_POD_LOG_LEGACY_DAEMONSET").is_some()
+                })
+                .collect();
+            assert_eq!(readers.len(), 1);
+            assert_eq!(
+                operator_env_value(readers[0], "OPERATOR_POD_LOG_LEGACY_DAEMONSET"),
+                Some(legacy_name)
+            );
+            assert_eq!(
+                operator_env_value(readers[0], "OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET"),
+                Some(replacement_name)
+            );
+        }
+    }
+
+    #[test]
+    fn node_collector_selectors_do_not_match_other_workloads() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let long_fullname = format!("{}-logs-v2", "a".repeat(55));
+        for (remote_enabled, runtime_name, fullname) in [
+            (false, "operator", ""),
+            (true, "operator", ""),
+            (false, "log-collector", ""),
+            (false, "lifecycle-hook", ""),
+            (false, "operator", long_fullname.as_str()),
+        ] {
+            let values = format!(
+                r#"
+nameOverride: {runtime_name}
+fullnameOverride: "{fullname}"
+management:
+  url: https://manager.example.test
+logCollector:
+  enabled: true
+  mode: nodeAgent
+runtime:
+  pdb:
+    enabled: true
+  networkPolicy:
+    enabled: true
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+clusterBootstrap:
+  metricsServer:
+    enabled: true
+remoteOperator:
+  enabled: {remote_enabled}
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("collector selector isolation");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let mut resource_names = BTreeSet::new();
+            for doc in &docs {
+                let resource = (
+                    doc["kind"].as_str().unwrap(),
+                    doc["metadata"]["namespace"].as_str().unwrap_or("default"),
+                    doc["metadata"]["name"].as_str().unwrap(),
+                );
+                assert!(
+                    resource_names.insert(resource),
+                    "duplicate Kubernetes resource: {resource:?}"
+                );
+            }
+            let workloads: Vec<_> = docs
+                .iter()
+                .filter(|doc| {
+                    matches!(
+                        yaml_str(doc, "kind"),
+                        Some("Deployment" | "DaemonSet" | "StatefulSet" | "Job")
+                    )
+                })
+                .collect();
+            assert_eq!(docs_by_kind(&docs, "DaemonSet").len(), 1);
+            for doc in &docs {
+                let selector = match yaml_str(doc, "kind") {
+                    Some("Deployment" | "DaemonSet" | "StatefulSet" | "PodDisruptionBudget") => {
+                        &doc["spec"]["selector"]["matchLabels"]
+                    }
+                    Some("Service") => &doc["spec"]["selector"],
+                    Some("NetworkPolicy") => &doc["spec"]["podSelector"]["matchLabels"],
+                    _ => continue,
+                };
+                let selector = selector.as_mapping().expect("non-empty label selector");
+                assert!(!selector.is_empty());
+                let selected: Vec<_> = workloads
+                    .iter()
+                    .filter(|workload| {
+                        let namespace = |resource: &YamlValue| {
+                            resource["metadata"]["namespace"]
+                                .as_str()
+                                .unwrap_or("default")
+                                .to_string()
+                        };
+                        let labels = &workload["spec"]["template"]["metadata"]["labels"];
+                        namespace(doc) == namespace(workload)
+                            && selector
+                                .iter()
+                                .all(|(key, value)| labels.get(key) == Some(value))
+                    })
+                    .collect();
+                assert_eq!(
+                    selected.len(), 1,
+                    "{}/{} must select exactly its intended workload, remote enabled={remote_enabled}",
+                    doc["kind"].as_str().unwrap(),
+                    doc["metadata"]["name"].as_str().unwrap(),
+                );
+                if matches!(
+                    yaml_str(doc, "kind"),
+                    Some("Deployment" | "DaemonSet" | "StatefulSet")
+                ) {
+                    assert_eq!(
+                        selected[0]["metadata"], doc["metadata"],
+                        "workload must select its own Pods"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn node_collector_renders_without_pod_log_reader() {
+        let chart = sample_product_chart_with_collector(true);
+        let values = r#"
+management:
+  url: https://manager.example.com
+logCollector:
+  enabled: true
+  mode: nodeAgent
+"#;
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+        rendered.assert_ok("node collector chart render");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let daemonsets = docs_by_kind(&docs, "DaemonSet");
+        assert_eq!(daemonsets.len(), 1);
+        assert_eq!(
+            daemonsets[0]["spec"]["template"]["spec"]["containers"][0]["image"],
+            "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+        );
+        assert!(docs_by_kind(&docs, "Role").iter().all(|role| !role["rules"]
+            .as_sequence()
+            .is_some_and(|rules| rules
+                .iter()
+                .any(|rule| rule["resources"] == serde_yaml::to_value(["pods/log"]).unwrap()))));
+        let remote = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .expect("node collector receiver");
+        assert_eq!(
+            operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_KEY"),
+            None
+        );
+        let rotated_values = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: rotated");
+        let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
+        rotated.assert_ok("rotated node collector token");
+        let rotated_docs = parse_manifest_docs(&rotated.stdout);
+        let rotated_runtime = docs_by_kind(&rotated_docs, "Deployment")
+            .into_iter()
+            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .expect("rotated runtime receiver");
+        assert_ne!(
+            remote["spec"]["template"]["metadata"]["annotations"]["checksum/collector-credential"],
+            rotated_runtime["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/collector-credential"]
+        );
+
+        let mut remote_files = chart.files.clone();
+        remote_files.shift_remove("templates/remote-operator-checks.yaml");
+        let remote_values = format!(
+            "{values}\nremoteOperator:\n  enabled: true\n  existingSecret:\n    name: setup-owned\n    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        );
+        let remote_rendered = crate::test_utils::helm_template(&remote_files, Some(&remote_values));
+        remote_rendered.assert_ok("remote node collector chart render");
+        let remote_docs = parse_manifest_docs(&remote_rendered.stdout);
+        assert_eq!(docs_by_kind(&remote_docs, "DaemonSet").len(), 1);
+        let remote_daemonset = docs_by_kind(&remote_docs, "DaemonSet")[0].clone();
+        assert_eq!(
+            remote_daemonset["spec"]["template"]["spec"]["containers"][0]["image"],
+            "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+        );
+        let scoped_values = remote_values.replace(
+            "mode: nodeAgent",
+            "mode: nodeAgent\n  scope:\n    deploymentLabelValue: other",
+        );
+        let scoped = crate::test_utils::helm_template(&remote_files, Some(&scoped_values));
+        scoped.assert_ok("changed Remote Operator node collector scope");
+        let scoped_docs = parse_manifest_docs(&scoped.stdout);
+        let scoped_daemonset = docs_by_kind(&scoped_docs, "DaemonSet")[0].clone();
+        assert_ne!(
+            remote_daemonset["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/log-collector-scope"],
+            scoped_daemonset["spec"]["template"]["metadata"]["annotations"]
+                ["checksum/log-collector-scope"]
+        );
+        let revised_values = remote_values.replace(
+            "  existingSecret:\n",
+            "  collectorTokenRevision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  existingSecret:\n",
+        );
+        let revised = crate::test_utils::helm_template(&remote_files, Some(&revised_values));
+        revised.assert_ok("rotated Remote Operator node collector credential");
+        let revised_docs = parse_manifest_docs(&revised.stdout);
+        let revised_operator = docs_by_kind(&revised_docs, "Deployment")
+            .into_iter()
+            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .expect("revised Remote Operator receiver");
+        assert_eq!(
+            operator_env_value(&revised_operator, "COLLECTOR_TOKEN_REVISION"),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        let revised_collector = docs_by_kind(&revised_docs, "DaemonSet")[0].clone();
+        assert_eq!(
+            revised_collector["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     #[test]

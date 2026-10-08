@@ -49,7 +49,12 @@ pub async fn handle_running(
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
     // and incorrectly triggers an update flow.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
@@ -58,6 +63,24 @@ pub async fn handle_running(
             monitoring,
             current.platform,
         )?;
+    }
+
+    // Report each deployer secret slot as it is now, so a slot the deployer
+    // fills or empties while the deployment runs shows up without a redeploy.
+    // The workload config above keeps the reports it was deployed with; new
+    // ones take effect with the next update.
+    let deployer_secrets = crate::helpers::check_deployer_secrets(
+        &target_stack,
+        &stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await?;
+    if deployer_secrets != runtime_metadata.deployer_secrets {
+        let mut runtime_metadata = runtime_metadata.clone();
+        runtime_metadata.deployer_secrets = deployer_secrets;
+        next.runtime_metadata = Some(runtime_metadata);
     }
 
     let executor = StackExecutor::builder(&target_stack, client_config)
@@ -127,7 +150,8 @@ pub async fn handle_running(
 ///
 /// This step:
 /// 1. Continues observation when no retry is requested, preserving controller state
-/// 2. Calls retry_failed() on stack state to recover failed resources
+/// 2. Resumes every failed resource whose config is unchanged at its saved step, and refuses
+///    the retry (naming them) when a failure needs an update or setup instead
 /// 3. Transitions back to Running status
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_refresh_failed(
@@ -156,15 +180,33 @@ pub async fn handle_refresh_failed(
         })
     })?;
 
-    // Retry failed resources using alien-infra
-    use alien_infra::state_utils::StackStateExt;
-    let retried = stack_state
-        .retry_failed()
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to retry failed resources".to_string(),
-        })?;
+    // Every failure whose config is unchanged resumes where it stopped. A running deployment
+    // only refreshes and never plans, so a failure that cannot resume would silently stay
+    // failed: the retry is refused with what each one needs instead.
+    let outcome = crate::helpers::retry_failed_runtime_resources(
+        &mut stack_state,
+        current.runtime_metadata.as_ref(),
+        &config,
+    )?;
+    if let Some(error) = crate::helpers::retry_cannot_resume(&outcome.unresumed) {
+        info!(%error, "Retry refused");
+        next.status = DeploymentStatus::RefreshFailed;
+        next.error = Some(error.into_generic());
+        next.retry_requested = false;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
 
-    info!("Retried {} failed resources: {:?}", retried.len(), retried);
+    info!(
+        "Retried {} failed resources: {:?}",
+        outcome.retried.len(),
+        outcome.retried
+    );
 
     // Transition back to Running
     next.status = DeploymentStatus::Running;

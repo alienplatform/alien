@@ -252,8 +252,20 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       options = input as AlienErrorOptions & { context?: any }
     }
 
+    // Built before `super` so `cause` and `source` are the same `AlienError`, not the raw options.
+    const sourceOptions = options.source
+    const source =
+      sourceOptions &&
+      typeof sourceOptions === "object" &&
+      "code" in sourceOptions &&
+      "message" in sourceOptions &&
+      "retryable" in sourceOptions &&
+      "internal" in sourceOptions
+        ? new AlienError(sourceOptions as AlienErrorOptions)
+        : undefined
+
     const message = options.message
-    super(message, { cause: options.source })
+    super(message, { cause: source })
 
     this.name = "AlienError"
     this.code = options.code
@@ -263,19 +275,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
     this.context = options.context
     this.hint = options.hint
 
-    // Handle source construction - check if it's a valid AlienErrorOptions object
-    this.source = undefined
-    if (options.source && typeof options.source === "object") {
-      // Check if it has the required fields to be a valid AlienErrorOptions
-      if (
-        "code" in options.source &&
-        "message" in options.source &&
-        "retryable" in options.source &&
-        "internal" in options.source
-      ) {
-        this.source = new AlienError(options.source as AlienErrorOptions)
-      }
-    }
+    this.source = source
   }
 
   /**

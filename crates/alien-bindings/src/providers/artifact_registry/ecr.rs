@@ -136,6 +136,22 @@ pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Va
     })
 }
 
+/// Names to describe for `repo_id`, the routable (prefixed) name first: `create_repository`
+/// creates it there, so the common lookup costs one describe. The logical name is a fallback for
+/// a repository named without the prefix, which only a pull role wider than the prefix can read.
+fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String> {
+    if repository_prefix.is_empty() || repo_id.starts_with(&format!("{repository_prefix}-")) {
+        vec![repo_id.to_string()]
+    } else if repo_id.is_empty() {
+        vec![repository_prefix.to_string()]
+    } else {
+        vec![
+            format!("{repository_prefix}-{repo_id}"),
+            repo_id.to_string(),
+        ]
+    }
+}
+
 impl EcrArtifactRegistry {
     /// Creates a new AWS ECR artifact registry binding from binding parameters.
     pub async fn new(
@@ -218,17 +234,6 @@ impl EcrArtifactRegistry {
             format!("{}-{}", self.repository_prefix, repo_name)
         } else {
             repo_name.to_string()
-        }
-    }
-
-    fn repository_lookup_names(&self, repo_id: &str) -> Vec<String> {
-        let is_prefixed = !self.repository_prefix.is_empty()
-            && repo_id.starts_with(&format!("{}-", self.repository_prefix));
-
-        if is_prefixed || self.repository_prefix.is_empty() {
-            vec![repo_id.to_string()]
-        } else {
-            vec![repo_id.to_string(), self.make_full_repo_name(repo_id)]
         }
     }
 
@@ -494,9 +499,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        // Prefer the routable name returned by `create_repository`, but also
-        // accept the logical repository name used by older callers.
-        let lookup_names = self.repository_lookup_names(repo_id);
+        let lookup_names = repository_lookup_names(&self.repository_prefix, repo_id);
 
         info!(
             repo_id = %repo_id,
@@ -541,6 +544,9 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 })?,
         );
 
+        // When every name misses, answer with the routable name's error: a pull role scoped to
+        // the prefix gets 403 on the logical name, which would hide the in-scope 404.
+        let mut routable_miss = None;
         let last_lookup_index = lookup_names.len().saturating_sub(1);
         for (index, full_repo_name) in lookup_names.iter().enumerate() {
             let request = DescribeRepositoriesRequest::builder()
@@ -559,13 +565,14 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                         Some(repo_id.to_string()),
                     );
 
-                    if index < last_lookup_index
-                        && matches!(error.http_status_code, Some(403 | 404))
-                    {
-                        continue;
+                    if !matches!(error.http_status_code, Some(403 | 404)) {
+                        return Err(error);
                     }
-
-                    return Err(error);
+                    if index == last_lookup_index {
+                        return Err(routable_miss.unwrap_or(error));
+                    }
+                    routable_miss.get_or_insert(error);
+                    continue;
                 }
             };
 
@@ -1128,5 +1135,38 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             "ECR repository deleted successfully"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_tries_the_routable_name_before_the_logical_one() {
+        assert_eq!(
+            repository_lookup_names("alien-artifacts-prj_1", "sandbox"),
+            vec![
+                "alien-artifacts-prj_1-sandbox".to_string(),
+                "sandbox".to_string()
+            ],
+        );
+    }
+
+    #[test]
+    fn lookup_of_an_already_routable_name_is_a_single_describe() {
+        assert_eq!(
+            repository_lookup_names("alien-artifacts-prj_1", "alien-artifacts-prj_1-sandbox"),
+            vec!["alien-artifacts-prj_1-sandbox".to_string()],
+        );
+        assert_eq!(
+            repository_lookup_names("", "sandbox"),
+            vec!["sandbox".to_string()]
+        );
+        assert_eq!(
+            repository_lookup_names("alien-artifacts-prj_1", ""),
+            vec!["alien-artifacts-prj_1".to_string()],
+            "an empty id names the shared repository, as create does"
+        );
     }
 }

@@ -76,6 +76,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -195,17 +206,17 @@ locals {
   deployment_region            = var.gcp_region
   deployment_management_config = var.deployment_model == "push" ? { platform = "gcp", projectId = var.gcp_project, serviceAccountEmail = var.managing_service_account_email } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
       type = "network"
       importData = {
         projectId       = var.gcp_project
-        vpcSelfLink     = var.network_mode == "create-new" ? google_compute_network.default_network[0].self_link : var.network_mode == "use-existing" ? data.google_compute_network.default_network[0].self_link : null
-        vpcName         = var.network_mode == "create-new" ? google_compute_network.default_network[0].name : var.network_mode == "use-existing" ? data.google_compute_network.default_network[0].name : null
-        subnetSelfLinks = var.network_mode == "create-new" ? [google_compute_subnetwork.default_network_workload[0].self_link] : var.network_mode == "use-existing" ? [data.google_compute_subnetwork.default_network_existing_subnet[0].self_link] : []
-        cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : var.network_mode == "use-existing" ? data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range : null
+        vpcSelfLink     = var.network_mode == "create-new" ? google_compute_network.default_network[0].self_link : data.google_compute_network.default_network[0].self_link
+        vpcName         = var.network_mode == "create-new" ? google_compute_network.default_network[0].name : data.google_compute_network.default_network[0].name
+        subnetSelfLinks = var.network_mode == "create-new" ? [google_compute_subnetwork.default_network_workload[0].self_link] : [data.google_compute_subnetwork.default_network_existing_subnet[0].self_link]
+        cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range
         routerSelfLink  = var.network_mode == "create-new" ? google_compute_router.default_network_router[0].self_link : null
         natName         = var.network_mode == "create-new" ? google_compute_router_nat.default_network_nat[0].name : null
         isByoVpc        = var.network_mode != "create-new"
@@ -289,16 +300,16 @@ locals {
 
 === default_network.tf ===
 data "google_compute_network" "default_network" {
-  count   = var.network_mode == "use-existing" ? 1 : 0
-  name    = var.network_name
+  count   = var.network_mode != "create-new" ? 1 : 0
+  name    = var.network_mode == "use-default" ? "default" : var.network_name
   project = var.gcp_project
 }
 
 data "google_compute_subnetwork" "default_network_existing_subnet" {
-  count   = var.network_mode == "use-existing" ? 1 : 0
-  name    = var.subnet_name
+  count   = var.network_mode != "create-new" ? 1 : 0
+  name    = var.network_mode == "use-default" ? "default" : var.subnet_name
   project = var.gcp_project
-  region  = var.network_region == "" ? var.gcp_region : var.network_region
+  region  = var.network_mode == "use-default" || var.network_region == "" ? var.gcp_region : var.network_region
 }
 
 resource "google_compute_network" "default_network" {
@@ -401,10 +412,10 @@ resource "google_project_iam_member" "gcp_role_read_cloud_storage_objects_execut
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
-resource "google_project_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1" {
-  project = var.gcp_project
-  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
-  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+resource "google_service_account_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1" {
+  service_account_id = "projects/${var.gcp_project}/serviceAccounts/${google_service_account.execution_sa.account_id}@${var.gcp_project}.iam.gserviceaccount.com"
+  role               = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
+  member             = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
 resource "google_project_iam_member" "pubsub_publisher_execution_sa_binding_0" {
@@ -776,7 +787,7 @@ resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
     google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
-    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
+    google_service_account_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
     google_project_iam_member.pubsub_publisher_execution_sa_binding_0,
     google_project_iam_member.pubsub_subscriber_execution_sa_binding_1,
     google_project_iam_member.pubsub_viewer_execution_sa_binding_2,
@@ -819,7 +830,7 @@ resource "terraform_data" "deployment_registration" {
     google_project_iam_custom_role.gcp_role_read_cloud_storage_objects,
     google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls,
     google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
-    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
+    google_service_account_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
     google_project_iam_member.pubsub_publisher_execution_sa_binding_0,
     google_project_iam_member.pubsub_subscriber_execution_sa_binding_1,
     google_project_iam_member.pubsub_viewer_execution_sa_binding_2,

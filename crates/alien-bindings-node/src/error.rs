@@ -16,7 +16,7 @@
 //! structured `context` can reach JS as first-class properties — the only
 //! channel that carries arbitrary data is the `reason` (the JS `message`).
 //! We therefore serialize a compact, stable JSON envelope
-//! (`{ code, message, context, retryable, internal, httpStatusCode, hint }`) into
+//! (`{ code, message, context, retryable, internal, httpStatusCode, hint, source }`) into
 //! `reason`. The TypeScript layer
 //! recovers the structured error with a single `JSON.parse(err.message)` — no
 //! regex, no message scraping — and re-throws a proper `AlienError`.
@@ -25,7 +25,7 @@
 //! every method routes through them.
 
 use alien_bindings::ErrorData;
-use alien_error::AlienError;
+use alien_error::{AlienError, GenericError};
 use serde::Serialize;
 
 /// The stable JSON shape serialized into a `napi::Error`'s `reason`.
@@ -54,6 +54,9 @@ struct ErrorEnvelope<'a> {
     /// Optional human-facing remediation guidance.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
+    /// The error that caused this one, with its own chain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'a AlienError<GenericError>>,
 }
 
 /// Serialize an `AlienError` into a `napi::Error` carrying the structured
@@ -72,6 +75,7 @@ pub fn map_alien_error(err: AlienError<ErrorData>) -> napi::Error {
         internal: err.internal,
         http_status_code: err.http_status_code,
         hint: err.hint.as_deref(),
+        source: err.source.as_deref(),
     };
     // Serialization of this fixed, owned shape cannot realistically fail; fall
     // back to the bare message so an error is never swallowed.
@@ -108,6 +112,12 @@ pub fn map_object_store_error(
             binding_name,
             operation,
         }),
+        object_store::Error::AlreadyExists { .. } => {
+            AlienError::new(ErrorData::StorageObjectAlreadyExists {
+                binding_name,
+                operation,
+            })
+        }
         _ => AlienError::new(ErrorData::StorageOperationFailed {
             binding_name,
             operation,
@@ -132,6 +142,7 @@ fn alien_error_in_chain(err: &object_store::Error) -> Option<AlienError<ErrorDat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_error::ContextError;
     use serde_json::Value;
 
     /// Parse the JSON envelope back out of a mapped `napi::Error`'s reason.
@@ -257,6 +268,31 @@ mod tests {
         assert_eq!(env["context"]["operation"], "sandbox.runCommand");
     }
 
+    /// A sandbox refusal names its cause only in the layer beneath it (the cloud's own response),
+    /// so a caller that receives the outer error alone cannot tell which side refused.
+    #[test]
+    fn a_wrapped_error_reaches_typescript_with_the_error_that_caused_it() {
+        let cause = AlienError::new(ErrorData::Other {
+            message: "Azure CreateSandbox failed: HTTP 403".to_string(),
+        });
+        let napi_err = map_alien_error(cause.context(ErrorData::SandboxCommandFailed {
+            failure: "dataPlaneRefused".to_string(),
+            reason: "sandbox.create was refused; the cause carries which side refused".to_string(),
+        }));
+
+        let env = envelope_of(&napi_err);
+        assert_eq!(env["code"], "SANDBOX_COMMAND_FAILED");
+        assert_eq!(env["source"]["code"], "BINDINGS_ERROR");
+        assert_eq!(
+            env["source"]["message"],
+            "Bindings error: Azure CreateSandbox failed: HTTP 403"
+        );
+        // Each layer keeps its own flags: `toExternal()` hides an internal cause layer by layer.
+        assert_eq!(env["source"]["internal"], true);
+        assert_eq!(env["source"]["retryable"], true);
+        assert!(env["source"].get("source").is_none());
+    }
+
     /// `retryable` must survive translation (STORAGE_OPERATION_FAILED is
     /// retryable, BINDING_NOT_CONFIGURED is not).
     #[test]
@@ -310,6 +346,25 @@ mod tests {
         assert_eq!(env["context"]["operation"], "get");
         let serialized = env.to_string();
         assert!(!serialized.contains("greeting.txt"));
+        assert!(!serialized.contains("secret URL"));
+    }
+
+    #[test]
+    fn map_object_store_error_classifies_create_conflict_safely() {
+        let err = object_store::Error::AlreadyExists {
+            path: "immutable/object.txt".to_string(),
+            source: "provider detail with a secret URL".into(),
+        };
+        let napi_err = map_object_store_error(err, "files", "put");
+
+        let env = envelope_of(&napi_err);
+        assert_eq!(env["code"], "STORAGE_OBJECT_ALREADY_EXISTS");
+        assert_eq!(env["retryable"], false);
+        assert_eq!(env["httpStatusCode"], 409);
+        assert_eq!(env["context"]["binding_name"], "files");
+        assert_eq!(env["context"]["operation"], "put");
+        let serialized = env.to_string();
+        assert!(!serialized.contains("object.txt"));
         assert!(!serialized.contains("secret URL"));
     }
 

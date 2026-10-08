@@ -40,6 +40,25 @@ describe("storage (local file-tree provider)", () => {
     expect(fetched.attributes).toEqual({ metadata: {} })
   })
 
+  it("atomically creates one immutable object without replacing the winner", async () => {
+    const s = freshStorage()
+    const writes = await Promise.allSettled([
+      s.put("immutable.bin", Buffer.from("first"), { condition: "absent" }),
+      s.put("immutable.bin", Buffer.from("second"), { condition: "absent" }),
+    ])
+
+    expect(writes.filter(result => result.status === "fulfilled")).toHaveLength(1)
+    const [rejected] = writes.filter(result => result.status === "rejected")
+    expect(rejected).toMatchObject({
+      reason: {
+        code: "STORAGE_OBJECT_ALREADY_EXISTS",
+        retryable: false,
+        httpStatusCode: 409,
+      },
+    })
+    expect(["first", "second"]).toContain((await s.get("immutable.bin")).data.toString("utf8"))
+  })
+
   it("rejects object attributes when the backend cannot persist them", async () => {
     const s = freshStorage()
     const data = Buffer.from("attribute-bearing object")

@@ -148,6 +148,57 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
     assert_eq!(sandbox.state, SandboxState::Running);
 }
 
+/// `create` resolves only once the agent answers: a probe the proxy refuses while the container is
+/// still coming up is retried, and one that never answers within the budget deletes the sandbox.
+#[tokio::test(start_paused = true)]
+async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answers() {
+    fn bad_gateway() -> AlienError<AgentPlatformErrorData> {
+        AlienError::new(AgentPlatformErrorData::ExecuteFailed {
+            sandbox: "s1".to_string(),
+            message: "Bad Gateway: Unable to reach the sandbox environment.".to_string(),
+        })
+    }
+    let client_with = |answer_after: Option<usize>, deletes: usize| {
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_create_sandbox()
+            .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+        let probes = AtomicUsize::new(0);
+        client.expect_execute().returning(move |_, _, _| {
+            let seen = probes.fetch_add(1, Ordering::SeqCst);
+            match answer_after {
+                Some(after) if seen >= after => Ok(health_reply()),
+                _ => Err(bad_gateway()),
+            }
+        });
+        client
+            .expect_delete_sandbox()
+            .times(deletes)
+            .returning(|_, _| Ok(()));
+        client
+    };
+
+    let ready = provider(client_with(Some(2), 0))
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("the agent answers on the third probe");
+    assert_eq!(ready.sandbox_id, "s1");
+
+    let error = provider(client_with(None, 1))
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("an agent that never answers fails create");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Bad Gateway") && rendered.contains("did not become servable within"),
+        "the timeout sits over the last probe's cause: {rendered}"
+    );
+}
+
 /// Pins the unit as well as the value: `timeoutMs` is milliseconds and Agent Platform's `ttl` is
 /// a duration string in seconds, so a missed conversion is 1000x either way. The declared ceiling
 /// (3600s, from `provider`) must not be raised by a request asking for more.
@@ -306,11 +357,9 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
     assert!(sandbox.created, "a replacement is a sandbox this call made");
 }
 
-/// A reconnect to a suspended sandbox wakes it and hands it back, rather than creating a second
 /// A reconnect to a sandbox still coming up waits for it. Replacing it would leave the first one
-/// starting, reaching RUNNING and costing its owner, with nobody holding its id — the same leak the
-/// suspended arm avoids. Mutation check: delete the `Starting` arm and `create_sandbox().never()`
-/// fires.
+/// starting, reaching RUNNING and costing its owner, with nobody holding its id. Mutation check:
+/// delete the `Starting` arm and `create_sandbox().never()` fires.
 #[tokio::test]
 async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second() {
     let reads = Arc::new(AtomicUsize::new(0));
@@ -329,7 +378,6 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
         .returning(|_, _, _| Ok(health_reply()));
     client.expect_create_sandbox().never();
     client.expect_delete_sandbox().never();
-    client.expect_resume().never();
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
@@ -345,6 +393,40 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
         !sandbox.created,
         "whoever started it created it, not this call"
     );
+}
+
+/// A paused record cannot be woken with its state kept, so a reconnect to one is served by a fresh
+/// sandbox, and the paused one, which may be another revision's, is left untouched.
+#[tokio::test]
+async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(|_, id| {
+        if id == "paused" {
+            Ok(sandbox_in_state(id, "STATE_PAUSED"))
+        } else {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        }
+    });
+    client.expect_create_sandbox().times(1).returning(|_, _| {
+        Ok(done_op(
+            serde_json::json!({ "name": sandbox_name("fresh") }),
+        ))
+    });
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "health")
+        .returning(|_, _, _| Ok(health_reply()));
+    client.expect_delete_sandbox().never();
+
+    let resolved = provider(client)
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("paused".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("a fresh sandbox serves the reconnect");
+    assert_eq!(resolved.sandbox.sandbox_id, "fresh");
+    assert!(resolved.created);
 }
 
 /// `STATE_RESUMING` reads as `Starting` too, and it is the reading two callers sharing one id
@@ -367,8 +449,6 @@ async fn get_or_create_waits_out_a_wake_someone_else_started() {
         .returning(|_, _, _| Ok(health_reply()));
     client.expect_create_sandbox().never();
     client.expect_delete_sandbox().never();
-    // Not ours to wake: someone else's resume is already in flight.
-    client.expect_resume().never();
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
@@ -379,88 +459,6 @@ async fn get_or_create_waits_out_a_wake_someone_else_started() {
         .expect("a wake already in flight is waited out");
 
     assert!(!sandbox.created, "the sandbox existed before this call");
-}
-
-/// sandbox and orphaning the paused one. Mutation check: fold the `Suspended` arm into `Ok(_) =>
-/// {}` and `create_sandbox().never()` fails while a second sandbox is minted.
-#[tokio::test]
-async fn get_or_create_resumes_a_suspended_sandbox_rather_than_creating_a_second() {
-    let reads = Arc::new(AtomicUsize::new(0));
-    let mut client = MockAgentPlatformApi::new();
-    client.expect_get_sandbox().returning(move |_, id| {
-        // Paused on the first read, running once resumed.
-        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
-            Ok(sandbox_in_state(id, "STATE_PAUSED"))
-        } else {
-            Ok(sandbox_in_state(id, "STATE_RUNNING"))
-        }
-    });
-    client
-        .expect_resume()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    client
-        .expect_execute()
-        .withf(|_, _, input| op_of(input) == "health")
-        .returning(|_, _, _| Ok(health_reply()));
-    client.expect_create_sandbox().never();
-    client.expect_delete_sandbox().never();
-
-    let sandbox = provider(client)
-        .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("paused".to_string()),
-            ..Default::default()
-        })
-        .await
-        .expect("a suspended sandbox is resumed and returned");
-    assert_eq!(sandbox.sandbox.sandbox_id, "paused");
-    assert_eq!(sandbox.sandbox.state, SandboxState::Running);
-    assert!(
-        !sandbox.created,
-        "waking a sleeping sandbox is not creating one"
-    );
-    // The reconnect path the capability flip promises: a woken sandbox carries a real generation
-    // read from the container it came back on, not the unprobed sentinel.
-    assert_ne!(
-        sandbox.sandbox.generation, NO_GENERATION,
-        "a woken sandbox carries its container generation"
-    );
-}
-
-#[tokio::test]
-async fn get_or_create_fails_rather_than_leaking_a_resume_it_cannot_roll_back() {
-    let mut client = MockAgentPlatformApi::new();
-    // Paused before the wake and paused after it: the wake never brought the sandbox up.
-    client
-        .expect_get_sandbox()
-        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
-    client
-        .expect_resume()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    // The compensating suspend fails, so the woken sandbox cannot be put back to sleep.
-    client
-        .expect_pause()
-        .times(1)
-        .returning(|_, _| Err(not_found()));
-    client
-        .expect_execute()
-        .returning(|_, _, _| Ok(health_reply()));
-    // A second live sandbox must never be provisioned beside the one this call woke.
-    client.expect_create_sandbox().never();
-    client.expect_delete_sandbox().never();
-
-    let error = provider(client)
-        .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("paused".to_string()),
-            ..Default::default()
-        })
-        .await
-        .expect_err("a resume that cannot be rolled back must fail, not leak a live sandbox");
-    assert!(
-        error.to_string().contains("paused"),
-        "the failure names the woken sandbox so it stays identifiable: {error}"
-    );
 }
 
 // ---- generation and health -------------------------------------------------------------------
@@ -554,18 +552,42 @@ async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
 /// then panics the test — red either way.
 #[tokio::test(start_paused = true)]
 async fn get_does_not_hang_on_a_wedged_agent() {
-    let error = provider_from(Arc::new(WedgedAgent))
+    let error = provider_from(Arc::new(WedgedAgent::default()))
         .get("s1")
         .await
         .expect_err("a wedged agent is unreachable, not a hang");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
 }
 
+/// The first readiness probe after create wedges, so the wait's own deadline cuts it off with no
+/// finished probe to report, and the sandbox the caller never received is still deleted.
+#[tokio::test(start_paused = true)]
+async fn create_gives_up_on_a_wedged_first_probe_and_deletes_the_sandbox() {
+    let client = Arc::new(WedgedAgent::default());
+    let started = tokio::time::Instant::now();
+    let error = provider_from(client.clone())
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("a wedged agent fails create, not hangs it");
+    assert!(
+        started.elapsed() < AGENT_PROBE_BUDGET,
+        "the wait's deadline, not the probe's own budget, ended the wait"
+    );
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    assert!(
+        error.to_string().contains("did not become servable within"),
+        "{error}"
+    );
+    assert_eq!(client.deletes.load(Ordering::SeqCst), 1);
+}
+
 /// A client whose sandbox reads RUNNING but whose `execute` never answers, standing in for an agent
-/// that accepts the health probe and then wedges. Only the two methods `get` reaches are real; the
-/// rest are unreachable in this test.
-#[derive(Debug)]
-struct WedgedAgent;
+/// that accepts the health probe and then wedges. Only the methods `get` and `create` reach are
+/// real; the rest are unreachable in these tests.
+#[derive(Debug, Default)]
+struct WedgedAgent {
+    deletes: AtomicUsize,
+}
 
 #[async_trait]
 impl AgentPlatformApi for WedgedAgent {
@@ -613,19 +635,14 @@ impl AgentPlatformApi for WedgedAgent {
         _engine: &str,
         _request: SandboxCreateRequest,
     ) -> ClientResult<Operation> {
-        unimplemented!()
+        Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") })))
     }
     async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
         unimplemented!()
     }
     async fn delete_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<()> {
-        unimplemented!()
-    }
-    async fn pause(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
-        unimplemented!()
-    }
-    async fn resume(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
-        unimplemented!()
+        self.deletes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     async fn snapshot(
         &self,
@@ -1421,23 +1438,99 @@ async fn read_file_decodes_the_agent_reply() {
     assert_eq!(contents, b"file body");
 }
 
-// ---- pause / resume / snapshot ----------------------------------------------------------------
-
+/// The `:execute` proxy relays an agent's 404 as its own, so a file the agent cannot find must not
+/// read as a gone sandbox, while a 404 without an agent code still does. A relayed 5xx carries the
+/// same shape but proves nothing about a command, so it stays outcome-unknown.
 #[tokio::test]
-async fn pause_and_resume_await_their_operations() {
+async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
+    fn relayed(status: u16, details: &'static str) -> AlienError<AgentPlatformErrorData> {
+        let body = serde_json::json!({
+            "error": {
+                "code": status,
+                "message": format!("Execution Failed. URL not found `https://x.sandbox.vertexai.goog`. Error Details: {details}"),
+            }
+        })
+        .to_string();
+        let http = AlienError::new(alien_client_core::ErrorData::HttpResponseError {
+            message: format!("Request failed with HTTP {status}"),
+            url: "https://example.invalid/:execute".to_string(),
+            http_status: status,
+            http_request_text: None,
+            http_response_text: Some(body),
+        });
+        let http = if status == 404 {
+            http.context(alien_client_core::ErrorData::RemoteResourceNotFound {
+                resource_type: "Vertex AI Agent Platform".to_string(),
+                resource_name: "s1".to_string(),
+            })
+        } else {
+            http
+        };
+        http.context(AgentPlatformErrorData::ExecuteFailed {
+            sandbox: "s1".to_string(),
+            message: "the API rejected or cut short the request".to_string(),
+        })
+    }
+    fn relayed_404(details: &'static str) -> AlienError<AgentPlatformErrorData> {
+        relayed(404, details)
+    }
+
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(|_, _, _| {
+        Err(relayed_404(
+            "PATH_NOT_FOUND: No such file in the sandbox: /before",
+        ))
+    });
+    let error = provider(client)
+        .read_file("s1", "/before")
+        .await
+        .expect_err("a missing file is an error");
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("agentRefused"), "{rendered}");
+    assert!(rendered.contains("PATH_NOT_FOUND"), "{rendered}");
+
+    assert!(agent_answer(&not_found()).is_none());
+    assert!(agent_answer(&relayed_404(
+        "Bad Gateway: Unable to reach the sandbox environment."
+    ))
+    .is_none());
+
     let mut client = MockAgentPlatformApi::new();
     client
-        .expect_pause()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    client
-        .expect_resume()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
+        .expect_execute()
+        .returning(move |_, _, _| Err(relayed(500, "INTERNAL_SERVER_ERROR: stream reset")));
+    let Err(command) = provider(client)
+        .run_command(
+            "s1",
+            RunCommandRequest {
+                command: "/bin/true".to_string(),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await
+    else {
+        panic!("a relayed 5xx fails the command");
+    };
+    assert_eq!(command.code, "SANDBOX_OUTCOME_UNKNOWN", "{command}");
+}
 
-    let provider = provider(client);
-    provider.pause("s1").await.expect("pause completes");
-    provider.resume("s1").await.expect("resume completes");
+// ---- pause / resume / snapshot ----------------------------------------------------------------
+
+/// The capability row says no pause, and the provider agrees without calling the API: a resume
+/// that reports success on a fresh container must never reach a caller as a kept sandbox.
+#[tokio::test]
+async fn pause_and_resume_are_refused_as_unsupported() {
+    assert!(!SandboxCapabilities::gcp_agent_platform().pause_resume);
+    let provider = provider(MockAgentPlatformApi::new());
+    for error in [
+        provider.pause("s1").await.expect_err("pause is refused"),
+        provider.resume("s1").await.expect_err("resume is refused"),
+    ] {
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    }
 }
 
 #[tokio::test]

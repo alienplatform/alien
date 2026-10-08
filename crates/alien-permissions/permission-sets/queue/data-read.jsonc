@@ -1,12 +1,18 @@
 {
-  // Allows reading messages from queues (runtime access for functions)
+  // Allows consuming and acknowledging messages from queues
   "id": "queue/data-read",
-  "description": "Allows reading messages from message queues",
+  "description": "Allows consuming and acknowledging messages from message queues",
   "platforms": {
     "aws": [
       {
         "grant": {
-          "actions": ["sqs:ReceiveMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
+          "actions": [
+            "sqs:ReceiveMessage",
+            "sqs:DeleteMessage",
+            "sqs:ChangeMessageVisibility",
+            "sqs:GetQueueAttributes",
+            "sqs:GetQueueUrl"
+          ]
         },
         "binding": {
           "stack": {

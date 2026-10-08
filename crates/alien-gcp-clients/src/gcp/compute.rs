@@ -4,7 +4,7 @@
 //! - VPC networks, subnetworks, routers, and firewalls
 //! - Load balancing: health checks, backend services, URL maps, proxies, forwarding rules, NEGs
 //! - Instance management: instance templates, instance group managers, instances
-//! - Persistent disks
+//! - Persistent disks, snapshot schedules (resource policies), and snapshots
 //!
 //! See:
 //! - Networks: https://cloud.google.com/compute/docs/reference/rest/v1/networks
@@ -22,6 +22,8 @@
 //! - Instance Group Managers: https://cloud.google.com/compute/docs/reference/rest/v1/instanceGroupManagers
 //! - Instances: https://cloud.google.com/compute/docs/reference/rest/v1/instances
 //! - Disks: https://cloud.google.com/compute/docs/reference/rest/v1/disks
+//! - Resource Policies: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies
+//! - Snapshots: https://cloud.google.com/compute/docs/reference/rest/v1/snapshots
 
 use crate::gcp::api_client::{GcpClientBase, GcpServiceConfig};
 use crate::gcp::GcpClientConfig;
@@ -590,6 +592,79 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// Deletes a disk.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/delete
     async fn delete_disk(&self, zone: String, disk_name: String) -> Result<Operation>;
+
+    /// Attaches a resource policy (such as a snapshot schedule) to a disk.
+    /// Compute Engine accepts one policy per call.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/addResourcePolicies
+    async fn add_disk_resource_policies(
+        &self,
+        zone: String,
+        disk_name: String,
+        request: DisksAddResourcePoliciesRequest,
+    ) -> Result<Operation>;
+
+    /// Detaches resource policies from a disk.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/removeResourcePolicies
+    async fn remove_disk_resource_policies(
+        &self,
+        zone: String,
+        disk_name: String,
+        request: DisksRemoveResourcePoliciesRequest,
+    ) -> Result<Operation>;
+
+    // --- Resource Policy Operations ---
+
+    /// Gets a regional resource policy.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/get
+    async fn get_resource_policy(&self, region: String, policy_name: String)
+        -> Result<ResourcePolicy>;
+
+    /// Creates a regional resource policy.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/insert
+    async fn insert_resource_policy(
+        &self,
+        region: String,
+        policy: ResourcePolicy,
+    ) -> Result<Operation>;
+
+    /// Lists one page of regional resource policies, optionally filtered.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/list
+    async fn list_resource_policies(
+        &self,
+        region: String,
+        filter: Option<String>,
+        page_token: Option<String>,
+    ) -> Result<ResourcePolicyList>;
+
+    /// Deletes a regional resource policy. Fails while the policy is attached to a disk.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/delete
+    async fn delete_resource_policy(
+        &self,
+        region: String,
+        policy_name: String,
+    ) -> Result<Operation>;
+
+    // --- Snapshot Operations ---
+
+    /// Gets a (global) snapshot.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/snapshots/get
+    async fn get_snapshot(&self, snapshot_name: String) -> Result<Snapshot>;
+
+    /// Creates a (global) snapshot of `snapshot.source_disk`.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/snapshots/insert
+    async fn insert_snapshot(&self, snapshot: Snapshot) -> Result<Operation>;
+
+    /// Lists one page of snapshots, optionally filtered.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/snapshots/list
+    async fn list_snapshots(
+        &self,
+        filter: Option<String>,
+        page_token: Option<String>,
+    ) -> Result<SnapshotList>;
+
+    /// Deletes a snapshot.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/snapshots/delete
+    async fn delete_snapshot(&self, snapshot_name: String) -> Result<Operation>;
 
     // --- Serial Port Operations ---
 
@@ -1945,6 +2020,161 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn add_disk_resource_policies(
+        &self,
+        zone: String,
+        disk_name: String,
+        request: DisksAddResourcePoliciesRequest,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/disks/{}/addResourcePolicies",
+            self.project_id, zone, disk_name
+        );
+        self.base
+            .execute_request(Method::POST, &path, None, Some(request), &disk_name)
+            .await
+    }
+
+    async fn remove_disk_resource_policies(
+        &self,
+        zone: String,
+        disk_name: String,
+        request: DisksRemoveResourcePoliciesRequest,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/disks/{}/removeResourcePolicies",
+            self.project_id, zone, disk_name
+        );
+        self.base
+            .execute_request(Method::POST, &path, None, Some(request), &disk_name)
+            .await
+    }
+
+    // --- Resource Policy Operations ---
+
+    async fn get_resource_policy(
+        &self,
+        region: String,
+        policy_name: String,
+    ) -> Result<ResourcePolicy> {
+        let path = format!(
+            "projects/{}/regions/{}/resourcePolicies/{}",
+            self.project_id, region, policy_name
+        );
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, &policy_name)
+            .await
+    }
+
+    async fn insert_resource_policy(
+        &self,
+        region: String,
+        policy: ResourcePolicy,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/resourcePolicies",
+            self.project_id, region
+        );
+        let resource_name = policy.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(Method::POST, &path, None, Some(policy), &resource_name)
+            .await
+    }
+
+    async fn list_resource_policies(
+        &self,
+        region: String,
+        filter: Option<String>,
+        page_token: Option<String>,
+    ) -> Result<ResourcePolicyList> {
+        let path = format!(
+            "projects/{}/regions/{}/resourcePolicies",
+            self.project_id, region
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                list_query(filter, page_token),
+                Option::<()>::None,
+                "resourcePolicies",
+            )
+            .await
+    }
+
+    async fn delete_resource_policy(
+        &self,
+        region: String,
+        policy_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/resourcePolicies/{}",
+            self.project_id, region, policy_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &policy_name,
+            )
+            .await
+    }
+
+    // --- Snapshot Operations ---
+
+    async fn get_snapshot(&self, snapshot_name: String) -> Result<Snapshot> {
+        let path = format!(
+            "projects/{}/global/snapshots/{}",
+            self.project_id, snapshot_name
+        );
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, &snapshot_name)
+            .await
+    }
+
+    async fn insert_snapshot(&self, snapshot: Snapshot) -> Result<Operation> {
+        let path = format!("projects/{}/global/snapshots", self.project_id);
+        let resource_name = snapshot.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(Method::POST, &path, None, Some(snapshot), &resource_name)
+            .await
+    }
+
+    async fn list_snapshots(
+        &self,
+        filter: Option<String>,
+        page_token: Option<String>,
+    ) -> Result<SnapshotList> {
+        let path = format!("projects/{}/global/snapshots", self.project_id);
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                list_query(filter, page_token),
+                Option::<()>::None,
+                "snapshots",
+            )
+            .await
+    }
+
+    async fn delete_snapshot(&self, snapshot_name: String) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/global/snapshots/{}",
+            self.project_id, snapshot_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &snapshot_name,
+            )
+            .await
+    }
+
     async fn get_serial_port_output(
         &self,
         zone: String,
@@ -1964,6 +2194,19 @@ impl ComputeApi for ComputeClient {
             )
             .await
     }
+}
+
+/// Query parameters for a paginated, optionally filtered `list` call.
+fn list_query(
+    filter: Option<String>,
+    page_token: Option<String>,
+) -> Option<Vec<(&'static str, String)>> {
+    let params: Vec<(&'static str, String)> = filter
+        .map(|filter| ("filter", filter))
+        .into_iter()
+        .chain(page_token.map(|token| ("pageToken", token)))
+        .collect();
+    (!params.is_empty()).then_some(params)
 }
 
 // =============================================================================================
@@ -5629,6 +5872,11 @@ pub struct Disk {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<String>,
 
+    /// Resource policies (such as snapshot schedules) attached to this disk, as URLs.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_policies: Vec<String>,
+
     /// Labels for this disk.
     #[builder(default)]
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
@@ -5681,6 +5929,314 @@ pub enum DiskStatus {
     Ready,
     /// Disk is being deleted.
     Deleting,
+}
+
+/// Request body for `disks.addResourcePolicies`.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/addResourcePolicies
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct DisksAddResourcePoliciesRequest {
+    /// Full or relative URL of the resource policy to attach. Compute Engine accepts one.
+    #[builder(default)]
+    #[serde(default)]
+    pub resource_policies: Vec<String>,
+}
+
+/// Request body for `disks.removeResourcePolicies`.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/removeResourcePolicies
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct DisksRemoveResourcePoliciesRequest {
+    /// Full or relative URLs of the resource policies to detach.
+    #[builder(default)]
+    #[serde(default)]
+    pub resource_policies: Vec<String>,
+}
+
+// =============================================================================================
+// Data Structures - Resource Policy
+// =============================================================================================
+
+/// A regional resource policy. Only snapshot schedules are modelled.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicy {
+    /// Unique identifier; defined by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Name of the resource (1-63 characters, RFC 1035).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Optional description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Region URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+
+    /// Server-defined URL for the resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+
+    /// Status of the policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<ResourcePolicyStatus>,
+
+    /// Snapshot schedule for the disks this policy is attached to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_schedule_policy: Option<ResourcePolicySnapshotSchedulePolicy>,
+
+    /// Creation timestamp (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_timestamp: Option<String>,
+
+    /// Type of resource (always "compute#resourcePolicy").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// Resource policy status.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ResourcePolicyStatus {
+    /// Policy is being created.
+    Creating,
+    /// Policy is being deleted.
+    Deleting,
+    /// Policy has expired.
+    Expired,
+    /// Policy is invalid.
+    Invalid,
+    /// Policy is ready to be attached.
+    Ready,
+}
+
+/// Snapshot schedule of a resource policy.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicySnapshotSchedulePolicy {
+    /// When snapshots are taken.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<ResourcePolicySnapshotSchedulePolicySchedule>,
+
+    /// How long snapshots are kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_policy: Option<ResourcePolicySnapshotSchedulePolicyRetentionPolicy>,
+
+    /// Properties (such as labels) given to every scheduled snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_properties: Option<ResourcePolicySnapshotSchedulePolicySnapshotProperties>,
+}
+
+/// Snapshot schedule frequency. Exactly one of the cycles is set.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicySnapshotSchedulePolicySchedule {
+    /// Every N hours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hourly_schedule: Option<ResourcePolicyHourlyCycle>,
+
+    /// Every N days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_schedule: Option<ResourcePolicyDailyCycle>,
+}
+
+/// Hourly snapshot cycle.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicyHourlyCycle {
+    /// Hours between snapshots. Google documents values that divide 24: 1, 2, 3, 4, 6, 8, 12.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hours_in_cycle: Option<i32>,
+
+    /// Window start, "HH:00" in UTC.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+
+    /// Window length chosen by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<String>,
+}
+
+/// Daily snapshot cycle.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicyDailyCycle {
+    /// Days between snapshots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days_in_cycle: Option<i32>,
+
+    /// Window start in UTC; must resolve to 00:00, 04:00, 08:00, 12:00, 16:00 or 20:00.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+
+    /// Window length chosen by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<String>,
+}
+
+/// Retention of scheduled snapshots.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicySnapshotSchedulePolicyRetentionPolicy {
+    /// Maximum age of a scheduled snapshot, in days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_retention_days: Option<i32>,
+
+    /// What happens to scheduled snapshots when their source disk is deleted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_source_disk_delete: Option<OnSourceDiskDelete>,
+}
+
+/// Behaviour for scheduled snapshots whose source disk is deleted.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OnSourceDiskDelete {
+    /// Keep expiring snapshots per the retention policy.
+    ApplyRetentionPolicy,
+    /// Keep scheduled snapshots forever.
+    KeepAutoSnapshots,
+    /// Unspecified.
+    UnspecifiedOnSourceDiskDelete,
+}
+
+/// Properties of scheduled snapshots.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicySnapshotSchedulePolicySnapshotProperties {
+    /// Labels applied to every scheduled snapshot.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub labels: std::collections::HashMap<String, String>,
+
+    /// Cloud Storage location of the snapshots (regional or multi-regional).
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storage_locations: Vec<String>,
+}
+
+/// One page of resource policies.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePolicyList {
+    /// Resource policies on this page.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ResourcePolicy>,
+
+    /// Token for the next page of results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+}
+
+// =============================================================================================
+// Data Structures - Snapshot
+// =============================================================================================
+
+/// A (global) persistent disk snapshot.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/snapshots
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    /// Unique identifier; defined by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Name of the resource (1-63 characters, RFC 1035).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Optional description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Disk the snapshot is taken from (URL). Required on insert.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_disk: Option<String>,
+
+    /// ID of the source disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_disk_id: Option<String>,
+
+    /// Status of the snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<SnapshotStatus>,
+
+    /// Size of the source disk in GB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_size_gb: Option<String>,
+
+    /// Bytes of storage used by the snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_bytes: Option<String>,
+
+    /// Labels for this snapshot.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub labels: std::collections::HashMap<String, String>,
+
+    /// Label fingerprint for optimistic locking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_fingerprint: Option<String>,
+
+    /// True if a snapshot schedule created the snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_created: Option<bool>,
+
+    /// URL of the snapshot schedule that created the snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_snapshot_schedule_policy: Option<String>,
+
+    /// Cloud Storage location of the snapshot.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storage_locations: Vec<String>,
+
+    /// Server-defined URL for the resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+
+    /// Creation timestamp (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_timestamp: Option<String>,
+
+    /// Type of resource (always "compute#snapshot").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// Snapshot status.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SnapshotStatus {
+    /// Snapshot is being created.
+    Creating,
+    /// Snapshot is being deleted.
+    Deleting,
+    /// Snapshot creation failed.
+    Failed,
+    /// Snapshot is complete and usable.
+    Ready,
+    /// Snapshot is being uploaded.
+    Uploading,
+}
+
+/// One page of snapshots.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotList {
+    /// Snapshots on this page.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Snapshot>,
+
+    /// Token for the next page of results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
 }
 
 // =============================================================================================
@@ -5917,6 +6473,316 @@ mod tests {
                 "advancedMachineFeatures": {
                     "enableNestedVirtualization": true
                 }
+            })
+        );
+    }
+    /// Serves `responses.len()` HTTP requests, answering each with the next JSON body,
+    /// and returns the raw requests (headers + body) it received.
+    fn serve_json_responses(
+        responses: Vec<&'static str>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for body in responses {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let (header_end, content_length) = loop {
+                    let count = stream.read(&mut buffer).expect("read request");
+                    assert!(count > 0, "request ended before headers");
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let header_end = end + 4;
+                        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .and_then(|value| value.parse().ok())
+                            })
+                            .unwrap_or(0);
+                        break (header_end, length);
+                    }
+                };
+                while bytes.len() < header_end + content_length {
+                    let count = stream.read(&mut buffer).expect("read body");
+                    assert!(count > 0, "request ended before body");
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                requests.push(
+                    String::from_utf8(bytes[..header_end + content_length].to_vec())
+                        .expect("request utf8"),
+                );
+                write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body).expect("write response");
+            }
+            requests
+        });
+        (endpoint, server)
+    }
+
+    fn test_client(endpoint: String) -> ComputeClient {
+        use alien_core::{GcpCredentials, GcpServiceOverrides};
+        ComputeClient::new(
+            Client::new(),
+            GcpClientConfig {
+                project_id: "example-project".to_string(),
+                region: "us-central1".to_string(),
+                credentials: GcpCredentials::AccessToken {
+                    token: "test-token".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: std::collections::HashMap::from([(
+                        "compute".to_string(),
+                        endpoint,
+                    )]),
+                }),
+                project_number: None,
+            },
+        )
+    }
+
+    fn request_line_and_body(request: &str) -> (&str, serde_json::Value) {
+        let (headers, body) = request.split_once("\r\n\r\n").expect("request");
+        let line = headers.lines().next().expect("request line");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(body).expect("request JSON")
+        };
+        (line, body)
+    }
+
+    #[tokio::test]
+    async fn snapshot_schedule_and_snapshot_calls_use_compute_rest_contract() {
+        const OPERATION: &str = r#"{"name":"operation-1","status":"DONE"}"#;
+        let (endpoint, server) = serve_json_responses(vec![
+            OPERATION,
+            r#"{"name":"stack-c-bk-1h2d","status":"READY","selfLink":"https://www.googleapis.com/compute/v1/projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d"}"#,
+            r#"{"items":[{"name":"stack-c-bk-1h2d"}],"nextPageToken":"next"}"#,
+            OPERATION,
+            OPERATION,
+            OPERATION,
+            OPERATION,
+            r#"{"name":"snap-1","status":"READY","sourceDisk":"https://www.googleapis.com/compute/v1/projects/example-project/zones/us-central1-a/disks/disk-0","diskSizeGb":"10","labels":{"resource":"c"},"creationTimestamp":"2026-10-05T10:00:00.000-07:00","autoCreated":true}"#,
+            r#"{"items":[{"name":"snap-1","status":"READY"}]}"#,
+            OPERATION,
+        ]);
+        let client = test_client(endpoint);
+
+        let policy = ResourcePolicy::builder()
+            .name("stack-c-bk-1h2d".to_string())
+            .snapshot_schedule_policy(
+                ResourcePolicySnapshotSchedulePolicy::builder()
+                    .schedule(
+                        ResourcePolicySnapshotSchedulePolicySchedule::builder()
+                            .hourly_schedule(
+                                ResourcePolicyHourlyCycle::builder()
+                                    .hours_in_cycle(1)
+                                    .start_time("00:00".to_string())
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .retention_policy(
+                        ResourcePolicySnapshotSchedulePolicyRetentionPolicy::builder()
+                            .max_retention_days(2)
+                            .on_source_disk_delete(OnSourceDiskDelete::ApplyRetentionPolicy)
+                            .build(),
+                    )
+                    .snapshot_properties(
+                        ResourcePolicySnapshotSchedulePolicySnapshotProperties::builder()
+                            .labels(std::collections::HashMap::from([(
+                                "resource".to_string(),
+                                "c".to_string(),
+                            )]))
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        client
+            .insert_resource_policy("us-central1".to_string(), policy)
+            .await
+            .expect("insert policy");
+        let fetched = client
+            .get_resource_policy("us-central1".to_string(), "stack-c-bk-1h2d".to_string())
+            .await
+            .expect("get policy");
+        assert_eq!(fetched.status, Some(ResourcePolicyStatus::Ready));
+        let page = client
+            .list_resource_policies(
+                "us-central1".to_string(),
+                Some("name eq stack-c-bk-.*".to_string()),
+                Some("token-1".to_string()),
+            )
+            .await
+            .expect("list policies");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.next_page_token.as_deref(), Some("next"));
+        client
+            .add_disk_resource_policies(
+                "us-central1-a".to_string(),
+                "disk-0".to_string(),
+                DisksAddResourcePoliciesRequest {
+                    resource_policies: vec![
+                        "projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d"
+                            .to_string(),
+                    ],
+                },
+            )
+            .await
+            .expect("attach policy");
+        client
+            .remove_disk_resource_policies(
+                "us-central1-a".to_string(),
+                "disk-0".to_string(),
+                DisksRemoveResourcePoliciesRequest {
+                    resource_policies: vec![
+                        "projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d"
+                            .to_string(),
+                    ],
+                },
+            )
+            .await
+            .expect("detach policy");
+        client
+            .delete_resource_policy("us-central1".to_string(), "stack-c-bk-1h2d".to_string())
+            .await
+            .expect("delete policy");
+        client
+            .insert_snapshot(
+                Snapshot::builder()
+                    .name("snap-final-0".to_string())
+                    .source_disk(
+                        "projects/example-project/zones/us-central1-a/disks/disk-0".to_string(),
+                    )
+                    .labels(std::collections::HashMap::from([(
+                        "ordinal".to_string(),
+                        "0".to_string(),
+                    )]))
+                    .build(),
+            )
+            .await
+            .expect("insert snapshot");
+        let snapshot = client
+            .get_snapshot("snap-1".to_string())
+            .await
+            .expect("get snapshot");
+        assert_eq!(snapshot.status, Some(SnapshotStatus::Ready));
+        assert_eq!(snapshot.disk_size_gb.as_deref(), Some("10"));
+        assert_eq!(snapshot.auto_created, Some(true));
+        let snapshots = client
+            .list_snapshots(Some("(labels.resource = \"c\")".to_string()), None)
+            .await
+            .expect("list snapshots");
+        assert_eq!(snapshots.items.len(), 1);
+        assert!(snapshots.next_page_token.is_none());
+        client
+            .delete_snapshot("snap-1".to_string())
+            .await
+            .expect("delete snapshot");
+
+        let requests = server.join().expect("server should finish");
+        let calls: Vec<_> = requests
+            .iter()
+            .map(|request| request_line_and_body(request))
+            .collect();
+
+        assert_eq!(
+            calls[0].0,
+            "POST /projects/example-project/regions/us-central1/resourcePolicies HTTP/1.1"
+        );
+        assert_eq!(
+            calls[0].1,
+            serde_json::json!({
+                "name": "stack-c-bk-1h2d",
+                "snapshotSchedulePolicy": {
+                    "schedule": {"hourlySchedule": {"hoursInCycle": 1, "startTime": "00:00"}},
+                    "retentionPolicy": {
+                        "maxRetentionDays": 2,
+                        "onSourceDiskDelete": "APPLY_RETENTION_POLICY"
+                    },
+                    "snapshotProperties": {"labels": {"resource": "c"}}
+                }
+            })
+        );
+        assert_eq!(
+            calls[1].0,
+            "GET /projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d HTTP/1.1"
+        );
+        assert_eq!(
+            calls[2].0,
+            "GET /projects/example-project/regions/us-central1/resourcePolicies?filter=name+eq+stack-c-bk-.*&pageToken=token-1 HTTP/1.1"
+        );
+        assert_eq!(
+            calls[3].0,
+            "POST /projects/example-project/zones/us-central1-a/disks/disk-0/addResourcePolicies HTTP/1.1"
+        );
+        assert_eq!(
+            calls[3].1,
+            serde_json::json!({"resourcePolicies": ["projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d"]})
+        );
+        assert_eq!(
+            calls[4].0,
+            "POST /projects/example-project/zones/us-central1-a/disks/disk-0/removeResourcePolicies HTTP/1.1"
+        );
+        assert_eq!(calls[4].1, calls[3].1);
+        assert_eq!(
+            calls[5].0,
+            "DELETE /projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d HTTP/1.1"
+        );
+        assert_eq!(
+            calls[6].0,
+            "POST /projects/example-project/global/snapshots HTTP/1.1"
+        );
+        assert_eq!(
+            calls[6].1,
+            serde_json::json!({
+                "name": "snap-final-0",
+                "sourceDisk": "projects/example-project/zones/us-central1-a/disks/disk-0",
+                "labels": {"ordinal": "0"}
+            })
+        );
+        assert_eq!(
+            calls[7].0,
+            "GET /projects/example-project/global/snapshots/snap-1 HTTP/1.1"
+        );
+        assert_eq!(
+            calls[8].0,
+            "GET /projects/example-project/global/snapshots?filter=%28labels.resource+%3D+%22c%22%29 HTTP/1.1"
+        );
+        assert_eq!(
+            calls[9].0,
+            "DELETE /projects/example-project/global/snapshots/snap-1 HTTP/1.1"
+        );
+    }
+
+    #[test]
+    fn disk_from_snapshot_serializes_source_snapshot_and_policies() {
+        let disk = Disk::builder()
+            .name("stack-c-disk-0-r1".to_string())
+            .size_gb("20".to_string())
+            .source_snapshot("projects/example-project/global/snapshots/snap-1".to_string())
+            .resource_policies(vec![
+                "projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d"
+                    .to_string(),
+            ])
+            .build();
+        assert_eq!(
+            serde_json::to_value(disk).expect("disk should serialize"),
+            serde_json::json!({
+                "name": "stack-c-disk-0-r1",
+                "sizeGb": "20",
+                "sourceSnapshot": "projects/example-project/global/snapshots/snap-1",
+                "resourcePolicies": ["projects/example-project/regions/us-central1/resourcePolicies/stack-c-bk-1h2d"]
             })
         );
     }

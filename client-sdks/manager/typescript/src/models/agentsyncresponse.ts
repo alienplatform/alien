@@ -11,6 +11,10 @@ import {
   ExecutionClaim$inboundSchema,
 } from "./executionclaim.js";
 import {
+  TargetDynamicContainer,
+  TargetDynamicContainer$inboundSchema,
+} from "./targetdynamiccontainer.js";
+import {
   TargetOperationsBundleSet,
   TargetOperationsBundleSet$inboundSchema,
 } from "./targetoperationsbundleset.js";
@@ -34,7 +38,26 @@ export type AgentSyncResponse = {
   currentState?: any | undefined;
   executionClaim?: ExecutionClaim | null | undefined;
   target?: any | undefined;
+  /**
+   * Complete release-independent target set. Older embedders omit it.
+   */
+  targetDynamicContainers?: Array<TargetDynamicContainer> | null | undefined;
   targetOperationsBundleSet?: TargetOperationsBundleSet | null | undefined;
+  /**
+   * Operator image this manager's charts install. Operators that manage
+   *
+   * @remarks
+   * their own workload update to it. Absent when the manager serves no
+   * charts.
+   */
+  targetOperatorImage?: string | null | undefined;
+  /**
+   * Base URL operators open tunnel connections to. Absent when this manager
+   *
+   * @remarks
+   * does not accept tunnels; operators then never dial.
+   */
+  tunnelUrl?: string | null | undefined;
 };
 
 /** @internal */
@@ -46,8 +69,13 @@ export const AgentSyncResponse$inboundSchema: z.ZodType<
   currentState: z.any().optional(),
   executionClaim: z.nullable(ExecutionClaim$inboundSchema).optional(),
   target: z.any().optional(),
+  targetDynamicContainers: z.nullable(
+    z.array(TargetDynamicContainer$inboundSchema),
+  ).optional(),
   targetOperationsBundleSet: z.nullable(TargetOperationsBundleSet$inboundSchema)
     .optional(),
+  targetOperatorImage: z.nullable(z.string()).optional(),
+  tunnelUrl: z.nullable(z.string()).optional(),
 });
 
 export function agentSyncResponseFromJSON(

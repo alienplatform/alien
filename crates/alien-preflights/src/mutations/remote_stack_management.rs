@@ -3,8 +3,8 @@
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, DeploymentModel, Platform, RemoteStackManagement, ResourceEntry,
-    ResourceLifecycle, Stack, StackState,
+    DeploymentConfig, DeploymentModel, KubernetesClusterOwnership, Platform, RemoteStackManagement,
+    ResourceEntry, ResourceLifecycle, Stack, StackState,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -53,6 +53,20 @@ impl StackMutation for RemoteStackManagementMutation {
                 Platform::Aws | Platform::Gcp | Platform::Azure
             )
             && config.stack_settings.deployment_model == DeploymentModel::Pull;
+
+        // An operator installed into an existing cluster already has its
+        // workload identity. There is no setup-owned management identity to
+        // provision or import in this deployment.
+        if cloud_backed_kubernetes_pull
+            && config
+                .stack_settings
+                .kubernetes
+                .as_ref()
+                .and_then(|settings| settings.cluster.as_ref())
+                .is_some_and(|cluster| cluster.ownership != KubernetesClusterOwnership::Managed)
+        {
+            return false;
+        }
 
         // Push-mode cloud stacks need an external manager management config.
         // Cloud-backed Kubernetes pull stacks still need this setup-owned
@@ -107,7 +121,10 @@ impl StackMutation for RemoteStackManagementMutation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{EnvironmentVariablesSnapshot, ExternalBindings, StackSettings, Storage};
+    use alien_core::{
+        EnvironmentVariablesSnapshot, ExternalBindings, KubernetesClusterSettings,
+        KubernetesSettings, StackSettings, Storage,
+    };
 
     fn empty_stack() -> Stack {
         Stack::new("test".to_string()).build()
@@ -129,6 +146,7 @@ mod tests {
                 hash: "empty".to_string(),
                 created_at: "1970-01-01T00:00:00Z".to_string(),
             },
+            stored_secret_input_ids: None,
             input_values: Default::default(),
             allow_frozen_changes: false,
             compute_backend: None,
@@ -143,6 +161,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 
@@ -153,6 +172,23 @@ mod tests {
         let config = config(Some(Platform::Aws), DeploymentModel::Pull);
 
         assert!(mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
+    }
+
+    #[test]
+    fn existing_cloud_cluster_does_not_provision_remote_management() {
+        let mutation = RemoteStackManagementMutation;
+        let stack = empty_stack();
+        let mut config = config(Some(Platform::Aws), DeploymentModel::Pull);
+        config.stack_settings.kubernetes = Some(KubernetesSettings {
+            cluster: Some(KubernetesClusterSettings {
+                ownership: KubernetesClusterOwnership::Existing,
+                namespace: Some("application".to_string()),
+                cloud: None,
+            }),
+            exposure: None,
+        });
+
+        assert!(!mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
     }
 
     #[test]

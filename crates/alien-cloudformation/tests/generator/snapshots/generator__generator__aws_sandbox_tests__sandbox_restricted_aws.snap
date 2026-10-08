@@ -106,6 +106,13 @@ Parameters:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing security group IDs.
     Default: ''
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -261,6 +268,9 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
+    - AgentsEgressOperatorRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -322,6 +332,9 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
+    - AgentsEgressOperatorRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -383,6 +396,9 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
+    - AgentsEgressOperatorRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -530,6 +546,9 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - AgentsBuildRole
+    - AgentsEgressOperatorRole
     Condition: NetworkModeCreate
   AgentsBuildRole:
     Type: AWS::IAM::Role
@@ -558,12 +577,6 @@ Resources:
             - s3:GetObject
             Resource:
               Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
-          - Effect: Allow
-            Action:
-            - logs:CreateLogGroup
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-            Resource: '*'
       Tags:
       - Key: managed-by
         Value: setup
@@ -603,6 +616,7 @@ Resources:
               Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
             Condition:
               StringEquals:
+                ec2:CreateAction: CreateNetworkInterface
                 ec2:ManagedResourceOperator: network-connectors.lambda.amazonaws.com
       Tags:
       - Key: managed-by
@@ -757,6 +771,8 @@ Resources:
           Ref: ManagingRoleArn
       StackSettings:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:

@@ -12,6 +12,17 @@ use super::*;
 use crate::auth::Subject;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
 
+/// The route's release checks in its order: the kind lookup, then the remote-access validation.
+async fn current_release_remote_access(
+    store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<alien_core::remote_bindings::RemoteBindingKind, AlienError<ErrorData>> {
+    let (release, kind) = current_release_binding_kind(store, deployment, resource_id).await?;
+    require_current_release_remote_access(&release, deployment, resource_id)?;
+    Ok(kind)
+}
+
 #[derive(Default)]
 struct StubReleaseStore {
     releases: HashMap<String, ReleaseRecord>,
@@ -253,6 +264,7 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
             "us-central1",
             Some(1800),
+            true,
         ),
         _ => open_sandbox_binding(),
     }
@@ -286,6 +298,34 @@ fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
     );
 }
 
+/// The GCP binding reports the declared egress both ways: the template enforces it, and a client
+/// that never reads the template decides eligibility from this field alone.
+#[test]
+fn remote_gcp_sandbox_binding_reports_the_declared_egress() {
+    for allow_egress in [true, false] {
+        let binding = SandboxBinding::gcp_agent_platform(
+            GCP_ENGINE,
+            format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
+            "us-central1",
+            None,
+            allow_egress,
+        );
+        let deployment =
+            deployment_on_platform(sandbox_stack_state(binding, Platform::Gcp), Platform::Gcp);
+
+        let Ok(RemoteSandboxBinding::Gcp(resolved)) = remote_sandbox_binding(&deployment, "agents")
+        else {
+            panic!("a GCP deployment's own binding resolves")
+        };
+        assert_eq!(resolved.allow_egress, allow_egress);
+        let json = serde_json::to_value(&resolved).expect("serializes");
+        // Deny is omitted, so a client whose schema predates the field still decodes it.
+        let sent = json.get("allowEgress").cloned();
+        let expected = allow_egress.then_some(serde_json::Value::Bool(true));
+        assert_eq!(sent, expected, "{json}");
+    }
+}
+
 /// A Live sandbox's binding is published by its runtime controller once the image build
 /// reaches ACTIVE, and must resolve exactly like a Frozen one's — refusing on lifecycle here
 /// would make every runtime-provisioned sandbox unreachable over Remote Bindings.
@@ -307,6 +347,136 @@ fn remote_sandbox_validation_accepts_a_live_sandbox() {
         "arn:aws:lambda:us-east-1:123456789012:microvm-image:stack-agents"
     );
     assert_eq!(binding.image_version, "3");
+}
+
+fn with_resource_status(
+    mut stack_state: StackState,
+    resource_id: &str,
+    status: ResourceStatus,
+) -> StackState {
+    stack_state
+        .resources
+        .get_mut(resource_id)
+        .expect("the fixture holds the resource")
+        .status = status;
+    stack_state
+}
+
+/// Pins the gate only; that the binding names the previous image version mid-roll is proven in
+/// alien-infra by `a_failed_roll_keeps_the_previous_version_serving`.
+#[test]
+fn a_rolling_aws_sandbox_keeps_serving_its_previous_binding() {
+    for status in [ResourceStatus::Updating, ResourceStatus::UpdateFailed] {
+        let deployment = deployment(with_resource_status(
+            sandbox_stack_state_with_lifecycle(
+                open_sandbox_binding(),
+                Platform::Aws,
+                ResourceLifecycle::Live,
+            ),
+            "agents",
+            status,
+        ));
+
+        let Ok(RemoteSandboxBinding::Aws(binding)) = remote_sandbox_binding(&deployment, "agents")
+        else {
+            panic!("a {status:?} AWS sandbox with a published binding resolves")
+        };
+        assert_eq!(binding.image_version, "3", "{status:?}");
+    }
+}
+
+/// Azure publishes only the current binding. GCP keeps its old template, but its roll reports
+/// Provisioning/ProvisionFailed, so `Updating` here is not a roll the gate can trust.
+#[test]
+fn a_rolling_azure_or_gcp_sandbox_is_refused() {
+    for platform in [Platform::Azure, Platform::Gcp] {
+        for status in [ResourceStatus::Updating, ResourceStatus::UpdateFailed] {
+            let deployment = deployment_on_platform(
+                with_resource_status(
+                    sandbox_stack_state_with_lifecycle(
+                        open_sandbox_binding_for(platform),
+                        platform,
+                        ResourceLifecycle::Live,
+                    ),
+                    "agents",
+                    status,
+                ),
+                platform,
+            );
+
+            let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+                panic!("a {status:?} {platform} sandbox must not resolve")
+            };
+            assert!(error.message.contains("not running"), "{}", error.message);
+        }
+    }
+}
+
+#[test]
+fn a_rolling_aws_sandbox_without_a_parseable_binding_is_refused() {
+    for params in [None, Some(serde_json::json!({"service": "not-a-sandbox"}))] {
+        let mut stack_state = with_resource_status(
+            sandbox_stack_state_with_lifecycle(
+                open_sandbox_binding(),
+                Platform::Aws,
+                ResourceLifecycle::Live,
+            ),
+            "agents",
+            ResourceStatus::Updating,
+        );
+        stack_state
+            .resources
+            .get_mut("agents")
+            .expect("the fixture holds the resource")
+            .remote_binding_params = params.clone();
+
+        let Err(error) = remote_sandbox_binding(&deployment(stack_state), "agents") else {
+            panic!("an updating sandbox with binding params {params:?} must not resolve")
+        };
+        assert_eq!(error.code, "BAD_REQUEST");
+    }
+}
+
+/// Storage, Key and AI publish no previous binding through a roll, so they still need `Running`.
+#[test]
+fn updating_storage_key_and_ai_resources_are_refused() {
+    let storage = deployment(stack_state_with_resource(
+        Storage::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Updating,
+        Some(serde_json::to_value(StorageBinding::s3("files")).unwrap()),
+    ));
+    let Err(error) = remote_storage_binding(&storage, "files") else {
+        panic!("updating storage must not resolve")
+    };
+    assert!(error.message.contains("not running"), "{}", error.message);
+
+    let key = deployment(stack_state_with_resource(
+        Key::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Updating,
+        Some(
+            serde_json::to_value(KeyBinding::aws_kms(
+                "arn:aws:kms:us-east-1:123:key/abc",
+                Some("us-east-1"),
+            ))
+            .unwrap(),
+        ),
+    ));
+    let Err(error) = remote_key_binding(&key, "files") else {
+        panic!("an updating key must not resolve")
+    };
+    assert!(error.message.contains("not running"), "{}", error.message);
+
+    let ai = deployment(with_resource_status(
+        ai_stack_state(AiBinding::bedrock("us-east-1"), Platform::Aws),
+        "models",
+        ResourceStatus::Updating,
+    ));
+    let Err(error) = remote_ai_binding(&ai, "models") else {
+        panic!("updating AI must not resolve")
+    };
+    assert!(error.message.contains("not running"), "{}", error.message);
 }
 
 /// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`, so a session cannot be
@@ -601,7 +771,7 @@ async fn remote_access_uses_the_current_release_not_the_desired_release() {
         ]),
     };
 
-    require_current_release_remote_access(&store, &deployment, "files")
+    current_release_remote_access(&store, &deployment, "files")
         .await
         .expect("the current release explicitly enables remote access");
 }
@@ -630,7 +800,7 @@ async fn deployment_level_ai_selector_requires_exactly_one_remote_ai() {
         "models"
     );
     assert!(matches!(
-        require_current_release_remote_access(&store, &deployment, "models")
+        current_release_remote_access(&store, &deployment, "models")
             .await
             .expect("an unrelated remote binding does not make AI ambiguous"),
         alien_core::remote_bindings::RemoteBindingKind::Ai
@@ -689,7 +859,7 @@ async fn key_resolution_rechecks_that_no_sibling_is_remotely_published() {
         )]),
     };
 
-    let error = require_current_release_remote_access(&store, &deployment, "customer-key")
+    let error = current_release_remote_access(&store, &deployment, "customer-key")
         .await
         .expect_err("resolver must repeat the one-remote-resource rule");
     assert!(error.message.contains("only remoteAccess resource"));
@@ -712,7 +882,7 @@ async fn legacy_binding_params_cannot_bypass_a_disabled_current_release() {
     };
 
     assert!(remote_storage_binding(&deployment, "files").is_ok());
-    let error = require_current_release_remote_access(&store, &deployment, "files")
+    let error = current_release_remote_access(&store, &deployment, "files")
         .await
         .expect_err("stack-state binding params cannot grant access by themselves");
     assert_eq!(error.code, "BAD_REQUEST");
@@ -739,7 +909,7 @@ async fn remote_access_accepts_a_live_sandbox_and_refuses_a_live_bucket() {
             release("current", Platform::Aws, sandbox_stack),
         )]),
     };
-    require_current_release_remote_access(&store, &live_sandbox, "agents")
+    current_release_remote_access(&store, &live_sandbox, "agents")
         .await
         .expect("a Live sandbox is scaffolded by setup and resolves");
 
@@ -759,7 +929,7 @@ async fn remote_access_accepts_a_live_sandbox_and_refuses_a_live_bucket() {
             release("current", Platform::Aws, bucket_stack),
         )]),
     };
-    let error = require_current_release_remote_access(&store, &live_bucket, "files")
+    let error = current_release_remote_access(&store, &live_bucket, "files")
         .await
         .expect_err("setup renders nothing for a Live bucket, so no grant exists");
     assert_eq!(error.code, "BAD_REQUEST");
@@ -781,14 +951,14 @@ async fn remote_access_fails_closed_when_current_release_context_is_missing() {
     let store = StubReleaseStore::default();
 
     let no_current_release = deployment(stack_state.clone());
-    let error = require_current_release_remote_access(&store, &no_current_release, "files")
+    let error = current_release_remote_access(&store, &no_current_release, "files")
         .await
         .expect_err("missing current release must deny access");
     assert_eq!(error.code, "BAD_REQUEST");
 
     let mut missing_release = deployment(stack_state.clone());
     missing_release.current_release_id = Some("missing".to_string());
-    let error = require_current_release_remote_access(&store, &missing_release, "files")
+    let error = current_release_remote_access(&store, &missing_release, "files")
         .await
         .expect_err("a dangling current release id must deny access");
     assert_eq!(error.code, "INTERNAL_ERROR");
@@ -801,7 +971,7 @@ async fn remote_access_fails_closed_when_current_release_context_is_missing() {
             release("current", Platform::Gcp, storage_stack(true)),
         )]),
     };
-    let error = require_current_release_remote_access(&store, &missing_platform_stack, "files")
+    let error = current_release_remote_access(&store, &missing_platform_stack, "files")
         .await
         .expect_err("missing platform stack must deny access");
     assert_eq!(error.code, "INTERNAL_ERROR");
@@ -815,7 +985,7 @@ async fn remote_access_fails_closed_when_current_release_context_is_missing() {
             release("current", Platform::Aws, empty_stack),
         )]),
     };
-    let error = require_current_release_remote_access(&store, &missing_resource, "files")
+    let error = current_release_remote_access(&store, &missing_resource, "files")
         .await
         .expect_err("resource absent from the current release must deny access");
     assert_eq!(error.code, "BAD_REQUEST");
@@ -866,6 +1036,7 @@ fn remote_binding_deployment_status_gate_is_post_handoff_only() {
         "initial-setup-failed",
         "provisioning",
         "waiting-for-machines",
+        "waiting-for-secrets",
         "provisioning-failed",
         "delete-pending",
         "deleting",
@@ -1088,4 +1259,231 @@ fn resolve_response_debug_redacts_binding_and_credentials() {
     assert!(!debug.contains("AKIASECRET"));
     assert!(!debug.contains("TOP_SECRET"));
     assert!(!debug.contains("SESSION_SECRET"));
+}
+
+#[test]
+fn remote_kv_requires_running_frozen_table_and_matching_platform() {
+    let binding = serde_json::json!({
+        "service": "dynamodb", "tableName": "acme-cache", "region": "us-east-1"
+    });
+    let state = stack_state_with_resource(
+        Kv::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Running,
+        Some(binding),
+    );
+    let mut deployment = deployment(state);
+    match remote_kv_binding(&deployment, "files").expect("resolve enabled table") {
+        RemoteKvBinding::Aws(binding) => {
+            assert_eq!(binding.table_name, "acme-cache");
+            assert_eq!(binding.region, "us-east-1");
+        }
+        _ => panic!("expected DynamoDB"),
+    }
+    deployment.platform = Platform::Gcp;
+    assert!(remote_kv_binding(&deployment, "files").is_err());
+    deployment.platform = Platform::Aws;
+    for (lifecycle, status, params) in [
+        (Some(ResourceLifecycle::Live), ResourceStatus::Running, true),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Updating,
+            true,
+        ),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            false,
+        ),
+    ] {
+        let mut invalid = deployment.clone();
+        let resource = invalid
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("files")
+            .unwrap();
+        resource.lifecycle = lifecycle;
+        resource.status = status;
+        if !params {
+            resource.remote_binding_params = None;
+        }
+        assert!(remote_kv_binding(&invalid, "files").is_err());
+    }
+    assert!(remote_kv_binding(&deployment, "missing").is_err());
+}
+
+#[test]
+fn remote_queue_requires_running_frozen_queue_and_matching_platform() {
+    let binding = serde_json::json!({
+        "service": "sqs", "queueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/events"
+    });
+    let state = stack_state_with_resource(
+        Queue::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Frozen),
+        ResourceStatus::Running,
+        Some(binding),
+    );
+    let mut deployment = deployment(state);
+    match remote_queue_binding(&deployment, "files").expect("resolve enabled table") {
+        RemoteQueueBinding::Aws(binding) => {
+            assert!(binding.queue_url.ends_with("/events"));
+        }
+        _ => panic!("expected SQS"),
+    }
+    deployment.platform = Platform::Gcp;
+    assert!(remote_queue_binding(&deployment, "files").is_err());
+    deployment.platform = Platform::Aws;
+    for (lifecycle, status, params) in [
+        (Some(ResourceLifecycle::Live), ResourceStatus::Running, true),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Updating,
+            true,
+        ),
+        (
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            false,
+        ),
+    ] {
+        let mut invalid = deployment.clone();
+        let resource = invalid
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("files")
+            .unwrap();
+        resource.lifecycle = lifecycle;
+        resource.status = status;
+        if !params {
+            resource.remote_binding_params = None;
+        }
+        assert!(remote_queue_binding(&invalid, "files").is_err());
+    }
+    assert!(remote_queue_binding(&deployment, "missing").is_err());
+}
+
+/// A release store whose reads fail, as when the backing service is unreachable.
+struct FailingReleaseStore;
+
+#[async_trait]
+impl ReleaseStore for FailingReleaseStore {
+    async fn create_release(
+        &self,
+        _caller: &Subject,
+        _params: CreateReleaseParams,
+    ) -> Result<ReleaseRecord, AlienError> {
+        unreachable!("remote binding resolution never creates releases")
+    }
+
+    async fn get_release(
+        &self,
+        _caller: &Subject,
+        _id: &str,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        Err(AlienError::new(alien_error::GenericError {
+            message: "release store credentials token=secret-value rejected".to_string(),
+        }))
+    }
+
+    async fn get_latest_release(
+        &self,
+        _caller: &Subject,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        unreachable!("remote binding resolution never lists releases")
+    }
+
+    async fn list_releases(&self, _caller: &Subject) -> Result<Vec<ReleaseRecord>, AlienError> {
+        unreachable!("remote binding resolution never lists releases")
+    }
+}
+
+fn deployment_after_failed_update() -> DeploymentRecord {
+    let mut deployment = deployment(StackState::new(Platform::Aws));
+    deployment.status = "update-failed".to_string();
+    deployment.current_release_id = Some("current".to_string());
+    deployment.desired_release_id = Some("desired".to_string());
+    deployment
+}
+
+/// The caller sees the error the manager actually sends: a typed, retryable 503 rather than a
+/// sanitized internal 500.
+fn assert_desired_release_unavailable(error: AlienError<ErrorData>, reason: &str) {
+    let external = error.into_external();
+    assert_eq!(external.code, "REMOTE_BINDING_DESIRED_RELEASE_UNAVAILABLE");
+    assert_eq!(external.http_status_code, Some(503));
+    assert!(external.retryable);
+    assert!(!external.internal);
+    assert_eq!(
+        external.message,
+        format!(
+            "Desired release 'desired' of deployment 'deployment' could not be loaded to check remote binding access: {reason}"
+        )
+    );
+    assert!(
+        external.source.is_none(),
+        "release store details stay in the manager log"
+    );
+}
+
+#[tokio::test]
+async fn missing_desired_release_refuses_with_a_retryable_typed_error() {
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, storage_stack(true)),
+        )]),
+    };
+
+    let error = sandbox_may_share_the_identity(&store, &deployment_after_failed_update())
+        .await
+        .expect_err("an unreadable desired release must not be treated as sandbox-free");
+    assert_desired_release_unavailable(error, "the release was not found");
+}
+
+#[tokio::test]
+async fn failing_release_store_refuses_without_exposing_store_details() {
+    let error =
+        sandbox_may_share_the_identity(&FailingReleaseStore, &deployment_after_failed_update())
+            .await
+            .expect_err("a release store failure must refuse the binding");
+    assert_desired_release_unavailable(error, "the release store request failed");
+}
+
+#[tokio::test]
+async fn readable_desired_release_after_a_failed_update_is_checked_for_sandboxes() {
+    let sandbox_free = StubReleaseStore {
+        releases: HashMap::from([(
+            "desired".to_string(),
+            release("desired", Platform::Aws, storage_stack(true)),
+        )]),
+    };
+    assert!(
+        !sandbox_may_share_the_identity(&sandbox_free, &deployment_after_failed_update())
+            .await
+            .expect("a readable desired release resolves"),
+        "a desired release without a remote sandbox leaves the identity unshared"
+    );
+
+    let with_sandbox = StubReleaseStore {
+        releases: HashMap::from([(
+            "desired".to_string(),
+            release(
+                "desired",
+                Platform::Aws,
+                Stack::new("stack".to_string())
+                    .add_with_remote_access(sandbox_resource(), ResourceLifecycle::Frozen)
+                    .build(),
+            ),
+        )]),
+    };
+    assert!(
+        sandbox_may_share_the_identity(&with_sandbox, &deployment_after_failed_update())
+            .await
+            .expect("a readable desired release resolves"),
+        "a desired release that adds a remote sandbox may share the identity"
+    );
 }

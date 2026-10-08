@@ -55,14 +55,14 @@ jobs:
               echo "::error::Release qualification requires a Linear-derived branch"
               exit 1
             fi
-            allowed='^(Cargo.toml|Cargo.lock|packages/(core|commands|sdk|testing|bindings|ai-gateway)/package.json|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/(package.json|jsr.json|package-lock.json|src/lib/config.ts|\.speakeasy/(gen.yaml|gen.lock))|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json)$'
+            allowed='^(Cargo.toml|Cargo.lock|packages/(core|permissions|commands|sdk|testing|bindings|ai-gateway)/package.json|packages/permissions/generated/(bytes\.js|compiler\.js|compiler\.d\.ts)|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/(package.json|jsr.json|package-lock.json|src/lib/config.ts|\.speakeasy/(gen.yaml|gen.lock))|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json|infra/helm/alien-manager/Chart.yaml|infra/aws-ecs-manager/variables.tf)$'
             unexpected=$(git diff --name-only "$BASE_SHA" "$SOURCE_REF" | grep -Ev "$allowed" || true)
             if [ -n "$unexpected" ]; then
               echo "::error::Release PR contains non-version files:"
               echo "$unexpected"
               exit 1
             fi
-            BASE_SHA="$BASE_SHA" SOURCE_REF="$SOURCE_REF" node --input-type=module <<'NODE'
+            BASE_SHA="$BASE_SHA" SOURCE_REF="$SOURCE_REF" RELEASE_VERSION="$CURRENT_VERSION" node --input-type=module <<'NODE'
             import { execFileSync } from 'node:child_process';
             import { withSDKReleaseVersion } from './scripts/sdk-release-metadata.mjs';
 
@@ -97,6 +97,14 @@ jobs:
               ? content.replace(/(typescript:\n  version: )[^\n]+/, '$1__RELEASE_VERSION__')
               : content.replace(/(  releaseVersion: )[^\n]+/, '$1__RELEASE_VERSION__');
 
+            const releaseVersion = process.env.RELEASE_VERSION.replaceAll('.', '\\.');
+            const requireVersion = (path, content, pattern) => {
+              if (!pattern.test(content)) {
+                console.error('::error::' + path + ' does not carry release version ' + process.env.RELEASE_VERSION);
+                process.exit(1);
+              }
+            };
+
             for (const path of changed) {
               let base;
               let head;
@@ -111,6 +119,22 @@ jobs:
               } else if (path.endsWith('/src/lib/config.ts')) {
                 base = withSDKReleaseVersion(fromRef(process.env.BASE_SHA, path), '0.0.0');
                 head = withSDKReleaseVersion(fromRef(process.env.SOURCE_REF, path), '0.0.0');
+              } else if (path === 'infra/helm/alien-manager/Chart.yaml') {
+                const normalizeChart = (content) => content
+                  .replace(/^version: .*$/m, 'version: __RELEASE_VERSION__')
+                  .replace(/^appVersion: .*$/m, 'appVersion: __RELEASE_VERSION__');
+                const chart = fromRef(process.env.SOURCE_REF, path);
+                requireVersion(path, chart, new RegExp('^version: ' + releaseVersion + '$', 'm'));
+                requireVersion(path, chart, new RegExp('^appVersion: "' + releaseVersion + '"$', 'm'));
+                base = normalizeChart(fromRef(process.env.BASE_SHA, path));
+                head = normalizeChart(chart);
+              } else if (path === 'infra/aws-ecs-manager/variables.tf') {
+                const imagePattern = /(ghcr\.io\/alienplatform\/alien-manager:v)[0-9][^"]*/;
+                const normalizeModule = (content) => content.replace(imagePattern, '$1__RELEASE_VERSION__');
+                const module = fromRef(process.env.SOURCE_REF, path);
+                requireVersion(path, module, new RegExp('ghcr\\.io/alienplatform/alien-manager:v' + releaseVersion + '"'));
+                base = normalizeModule(fromRef(process.env.BASE_SHA, path));
+                head = normalizeModule(module);
               } else {
                 continue;
               }

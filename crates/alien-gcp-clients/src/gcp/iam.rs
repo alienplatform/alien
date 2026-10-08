@@ -274,11 +274,15 @@ impl IamApi for IamClient {
         service_account_name: String,
         iam_policy: IamPolicy,
     ) -> Result<IamPolicy> {
-        let encoded_name = urlencoding::encode(&service_account_name).into_owned();
-        let path = format!(
-            "projects/{}/serviceAccounts/{}:setIamPolicy",
-            self.project_id, encoded_name
-        );
+        let path = if service_account_name.starts_with("projects/") {
+            format!("{service_account_name}:setIamPolicy")
+        } else {
+            let encoded_name = urlencoding::encode(&service_account_name);
+            format!(
+                "projects/{}/serviceAccounts/{encoded_name}:setIamPolicy",
+                self.project_id
+            )
+        };
         let request = SetIamPolicyRequest { policy: iam_policy };
 
         self.base

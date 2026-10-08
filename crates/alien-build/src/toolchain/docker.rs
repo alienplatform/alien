@@ -64,7 +64,7 @@ impl DockerToolchain {
         format!("alien-build-{}-{suffix}", std::process::id())
     }
 
-    fn absolute_path(path: &Path) -> Result<PathBuf> {
+    pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
         if path.is_absolute() {
             return Ok(path.to_path_buf());
         }
@@ -325,9 +325,12 @@ impl DockerToolchain {
     }
 }
 
-#[async_trait]
-impl Toolchain for DockerToolchain {
-    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+impl DockerToolchain {
+    pub(crate) async fn build_with_contexts(
+        &self,
+        context: &ToolchainContext,
+        additional_contexts: &[(&str, &Path)],
+    ) -> Result<ToolchainOutput> {
         let dockerfile_name = self.dockerfile.as_deref().unwrap_or("Dockerfile");
 
         info!(
@@ -351,7 +354,16 @@ impl Toolchain for DockerToolchain {
             "{}.oci.tar",
             context.build_target.runtime_platform_id()
         )))?;
-        let output = format!("type=oci,dest={}", output_tarball.display());
+        let lambda_worker = context.runtime_platform_name == "aws"
+            && context.workload == super::WorkloadKind::Worker;
+        let output = if lambda_worker {
+            format!(
+                "type=oci,dest={},compression=gzip,force-compression=true",
+                output_tarball.display()
+            )
+        } else {
+            format!("type=oci,dest={}", output_tarball.display())
+        };
         let arch_str = match context.build_target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
@@ -382,6 +394,12 @@ impl Toolchain for DockerToolchain {
             dockerfile_name.to_string(),
         ];
 
+        if lambda_worker {
+            // Lambda accepts a single architecture and no attestation manifest.
+            args.push("--provenance=false".to_string());
+            args.push("--sbom=false".to_string());
+        }
+
         // Add build args if provided
         let build_arg_strings: Vec<String> = self
             .build_args
@@ -400,10 +418,19 @@ impl Toolchain for DockerToolchain {
             args.push(format!("id=enterprise_ca,src={}", path.display()));
         }
 
+        if context.pull_base_images {
+            args.push("--pull".to_string());
+        }
+
         // Add target if specified
         if let Some(target) = &self.target {
             args.push("--target".to_string());
             args.push(target.clone());
+        }
+
+        for (name, path) in additional_contexts {
+            args.push("--build-context".to_string());
+            args.push(format!("{name}={}", path.display()));
         }
 
         // Add build context
@@ -502,6 +529,13 @@ impl Toolchain for DockerToolchain {
             entrypoint: None,
             runtime_command,
         })
+    }
+}
+
+#[async_trait]
+impl Toolchain for DockerToolchain {
+    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+        self.build_with_contexts(context, &[]).await
     }
 
     fn dev_command(&self, _src_dir: &Path) -> Vec<String> {
@@ -1038,6 +1072,7 @@ CMD ["cat", "hello.txt"]
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1154,6 +1189,7 @@ CMD ["true"]
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "local".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1371,6 +1407,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1410,6 +1447,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 
@@ -1459,6 +1497,7 @@ WORKDIR /app
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
 

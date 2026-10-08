@@ -5,6 +5,8 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
     Storage,
+    Kv,
+    Queue,
     Key,
     Ai,
     Sandbox,
@@ -31,6 +33,26 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         permission_set: "storage/remote-data-write",
         kind: RemoteBindingKind::Storage,
         description: "Read and write objects in this storage resource",
+        setup_support_resource_types: &[
+            "azure_resource_group",
+            "azure_storage_account",
+            "service_activation",
+        ],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "queue",
+        permission_set: "queue/publish",
+        kind: RemoteBindingKind::Queue,
+        description: "Send messages to this queue",
+        setup_support_resource_types: &["azure_resource_group", "azure_service_bus_namespace", "service_activation"],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "kv",
+        permission_set: "kv/remote-data-write",
+        kind: RemoteBindingKind::Kv,
+        description: "Read and write entries in this key-value store",
         setup_support_resource_types: &[
             "azure_resource_group",
             "azure_storage_account",
@@ -112,6 +134,10 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
     remote_binding_for_entry(entry)?;
     let sandbox = entry.config.downcast_ref::<Sandbox>()?;
 
+    if sandbox.privileged_supervisor.is_some() {
+        return Some("a remotely published sandbox cannot declare privilegedSupervisor; the raw grant can start retained image versions with a different command identity or egress policy; use an ordinary workload binding");
+    }
+
     if !matches!(sandbox.egress, SandboxEgress::Allow) {
         return Some(
             "a remotely published sandbox must declare egress 'allow'; the remote grant either \
@@ -189,6 +215,36 @@ mod tests {
             dependencies: Vec::new(),
             lifecycle: ResourceLifecycle::Frozen,
             remote_access: true,
+        }
+    }
+
+    #[test]
+    fn a_remote_grant_cannot_bypass_supervision_through_a_retained_version() {
+        for egress in [
+            SandboxEgress::Allow,
+            SandboxEgress::Deny,
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+        ] {
+            let mut entry = remote_sandbox(egress, vec![]);
+            let mut sandbox = entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .expect("sandbox")
+                .clone();
+            sandbox.privileged_supervisor =
+                Some(crate::SandboxPrivilegedSupervisor { command_uid: 60001 });
+            entry.config = crate::Resource::new(sandbox);
+            assert!(remote_binding_undeliverable_reason(&entry)
+                .expect("raw version-wide grant is unsafe")
+                .contains("privilegedSupervisor"));
+            entry.remote_access = false;
+            assert_eq!(
+                remote_binding_undeliverable_reason(&entry),
+                None,
+                "ordinary bindings select the active version"
+            );
         }
     }
 

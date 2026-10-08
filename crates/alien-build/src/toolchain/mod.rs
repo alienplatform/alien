@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub mod cache_utils;
 pub mod docker;
 pub(crate) mod native_addon;
+pub mod python;
 pub mod rust;
 pub mod typescript;
 
@@ -27,6 +28,9 @@ pub enum WorkloadKind {
     /// Long-lived native process (DaemonSet on Kubernetes, host process on
     /// Local); its binary is the image entrypoint.
     Daemon,
+    /// Root filesystem a sandbox session runs in. It sets no entrypoint: the bundle layers the
+    /// sandbox agent on afterwards, and the agent is what runs.
+    SandboxBase,
 }
 
 impl WorkloadKind {
@@ -36,6 +40,7 @@ impl WorkloadKind {
             Self::Worker => "worker",
             Self::Container => "container",
             Self::Daemon => "daemon",
+            Self::SandboxBase => "sandbox",
         }
     }
 }
@@ -58,6 +63,8 @@ pub struct ToolchainContext {
     pub runtime_platform_name: String,
     /// Whether to build in debug mode (faster builds, larger binaries)
     pub debug_mode: bool,
+    /// Re-resolve base images from their registry instead of reusing a local copy.
+    pub pull_base_images: bool,
     /// Which compute workload this build is for (decides the image shape).
     pub workload: WorkloadKind,
 }
@@ -304,6 +311,15 @@ pub fn create_toolchain(config: &ToolchainConfig) -> Box<dyn Toolchain> {
         ToolchainConfig::TypeScript { binary_name } => Box::new(typescript::TypeScriptToolchain {
             binary_name: binary_name.clone(),
         }),
+        ToolchainConfig::Python {
+            python_version,
+            package,
+            command,
+        } => Box::new(python::PythonToolchain {
+            python_version: python_version.clone(),
+            package: package.clone(),
+            command: command.clone(),
+        }),
         ToolchainConfig::Docker {
             dockerfile,
             build_args,
@@ -398,6 +414,7 @@ mod tests {
             build_target: BinaryTarget::LinuxX64,
             runtime_platform_name: platform.to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload,
         }
     }

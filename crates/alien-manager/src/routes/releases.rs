@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use alien_core::{Platform, Stack};
+use alien_preflights::compile_time::endpoint_host_label_conflicts;
 
 use crate::error::ErrorData;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
@@ -60,6 +61,10 @@ pub struct CreateReleaseRequest {
     /// `unknown field "project", expected "projectId"`.
     #[serde(alias = "project")]
     pub project_id: String,
+    /// Channel the release advances; `production` when absent. Deployments
+    /// following the channel roll out to it.
+    #[serde(default)]
+    pub channel: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +213,27 @@ fn parse_stacks_from_request(
     Ok(stacks)
 }
 
+/// Refuse a new release whose public endpoints would share a generated hostname.
+///
+/// Only new releases are refused: deployments of releases created before this check keep
+/// updating, so it must not move into deployment-time preflights.
+fn refuse_endpoint_host_label_conflicts(
+    stacks: &HashMap<Platform, Stack>,
+) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
+    let mut platforms: Vec<&Platform> = stacks.keys().collect();
+    platforms.sort_by_key(|platform| platform.as_str());
+    for platform in platforms {
+        let conflicts = endpoint_host_label_conflicts(&stacks[platform], *platform);
+        if !conflicts.is_empty() {
+            return Err(ErrorData::bad_request(format!(
+                "Invalid stack for {platform}: {}",
+                conflicts.join(" ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 // --- Handlers ---
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -241,11 +267,37 @@ async fn create_release(
 
     tracing::info!(project_id = %req.project_id, "Received create release request");
 
+    let channel = req
+        .channel
+        .clone()
+        .unwrap_or_else(|| crate::traits::DEFAULT_CHANNEL.to_string());
+    if !super::channels::valid_channel_name(&channel) {
+        return ErrorData::bad_request(format!("Invalid channel name '{channel}'")).into_response();
+    }
+    if let Some(channels) = &state.release_channels {
+        match channels.get_channel(&channel).await {
+            Ok(None) if channel != crate::traits::DEFAULT_CHANNEL => {
+                return ErrorData::bad_request(format!(
+                    "No channel named '{channel}'; create it with `alien releases create-channel {channel}`"
+                ))
+                .into_response()
+            }
+            Ok(_) => {}
+            Err(e) => return e.into_response(),
+        }
+    } else if channel != crate::traits::DEFAULT_CHANNEL {
+        return ErrorData::bad_request("This manager doesn't support release channels")
+            .into_response();
+    }
+
     // Parse all platform stacks from request
     let stacks = match parse_stacks_from_request(&req.stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    if let Err(e) = refuse_endpoint_host_label_conflicts(&stacks) {
+        return e.into_response();
+    }
 
     let (git_sha, git_ref, git_msg) = match &req.git_metadata {
         Some(gm) => (
@@ -277,13 +329,12 @@ async fn create_release(
         }
     };
 
-    // Set desired_release_id on eligible deployments
-    if let Err(e) = state
-        .deployment_store
-        .set_desired_release(&subject, &release.id, None)
-        .await
+    // Advance the release's channel and roll it out to the deployments
+    // following it (every deployment on a manager without channels).
+    if let Err(e) =
+        super::channels::route_new_release(&state, &subject, &release.id, &channel).await
     {
-        tracing::warn!(error = %e, "Failed to set desired release on deployments");
+        return e.into_response();
     }
 
     let response = match record_to_response(&release) {
@@ -407,5 +458,72 @@ async fn get_latest_release(State(state): State<AppState>, headers: HeaderMap) -
     match record_to_response(&release) {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stack_by_platform(aws: serde_json::Value) -> StackByPlatform {
+        serde_json::from_value(serde_json::json!({ "aws": aws })).expect("stack by platform")
+    }
+
+    /// A container as `alien release` serializes it.
+    fn container(id: &str, endpoint: &str) -> serde_json::Value {
+        serde_json::json!({
+            "config": {
+                "id": id,
+                "type": "container",
+                "code": { "type": "image", "image": format!("example.test/{id}:latest") },
+                "cpu": { "min": "0.25", "desired": "0.25" },
+                "memory": { "min": "512Mi", "desired": "512Mi" },
+                "links": [],
+                "ports": [{ "port": 8080 }],
+                "replicas": 1,
+                "stateful": false,
+                "environment": {},
+                "healthCheck": { "path": "/health", "method": "GET", "timeoutSeconds": 2, "failureThreshold": 3 },
+                "permissions": "app",
+                "commandsEnabled": false,
+                "publicEndpoints": [
+                    { "name": endpoint, "port": 8080, "protocol": "http", "wildcardSubdomains": false }
+                ]
+            },
+            "lifecycle": "live",
+            "dependencies": [],
+            "remoteAccess": false
+        })
+    }
+
+    /// `POST /v1/releases` parses the request with these two steps; a stack built outside
+    /// `alien release` reaches the manager without the build-time preflights.
+    fn validate(mut aws: serde_json::Value) -> std::result::Result<(), String> {
+        aws["permissions"] = serde_json::json!({ "profiles": { "app": {} }, "management": "auto" });
+        let stacks = parse_stacks_from_request(&stack_by_platform(aws)).map_err(|e| e.message)?;
+        refuse_endpoint_host_label_conflicts(&stacks).map_err(|e| e.message)
+    }
+
+    #[test]
+    fn new_release_with_shared_endpoint_hostname_is_refused() {
+        let error = validate(serde_json::json!({
+            "id": "app",
+            "resources": { "gateway": container("gateway", "api"), "probe": container("probe", "api") },
+        }))
+        .expect_err("two 'api' endpoints must be refused");
+        assert!(
+            error.contains("Invalid stack for aws: Public endpoints 'api' on '"),
+            "{error}"
+        );
+        assert!(
+            error.contains("would both get hostname 'api.<deployment domain>'"),
+            "{error}"
+        );
+
+        validate(serde_json::json!({
+            "id": "app",
+            "resources": { "gateway": container("gateway", "api"), "probe": container("probe", "probe") },
+        }))
+        .expect("distinct endpoint names are accepted");
     }
 }

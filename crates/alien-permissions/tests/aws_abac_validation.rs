@@ -199,7 +199,7 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
         .as_ref()
         .expect("permission set must have AWS permissions");
 
-    assert_eq!(aws_permissions.len(), 2);
+    assert_eq!(aws_permissions.len(), 3);
     for permission in aws_permissions {
         assert!(
             permission.binding.stack.is_none(),
@@ -210,12 +210,23 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
             .resource
             .as_ref()
             .expect("resource binding required");
+        let actions = permission.grant.actions.as_ref().expect("actions required");
+        // ListCertificates supports no resource scoping, so it is the one unscoped grant, and
+        // it may carry nothing else.
+        if actions
+            .iter()
+            .any(|action| action == "acm:ListCertificates")
+        {
+            assert_eq!(actions, &["acm:ListCertificates"]);
+            assert_eq!(binding.resources, ["*"]);
+            assert!(binding.condition.is_none());
+            continue;
+        }
         assert_eq!(
             binding.resources,
             ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
         );
 
-        let actions = permission.grant.actions.as_ref().expect("actions required");
         if actions
             .iter()
             .any(|action| action == "acm:DeleteCertificate")
@@ -269,11 +280,21 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || resource.contains("${resourceName}")
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
+                        || documented_compute_instance_profile_metadata_scope(
+                            permission_set_id,
+                            actions,
+                            resource,
+                        )
                         || documented_same_account_ecr_metadata_scope(actions, resource)
                         || documented_aoss_id_scoped_collection_resource(actions, resource)
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
                         || documented_ses_domain_identity_scope(resource)
+                        || documented_detached_network_interface_cleanup(
+                            permission_set_id,
+                            actions,
+                            resource,
+                        )
                     {
                         continue;
                     }
@@ -333,6 +354,21 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     resource == "arn:aws:lambda:${awsRegion}:aws:network-connector:aws-network-connector:*"
 }
 
+fn documented_detached_network_interface_cleanup(
+    permission_set_id: &str,
+    actions: &[String],
+    resource: &str,
+) -> bool {
+    // Lambda leaves detached network interfaces in the managed network's subnets, and they block
+    // deleting it. They carry no Alien tags, so no tag condition can scope the delete, and the
+    // VPC ID a condition would need is only known at runtime. EC2 refuses to delete an attached
+    // interface, and the network controller deletes only available, AWS-managed `lambda`
+    // interfaces in its own subnets and security group.
+    permission_set_id == "network/provision"
+        && actions == ["ec2:DeleteNetworkInterface"]
+        && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+}
+
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {
     // SES identities are named after customer mail domains (e.g.
     // `identity/mail.example.com`), so their ARNs cannot carry the stack
@@ -349,6 +385,82 @@ fn documented_aoss_id_scoped_collection_resource(actions: &[String], resource: &
     // to be a principal of the collection's data-access policy.
     actions.iter().all(|action| action == "aoss:APIAccessAll")
         && resource == "arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"
+}
+
+fn documented_compute_instance_profile_metadata_scope(
+    permission_set_id: &str,
+    actions: &[String],
+    resource: &str,
+) -> bool {
+    // The actual profile ARN is unavailable in this context, and generated profile
+    // names need not carry the stack prefix. Role metadata reads and PassRole stay
+    // prefix-scoped; this exception permits only account-local profile metadata.
+    matches!(
+        permission_set_id,
+        "compute-cluster/management" | "compute-cluster/provision"
+    ) && actions == ["iam:GetInstanceProfile"]
+        && resource == "arn:aws:iam::${awsAccountId}:instance-profile/*"
+}
+
+#[test]
+fn compute_instance_profile_metadata_scope_exception_is_exact() {
+    let resource = "arn:aws:iam::${awsAccountId}:instance-profile/*";
+    let actions = vec!["iam:GetInstanceProfile".to_string()];
+    for id in ["compute-cluster/management", "compute-cluster/provision"] {
+        assert!(documented_compute_instance_profile_metadata_scope(
+            id, &actions, resource
+        ));
+        assert!(!documented_compute_instance_profile_metadata_scope(
+            id,
+            &[],
+            resource
+        ));
+        for extra in [
+            "iam:AddRoleToInstanceProfile",
+            "iam:PassRole",
+            "sts:AssumeRole",
+            "sts:GetSessionToken",
+            "iam:GetRole",
+            "iam:*",
+            "iam:GetInstanceProfile",
+        ] {
+            let mixed = vec![actions[0].clone(), extra.to_string()];
+            assert!(!documented_compute_instance_profile_metadata_scope(
+                id, &mixed, resource
+            ));
+            if extra != "iam:GetInstanceProfile" {
+                assert!(!documented_compute_instance_profile_metadata_scope(
+                    id,
+                    &[extra.to_string()],
+                    resource,
+                ));
+            }
+        }
+        for wrong_resource in [
+            "arn:aws:iam::${managingAccountId}:instance-profile/*",
+            "arn:aws:iam::999999999999:instance-profile/*",
+            "arn:aws:iam::*:instance-profile/*",
+            "arn:aws:iam::${awsAccountId}:*",
+            "arn:aws:iam::${awsAccountId}:role/*",
+            "*",
+        ] {
+            assert!(!documented_compute_instance_profile_metadata_scope(
+                id,
+                &actions,
+                wrong_resource
+            ));
+        }
+    }
+    for wrong_id in [
+        "compute-cluster/heartbeat",
+        "worker/management",
+        "compute-cluster/management-extra",
+        "",
+    ] {
+        assert!(!documented_compute_instance_profile_metadata_scope(
+            wrong_id, &actions, resource
+        ));
+    }
 }
 
 fn documented_same_account_ecr_metadata_scope(actions: &[String], resource: &str) -> bool {
@@ -655,16 +767,82 @@ fn action_requires_service_name_condition(action: &str) -> bool {
     matches!(action, "iam:CreateServiceLinkedRole")
 }
 
+/// The invariant that makes `lambda:TagResource` safe on Resource "*".
+///
+/// A holder of it can stamp this stack's tag onto any Lambda resource in the account. That is
+/// only harmless while every Lambda statement keyed on `aws:ResourceTag` also pins the name to
+/// this stack — a forged tag on `their-function` then satisfies the condition but never the
+/// resource. Drop the name pin from one of those statements and the wildcard tag becomes a way
+/// to read and reconfigure a customer's own functions.
+#[test]
+fn lambda_resource_tag_statements_are_name_pinned() {
+    let mut failures = Vec::new();
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+
+        for (statement_index, permission) in aws_permissions.iter().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+            if !actions.iter().any(|action| action.starts_with("lambda:")) {
+                continue;
+            }
+
+            for binding in [
+                permission.binding.stack.as_ref(),
+                permission.binding.resource.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !has_condition_key(binding, "aws:ResourceTag/${stackTag}") {
+                    continue;
+                }
+                for resource in &binding.resources {
+                    if !resource.contains("${stackPrefix}") && !resource.contains("${resourceName}")
+                    {
+                        failures.push(format!(
+                            "{permission_set_id}[{statement_index}] keys a Lambda grant on \
+                             aws:ResourceTag but does not pin the name to this stack: {resource}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "Lambda ResourceTag name-pinning failed:\n{}",
+        failures.join("\n")
+    );
+}
+
 fn action_requires_tag_condition(action: &str) -> bool {
     matches!(
         action,
-        "acm:ImportCertificate"
+        // A tagged create carries an implicit TagResource, authorized the way its create is. For
+        // lambda:CreateMicrovmImage that is against no resource type, so the tag cannot be
+        // authorized against the image ARN and only the request tags can bound it. What keeps
+        // that from being a way to pull a foreign function into this stack's scope is
+        // `lambda_resource_tag_statements_are_name_pinned`.
+        "lambda:TagResource"
+            | "acm:ImportCertificate"
             | "acm:AddTagsToCertificate"
             | "acm:DeleteCertificate"
             | "apigateway:POST"
             | "apigateway:PUT"
             | "apigateway:TagResource"
             | "autoscaling:CreateAutoScalingGroup"
+            | "dlm:CreateLifecyclePolicy"
             | "autoscaling:DeleteAutoScalingGroup"
             | "autoscaling:SetDesiredCapacity"
             | "autoscaling:StartInstanceRefresh"
@@ -730,6 +908,60 @@ const SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE: &[&str] = &[
     // `lambda:PassNetworkConnector` is deliberately absent: AWS authorizes it against the
     // connector ARN, so it is scoped rather than wildcarded — see `sandbox/remote-execute`.
 ];
+
+/// A tag grant on `*` also tags every existing Lambda resource in the account, and its request
+/// tags bound only the keys they name. The implicit tag of a create is the one tag AWS checks
+/// against no resource, so it is granted on `NotResource` of every Lambda ARN instead.
+#[test]
+fn lambda_tag_resource_is_never_granted_on_every_resource() {
+    let mut failures = Vec::new();
+    let mut tag_on_create = 0;
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        for (index, permission) in permission_set.platforms.aws.iter().flatten().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+            let tags = permission
+                .grant
+                .actions
+                .iter()
+                .flatten()
+                .any(|action| action == "lambda:TagResource");
+            if !tags {
+                continue;
+            }
+            for binding in [
+                permission.binding.stack.as_ref(),
+                permission.binding.resource.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if binding.resources.iter().any(|resource| resource == "*") {
+                    failures.push(format!(
+                        "{permission_set_id}[{index}] grants lambda:TagResource on \"*\""
+                    ));
+                }
+                if binding
+                    .not_resources
+                    .iter()
+                    .any(|pattern| pattern == "arn:*:lambda:*:*:*")
+                {
+                    tag_on_create += 1;
+                }
+            }
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(
+        tag_on_create > 0,
+        "no sandbox image build can tag on create: the NotResource grant is gone"
+    );
+}
 
 /// The inverse of the wildcard check above: that one asks whether a `*` is too wide, this one asks
 /// whether an ARN is too narrow to work.
@@ -918,4 +1150,58 @@ fn no_sandbox_set_can_pass_a_role_into_a_session() {
     }
 
     assert!(inspected > 0, "no sandbox permission set was inspected");
+}
+
+/// IAM answers a call whose grant is conditioned on `aws:ResourceTag` with AccessDenied when the
+/// role does not exist, because a missing role has no tags to match. Container cleanup deletes
+/// the volume-backup execution role whether or not it exists, and only `NoSuchEntity` tells it
+/// the role is already gone. So every call on that existing role must be scoped by name alone.
+#[test]
+fn container_backup_role_calls_on_existing_roles_are_name_scoped() {
+    let permission_set = get_permission_set("container/provision").expect("container/provision");
+    let aws_permissions = permission_set
+        .platforms
+        .aws
+        .as_ref()
+        .expect("container/provision has AWS permissions");
+    let existing_role_actions = [
+        "iam:GetRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:DeleteRole",
+        "iam:PassRole",
+    ];
+    for action in existing_role_actions {
+        let statements = aws_permissions
+            .iter()
+            .filter(|permission| {
+                permission
+                    .grant
+                    .actions
+                    .iter()
+                    .flatten()
+                    .any(|granted| granted == action)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statements.len(), 1, "{action} should be granted once");
+        for binding in [
+            statements[0].binding.stack.as_ref(),
+            statements[0].binding.resource.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert_eq!(
+                binding.resources,
+                ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+                "{action} must cover the controller's role name `{{prefix}}-dlm-{{hash}}`"
+            );
+            assert!(
+                !has_condition_key(binding, "aws:ResourceTag/${stackTag}")
+                    && !has_condition_key(binding, "aws:ResourceTag/${resourceTag}")
+                    && !has_condition_key(binding, "aws:ResourceTag/${managedByTag}"),
+                "{action} must not depend on the role's tags"
+            );
+        }
+    }
 }

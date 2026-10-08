@@ -37,6 +37,22 @@ impl Modify for BearerSecurity {
         crate::routes::health::health,
         // Identity
         crate::routes::whoami::whoami,
+        crate::routes::manager_info::manager_info,
+        crate::routes::logs::recent_logs,
+        crate::routes::airgap::target,
+        crate::routes::airgap::bundle_sources,
+        crate::routes::channels::list_channels,
+        crate::routes::channels::create_channel,
+        crate::routes::channels::delete_channel,
+        crate::routes::channels::promote_release,
+        crate::routes::channels::get_routing,
+        crate::routes::channels::set_channel,
+        crate::routes::channels::set_pin,
+        crate::routes::airgap::bundle_signature,
+        crate::routes::airgap::status_report,
+        crate::routes::tokens::list_tokens,
+        crate::routes::tokens::create_token,
+        crate::routes::tokens::delete_token,
         // Deployments
         crate::routes::deployments::create_deployment,
         crate::routes::deployments::list_deployments,
@@ -68,6 +84,10 @@ impl Modify for BearerSecurity {
         crate::routes::credentials::mint_credentials,
         // Remote bindings
         crate::routes::bindings::resolve_binding,
+        // Vault secrets
+        crate::routes::vault::set_secret,
+        crate::routes::vault::get_secret,
+        crate::routes::vault::delete_secret,
     ),
     components(schemas(
         // Deployment types
@@ -103,7 +123,6 @@ impl Modify for BearerSecurity {
         crate::routes::sync::ReconcileResponse,
         crate::routes::sync::RenewRequest,
         crate::routes::sync::ReleaseRequest,
-        crate::routes::sync::AgentSyncRequest,
         crate::routes::sync::AgentSyncResponse,
         crate::routes::sync::InitializeRequest,
         crate::routes::sync::InitializeResponse,
@@ -111,16 +130,52 @@ impl Modify for BearerSecurity {
         alien_core::sync::OperationsReport,
         alien_core::sync::OperatorImageReport,
         alien_core::sync::OperatorImageSource,
+        alien_core::sync::ObservedApplicationReport,
+        alien_core::sync::ObservedApplicationImage,
+        alien_core::sync::ObservedApplicationSource,
         alien_core::sync::OperationsBundleDownload,
         alien_core::sync::TargetOperationsBundleSet,
+        alien_core::sync::TargetDynamicContainer,
+        alien_core::sync::DynamicContainerHealthCheck,
+        alien_core::sync::DynamicContainerReport,
+        alien_core::sync::DynamicContainerStatus,
         // Credentials types
         crate::routes::credentials::MintCredentialsRequest,
         crate::routes::credentials::MintCredentialsResponse,
         // Remote binding types
         crate::routes::bindings::ResolveBindingRequest,
         crate::routes::bindings::ResolveBindingResponse,
+        // Vault types
+        crate::routes::vault::SetSecretRequest,
+        crate::routes::vault::GetSecretResponse,
+        crate::routes::vault::VaultMutationResponse,
         // Identity types
         crate::routes::whoami::WhoamiResponse,
+        crate::routes::manager_info::ManagerInfoResponse,
+        crate::routes::manager_info::ManagerCapabilities,
+        crate::routes::logs::RecentLogsResponse,
+        crate::routes::logs::RecentLogEntry,
+        crate::routes::airgap::BundleSignatureRequest,
+        crate::routes::channels::ReleaseChannelResponse,
+        crate::routes::channels::ListReleaseChannelsResponse,
+        crate::routes::channels::CreateReleaseChannelRequest,
+        crate::routes::channels::PromoteReleaseRequest,
+        crate::routes::channels::SetDeploymentChannelRequest,
+        crate::routes::channels::SetDeploymentPinRequest,
+        crate::routes::channels::DeploymentRoutingResponse,
+        crate::routes::airgap::BundleSignatureResponse,
+        crate::routes::airgap::StatusReport,
+        crate::routes::airgap::ReportedTelemetry,
+        crate::traits::BundleSources,
+        crate::traits::BundleSource,
+        crate::traits::SourceCredentials,
+        crate::traits::ToolDownload,
+        crate::routes::airgap::StatusReportResponse,
+        crate::routes::tokens::TokenResponse,
+        crate::routes::tokens::ListTokensResponse,
+        crate::routes::tokens::CreateTokenRequest,
+        crate::routes::tokens::CreatableTokenType,
+        crate::routes::tokens::CreatedTokenResponse,
         // Health types
         crate::routes::health::HealthResponse,
         // Core types
@@ -137,6 +192,7 @@ impl Modify for BearerSecurity {
         (name = "sync", description = "Agent sync and state reconciliation"),
         (name = "credentials", description = "Credential resolution for deployments"),
         (name = "bindings", description = "Remote resource binding resolution"),
+        (name = "vault", description = "Deployment Vault secret management"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),
     )
 )]
@@ -171,5 +227,20 @@ mod tests {
             document.pointer("/paths/~1v1~1bindings~1resolve/post/security/0/bearer"),
             Some(&json!([]))
         );
+    }
+
+    #[test]
+    fn openapi_exposes_authenticated_vault_secret_operations() {
+        let document = serde_json::to_value(ApiDoc::openapi())
+            .expect("manager OpenAPI should serialize as JSON");
+        let path = "/paths/~1v1~1deployments~1{id}~1vault~1{vault_name}~1secrets~1{key}";
+
+        for method in ["put", "get", "delete"] {
+            assert_eq!(
+                document.pointer(&format!("{path}/{method}/security/0/bearer")),
+                Some(&json!([])),
+                "{method} must require bearer authentication"
+            );
+        }
     }
 }

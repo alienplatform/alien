@@ -1,11 +1,19 @@
 pub(crate) mod command_output;
 pub mod dependencies;
+mod dockerignore;
 pub mod error;
+mod lambda_image;
+#[cfg(test)]
+mod lambda_tests;
 pub mod merge;
 pub mod plan;
+pub mod registry;
 pub mod sandbox_bundle;
 pub mod settings;
+mod source_input;
 pub mod toolchain;
+
+pub use source_input::docker_source_input_hash;
 
 use alien_core::{
     alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,
@@ -85,6 +93,7 @@ struct DedupeKey {
 enum ToolchainType {
     Rust,
     TypeScript,
+    Python,
     Docker,
 }
 
@@ -101,6 +110,20 @@ impl DedupeKey {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::TypeScript,
                 binary_name: binary_name.clone().unwrap_or_else(|| "default".to_string()),
+            },
+            ToolchainConfig::Python {
+                python_version,
+                package,
+                command,
+            } => Self {
+                src: src.to_string(),
+                toolchain_type: ToolchainType::Python,
+                binary_name: format!(
+                    "{}\0{}\0{}",
+                    python_version.as_deref().unwrap_or_default(),
+                    package.as_deref().unwrap_or_default(),
+                    command.join("\0")
+                ),
             },
             ToolchainConfig::Docker { dockerfile, .. } => Self {
                 src: src.to_string(),
@@ -134,6 +157,15 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         "Starting stack build process for platform: {:?}...",
         settings.platform.runtime_platform()
     );
+
+    // Release auto-builds and library callers can construct BuildSettings directly instead of
+    // going through the CLI planner. Enforce the platform's architecture contract here so every
+    // path fails before doing build work or writing artifacts.
+    plan::resolve_targets_for_stack_platform(
+        &stack,
+        settings.platform.runtime_platform(),
+        settings.targets.as_deref(),
+    )?;
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
@@ -189,6 +221,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
     let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
+    let mut sandboxes_to_build: Vec<(String, Sandbox, String, ToolchainConfig)> = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
         if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
@@ -227,6 +260,40 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 }
                 DaemonCode::Image { .. } => {
                     info!("Daemon '{}' already has an image. Skipping.", daemon.id);
+                }
+            }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            info!("Processing sandbox: {}", sandbox.id);
+            match &sandbox.code {
+                SandboxCode::Source { src, toolchain } => {
+                    // A sandbox base image is a root filesystem, not a compiled binary laid on one,
+                    // so the other toolchains have no meaning here rather than a missing
+                    // implementation.
+                    if !matches!(toolchain, ToolchainConfig::Docker { .. }) {
+                        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+                            message: format!(
+                                "Sandbox '{}' is built from source with a {} toolchain. A sandbox \
+                                 base image is a root filesystem, so it is built from a \
+                                 Dockerfile; give it a docker toolchain, or name a prebuilt image \
+                                 in code.image.",
+                                sandbox.id,
+                                toolchain_name(toolchain)
+                            ),
+                        }));
+                    }
+                    info!(
+                        "Sandbox '{}' has source code. Queued for parallel build.",
+                        sandbox.id
+                    );
+                    sandboxes_to_build.push((
+                        id.clone(),
+                        sandbox.clone(),
+                        src.clone(),
+                        toolchain.clone(),
+                    ));
+                }
+                SandboxCode::Image { .. } => {
+                    info!("Sandbox '{}' already has an image. Skipping.", sandbox.id);
                 }
             }
         }
@@ -599,6 +666,157 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         }
 
         info!("Completed parallel building of {} daemons", completed_tasks);
+    }
+
+    // A sandbox base image is the root filesystem a session runs in. It is built and pushed like
+    // any other compute image; the bundle layers the sandbox agent on afterwards, and AWS builds
+    // the MicroVM from that bundle inside the customer's account.
+    if !sandboxes_to_build.is_empty() {
+        let build_targets = settings.get_targets();
+
+        info!(
+            "Building {} sandbox base images for {} target(s): {:?}",
+            sandboxes_to_build.len(),
+            build_targets.len(),
+            build_targets
+        );
+
+        let current_bus = alien_core::EventBus::current();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        let build_tasks: Vec<_> = sandboxes_to_build
+            .into_iter()
+            .map(|(resource_id, sandbox, src, toolchain)| {
+                let sandbox_id = sandbox.id.clone();
+                let stack_id = stack_id.clone();
+                let settings = settings.clone();
+                let output_dir = output_dir.clone();
+                let bus = current_bus.clone();
+                let cancel_token = cancel_token.clone();
+
+                tokio::spawn(async move {
+                    let sandbox_id_for_warning = sandbox_id.clone();
+
+                    let build_work = async move {
+                        info!("Starting parallel build for resource: {}", sandbox_id);
+
+                        if cancel_token.is_cancelled() {
+                            return (
+                                resource_id.clone(),
+                                sandbox,
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: sandbox_id.clone(),
+                                })),
+                            );
+                        }
+
+                        let result = tokio::select! {
+                            result = build_resource(
+                                &src,
+                                &toolchain,
+                                &sandbox_id,
+                                &stack_id,
+                                &settings,
+                                &output_dir,
+                                toolchain::WorkloadKind::SandboxBase,
+                                &[],
+                            ) => result,
+                            _ = cancel_token.cancelled() => {
+                                info!("Build for sandbox '{}' was cancelled", sandbox_id);
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: sandbox_id.clone()
+                                }))
+                            }
+                        };
+
+                        match &result {
+                            Ok(image_uri) => {
+                                info!(
+                                    "Successfully built OCI image for resource '{}' to: {}",
+                                    sandbox_id, image_uri
+                                );
+                            }
+                            Err(e) => {
+                                info!("Failed to build sandbox '{}': {}", sandbox_id, e);
+                            }
+                        }
+
+                        (resource_id, sandbox, result)
+                    };
+
+                    match bus {
+                        Some(bus) => bus.run(|| build_work).await,
+                        None => {
+                            tracing::debug!(
+                                "No event bus context available for parallel build of sandbox '{}'",
+                                sandbox_id_for_warning
+                            );
+                            build_work.await
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        let mut build_results: Vec<(String, Sandbox)> = Vec::new();
+        let mut completed_tasks = 0;
+        let mut remaining_tasks = build_tasks;
+        let mut first_error: Option<AlienError<ErrorData>> = None;
+
+        while !remaining_tasks.is_empty() {
+            let (result, _index, rest) = futures::future::select_all(remaining_tasks).await;
+            remaining_tasks = rest;
+
+            match result {
+                Ok((resource_id, sandbox, build_result)) => match build_result {
+                    Ok(image_uri) => {
+                        let mut updated_sandbox = sandbox;
+                        updated_sandbox.code = SandboxCode::Image { image: image_uri };
+                        build_results.push((resource_id, updated_sandbox));
+                        completed_tasks += 1;
+                    }
+                    Err(e) => {
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                            cancel_token.cancel();
+                            for task in remaining_tasks {
+                                task.abort();
+                            }
+                            break;
+                        }
+                    }
+                },
+                Err(join_error) => {
+                    if join_error.is_cancelled() {
+                        info!("Build task was cancelled");
+                    } else {
+                        tracing::warn!("Build task failed: {}", join_error);
+                        if first_error.is_none() {
+                            first_error = Some(AlienError::new(ErrorData::BuildConfigInvalid {
+                                message: format!("Build task failed: {}", join_error),
+                            }));
+                            cancel_token.cancel();
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        for (resource_id, updated_sandbox) in build_results {
+            if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id)
+            {
+                resource_entry.1.config = alien_core::Resource::new(updated_sandbox);
+            }
+        }
+
+        info!(
+            "Completed parallel building of {} sandbox base images",
+            completed_tasks
+        );
     }
 
     // Build all containers in parallel with fail-fast behavior
@@ -1070,6 +1288,23 @@ fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platfor
     }
 }
 
+/// Check local AWS Worker images before a release cache can replace their paths.
+/// Remote image references supplied explicitly by the stack are left unchanged.
+pub fn validate_aws_worker_artifacts(stack: &Stack) -> Result<()> {
+    for target in collect_push_targets(stack)? {
+        if target.resource_type == "worker" {
+            lambda_image::validate(
+                &target.local_image_dir.join(format!(
+                    "{}.oci.tar",
+                    BinaryTarget::LinuxArm64.runtime_platform_id()
+                )),
+                target.resource_name(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
 #[derive(Debug)]
 struct ResourcePushTarget {
@@ -1143,8 +1378,9 @@ fn add_push_target_resource(
 /// Returns an error if any compute resource still has unbuilt source code — that means
 /// `alien build` was not run first.
 ///
-/// To add support for a new compute resource type, add an `else if` branch here and in
-/// [`apply_pushed_images`].
+/// To add a compute resource type, branch here, in [`apply_pushed_images`], and in the CLI
+/// `release` push-cache sites: prebuilt rebase, cache apply, cache collect. One missing from
+/// those three still pushes, but re-pushes on every release.
 fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
     let mut targets = Vec::new();
 
@@ -1276,8 +1512,8 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
 
 /// Applies pushed registry URIs back to their respective resources in the stack.
 ///
-/// To add support for a new compute resource type, add an `else if` branch here and in
-/// [`collect_push_targets`].
+/// To add support for a new compute resource type, add an `else if` branch here, in
+/// [`collect_push_targets`], and in the three push-cache sites in the CLI's `release`.
 fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
     for (resource_id, image_uri) in updates {
         if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
@@ -1313,6 +1549,9 @@ pub async fn push_stack(
         push_settings.repository
     );
 
+    if platform == Platform::Aws {
+        validate_aws_worker_artifacts(&stack)?;
+    }
     let to_push = collect_push_targets(&stack)?;
 
     let resource_count = to_push
@@ -1341,6 +1580,7 @@ pub async fn push_stack(
             let resource_name = target.resource_name().to_string();
             let display_resource_name = target.display_resource_name();
             let resource_names = target.resource_names.clone();
+            let platform = platform.clone();
             let repository = push_settings.repository.clone();
             let push_opts = push_settings.options.clone();
             let bus = current_bus.clone();
@@ -1377,6 +1617,7 @@ pub async fn push_stack(
                             &resource_name,
                             target.resource_type,
                             &target.local_image_dir,
+                            &platform,
                             &repository,
                             &push_opts,
                         ) => result,
@@ -1498,6 +1739,7 @@ async fn push_resource_images(
     resource_name: &str,
     resource_type: &str,
     images_dir: &Path,
+    platform: &Platform,
     repository: &str,
     push_options: &dockdash::PushOptions,
 ) -> Result<String> {
@@ -1591,12 +1833,42 @@ async fn push_resource_images(
         resource_name: resource_name.to_string(),
     }));
 
-    // Container images are linux; darwin/windows tarballs (produced for `local` host
-    // binaries) are not registry container images, so they're excluded from the push.
-    let linux_tarballs = select_linux_tarballs(&oci_files);
+    // Lambda requires one ARM64 image. Local Workers/Daemons execute host binaries;
+    // other container runtimes can consume Linux multi-architecture indexes.
+    let selected_tarballs = if *platform == Platform::Aws && resource_type == "worker" {
+        let target = BinaryTarget::LinuxArm64;
+        let archive = oci_files
+            .iter()
+            .find(|path| oci_tarball_target(path) == Some(target))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: resource_name.to_string(),
+                    reason: "AWS Workers require a Linux ARM64 OCI archive".to_string(),
+                })
+            })?;
+        lambda_image::validate(archive, resource_name)?;
+        vec![(target, archive.clone())]
+    } else if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
+        let host = BinaryTarget::current_os();
+        let archive = oci_files
+            .iter()
+            .find(|path| oci_tarball_target(path) == Some(host))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: resource_name.to_string(),
+                    reason: format!(
+                        "No OCI archive for local host target '{}'",
+                        host.runtime_platform_id()
+                    ),
+                })
+            })?;
+        vec![(host, archive.clone())]
+    } else {
+        select_linux_tarballs(&oci_files)
+    };
 
     // No linux image (unusual) — push whatever tarballs are present.
-    if linux_tarballs.is_empty() {
+    if selected_tarballs.is_empty() {
         for oci_file in &oci_files {
             let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
             push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
@@ -1611,7 +1883,7 @@ async fn push_resource_images(
     }
 
     // Single arch: push the image straight to the tag — no index needed.
-    if let [(_, only)] = linux_tarballs.as_slice() {
+    if let [(_, only)] = selected_tarballs.as_slice() {
         info!("Pushing {} to {}", only.display(), image_uri);
         let image = DockDashImage::from_tarball(only).map_dockdash_err()?;
         push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
@@ -1631,7 +1903,7 @@ async fn push_resource_images(
         ..Default::default()
     });
     let mut entries = Vec::new();
-    for (target, oci_file) in &linux_tarballs {
+    for (target, oci_file) in &selected_tarballs {
         let child_uri = format!("{}-{}", image_uri, target.runtime_platform_id());
         info!("Pushing {} as {}", oci_file.display(), child_uri);
         let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
@@ -1685,7 +1957,7 @@ async fn push_resource_images(
     info!(
         "Pushed multi-arch image {} ({} arches)",
         image_uri,
-        linux_tarballs.len()
+        selected_tarballs.len()
     );
 
     info!(
@@ -1852,13 +2124,17 @@ async fn build_resource(
 
     let platform_name = settings.platform.runtime_platform().as_str();
     let lookup_started = Instant::now();
-    let cached_dir = find_cached_artifact_dir(
-        build_output_dir,
-        resource_name,
-        &targets,
-        &artifact_cache_key,
-    )
-    .await?;
+    let cached_dir = if settings.rebuild {
+        None
+    } else {
+        find_cached_artifact_dir(
+            build_output_dir,
+            resource_name,
+            &targets,
+            &artifact_cache_key,
+        )
+        .await?
+    };
     let lookup_secs = lookup_started.elapsed().as_secs_f64();
 
     if let Some(cached_dir) = cached_dir {
@@ -1979,7 +2255,26 @@ async fn build_resource(
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
     let finalized_dir = finalize_artifact_dir(&resource_dir, &final_output_dir, "build").await?;
-    write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key).await?;
+    // The key was taken before the build read the tree. If the tree changed since, the artifact
+    // is not the build of either version, so it stays out of the cache.
+    // A re-key that fails (a file removed since the build) leaves the artifact uncached too.
+    match compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
+        .await
+    {
+        Ok(key_after_build) if key_after_build == artifact_cache_key => {
+            write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key)
+                .await?;
+        }
+        Ok(_) => warn!(
+            resource = resource_name,
+            "Source changed during the build; the artifact is not cached"
+        ),
+        Err(error) => warn!(
+            resource = resource_name,
+            error = %error,
+            "Could not re-key the source after the build; the artifact is not cached"
+        ),
+    }
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
@@ -2001,6 +2296,9 @@ async fn compute_source_artifact_cache_key(
 ) -> Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(b"alien-build-artifact-cache-v3");
+    if source_layer_compression(settings, workload) == dockdash::LayerCompression::Gzip {
+        hasher.update(b"\0layer-compression:gzip-v1\0");
+    }
     hasher.update(src.as_bytes());
     hasher.update(
         serde_json::to_vec(toolchain_config)
@@ -2047,7 +2345,45 @@ async fn hash_build_input_source(
             hash_source_directory(Path::new(src), hasher).await?;
             hash_typescript_dependency_inputs(Path::new(src), targets, hasher).await
         }
-        _ => hash_source_directory(Path::new(src), hasher).await,
+        ToolchainConfig::Python { .. } => {
+            hash_source_directory(Path::new(src), hasher).await?;
+            hasher.update(toolchain::python::build_recipe_cache_key());
+            if let Some(wheel) = toolchain::python::sdk_wheel_path()? {
+                let bytes = fs::read(&wheel).await.into_alien_error().context(
+                    ErrorData::FileOperationFailed {
+                        operation: "read file".to_string(),
+                        file_path: wheel.display().to_string(),
+                        reason: "Failed to read Python SDK wheel for build cache key".to_string(),
+                    },
+                )?;
+                hasher.update(b"python-sdk-wheel");
+                hasher.update(bytes);
+            }
+            Ok(())
+        }
+        ToolchainConfig::Docker { dockerfile, .. } => {
+            hash_source_directory(Path::new(src), hasher).await?;
+            // The Dockerfile can sit outside `src` or under a skipped directory, where the
+            // directory walk does not see it. A missing one is left to the build to report.
+            let dockerfile = Path::new(src).join(dockerfile.as_deref().unwrap_or("Dockerfile"));
+            match fs::read(&dockerfile).await {
+                Ok(bytes) => {
+                    hasher.update(b"dockerfile");
+                    hasher.update(bytes);
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => {
+                    Err(error)
+                        .into_alien_error()
+                        .context(ErrorData::FileOperationFailed {
+                            operation: "read file".to_string(),
+                            file_path: dockerfile.display().to_string(),
+                            reason: "Failed to read the Dockerfile for build cache key".to_string(),
+                        })
+                }
+            }
+        }
     }
 }
 
@@ -2643,6 +2979,19 @@ async fn materialize_complete_oci_tarball(tarball_path: &Path, output_path: &Pat
     Ok(true)
 }
 
+fn source_layer_compression(
+    settings: &BuildSettings,
+    workload: toolchain::WorkloadKind,
+) -> dockdash::LayerCompression {
+    if settings.platform.runtime_platform() == Platform::Aws
+        && workload == toolchain::WorkloadKind::Worker
+    {
+        dockdash::LayerCompression::Gzip
+    } else {
+        dockdash::LayerCompression::Zstd
+    }
+}
+
 /// Build a specific OS/architecture target to an OCI tarball file
 #[allow(clippy::too_many_arguments)]
 async fn build_target_to_file(
@@ -2700,6 +3049,7 @@ async fn build_target_to_file(
         build_target: *target,
         runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
+        pull_base_images: settings.pull_base_images,
         workload,
     };
 
@@ -2767,7 +3117,9 @@ async fn build_target_to_file(
                 for attempt in 1..=BASE_IMAGE_BUILD_MAX_ATTEMPTS {
                     // Rebuild the lightweight application layer for each retry because
                     // dockdash layers are consumed by the image builder.
-                    let mut app_layer_builder = DockDashLayer::builder().map_dockdash_err()?;
+                    let mut app_layer_builder = DockDashLayer::builder()
+                        .map_dockdash_err()?
+                        .compression(source_layer_compression(settings, workload));
 
                     for file_spec in files_to_package {
                         let absolute_container_path = if file_spec.container_path.starts_with("/") {
@@ -2893,7 +3245,9 @@ async fn build_target_to_file(
             // Add toolchain-specified layers (runtime binary, app code, etc.)
             for layer_spec in layers {
                 info!("Adding layer: {}", layer_spec.description);
-                let mut layer_builder = DockDashLayer::builder().map_dockdash_err()?;
+                let mut layer_builder = DockDashLayer::builder()
+                    .map_dockdash_err()?
+                    .compression(source_layer_compression(settings, workload));
 
                 for file_spec in &layer_spec.files {
                     let absolute_container_path = if file_spec.container_path.starts_with("/") {
@@ -2944,6 +3298,12 @@ async fn build_target_to_file(
         }
     }
 
+    if source_layer_compression(settings, workload) == dockdash::LayerCompression::Gzip
+        && *target == BinaryTarget::LinuxArm64
+    {
+        lambda_image::validate(output_path, resource_name)?;
+    }
+
     info!(
         "Successfully built OCI image for resource {} (target: {}) at {}",
         resource_name,
@@ -2962,7 +3322,12 @@ fn effective_source_base_images(
     workload: toolchain::WorkloadKind,
     host_process: bool,
 ) -> Vec<String> {
-    if host_process || matches!(toolchain_config, alien_core::ToolchainConfig::Docker { .. }) {
+    if host_process
+        || matches!(
+            toolchain_config,
+            alien_core::ToolchainConfig::Docker { .. } | alien_core::ToolchainConfig::Python { .. }
+        )
+    {
         return vec![];
     }
 
@@ -2977,6 +3342,9 @@ fn effective_source_base_images(
                 .map(|image| (*image).to_string())
                 .collect()
         }
+        // A sandbox base image is only built from a Dockerfile, which returned above, and its
+        // `FROM` is the developer's to choose. Alien picking one would decide what a session runs.
+        (toolchain::WorkloadKind::SandboxBase, _) => Vec::new(),
     };
 
     base_images_for_workload(
@@ -2985,6 +3353,15 @@ fn effective_source_base_images(
         workload,
         toolchain_config,
     )
+}
+
+fn toolchain_name(toolchain: &ToolchainConfig) -> &'static str {
+    match toolchain {
+        ToolchainConfig::Rust { .. } => "rust",
+        ToolchainConfig::TypeScript { .. } => "typescript",
+        ToolchainConfig::Docker { .. } => "docker",
+        ToolchainConfig::Python { .. } => "python",
+    }
 }
 
 /// Apply a feature-versioned generic runtime base only to non-TypeScript
@@ -3656,6 +4033,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let error = build_stack(stack, &settings)
@@ -3666,6 +4045,39 @@ mod tests {
         let serialized = serde_json::to_string(&error).expect("error should serialize");
         assert!(serialized.contains("MACHINES_UNSUPPORTED_RESOURCE"));
         assert!(!output.path().join("build").join("machines").exists());
+    }
+
+    #[tokio::test]
+    async fn aws_build_rejects_worker_target_mismatch_before_writing_artifacts() {
+        let output = tempdir().unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/job:latest".to_string(),
+            })
+            .build();
+        let stack = Stack::new("worker-target-mismatch".to_string())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(vec![BinaryTarget::LinuxX64]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+
+        let error = build_stack(stack, &settings)
+            .await
+            .expect_err("AWS Worker should reject an x86-only build");
+
+        assert!(error.to_string().contains("expected LinuxArm64"));
+        assert!(!output.path().join("build").join("aws").exists());
     }
 
     #[test]
@@ -3913,6 +4325,36 @@ mod tests {
         assert_eq!(index.manifests[0].size, 123);
     }
 
+    #[tokio::test]
+    async fn a_dockerfile_outside_src_is_a_cache_key_input() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let src = root.path().join("app");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("run.sh"), "echo hi\n").unwrap();
+        std::fs::write(root.path().join("Sandbox.dockerfile"), "FROM alpine:3.20\n").unwrap();
+        let toolchain = ToolchainConfig::Docker {
+            dockerfile: Some("../Sandbox.dockerfile".to_string()),
+            build_args: None,
+            target: None,
+        };
+        let key = || async {
+            let mut hasher = Sha256::new();
+            hash_build_input_source(
+                src.to_str().unwrap(),
+                &toolchain,
+                &[BinaryTarget::LinuxArm64],
+                &mut hasher,
+            )
+            .await
+            .expect("the source should hash");
+            format!("{:x}", hasher.finalize())
+        };
+
+        let before = key().await;
+        std::fs::write(root.path().join("Sandbox.dockerfile"), "FROM alpine:3.21\n").unwrap();
+        assert_ne!(key().await, before);
+    }
+
     #[test]
     fn manifest_media_type_reads_field_or_none() {
         assert_eq!(
@@ -4087,6 +4529,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         // Pull alpine:latest (small, always available)
@@ -4154,6 +4598,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         // Try to pull non-existent image
@@ -4194,6 +4640,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         // Pull alpine image
@@ -4253,6 +4701,8 @@ mod tests {
             cache_url: None,
             override_base_image: Some("registry.example.com/base:tag".to_string()),
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
@@ -4423,6 +4873,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4485,6 +4937,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let first = compute_source_artifact_cache_key(
@@ -4550,6 +5004,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let first_key = compute_source_artifact_cache_key(
@@ -4614,6 +5070,8 @@ mod tests {
             cache_url: None,
             override_base_image: None,
             debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
         };
 
         let key = |dir: &Path| {
@@ -4697,6 +5155,8 @@ mod tests {
                     cache_url: None,
                     override_base_image: None,
                     debug_mode: false,
+                    rebuild: false,
+                    pull_base_images: false,
                 };
                 compute_source_artifact_cache_key(
                     &dir,
@@ -4745,6 +5205,8 @@ mod tests {
                 cache_url: None,
                 override_base_image: None,
                 debug_mode: false,
+                rebuild: false,
+                pull_base_images: false,
             };
         let x64 = vec![BinaryTarget::LinuxX64];
         let arm64 = vec![BinaryTarget::LinuxArm64];
@@ -4947,6 +5409,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
+                pull_base_images: false,
                 workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
@@ -5083,6 +5546,7 @@ mod tests {
             build_target: BinaryTarget::LinuxArm64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
+            pull_base_images: false,
             workload: crate::toolchain::WorkloadKind::Container,
         };
         toolchain
@@ -5217,6 +5681,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
+                pull_base_images: false,
                 workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
@@ -5319,6 +5784,101 @@ mod tests {
                 ("linux".to_string(), "arm64".to_string()),
             ],
             "merged stack must push as a real multi-arch index"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sandbox_build_tests {
+    use super::*;
+    use alien_core::{ResourceLifecycle, SandboxEgress, SandboxLifecyclePolicy};
+
+    fn sandbox_from_source(toolchain: ToolchainConfig) -> Sandbox {
+        Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Source {
+                src: "./sandbox".to_string(),
+                toolchain,
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    fn settings() -> BuildSettings {
+        BuildSettings {
+            output_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        }
+    }
+
+    /// A root filesystem is built from a Dockerfile. The other toolchains lay a compiled binary on
+    /// a base image Alien chooses, which is a different artifact, so they are refused by name
+    /// rather than half-built.
+    #[tokio::test]
+    async fn a_sandbox_built_from_source_requires_a_docker_toolchain() {
+        for toolchain in [
+            ToolchainConfig::Rust {
+                binary_name: "sbx".to_string(),
+            },
+            ToolchainConfig::TypeScript {
+                binary_name: Some("sbx".to_string()),
+            },
+        ] {
+            let stack = Stack::new("sandbox-build".to_string())
+                .add(sandbox_from_source(toolchain), ResourceLifecycle::Live)
+                .build();
+
+            let error = build_stack(stack, &settings())
+                .await
+                .expect_err("a non-docker sandbox toolchain must be refused");
+            let message = error.to_string();
+            assert!(
+                message.contains("root filesystem") && message.contains("docker"),
+                "the refusal must name the reason and the fix: {message}"
+            );
+        }
+    }
+
+    /// A sandbox that already names an image is left alone, the way a worker's is.
+    #[tokio::test]
+    async fn a_sandbox_with_an_image_is_not_rebuilt() {
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: "public.ecr.aws/acme/base:v1".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("sandbox-build".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build();
+
+        let built = build_stack(stack, &settings())
+            .await
+            .expect("an already-imaged sandbox needs no build");
+        let code = built
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>().map(|s| s.code.clone()))
+            .expect("sandbox should survive the build");
+        assert_eq!(
+            code,
+            SandboxCode::Image {
+                image: "public.ecr.aws/acme/base:v1".to_string()
+            }
         );
     }
 }

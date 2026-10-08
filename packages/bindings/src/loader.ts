@@ -129,6 +129,8 @@ export interface RawKvHandle {
 
 /** Raw napi queue handle, already scoped to its configured queue. */
 export interface RawQueueHandle {
+  sendBatchJson(messages: string[]): Promise<string>
+  sendBatchText(messages: string[]): Promise<string>
   sendJson(jsonString: string): Promise<void>
   sendText(text: string): Promise<void>
   receive(max: number): Promise<RawQueueMessage[]>
@@ -204,6 +206,13 @@ export interface RawSandboxInstance {
   generation: number
 }
 
+export interface RawSandboxPreview {
+  endpoint: string
+  headers: Record<string, string>
+  allowedPorts: number[]
+  expiresInSeconds: number
+}
+
 export interface RawResolvedSandbox {
   sandbox: RawSandboxInstance
   created: boolean
@@ -246,6 +255,7 @@ export interface RawSandboxHandle {
   cancelJob(sandboxId: string, jobId: string): Promise<void>
   readFile(sandboxId: string, path: string): Promise<Buffer>
   writeFile(sandboxId: string, path: string, contents: Buffer): Promise<void>
+  preview(sandboxId: string, port: number): Promise<RawSandboxPreview>
   pause(sandboxId: string): Promise<void>
   resume(sandboxId: string): Promise<void>
   terminate(sandboxId: string): Promise<void>
@@ -265,7 +275,9 @@ export interface RawBindingsHandle {
 
 /** Raw napi remote bindings entry point. */
 export interface RawRemoteBindingsHandle {
+  queue(name: string): Promise<RawQueueHandle>
   storage(name: string): Promise<RawRemoteStorageHandle>
+  kv(name: string): Promise<RawKvHandle>
   key(name: string): Promise<RawKeyHandle>
   sandbox(name: string): Promise<RawSandboxHandle>
   ai(): Promise<RawRemoteAiLease>

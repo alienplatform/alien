@@ -53,6 +53,11 @@ pub struct PermissionGrant {
 pub struct AwsBindingSpec {
     /// Resource ARNs to bind to
     pub resources: Vec<String>,
+    /// ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+    /// tag-on-create grant whose implied check AWS authorizes against no resource; the build
+    /// refuses it anywhere else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_resources: Vec<String>,
     /// Optional condition for additional filtering (rare)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<IndexMap<String, IndexMap<String, String>>>,
@@ -189,6 +194,67 @@ pub struct PermissionSet {
     pub description: String,
     /// Platform-specific permission configurations
     pub platforms: PlatformPermissions,
+}
+
+impl PermissionSet {
+    /// An `Allow` on `NotResource` grants everything outside the listed patterns, so it is held
+    /// to the one grant that needs it: the tag a create applies, which AWS authorizes against no
+    /// resource. Excluding every ARN of the tagging service leaves only that resourceless check.
+    pub fn validate_not_resources(&self) -> Result<(), String> {
+        let id = &self.id;
+        for entry in self.platforms.aws.iter().flatten() {
+            let specs = [
+                entry.binding.stack.as_ref(),
+                entry.binding.resource.as_ref(),
+            ];
+            for spec in specs.into_iter().flatten() {
+                if spec.not_resources.is_empty() {
+                    continue;
+                }
+                if !spec.resources.is_empty() {
+                    return Err(format!(
+                        "{id}: a binding names both resources and notResources"
+                    ));
+                }
+                if !entry.effect.is_allow() {
+                    return Err(format!("{id}: notResources is only for an Allow"));
+                }
+                let actions = entry.grant.actions.as_deref().unwrap_or_default();
+                if actions.is_empty() || !actions.iter().all(|a| a.ends_with(":TagResource")) {
+                    return Err(format!(
+                        "{id}: notResources may only grant a TagResource action, got {actions:?}"
+                    ));
+                }
+                let bounded_by_request_tags = spec
+                    .condition
+                    .as_ref()
+                    .and_then(|condition| condition.get("StringEquals"))
+                    .is_some_and(|keys| keys.keys().any(|k| k.starts_with("aws:RequestTag/")));
+                if !bounded_by_request_tags {
+                    return Err(format!(
+                        "{id}: a notResources grant must be bounded by StringEquals on \
+                         aws:RequestTag"
+                    ));
+                }
+                let services: Vec<&str> =
+                    actions.iter().filter_map(|a| a.split(':').next()).collect();
+                // An exclusion fails open: a pattern pinned to one partition excludes nothing in
+                // the others, so the partition must be a wildcard.
+                for pattern in &spec.not_resources {
+                    let service = pattern
+                        .strip_prefix("arn:*:")
+                        .and_then(|rest| rest.split(':').next());
+                    if !service.is_some_and(|service| services.contains(&service)) {
+                        return Err(format!(
+                            "{id}: notResources pattern '{pattern}' must be `arn:*:<the action's \
+                             service>:...`"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Reference to a permission set - either by name or inline definition
@@ -399,5 +465,92 @@ impl ManagementPermissions {
     /// Check if this overrides auto-derived permissions
     pub fn is_override(&self) -> bool {
         matches!(self, ManagementPermissions::Override(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag_on_create(
+        actions: &[&str],
+        not_resources: &[&str],
+        resources: &[&str],
+    ) -> PermissionSet {
+        let condition = IndexMap::from([(
+            "StringEquals".to_string(),
+            IndexMap::from([("aws:RequestTag/deployment".to_string(), "acme".to_string())]),
+        )]);
+        PermissionSet {
+            id: "test/set".to_string(),
+            description: "test".to_string(),
+            platforms: PlatformPermissions {
+                aws: Some(vec![AwsPlatformPermission {
+                    label: None,
+                    description: None,
+                    effect: AwsPermissionEffect::Allow,
+                    grant: PermissionGrant {
+                        actions: Some(actions.iter().map(|a| a.to_string()).collect()),
+                        ..Default::default()
+                    },
+                    binding: BindingConfiguration {
+                        stack: Some(AwsBindingSpec {
+                            resources: resources.iter().map(|r| r.to_string()).collect(),
+                            not_resources: not_resources.iter().map(|r| r.to_string()).collect(),
+                            condition: Some(condition),
+                        }),
+                        resource: None,
+                    },
+                }]),
+                gcp: None,
+                azure: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_request_tag_bound_tag_on_create_may_exclude_its_services_arns() {
+        let set = tag_on_create(&["lambda:TagResource"], &["arn:*:lambda:*:*:*"], &[]);
+        assert_eq!(set.validate_not_resources(), Ok(()));
+    }
+
+    #[test]
+    fn not_resources_is_refused_beyond_tag_on_create() {
+        for (set, why) in [
+            (
+                tag_on_create(&["lambda:InvokeFunction"], &["arn:*:lambda:*:*:*"], &[]),
+                "an action other than TagResource",
+            ),
+            (
+                tag_on_create(&["lambda:TagResource"], &["arn:*:s3:::*"], &[]),
+                "another service's ARNs, which leaves every Lambda ARN in",
+            ),
+            (
+                tag_on_create(&["lambda:TagResource"], &["arn:*"], &[]),
+                "a pattern IAM refuses",
+            ),
+            (
+                tag_on_create(&["lambda:TagResource"], &["arn:*:lambda:*:*:*"], &["*"]),
+                "both Resource and NotResource",
+            ),
+            (
+                tag_on_create(&["lambda:TagResource"], &["arn:aws:lambda:*:*:*"], &[]),
+                "a partition-pinned exclusion, which excludes nothing in GovCloud or China",
+            ),
+        ] {
+            assert!(set.validate_not_resources().is_err(), "must refuse {why}");
+        }
+
+        let mut unbounded = tag_on_create(&["lambda:TagResource"], &["arn:*:lambda:*:*:*"], &[]);
+        unbounded.platforms.aws.as_mut().unwrap()[0]
+            .binding
+            .stack
+            .as_mut()
+            .unwrap()
+            .condition = None;
+        assert!(
+            unbounded.validate_not_resources().is_err(),
+            "must refuse no request-tag bound"
+        );
     }
 }

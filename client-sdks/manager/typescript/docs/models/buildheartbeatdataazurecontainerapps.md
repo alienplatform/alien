@@ -13,7 +13,7 @@ let value: BuildHeartbeatDataAzureContainerApps = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "forbidden",
         severity: "info",
         source: "<value>",
       },

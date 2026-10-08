@@ -423,6 +423,34 @@
           }
         }
       },
+      // Read profile metadata in this account: generated profile names need not
+      // carry the stack prefix. The backing role is inspected within PassRole's scope.
+      {
+        "grant": {
+          "actions": ["iam:GetInstanceProfile"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:GetRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          }
+        }
+      },
       // iam:PassRole remains stack-prefix scoped. CloudFormation role names are
       // based on logical IDs and generated suffixes, so they do not reliably end
       // in a fixed role suffix.
@@ -440,12 +468,15 @@
         }
       },
       // Read-only inspection. AWS requires Resource: "*" for these Describe APIs.
+      // DescribeInstanceTypeOfferings keeps Auto Scaling Groups out of zones that
+      // do not offer the worker machine type.
       {
         "grant": {
           "actions": [
             "autoscaling:DescribeAutoScalingGroups",
             "autoscaling:DescribeInstanceRefreshes",
             "autoscaling:DescribeScalingActivities",
+            "ec2:DescribeInstanceTypeOfferings",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags"

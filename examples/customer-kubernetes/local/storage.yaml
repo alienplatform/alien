@@ -1,0 +1,69 @@
+# S3-compatible object storage inside the cluster, standing in for the
+# storage each customer already runs (MinIO, Ceph, Amazon S3, ...), with one
+# bucket per example customer.
+apiVersion: v1
+kind: Namespace
+metadata: {name: storage}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: s3-config, namespace: storage}
+stringData:
+  s3.json: '{"identities":[{"name":"demo","credentials":[{"accessKey":"demo-key","secretKey":"demo-secret"}],"actions":["Admin","Read","Write","List","Tagging"]}]}'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: s3, namespace: storage}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: s3}}
+  template:
+    metadata: {labels: {app: s3}}
+    spec:
+      # Otherwise Kubernetes sets S3_PORT=tcp://... for the s3 Service, which
+      # SeaweedFS reads as its own port setting.
+      enableServiceLinks: false
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:4.48
+          args: ["server", "-dir=/data", "-s3", "-s3.config=/etc/s3/s3.json", "-master.volumeSizeLimitMB=64", "-volume.max=100"]
+          ports: [{containerPort: 8333}]
+          readinessProbe:
+            tcpSocket: {port: 8333}
+            periodSeconds: 2
+          volumeMounts:
+            - {name: config, mountPath: /etc/s3}
+            - {name: data, mountPath: /data}
+      volumes:
+        - {name: config, secret: {secretName: s3-config}}
+        - {name: data, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: s3, namespace: storage}
+spec:
+  selector: {app: s3}
+  ports: [{port: 80, targetPort: 8333}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: buckets, namespace: storage}
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              for bucket in customer-1-files customer-2-files customer-3-files; do
+                code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+                  --aws-sigv4 aws:amz:us-east-1:s3 -u demo-key:demo-secret \
+                  "http://s3.storage.svc/$bucket")
+                case "$code" in 200|409) echo "$bucket ready" ;; *) echo "$bucket: HTTP $code"; exit 1 ;; esac
+              done

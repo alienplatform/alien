@@ -1,0 +1,45 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "alienplatform"
+dynamic = ["version"]
+description = "Typed Python resource bindings for Alien workloads"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "../../LICENSE.md" }
+authors = [{ name = "Alien Software, Inc.", email = "hi@alien.dev" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+
+[tool.maturin]
+module-name = "alienplatform._native"
+python-source = "python"
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+test = [
+  "maturin>=1.9,<2",
+  "mypy>=1.18,<2",
+  "pytest>=8,<10",
+  "pytest-asyncio>=1,<2",
+  "ruff>=0.13,<1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

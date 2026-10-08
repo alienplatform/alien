@@ -62,8 +62,10 @@
         },
         // Resource-scoped only. This role reaches inside a sandbox, and the sole stack-level
         // scope Azure RBAC can express is the resource group — where it would reach inside every
-        // sibling sandbox group too. Nothing needs it: a workload is handed this set through a
-        // resource link, which binds to the sandbox's own group.
+        // sibling sandbox group too. The Terraform setup therefore renders a workload profile's
+        // `"*"` grant as one group-scoped Data Owner assignment per sandbox group in the
+        // deployment, never one at the resource group, and a grant keyed by a sandbox on that
+        // group alone.
         "binding": {
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"

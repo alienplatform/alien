@@ -60,6 +60,16 @@ pub struct ComputeMachineOption {
     pub recommended: bool,
 }
 
+/// Failure-domain policy for a pool that hosts persistent stateful workloads when the
+/// deployment does not choose one: one provider-selected domain, so the pool's machines
+/// and their volumes land in the same zone.
+pub fn default_persistent_failure_domains() -> FailureDomainSelection {
+    FailureDomainSelection {
+        spread: 1,
+        selected_failure_domains: Vec::new(),
+    }
+}
+
 /// Compute a deterministic deployment-time plan.
 pub fn plan_compute(
     stack: &Stack,
@@ -243,10 +253,7 @@ fn recommended_selection(
 
     let failure_domains = (requires_failure_domain
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
-    .then_some(FailureDomainSelection {
-        spread: 1,
-        selected_failure_domains: Vec::new(),
-    });
+    .then(default_persistent_failure_domains);
 
     match scale {
         CapacityGroupScalePolicy::Fixed { machines } => Ok(ComputePoolSelection::Fixed {
@@ -749,6 +756,8 @@ mod tests {
             permissions: crate::permissions::PermissionsConfig::default(),
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
         }
     }
 
@@ -947,6 +956,35 @@ mod tests {
     }
 
     #[test]
+    fn graviton4_compute_machine_can_be_selected() {
+        let stack = stack_with_container();
+        let settings = ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("c8g.2xlarge".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).expect("plan should build");
+
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert!(pool.errors.is_empty(), "{:?}", pool.errors);
+        let selected = pool
+            .machines
+            .iter()
+            .find(|option| option.machine == "c8g.2xlarge")
+            .expect("selected machine should be offered");
+        assert!(selected.recommended);
+        assert_eq!(selected.profile.architecture, Some(Architecture::Arm64));
+    }
+
+    #[test]
     fn explicit_capacity_group_requirements_are_merged_with_workloads() {
         let mut stack = stack_with_container();
         let cluster = ComputeCluster::new("compute".to_string())
@@ -1100,6 +1138,8 @@ mod tests {
             permissions: crate::permissions::PermissionsConfig::default(),
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
         };
 
         let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");

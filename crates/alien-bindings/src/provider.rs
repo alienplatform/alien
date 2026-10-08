@@ -10,6 +10,8 @@ use crate::{
 };
 
 use crate::credential_source::{MintingCredentialSource, MintingResolver};
+#[cfg(feature = "aws")]
+use crate::providers::queue::aws_sqs::{create_http_client as create_sqs_http_client, AwsSqsQueue};
 use alien_client_config::ClientConfigExt;
 use alien_core::bindings::PostgresBinding;
 use alien_core::{ClientConfig, Platform, StackState, ENV_OPERATOR_BASE_PLATFORM};
@@ -361,6 +363,81 @@ impl BindingsProvider {
 
         Self::new(client_config, bindings)
     }
+
+    /// Loads an S3 binding that points at an S3-compatible endpoint.
+    ///
+    /// Static keys win when present; otherwise the ambient AWS credentials are
+    /// used, which requires an AWS client config (e.g. EKS with IRSA).
+    #[cfg(feature = "aws")]
+    async fn load_s3_compatible_storage(
+        &self,
+        binding_name: &str,
+        config: alien_core::S3StorageBinding,
+    ) -> Result<crate::providers::storage::aws_s3::S3Storage> {
+        use crate::providers::storage::aws_s3::{S3CompatibleEndpoint, S3Credentials, S3Storage};
+
+        let invalid = |message: &str| ErrorData::config_invalid(binding_name, message);
+        let bucket_name = config
+            .bucket_name
+            .into_value(binding_name, "bucketName")
+            .context(invalid("Failed to resolve bucketName"))?;
+        let endpoint_url = config
+            .endpoint
+            .expect("caller only routes bindings with an endpoint here")
+            .into_value(binding_name, "endpoint")
+            .context(invalid("Failed to resolve endpoint"))?;
+        let region = match config.region {
+            Some(region) => region
+                .into_value(binding_name, "region")
+                .context(invalid("Failed to resolve region"))?,
+            None => self
+                .client_config
+                .aws_config()
+                .map(|aws| aws.region.clone())
+                .unwrap_or_else(|| "us-east-1".to_string()),
+        };
+
+        let credentials = match (config.access_key_id, config.secret_access_key) {
+            (Some(access_key_id), Some(secret_access_key)) => S3Credentials::Static {
+                access_key_id: access_key_id
+                    .into_value(binding_name, "accessKeyId")
+                    .context(invalid("Failed to resolve accessKeyId"))?,
+                secret_access_key: secret_access_key
+                    .into_value(binding_name, "secretAccessKey")
+                    .context(invalid("Failed to resolve secretAccessKey"))?,
+            },
+            (None, None) => {
+                let aws_config = self.client_config.aws_config().ok_or_else(|| {
+                    AlienError::new(invalid(
+                        "S3-compatible storage needs accessKeyId and secretAccessKey when no AWS credentials are available",
+                    ))
+                })?;
+                S3Credentials::Provider(
+                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
+                        .await
+                        .context(ErrorData::BindingSetupFailed {
+                            binding_type: "S3-compatible storage".to_string(),
+                            reason: "Failed to create credential provider".to_string(),
+                        })?,
+                )
+            }
+            _ => {
+                return Err(AlienError::new(invalid(
+                    "accessKeyId and secretAccessKey must be set together",
+                )))
+            }
+        };
+
+        S3Storage::with_endpoint(
+            bucket_name,
+            S3CompatibleEndpoint {
+                url: endpoint_url,
+                region,
+                force_path_style: config.force_path_style.unwrap_or(true),
+            },
+            credentials,
+        )
+    }
 }
 
 impl LazyEnvBindingsProvider {
@@ -527,6 +604,14 @@ impl BindingsProviderApi for BindingsProvider {
         let binding: StorageBinding = self.parse_binding(binding_name, "storage")?;
 
         let result: Arc<dyn Storage> = match binding {
+            #[cfg(feature = "aws")]
+            StorageBinding::S3(config) if config.endpoint.is_some() => {
+                let storage: Arc<dyn Storage> = Arc::new(
+                    self.load_s3_compatible_storage(binding_name, config)
+                        .await?,
+                );
+                Ok(storage)
+            }
             #[cfg(feature = "aws")]
             StorageBinding::S3(config) => {
                 use crate::providers::storage::aws_s3::S3Storage;
@@ -1450,8 +1535,6 @@ impl BindingsProviderApi for BindingsProvider {
         let result: Arc<dyn Queue> = match binding {
             #[cfg(feature = "aws")]
             QueueBinding::Sqs(config) => {
-                use crate::providers::queue::aws_sqs::AwsSqsQueue;
-
                 let queue_url = config
                     .queue_url
                     .into_value(binding_name, "queue_url")
@@ -1473,10 +1556,8 @@ impl BindingsProviderApi for BindingsProvider {
                             platform: Platform::Aws,
                             message: "Failed to create AWS credential provider".to_string(),
                         })?;
-                let client = alien_aws_clients::sqs::SqsClient::new(
-                    crate::http_client::create_http_client(),
-                    credentials,
-                );
+                let client =
+                    alien_aws_clients::sqs::SqsClient::new(create_sqs_http_client()?, credentials);
                 let q: Arc<dyn Queue> = Arc::new(AwsSqsQueue::new(queue_url, client));
                 Ok(q)
             }

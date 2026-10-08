@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  ContainerImageIdentity,
+  ContainerImageIdentity$Outbound,
+  ContainerImageIdentity$outboundSchema,
+} from "./containerimageidentity.js";
+import {
   KubernetesOwnerReference,
   KubernetesOwnerReference$Outbound,
   KubernetesOwnerReference$outboundSchema,
@@ -15,6 +20,7 @@ import {
 } from "./metricsample.js";
 
 export type KubernetesPodRuntimeUnitStatus = {
+  containers?: Array<ContainerImageIdentity> | undefined;
   cpu?: MetricSample | null | undefined;
   memory?: MetricSample | null | undefined;
   name: string;
@@ -31,6 +37,7 @@ export type KubernetesPodRuntimeUnitStatus = {
 
 /** @internal */
 export type KubernetesPodRuntimeUnitStatus$Outbound = {
+  containers?: Array<ContainerImageIdentity$Outbound> | undefined;
   cpu?: MetricSample$Outbound | null | undefined;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
@@ -50,6 +57,7 @@ export const KubernetesPodRuntimeUnitStatus$outboundSchema: z.ZodType<
   KubernetesPodRuntimeUnitStatus$Outbound,
   KubernetesPodRuntimeUnitStatus
 > = z.object({
+  containers: z.array(ContainerImageIdentity$outboundSchema).optional(),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),

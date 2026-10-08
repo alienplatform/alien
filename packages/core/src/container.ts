@@ -4,7 +4,10 @@ import {
   type Container as ContainerConfig,
   type ContainerGpuSpec,
   ContainerSchema,
+  type ContainerSecurity,
   type HealthCheck,
+  type KubernetesHttpProbe,
+  type KubernetesSecretMount,
   type PersistentStorage,
   type PublicEndpoint,
   type ResourceSpec,
@@ -28,9 +31,13 @@ export type {
   ContainerGpuSpec,
   ContainerOutputs,
   ContainerPort,
+  ContainerSecurity,
+  ContainerSecurityProfile,
   ContainerStatus,
   ExposeProtocol,
   HealthCheck,
+  KubernetesHttpProbe,
+  KubernetesSecretMount,
   PersistentStorage,
   PublicEndpoint,
   ReplicaStatus,
@@ -51,6 +58,25 @@ export interface PersistentStorageOptions {
    * Defaults to `/data`.
    */
   mountPath?: string
+  /**
+   * Scheduled snapshots of each replica's volume, taken by the cloud's own
+   * scheduler. On by default: every 24 hours, each kept for 7 days. Pass `false`
+   * for volumes that hold nothing worth restoring, such as caches.
+   *
+   * When the container is deleted, one final snapshot of each volume is kept.
+   * Kubernetes deployments leave volume backups to the cluster's own tooling.
+   */
+  backups?: false | VolumeBackupOptions
+}
+
+export interface VolumeBackupOptions {
+  /** Hours between snapshots: 1, 2, 4, 6, 8, 12 or 24. Defaults to 24. */
+  intervalHours?: 1 | 2 | 4 | 6 | 8 | 12 | 24
+  /**
+   * Days each snapshot is kept: at most 365. Defaults to 7. A volume holds at
+   * most 450 snapshots, so hourly snapshots can be kept for up to 18 days.
+   */
+  retentionDays?: number
 }
 
 /**
@@ -66,6 +92,7 @@ export class Container extends ResourceBuilder {
     ports: [],
     publicEndpoints: [],
     environment: {},
+    kubernetesSecretMounts: [],
     stateful: false,
     // cluster is optional - if not set, ComputeClusterMutation will auto-assign
   }
@@ -132,15 +159,16 @@ export class Container extends ResourceBuilder {
   /**
    * Sets the memory resources for the container.
    *
-   * Format: "<number>Mi" or "<number>Gi"
+   * Use a size string to set the same request and limit, or a ResourceSpec
+   * to set them separately on Kubernetes.
    *
-   * Example: "512Mi", "2Gi", "16Gi"
+   * Examples: `.memory("512Mi")`, `.memory({ min: "128Mi", desired: "512Mi" })`
    *
-   * @param size Memory size string.
+   * @param value Memory size string or ResourceSpec with min/desired.
    * @returns The Container builder instance.
    */
-  public memory(size: string): this {
-    this._config.memory = { min: size, desired: size }
+  public memory(value: string | ResourceSpec): this {
+    this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
     return this
   }
 
@@ -282,6 +310,28 @@ export class Container extends ResourceBuilder {
   }
 
   /**
+   * Makes an HTTP port reachable from your control plane through the manager.
+   *
+   * Requests to `https://<manager>/v1/deployments/<deployment>/tunnels/<container>/...`
+   * are forwarded to this port over the Operator's outbound connection. Nothing
+   * is exposed on the deployment's network, and the environment needs no
+   * inbound access. Available on Kubernetes deployments.
+   *
+   * @param port Port that serves HTTP. Added to the container's ports if missing.
+   * @returns The Container builder instance.
+   */
+  public tunnel(port: number): this {
+    if (!this._config.ports) {
+      this._config.ports = []
+    }
+    if (!this._config.ports.some(p => p.port === port)) {
+      this._config.ports.push({ port })
+    }
+    this._config.tunnel = { port }
+    return this
+  }
+
+  /**
    * Sets environment variables for the container.
    * @param vars Key-value pairs of environment variables.
    * @returns The Container builder instance.
@@ -306,7 +356,7 @@ export class Container extends ResourceBuilder {
    * Configures persistent storage and marks the container stateful.
    * Data survives container restarts.
    * @param size Storage size (e.g., "100Gi", "500Gi", "1Ti").
-   * @param options Optional mount path.
+   * @param options Optional mount path and backup schedule.
    * @returns The Container builder instance.
    */
   public persistentStorage(size: string, options: PersistentStorageOptions = {}): this {
@@ -314,9 +364,44 @@ export class Container extends ResourceBuilder {
       size,
       mountPath: options.mountPath ?? "/data",
     }
+    if (options.backups !== undefined) {
+      persistentStorage.backups =
+        options.backups === false
+          ? { enabled: false, intervalHours: 24, retentionDays: 7 }
+          : {
+              enabled: true,
+              intervalHours: options.backups.intervalHours ?? 24,
+              retentionDays: options.backups.retentionDays ?? 7,
+            }
+    }
 
     this._config.persistentStorage = persistentStorage
     this._config.stateful = true
+    return this
+  }
+
+  /** Mounts an existing Secret from the deployment's Kubernetes namespace. */
+  public kubernetesSecretMount(mount: KubernetesSecretMount): this {
+    this._config.kubernetesSecretMounts ??= []
+    this._config.kubernetesSecretMounts.push(mount)
+    return this
+  }
+
+  /** Restarts a pod when this Kubernetes HTTP liveness probe fails. */
+  public kubernetesLivenessProbe(probe: KubernetesHttpProbe): this {
+    this._config.kubernetesLivenessProbe = probe
+    return this
+  }
+
+  /** Excludes a pod from Service endpoints until this Kubernetes HTTP readiness probe passes. */
+  public kubernetesReadinessProbe(probe: KubernetesHttpProbe): this {
+    this._config.kubernetesReadinessProbe = probe
+    return this
+  }
+
+  /** Sets a portable container security profile and process identity. */
+  public security(settings: ContainerSecurity): this {
+    this._config.security = settings
     return this
   }
 

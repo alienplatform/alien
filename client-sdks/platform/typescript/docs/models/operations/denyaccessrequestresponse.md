@@ -23,13 +23,37 @@ let value: DenyAccessRequestResponse = {
     },
   },
   remediationPlanId: null,
+  agentSessionId: "<id>",
   title: "<value>",
   reason: "<value>",
   commands: [],
   operationPattern: "<value>",
-  maxRisk: "read-only",
-  status: "customer-approved",
+  maxRisk: "mutating",
+  debugGrant: {
+    tool: "gcloud",
+    namespace: "braintrust",
+    cloudScope: "123456789012/prod-readonly",
+  },
+  status: "queued",
   approvedUntil: "<value>",
+  createdAt: "1708534827866",
+  queuedBy: null,
+  queuedAt: "<value>",
+  approvedBy: {
+    method: "<value>",
+    actorId: "<id>",
+    at: "<value>",
+  },
+  deniedBy: {
+    actorId: "<id>",
+    at: "<value>",
+  },
+  revokedBy: {
+    actorKind: "user",
+    actorId: "<id>",
+    at: "<value>",
+    reason: "<value>",
+  },
 };
 ```
 
@@ -44,10 +68,18 @@ let value: DenyAccessRequestResponse = {
 | `deploymentId`                                                                                         | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `deployment`                                                                                           | [operations.DenyAccessRequestDeployment](../../models/operations/denyaccessrequestdeployment.md)       | :heavy_minus_sign:                                                                                     | N/A                                                                                                    |
 | `remediationPlanId`                                                                                    | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
+| `agentSessionId`                                                                                       | *string*                                                                                               | :heavy_check_mark:                                                                                     | The investigation whose remediation plan proposed this request, if a plan did.                         |
 | `title`                                                                                                | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `reason`                                                                                               | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `commands`                                                                                             | [operations.DenyAccessRequestCommand](../../models/operations/denyaccessrequestcommand.md)[]           | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `operationPattern`                                                                                     | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `maxRisk`                                                                                              | [operations.DenyAccessRequestMaxRisk](../../models/operations/denyaccessrequestmaxrisk.md)             | :heavy_check_mark:                                                                                     | How risky an operation is (declared by the plugin metadata).                                           |
+| `debugGrant`                                                                                           | [models.AccessRequestDebugGrant](../../models/accessrequestdebuggrant.md)                              | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `status`                                                                                               | [models.AccessRequestStatus](../../models/accessrequeststatus.md)                                      | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
 | `approvedUntil`                                                                                        | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
+| `createdAt`                                                                                            | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
+| `queuedBy`                                                                                             | *string*                                                                                               | :heavy_check_mark:                                                                                     | Who passed the engineer gate; the requester for a plan-less request.                                   |
+| `queuedAt`                                                                                             | *string*                                                                                               | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
+| `approvedBy`                                                                                           | [operations.DenyAccessRequestApprovedBy](../../models/operations/denyaccessrequestapprovedby.md)       | :heavy_check_mark:                                                                                     | How and when the customer gate was passed. Null until approved.                                        |
+| `deniedBy`                                                                                             | [operations.DenyAccessRequestDeniedBy](../../models/operations/denyaccessrequestdeniedby.md)           | :heavy_check_mark:                                                                                     | N/A                                                                                                    |
+| `revokedBy`                                                                                            | [operations.DenyAccessRequestRevokedBy](../../models/operations/denyaccessrequestrevokedby.md)         | :heavy_check_mark:                                                                                     | N/A                                                                                                    |

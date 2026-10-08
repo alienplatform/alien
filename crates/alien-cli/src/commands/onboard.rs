@@ -2,7 +2,10 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
+use alien_core::{
+    deployer_secret_value_refusal, is_deployer_secret_input, Platform, Stack, StackInputDefinition,
+    StackInputKind, StackInputProvider,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
 use sha2::{Digest, Sha256};
@@ -11,8 +14,8 @@ use std::str::FromStr;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Onboard a customer and generate a deployment link or token",
-    long_about = "Create a deployment group for a customer and generate a deployment link (platform) or CLI command (standalone) to share with their admin."
+    about = "Onboard a customer and get the setup command to send them",
+    long_about = "Create a deployment group for a customer and print what their admin runs to set up the deployment: a setup link, a Helm install command for Kubernetes, or a CLI command."
 )]
 pub struct OnboardArgs {
     /// Customer name
@@ -62,6 +65,11 @@ pub struct OnboardArgs {
     /// Public subdomain to reserve for deployments created from this link.
     #[arg(long)]
     pub subdomain: Option<String>,
+
+    /// The environment can't reach your manager: register its deployment now.
+    /// The site keeps it up to date with `alien-deploy sync`.
+    #[arg(long)]
+    pub airgapped: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -123,11 +131,19 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         &release_inputs.supported_platforms,
         args.json,
     )?;
+    if args.airgapped && selected_platforms != [Platform::Kubernetes] {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "platforms".to_string(),
+            message: "Air-gapped environments run on Kubernetes: pass --platforms kubernetes"
+                .to_string(),
+        }));
+    }
     let developer_inputs = developer_inputs_for_platforms(&release_inputs, &selected_platforms);
+    let input_args = airgapped_or_group_inputs(&args, &release_inputs, &selected_platforms)?;
     let stack_input_values = collect_stack_input_values(
         &developer_inputs,
-        &args.input_values,
-        &args.secret_input_values,
+        &input_args.group_inputs,
+        &input_args.group_secret_inputs,
         &selected_platforms,
         args.json,
     )?;
@@ -185,6 +201,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 &selected_platforms,
                 public_subdomain.as_deref(),
                 &name,
+                includes_application,
             )?),
             description: None,
             entry_point: None,
@@ -240,6 +257,24 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         })?;
 
     let deployment_group_id = response.deployment_group.id.clone();
+
+    if args.airgapped {
+        drop(steps);
+        let group_name = customer_environment_name(&name);
+        let (manager_url, signing_key) =
+            airgapped_manager(&ctx.base_url(), &response.token).await?;
+        return register_airgapped(
+            &args,
+            &manager_url,
+            &manager_url,
+            &name,
+            &group_name,
+            &response.token,
+            &signing_key,
+            input_args.deployment_values,
+        )
+        .await;
+    }
 
     if let Some(steps) = &steps {
         steps.complete(0, Some(deployment_group_id.clone()));
@@ -298,7 +333,6 @@ fn onboard_setup_item_name(item: &OnboardSetupItem) -> &'static str {
     }
 }
 
-#[cfg(feature = "platform")]
 struct ActiveReleaseStackInputs {
     supported_platforms: Vec<Platform>,
     inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
@@ -397,6 +431,7 @@ fn platform_onboard_deployment_setup_config(
     platforms: &[Platform],
     public_subdomain: Option<&str>,
     customer_name: &str,
+    includes_application: bool,
 ) -> Result<alien_platform_api::types::DeploymentSetupConfigInput> {
     use alien_platform_api::types;
 
@@ -439,6 +474,7 @@ fn platform_onboard_deployment_setup_config(
     Ok(types::DeploymentSetupConfigInput {
         metadata: Some(types::DeploymentSetupMetadata(metadata)),
         public_subdomain,
+        validated_release_selection: None,
         policy: Some(types::DeploymentSetupConfigInputPolicy {
             allow_release_pinning: None,
             allowed_ai_providers: Vec::new(),
@@ -469,25 +505,44 @@ fn platform_onboard_deployment_setup_config(
                     types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Pull,
                     types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Airgapped,
                 ],
-                allowed_heartbeats_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On,
-                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::Off,
-                ],
-                allowed_network_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None,
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Create,
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Default,
-                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Byo,
-                ],
-                allowed_telemetry_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off,
-                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Auto,
-                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::ApprovalRequired,
-                ],
-                allowed_updates_modes: vec![
-                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::Auto,
-                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired,
-                ],
+                // A link with only capabilities installs a built-in package that registers no
+                // network, telemetry off, approval-required updates and heartbeats on. Allowing
+                // any other mode lets the setup request one that package does not accept.
+                allowed_heartbeats_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On,
+                        types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::Off,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On]
+                },
+                allowed_network_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None,
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Create,
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Default,
+                        types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Byo,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None]
+                },
+                allowed_telemetry_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off,
+                        types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Auto,
+                        types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::ApprovalRequired,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off]
+                },
+                allowed_updates_modes: if includes_application {
+                    vec![
+                        types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::Auto,
+                        types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired,
+                    ]
+                } else {
+                    vec![types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired]
+                },
                 defaults: None,
             }),
         }),
@@ -585,7 +640,6 @@ async fn fetch_active_release_stack_inputs(
     active_release_stack_inputs_from_values(&stack_values)
 }
 
-#[cfg(feature = "platform")]
 fn active_release_stack_inputs_from_values(
     stack_values: &[(Platform, Option<&serde_json::Value>)],
 ) -> Result<ActiveReleaseStackInputs> {
@@ -612,7 +666,6 @@ fn active_release_stack_inputs_from_values(
     })
 }
 
-#[cfg(feature = "platform")]
 fn select_onboard_platforms(
     requested: &[String],
     supported: &[Platform],
@@ -682,10 +735,31 @@ fn select_onboard_platforms(
     Ok(selected)
 }
 
-#[cfg(feature = "platform")]
 fn developer_inputs_for_platforms(
     release_inputs: &ActiveReleaseStackInputs,
     platforms: &[Platform],
+) -> Vec<StackInputDefinition> {
+    inputs_for_platforms(release_inputs, platforms, |input| {
+        input.provided_by.contains(&StackInputProvider::Developer)
+    })
+}
+
+/// Inputs only the deployer answers. A connected install answers them on its
+/// setup page; an air-gapped site has none, so onboarding answers them.
+fn deployer_only_inputs_for_platforms(
+    release_inputs: &ActiveReleaseStackInputs,
+    platforms: &[Platform],
+) -> Vec<StackInputDefinition> {
+    inputs_for_platforms(release_inputs, platforms, |input| {
+        input.provided_by.contains(&StackInputProvider::Deployer)
+            && !input.provided_by.contains(&StackInputProvider::Developer)
+    })
+}
+
+fn inputs_for_platforms(
+    release_inputs: &ActiveReleaseStackInputs,
+    platforms: &[Platform],
+    include: impl Fn(&StackInputDefinition) -> bool,
 ) -> Vec<StackInputDefinition> {
     let selected = if platforms.is_empty() {
         &release_inputs.supported_platforms
@@ -698,7 +772,7 @@ fn developer_inputs_for_platforms(
             continue;
         }
         for input in inputs {
-            if !input.provided_by.contains(&StackInputProvider::Developer) {
+            if !include(input) {
                 continue;
             }
             if input
@@ -718,7 +792,104 @@ fn developer_inputs_for_platforms(
     inputs
 }
 
-#[cfg(feature = "platform")]
+/// `--input` / `--secret-input` for an air-gapped site, split by who answers
+/// each input: deployer inputs register with the site's deployment, the rest
+/// stay with its deployment group like any other link.
+#[derive(Debug, Default, PartialEq)]
+struct AirgappedInputArgs {
+    group_inputs: Vec<String>,
+    group_secret_inputs: Vec<String>,
+    deployment_values: serde_json::Map<String, serde_json::Value>,
+}
+
+fn split_airgapped_inputs(
+    deployer_inputs: &[StackInputDefinition],
+    input_values: &[String],
+    secret_input_values: &[String],
+    json: bool,
+) -> Result<AirgappedInputArgs> {
+    let mut split = AirgappedInputArgs::default();
+    let args = input_values.iter().map(|arg| (arg, "--input")).chain(
+        secret_input_values
+            .iter()
+            .map(|arg| (arg, "--secret-input")),
+    );
+    for (arg, flag) in args {
+        let (id, value) = parse_stack_input_arg(arg, flag)?;
+        let Some(input) = deployer_inputs.iter().find(|input| input.id == id) else {
+            match flag {
+                "--input" => split.group_inputs.push(arg.clone()),
+                _ => split.group_secret_inputs.push(arg.clone()),
+            }
+            continue;
+        };
+        if is_deployer_secret_input(input) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: deployer_secret_value_refusal(&input.label),
+            }));
+        }
+        split
+            .deployment_values
+            .insert(id, stack_input_json_value(input, &value)?);
+    }
+
+    for input in deployer_inputs
+        .iter()
+        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
+    {
+        if split.deployment_values.contains_key(&input.id) {
+            continue;
+        }
+        if json || !can_prompt() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!(
+                    "Missing deployer input: {}. An air-gapped site has no setup page to \
+                     answer it: pass --input {}=...",
+                    input.label, input.id
+                ),
+            }));
+        }
+        let value = prompt_text(&input.label, input.placeholder.as_deref())?;
+        split
+            .deployment_values
+            .insert(input.id.clone(), stack_input_json_value(input, &value)?);
+    }
+    Ok(split)
+}
+
+fn airgapped_or_group_inputs(
+    args: &OnboardArgs,
+    release_inputs: &ActiveReleaseStackInputs,
+    selected_platforms: &[Platform],
+) -> Result<AirgappedInputArgs> {
+    if !args.airgapped {
+        return Ok(AirgappedInputArgs {
+            group_inputs: args.input_values.clone(),
+            group_secret_inputs: args.secret_input_values.clone(),
+            deployment_values: serde_json::Map::new(),
+        });
+    }
+    split_airgapped_inputs(
+        &deployer_only_inputs_for_platforms(release_inputs, selected_platforms),
+        &args.input_values,
+        &args.secret_input_values,
+        args.json,
+    )
+}
+
+/// The value as the manager's `/v1/initialize` takes it: plain JSON, the same
+/// shape a Helm install's `inputValues` carries.
+fn stack_input_json_value(input: &StackInputDefinition, value: &str) -> Result<serde_json::Value> {
+    serde_json::to_value(parse_stack_input_value(input, value)?)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: input.id.clone(),
+            message: format!("{} could not be encoded", input.label),
+        })
+}
+
 fn collect_stack_input_values(
     inputs: &[StackInputDefinition],
     input_values: &[String],
@@ -767,7 +938,13 @@ fn collect_stack_input_values(
         }
     }
 
-    for input in inputs.iter().filter(|input| input.required) {
+    // Alien generates a value for generated inputs when none is passed. A
+    // secret the deployer may also provide is optional here: without a
+    // developer value, the deployer writes it into their own secret store.
+    for input in inputs
+        .iter()
+        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
+    {
         if !raw_values.contains_key(&input.id) {
             if json || !can_prompt() {
                 return Err(AlienError::new(ErrorData::ValidationError {
@@ -801,7 +978,6 @@ fn collect_stack_input_values(
     Ok(types::StackInputValuesRequest(values))
 }
 
-#[cfg(feature = "platform")]
 fn narrowing_hint(input: &StackInputDefinition, selected_platforms: &[Platform]) -> String {
     let Some(input_platforms) = &input.platforms else {
         return ".".to_string();
@@ -821,7 +997,6 @@ fn narrowing_hint(input: &StackInputDefinition, selected_platforms: &[Platform])
     }
 }
 
-#[cfg(feature = "platform")]
 fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
@@ -838,7 +1013,6 @@ fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     Ok((id.trim().to_string(), value.to_string()))
 }
 
-#[cfg(feature = "platform")]
 fn parse_stack_input_value(
     input: &StackInputDefinition,
     value: &str,
@@ -889,7 +1063,6 @@ fn parse_stack_input_value(
     }
 }
 
-#[cfg(feature = "platform")]
 fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Result<()> {
     if let Some(validation) = &input.validation {
         if let Some(values) = &validation.values {
@@ -920,11 +1093,10 @@ fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Res
     Ok(())
 }
 
-#[cfg(feature = "platform")]
 fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
     let required = inputs
         .iter()
-        .filter(|input| input.required)
+        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
         .collect::<Vec<_>>();
     if required.is_empty() {
         return;
@@ -1019,24 +1191,92 @@ fn platform_setup_environment_variables(
         .collect()
 }
 
-/// Standalone/Dev mode: use manager API, show CLI command.
+/// Self-hosted and local managers: create the deployment group on the
+/// manager and print the setup command for each selected platform.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
-    use alien_manager_api::types::CreateDeploymentGroupRequest;
+    use alien_manager_api::types::{
+        CreateDeploymentGroupRequest, EnvironmentVariable, EnvironmentVariableType,
+    };
     use alien_manager_api::SdkResultExt;
 
-    if !args.env_vars.is_empty() || !args.secret_vars.is_empty() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "`alien onboard --env/--secret` is only supported in platform mode because standalone deployment-group tokens do not carry setup config.".to_string(),
-        }));
-    }
-
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
-
-    // Resolve manager (known in Standalone/Dev mode)
     let mgr = ctx.resolve_manager(&project_id, "local").await?;
 
+    // Developer inputs come from the latest release, like a setup link.
+    let latest = mgr
+        .client
+        .get_latest_release()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to fetch the latest release. Run `alien release` first.".to_string(),
+            url: None,
+        })?;
+    let stack_by_platform = serde_json::to_value(&latest.stack)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialize".to_string(),
+            reason: "release stacks".to_string(),
+        })?;
+    let stack_values: Vec<(Platform, Option<&serde_json::Value>)> = [
+        Platform::Aws,
+        Platform::Gcp,
+        Platform::Azure,
+        Platform::Kubernetes,
+        Platform::Machines,
+        Platform::Local,
+    ]
+    .into_iter()
+    .map(|platform| {
+        let value = stack_by_platform
+            .get(platform.as_str())
+            .filter(|value| !value.is_null());
+        (platform, value)
+    })
+    .collect();
+    let release_inputs = active_release_stack_inputs_from_values(&stack_values)?;
+    let selected_platforms = select_onboard_platforms(
+        &args.platforms,
+        &release_inputs.supported_platforms,
+        args.json,
+    )?;
+    let developer_inputs = developer_inputs_for_platforms(&release_inputs, &selected_platforms);
+    let input_args = airgapped_or_group_inputs(&args, &release_inputs, &selected_platforms)?;
+    let input_values = collect_stack_input_values(
+        &developer_inputs,
+        &input_args.group_inputs,
+        &input_args.group_secret_inputs,
+        &selected_platforms,
+        args.json,
+    )?;
+    let environment_variables =
+        crate::parse_env_and_secret_vars(&args.env_vars, &args.secret_vars)?
+            .into_iter()
+            .map(|variable| EnvironmentVariable {
+                name: variable.name,
+                value: variable.value,
+                type_: if variable.is_secret {
+                    EnvironmentVariableType::Secret
+                } else {
+                    EnvironmentVariableType::Plain
+                },
+                target_resources: variable.target_resources,
+            })
+            .collect::<Vec<_>>();
+    let manager = fetch_manager_info(&mgr).await?;
+
     if !args.json {
-        println!("{}", contextual_heading("Onboarding", &name, &[]));
+        let platforms_label = selected_platforms
+            .iter()
+            .map(|platform| platform.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "{}",
+            contextual_heading("Onboarding", &name, &[("platforms", &platforms_label)])
+        );
+        print_required_developer_inputs(&developer_inputs);
     }
     let steps = if args.json {
         None
@@ -1047,12 +1287,28 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     };
 
     let deployment_group_name = customer_environment_name(&name);
+    let input_values = match serde_json::to_value(&input_values)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialize".to_string(),
+            reason: "stack input values".to_string(),
+        })? {
+        serde_json::Value::Object(values) => values,
+        other => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input".to_string(),
+                message: format!("stack input values must be an object, got {other}"),
+            }))
+        }
+    };
     let response = mgr
         .client
         .create_deployment_group()
         .body(CreateDeploymentGroupRequest {
-            name: deployment_group_name,
+            name: deployment_group_name.clone(),
             max_deployments: Some(args.max_deployments as i64),
+            input_values,
+            environment_variables,
         })
         .send()
         .await
@@ -1061,7 +1317,6 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
             message: "Failed to create deployment group".to_string(),
             url: None,
         })?;
-
     let deployment_group_id = response.id.clone();
 
     if let Some(steps) = &steps {
@@ -1069,7 +1324,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         steps.activate(1, Some("Creating deployment token".to_string()));
     }
 
-    let token_response = mgr
+    let token = mgr
         .client
         .create_deployment_group_token()
         .id(&deployment_group_id)
@@ -1079,14 +1334,73 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create deployment group token".to_string(),
             url: None,
+        })?
+        .token
+        .clone();
+
+    if args.airgapped {
+        let signing_key = manager.bundle_signing_key.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "This manager doesn't sign air-gapped bundles".to_string(),
+            })
         })?;
+        return register_airgapped(
+            &args,
+            &mgr.manager_url,
+            &manager.url,
+            &name,
+            &deployment_group_name,
+            &token,
+            &signing_key,
+            input_args.deployment_values,
+        )
+        .await;
+    }
+
+    let kubernetes_stack = stack_values
+        .iter()
+        .find(|(platform, _)| *platform == Platform::Kubernetes)
+        .and_then(|(_, value)| *value)
+        .filter(|_| selected_platforms.contains(&Platform::Kubernetes))
+        .map(|value| serde_json::from_value::<Stack>(value.clone()))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse".to_string(),
+            reason: "release Kubernetes stack".to_string(),
+        })?;
+    let helm = kubernetes_stack
+        .as_ref()
+        .filter(|_| manager.capabilities.charts)
+        .map(|stack| {
+            HelmInstall::new(
+                stack,
+                &manager.url,
+                &manager.registry_host,
+                &deployment_group_name,
+            )
+        });
+    let cli_platforms: Vec<&str> = selected_platforms
+        .iter()
+        .filter(|platform| **platform != Platform::Kubernetes || helm.is_none())
+        .map(|platform| platform.as_str())
+        .collect();
 
     if args.json {
         print_json(&serde_json::json!({
             "deploymentGroupId": deployment_group_id,
             "name": name,
-            "token": token_response.token,
+            "token": token,
             "maxDeployments": args.max_deployments,
+            "managerUrl": manager.url,
+            "platforms": selected_platforms.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+            "helm": helm.as_ref().map(|helm| serde_json::json!({
+                "chart": helm.chart,
+                "release": helm.release,
+                "namespace": helm.release,
+                "command": helm.command(),
+                "values": helm.values_example(),
+            })),
         }))?;
         return Ok(());
     }
@@ -1098,20 +1412,42 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
 
     println!("{}", success_line("Ready to deploy."));
     println!("{} {}", dim_label("Customer"), name);
-    println!("{} {}", dim_label("Token"), accent(&token_response.token));
-    println!();
-    println!("{}", dim_label("Share with the customer's admin:"));
-    println!(
-        "  curl -fsSL {}/install | sh -s -- deploy \\",
-        mgr.manager_url.trim_end_matches('/')
-    );
-    println!("    --token {} \\", token_response.token);
-    println!("    --name <deployment-name> \\");
-    println!("    --platform <aws|gcp|azure> \\");
-    println!(
-        "    --manager-url {}",
-        mgr.manager_url.trim_end_matches('/')
-    );
+    println!("{} {}", dim_label("Token"), accent(&token));
+
+    if let Some(helm) = &helm {
+        if helm.needs_https() {
+            println!();
+            println!(
+                "{} {} is served over plain HTTP. Helm and Kubernetes nodes pull charts and images over HTTPS, so put the manager behind TLS before a customer installs.",
+                dim_label("Warning"),
+                manager.url
+            );
+        }
+        println!();
+        println!("{}", dim_label("Send to the customer's Kubernetes admin:"));
+        println!();
+        for line in helm.command().lines() {
+            println!("  {line}");
+        }
+        println!();
+        println!(
+            "{}",
+            dim_label("values.yaml connects the environment's own infrastructure:")
+        );
+        println!();
+        for line in helm.values_example().lines() {
+            println!("  {line}");
+        }
+    }
+    if !cli_platforms.is_empty() {
+        println!();
+        println!("{}", dim_label("Send to the customer's cloud admin:"));
+        println!("  curl -fsSL {}/install | sh -s -- deploy \\", manager.url);
+        println!("    --token {} \\", token);
+        println!("    --name <deployment-name> \\");
+        println!("    --platform <{}> \\", cli_platforms.join("|"));
+        println!("    --manager-url {}", manager.url);
+    }
     println!();
     println!(
         "{} {}",
@@ -1120,6 +1456,305 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     );
 
     Ok(())
+}
+
+/// Register the deployment for an environment that can't reach the manager,
+/// the way its Operator would on first contact.
+/// The manager the project's Kubernetes deployments use, and its bundle key,
+/// as the new customer's setup token sees them.
+#[cfg(feature = "platform")]
+async fn airgapped_manager(platform_url: &str, group_token: &str) -> Result<(String, String)> {
+    let failed =
+        |message: String| AlienError::new(ErrorData::ApiRequestFailed { message, url: None });
+    let get = |url: String| async move {
+        let response = reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(group_token)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("GET {url}"),
+                url: None,
+            })?;
+        let status = response.status();
+        let body: serde_json::Value =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("reading {url}"),
+                    url: None,
+                })?;
+        if !status.is_success() {
+            return Err(failed(format!(
+                "{url} returned {status}: {}",
+                body["message"].as_str().unwrap_or("no message")
+            )));
+        }
+        Ok(body)
+    };
+    let info = get(format!(
+        "{}/v1/deployment-info?platform=kubernetes",
+        platform_url.trim_end_matches('/')
+    ))
+    .await?;
+    let manager_url = info["installContext"]["targets"]["kubernetes"]["managerUrl"]
+        .as_str()
+        .ok_or_else(|| failed("The project has no manager for Kubernetes deployments".to_string()))?
+        .trim_end_matches('/')
+        .to_string();
+    let manager = get(format!("{manager_url}/v1/manager")).await?;
+    let signing_key = manager["bundleSigningKey"]
+        .as_str()
+        .ok_or_else(|| failed(format!("{manager_url} doesn't sign air-gapped bundles")))?
+        .to_string();
+    Ok((manager_url, signing_key))
+}
+
+async fn register_airgapped(
+    args: &OnboardArgs,
+    manager_url: &str,
+    public_manager_url: &str,
+    name: &str,
+    group_name: &str,
+    group_token: &str,
+    signing_key: &str,
+    input_values: serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/initialize",
+            manager_url.trim_end_matches('/')
+        ))
+        .bearer_auth(group_token)
+        // The site installs the project's Helm chart, so it registers as the
+        // chart's Operator does: the `deployment` setup item, set up with Helm.
+        // Without them the platform can't pick the setup or tell who owns the
+        // cluster.
+        .json(&serde_json::json!({
+            "name": group_name,
+            "platform": "kubernetes",
+            "initialDesiredRelease": "active",
+            "setupItem": "deployment",
+            "setupMethod": "helm",
+            "inputValues": input_values,
+        }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to register the air-gapped deployment".to_string(),
+            url: None,
+        })?;
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Registering the air-gapped deployment failed ({}): {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            ),
+            url: None,
+        }));
+    }
+    let registered: serde_json::Value =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to read the registration".to_string(),
+                url: None,
+            })?;
+    let deployment_id = registered["deploymentId"].as_str().unwrap_or_default();
+    // The site's token: `alien-deploy sync` uses it to download updates and
+    // send reports, and it can do nothing else.
+    let site_token = registered["token"].as_str().ok_or_else(|| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: "The manager registered the deployment but returned no token".to_string(),
+            url: None,
+        })
+    })?;
+    let start = format!("alien-deploy sync --token {site_token} --manager {public_manager_url}");
+    if args.json {
+        return print_json(&serde_json::json!({
+            "name": name,
+            "deploymentId": deployment_id,
+            "reference": format!("{group_name}/{group_name}"),
+            "airgapped": true,
+            "token": site_token,
+            "managerUrl": public_manager_url,
+            "bundleSigningKey": signing_key,
+            "command": start,
+        }));
+    }
+    println!(
+        "{}",
+        success_line(&format!("Registered {name} for air-gapped updates."))
+    );
+    println!();
+    println!("{}", dim_label(&format!("Send {name}'s admin:")));
+    println!(
+        "  {} {}   {}",
+        dim_label("Token"),
+        accent(site_token),
+        dim_label("keep on the online machine only")
+    );
+    println!(
+        "  {} {}   {}",
+        dim_label("Key  "),
+        accent(signing_key),
+        dim_label("confirm it with them by phone or email")
+    );
+    println!("  {} {}", dim_label("Start"), command(&start));
+    println!();
+    println!(
+        "{}",
+        dim_label("They run `alien-deploy sync` on both sides of the gap. Every `alien release` reaches the site on its next sync.")
+    );
+    Ok(())
+}
+
+/// Manager identity as deployments see it (`GET /v1/manager`).
+struct ManagerInfo {
+    url: String,
+    registry_host: String,
+    capabilities: ManagerCapabilities,
+    /// Public key air-gapped sites verify bundles with.
+    bundle_signing_key: Option<String>,
+}
+
+struct ManagerCapabilities {
+    charts: bool,
+}
+
+async fn fetch_manager_info(mgr: &crate::execution_context::ManagerContext) -> Result<ManagerInfo> {
+    use alien_manager_api::SdkResultExt;
+
+    let info = mgr
+        .client
+        .manager_info()
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to read manager information".to_string(),
+            url: None,
+        })?;
+    Ok(ManagerInfo {
+        url: info.url.trim_end_matches('/').to_string(),
+        registry_host: info.registry_host.clone(),
+        capabilities: ManagerCapabilities {
+            charts: info.capabilities.charts,
+        },
+        bundle_signing_key: info.bundle_signing_key.clone(),
+    })
+}
+
+/// The Helm command a customer's Kubernetes admin runs once.
+struct HelmInstall {
+    chart: String,
+    /// The manager is served over plain HTTP.
+    plain_http: bool,
+    release: String,
+    customer: String,
+    infrastructure: Vec<(String, String)>,
+}
+
+impl HelmInstall {
+    fn new(stack: &Stack, manager_url: &str, registry_host: &str, customer: &str) -> Self {
+        let infrastructure = stack
+            .resources()
+            .filter(|(_, entry)| {
+                matches!(
+                    entry.config.resource_type().as_ref(),
+                    "storage" | "kv" | "queue" | "vault"
+                )
+            })
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    entry.config.resource_type().as_ref().to_string(),
+                )
+            })
+            .collect();
+        Self {
+            chart: format!("oci://{registry_host}/charts/{}", stack.id()),
+            plain_http: manager_url.starts_with("http://"),
+            release: stack.id().to_string(),
+            customer: customer.to_string(),
+            infrastructure,
+        }
+    }
+
+    fn registry(&self) -> &str {
+        self.chart
+            .trim_start_matches("oci://")
+            .split('/')
+            .next()
+            .unwrap_or_default()
+    }
+
+    /// Helm reaches plain-HTTP registries only on the local machine; anywhere
+    /// else it (and every Kubernetes node) needs the manager behind HTTPS.
+    fn needs_https(&self) -> bool {
+        let host = self
+            .registry()
+            .rsplit_once(':')
+            .map_or(self.registry(), |(host, _)| host);
+        self.plain_http && !matches!(host, "localhost" | "127.0.0.1")
+    }
+
+    /// The commands for the customer's admin. The token is read once with
+    /// `read -s` and piped into Helm, so it stays out of shell history and
+    /// process arguments.
+    fn command(&self) -> String {
+        let (login_flags, install_flags) = if self.plain_http {
+            (" --insecure", " --plain-http")
+        } else {
+            ("", "")
+        };
+        let values = if self.infrastructure.is_empty() {
+            ""
+        } else {
+            " \\\n  --values values.yaml"
+        };
+        format!(
+            "read -rs ALIEN_TOKEN  # paste {customer}'s token, then Enter\n\
+             printf '%s' \"$ALIEN_TOKEN\" | helm registry login {registry}{login_flags} --username {customer} --password-stdin\n\n\
+             printf 'management:\\n  token: %s\\n' \"$ALIEN_TOKEN\" | \\\n\
+             helm install {release} {chart}{install_flags} \\\n  \
+             --namespace {release} --create-namespace \\\n  \
+             --set management.name={customer}{values} \\\n  \
+             --values -",
+            registry = self.registry(),
+            release = self.release,
+            chart = self.chart,
+            customer = self.customer,
+        )
+    }
+
+    fn values_example(&self) -> String {
+        if self.infrastructure.is_empty() {
+            return String::new();
+        }
+        let mut yaml = String::from("infrastructure:\n");
+        for (id, resource_type) in &self.infrastructure {
+            match resource_type.as_str() {
+                "storage" => yaml.push_str(&format!(
+                    "  {id}:\n    type: storage\n    service: s3\n    bucketName: <bucket>\n    # S3-compatible stores (MinIO, Ceph, ...): endpoint and keys.\n    # Omit them to use the pod's AWS identity with Amazon S3.\n    endpoint: https://<s3-endpoint>\n    accessKeyId: <access-key-id>\n    secretAccessKey: <secret-access-key>\n"
+                )),
+                "kv" => yaml.push_str(&format!(
+                    "  {id}:\n    type: kv\n    service: redis\n    connectionUrl: redis://<host>:6379\n"
+                )),
+                other => yaml.push_str(&format!(
+                    "  {id}:\n    type: {other}\n    # See `helm show values` for this resource's fields.\n"
+                )),
+            }
+        }
+        yaml
+    }
 }
 
 /// Turn a customer-facing name into the stable internal Deployment Group name.
@@ -1179,8 +1814,72 @@ mod tests {
             default: None,
             platforms: None,
             validation: None,
+            generate: None,
             env: vec![],
         }
+    }
+
+    fn deployer_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
+        StackInputDefinition {
+            provided_by: vec![StackInputProvider::Deployer],
+            label: format!("Deployer {id}"),
+            ..input(id, kind, required)
+        }
+    }
+
+    #[test]
+    fn airgapped_deployer_inputs_register_with_the_deployment_as_plain_json() {
+        let deployer = [
+            deployer_input("siteLabel", StackInputKind::String, true),
+            deployer_input("replicas", StackInputKind::Integer, false),
+        ];
+        let split = split_airgapped_inputs(
+            &deployer,
+            &[
+                "siteLabel=plant-7".to_string(),
+                "replicas=3".to_string(),
+                "apiKey=k".to_string(),
+            ],
+            &["token=t".to_string()],
+            true,
+        )
+        .expect("split");
+
+        // `/v1/initialize` validates these raw values; a tagged enum would fail it.
+        assert_eq!(
+            serde_json::Value::Object(split.deployment_values),
+            json!({ "siteLabel": "plant-7", "replicas": 3.0 })
+        );
+        assert_eq!(split.group_inputs, vec!["apiKey=k".to_string()]);
+        assert_eq!(split.group_secret_inputs, vec!["token=t".to_string()]);
+    }
+
+    #[test]
+    fn airgapped_onboarding_requires_deployer_inputs_up_front() {
+        let deployer = [deployer_input("siteLabel", StackInputKind::String, true)];
+        let error = split_airgapped_inputs(&deployer, &[], &[], true)
+            .expect_err("a required deployer input has no other place to be answered");
+        assert!(
+            error.message.contains("--input siteLabel="),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn airgapped_onboarding_refuses_deployer_secret_values() {
+        let deployer = [deployer_input("dbPassword", StackInputKind::Secret, true)];
+        let error =
+            split_airgapped_inputs(&deployer, &[], &["dbPassword=hunter2".to_string()], true)
+                .expect_err("deployer secrets never pass through Alien");
+        assert!(
+            error.message.contains("deployer secret"),
+            "{}",
+            error.message
+        );
+        // Without a value it is not required here: the site writes it into its own store.
+        let split = split_airgapped_inputs(&deployer, &[], &[], true).expect("split");
+        assert!(split.deployment_values.is_empty());
     }
 
     fn platform_input(
@@ -1193,6 +1892,62 @@ mod tests {
             platforms: Some(platforms),
             ..input(id, kind, required)
         }
+    }
+
+    #[test]
+    fn helm_command_follows_the_manager_scheme() {
+        let stack: Stack = serde_json::from_value(minimal_stack()).unwrap();
+
+        let https = HelmInstall::new(&stack, "https://m.example.com", "m.example.com", "c1");
+        let command = https.command();
+        assert!(!https.needs_https());
+        assert!(
+            command.contains("helm registry login m.example.com --username c1 --password-stdin")
+        );
+        assert!(
+            command.contains("helm install test-stack oci://m.example.com/charts/test-stack \\")
+        );
+        assert!(command.contains("--set management.name=c1"));
+        assert!(command.ends_with("--values -"));
+        assert!(!command.contains("--plain-http"));
+        assert!(
+            !command.contains("ax_dg_"),
+            "the token must not appear in the commands"
+        );
+
+        let local = HelmInstall::new(&stack, "http://localhost:5050", "localhost:5050", "c1");
+        let command = local.command();
+        assert!(!local.needs_https());
+        assert!(command.contains("helm registry login localhost:5050 --insecure --username c1"));
+        assert!(command.contains("oci://localhost:5050/charts/test-stack --plain-http \\"));
+
+        let remote = HelmInstall::new(&stack, "http://m.example.com", "m.example.com", "c1");
+        assert!(remote.needs_https());
+    }
+
+    #[test]
+    fn helm_command_runs_in_a_shell() {
+        // The generated commands must install with the token from stdin.
+        let stack: Stack = serde_json::from_value(minimal_stack()).unwrap();
+        let command =
+            HelmInstall::new(&stack, "https://m.example.com", "m.example.com", "c1").command();
+        let install = command
+            .split("\n\n")
+            .nth(1)
+            .expect("login and install are separate paragraphs");
+        let values = install
+            .split(" | ")
+            .next()
+            .expect("the install reads values from printf");
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("ALIEN_TOKEN=ax_dg_secret; {values}"))
+            .output()
+            .expect("sh runs");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "management:\n  token: ax_dg_secret\n"
+        );
     }
 
     fn minimal_stack() -> serde_json::Value {
@@ -1282,6 +2037,7 @@ mod tests {
             &[Platform::Aws],
             None,
             "Acme Corp",
+            true,
         )
         .expect("setup config should be valid");
 
@@ -1292,6 +2048,36 @@ mod tests {
                 .and_then(|metadata| metadata.0.get("customerName")),
             Some(&serde_json::Value::String("Acme Corp".to_string()))
         );
+    }
+
+    #[test]
+    fn a_capability_only_link_allows_the_settings_its_package_registers() {
+        use alien_platform_api::types::{
+            DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem as Heartbeats,
+            DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem as Network,
+            DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem as Telemetry,
+            DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem as Updates,
+        };
+
+        let config = platform_onboard_deployment_setup_config(
+            Vec::new(),
+            &[Platform::Aws],
+            None,
+            "Acme Corp",
+            false,
+        )
+        .expect("setup config should be valid");
+        let stack = config
+            .policy
+            .and_then(|policy| policy.stack_settings)
+            .expect("the link carries a stack-settings policy");
+
+        // Allowing a mode the built-in capability package does not register lets the setup
+        // request it, and that setup cannot complete.
+        assert_eq!(stack.allowed_telemetry_modes, vec![Telemetry::Off]);
+        assert_eq!(stack.allowed_network_modes, vec![Network::None]);
+        assert_eq!(stack.allowed_updates_modes, vec![Updates::ApprovalRequired]);
+        assert_eq!(stack.allowed_heartbeats_modes, vec![Heartbeats::On]);
     }
 
     #[test]
@@ -1332,6 +2118,34 @@ mod tests {
     }
 
     #[test]
+    fn generated_inputs_are_not_required_but_can_be_overridden() {
+        let generated = StackInputDefinition {
+            generate: Some(alien_core::StackInputGenerate { length: 64 }),
+            ..input("signingKey", StackInputKind::Secret, true)
+        };
+
+        let values = collect_stack_input_values(
+            std::slice::from_ref(&generated),
+            &[],
+            &[],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("a generated input needs no value");
+        assert!(values.is_empty(), "Alien generates the value later");
+
+        let values = collect_stack_input_values(
+            &[generated],
+            &[],
+            &["signingKey=0123456789abcdef0123".to_string()],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("an explicit value overrides generation");
+        assert_eq!(values.len(), 1);
+    }
+
+    #[test]
     fn collect_stack_input_values_parses_typed_values() {
         let values = collect_stack_input_values(
             &[
@@ -1351,6 +2165,28 @@ mod tests {
         .expect("typed values should parse");
 
         assert_eq!(values.len(), 3);
+    }
+
+    #[test]
+    fn a_secret_the_deployer_may_provide_is_optional_for_the_developer() {
+        let mut shared = input("apiKey", StackInputKind::Secret, true);
+        shared.provided_by = vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+
+        let values =
+            collect_stack_input_values(&[shared.clone()], &[], &[], &[Platform::Aws], true)
+                .expect("the deployer writes it into their secret store instead");
+        assert!(values.is_empty());
+
+        // A developer value still takes today's path.
+        let values = collect_stack_input_values(
+            &[shared],
+            &[],
+            &["apiKey=developer-value".to_string()],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("developer value");
+        assert_eq!(values.len(), 1);
     }
 
     #[test]

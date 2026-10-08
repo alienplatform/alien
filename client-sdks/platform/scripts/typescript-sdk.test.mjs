@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
+import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -9,6 +12,44 @@ import {
   kubernetesPermissionsToJSON,
   ruleToJSON,
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
+import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
+import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
+import { PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
+import {
+  UpdateProjectBinaryTarget,
+  UpdateProjectHelm$outboundSchema,
+  updateProjectHelmToJSON,
+} from "../typescript/esm/models/updateproject.js";
+
+test("published package model imports still validate and serialize", () => {
+  const rule = { apiGroup: "apps", resource: "deployments", verbs: ["get"], reason: "Read workload state" };
+  assert.deepEqual(PackageRule$inboundSchema.parse(rule), rule);
+  assert.deepEqual(packageRuleFromJSON(JSON.stringify(rule)), { ok: true, value: rule });
+  const helm = { enabled: true, chartName: "application", description: "Application deployment" };
+  assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm);
+  assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm);
+  assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64");
+});
+
+test("Helm installation routing survives SDK response validation", () => {
+  const helm = {
+    status: "ready",
+    chartRef: "oci://registry.example/charts/application",
+    outputs: {
+      chart: "oci://registry.example/charts/application",
+      version: "1.2.3",
+      managerUrl: "https://manager.example",
+    },
+    managerUrlOverride: "https://custom-manager.example",
+  };
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(helm), helm);
+  const previous = {
+    ...helm,
+    outputs: { chart: helm.outputs.chart, version: helm.outputs.version },
+  };
+  delete previous.managerUrlOverride;
+  assert.deepEqual(DeploymentInfoHelm$inboundSchema.parse(previous), previous);
+});
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.
@@ -37,6 +78,65 @@ function client(fetcher) {
   });
 }
 
+test("command retry keys survive configured transport retries and separate method calls", async () => {
+  const request = {
+    deploymentId,
+    target: "api",
+    name: "reindex",
+    params: { full: true },
+    idempotencyKey: randomUUID(),
+    deadline: new Date("2026-10-06T12:00:00.000Z"),
+  };
+  const sent = [];
+  const command = {
+    id: `cmd_${"a".repeat(28)}`,
+    projectId: `prj_${"a".repeat(28)}`,
+    deploymentModel: "pull",
+    target: { resourceId: "api", resourceType: "worker" },
+    deliveryMode: "pull",
+    operationResultContractPersisted: false,
+  };
+  const sdk = client(async outgoing => {
+    assert.equal(outgoing.method, "POST");
+    assert.equal(new URL(outgoing.url).pathname, "/v1/commands");
+    sent.push(await outgoing.json());
+    if (sent.length === 1) {
+      return new Response("temporarily unavailable", {
+        status: 503,
+        headers: { "retry-after-ms": "1" },
+      });
+    }
+    return Response.json(command, { status: 201 });
+  });
+
+  assert.deepEqual(await sdk.commands.create(request, {
+    retries: {
+      strategy: "backoff",
+      backoff: {
+        initialInterval: 1,
+        maxInterval: 5,
+        exponent: 1,
+        maxElapsedTime: 1_000,
+      },
+    },
+  }), command);
+  const serialized = JSON.parse(JSON.stringify(request));
+  assert.deepEqual(sent, [serialized, serialized]);
+
+  await sdk.commands.create(request);
+  const saved = JSON.parse(JSON.stringify(request));
+  const restored = {
+    ...saved,
+    deadline: saved.deadline == null ? saved.deadline : new Date(saved.deadline),
+  };
+  await sdk.commands.create(restored);
+  const next = { ...request, idempotencyKey: randomUUID() };
+  await sdk.commands.create(next);
+  assert.deepEqual(sent, [serialized, serialized, serialized, serialized, {
+    ...serialized, idempotencyKey: next.idempotencyKey,
+  }]);
+});
+
 test("legacy publish-plugin deep imports preserve Kubernetes permission exports", () => {
   const rule = {
     apiGroup: "apps",
@@ -50,6 +150,23 @@ test("legacy publish-plugin deep imports preserve Kubernetes permission exports"
   assert.equal(ruleToJSON(rule), JSON.stringify(rule));
   assert.deepEqual(KubernetesPermissions$outboundSchema.parse(permissions), permissions);
   assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
+});
+
+test("operations plugin responses retain the permission diff", () => {
+  const permissionDiff = {
+    aws: { added: [], removed: [] },
+    gcp: { added: [], removed: [] },
+    kubernetes: { added: [], removed: [] },
+  };
+  const response = PublishOperationsPluginResponse$inboundSchema.parse({
+    name: "registry",
+    version: "1",
+    tier: "mutating",
+    enabled: true,
+    permissionDiff,
+  });
+  assert.deepEqual(response.permissionDiff, permissionDiff);
+  assert.deepEqual(OperationsPermissionDiff$inboundSchema.parse(permissionDiff), permissionDiff);
 });
 
 test("configured server query parameters survive operation globals", async () => {
@@ -215,3 +332,42 @@ test("Events.get still rejects malformed rotation events", async () => {
     name: "ResponseValidationError",
   });
 });
+
+const commandId = "cmd_2sxjXxvOYct7IohT3ukliAzfmpqr";
+for (const [operation, request] of [
+  ["resolveTarget", { deploymentId, command: "reindex" }],
+  ["get", { id: commandId }],
+  ["update", { id: commandId, updateCommandRequest: { state: "DISPATCHED" } }],
+  ["dispatch", { id: commandId, dispatchCommandRequest: { dispatchedAt: new Date() } }],
+  ["complete", { id: commandId, completeCommandRequest: { state: "SUCCEEDED", completedAt: new Date() } }],
+  ["incrementAttempt", { id: commandId }],
+]) {
+  test(`Commands.${operation} preserves a structured 503 API error`, async () => {
+    let requests = 0;
+    const body = {
+      code: "SERVICE_UNAVAILABLE",
+      message: "The API cannot serve the request right now.",
+      retryable: true,
+      internal: false,
+      httpStatusCode: 503,
+      requestId: "00000000-0000-4000-8000-000000000000",
+    };
+    const sdk = client(async () => {
+      requests++;
+      return Response.json(body, { status: 503 });
+    });
+    await assert.rejects(
+      sdk.commands[operation](request, { retries: { strategy: "none" } }),
+      error => {
+        assert.ok(error instanceof APIError);
+        assert.equal(error.code, body.code);
+        assert.equal(error.message, body.message);
+        assert.equal(error.retryable, body.retryable);
+        assert.equal(error.httpStatusCode, body.httpStatusCode);
+        assert.equal(error.requestId, body.requestId);
+        return true;
+      },
+    );
+    assert.equal(requests, 1);
+  });
+}

@@ -76,8 +76,24 @@ pub async fn handle_provisioning(
         })
     })?;
 
+    // Check the deployer secret slots first: which are filled decides how
+    // workloads read them (see inject_environment_variables).
+    runtime_metadata.deployer_secrets = crate::helpers::check_deployer_secrets(
+        &target_stack,
+        &stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await?;
+
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
+    crate::helpers::inject_environment_variables(
+        &mut target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    )?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
@@ -104,6 +120,36 @@ pub async fn handle_provisioning(
         info!("Secrets synced to vault successfully");
     }
 
+    // A required deployer secret the customer has not written blocks every
+    // workload start. Nothing is deployed until it is; the reports above say
+    // what is missing and where it goes.
+    let blocking = crate::helpers::deployer_secrets_blocking_start(
+        &target_stack,
+        &config,
+        current.platform,
+        &runtime_metadata.deployer_secrets,
+    );
+    if !blocking.is_empty() {
+        let summary = blocking
+            .iter()
+            .map(|report| report.summary())
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(%summary, "Waiting for deployer secrets before starting workloads");
+
+        next.status = DeploymentStatus::WaitingForSecrets;
+        next.error =
+            Some(AlienError::new(ErrorData::DeployerSecretsMissing { summary }).into_generic());
+        next.runtime_metadata = Some(runtime_metadata);
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(30_000),
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     // Create executor for live resources. Lifecycle filtering limits mutation
     // scope; already-running managed dependencies still run Ready handlers.
     let executor = StackExecutor::builder(&target_stack, client_config)
@@ -116,6 +162,10 @@ pub async fn handle_provisioning(
             message: "Failed to create stack executor for live resources".to_string(),
         })?;
 
+    // Captured before stepping: completion is judged over exactly what this executor
+    // reconciles.
+    let reconciled_ids = executor.tracked_resource_ids();
+
     // Execute one step
     let step_result =
         executor
@@ -126,13 +176,25 @@ pub async fn handle_provisioning(
             })?;
 
     // Compute the stack status from the resulting state
-    let stack_status =
+    let mut stack_status =
         step_result
             .next_state
             .compute_stack_status()
             .context(ErrorData::StackExecutionFailed {
                 message: "Failed to compute stack status".to_string(),
             })?;
+
+    // A create finishes with the config it started with. If the desired config changed while
+    // it ran, the resource is Running on the old one and the next step plans its update.
+    if stack_status == StackStatus::Running
+        && !crate::updating::stack_has_converged(
+            &step_result.next_state,
+            &target_stack,
+            &reconciled_ids,
+        )
+    {
+        stack_status = StackStatus::InProgress;
+    }
 
     // Check if all live resources are deployed
     let waiting_for_machines =
@@ -235,13 +297,14 @@ pub async fn handle_provisioning(
 ///
 /// This step:
 /// 1. Checks if retry_requested flag is set
-/// 2. Calls retry_failed() on stack state to recover failed resources
+/// 2. Resumes every failed resource whose config is unchanged at its saved step; changed
+///    runtime resources are left to the planner, changed setup-owned ones refuse the retry
 /// 3. Transitions back to Provisioning status
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_provisioning_failed(
     current: DeploymentState,
     _target_stack: Stack,
-    _config: DeploymentConfig,
+    config: DeploymentConfig,
     _client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
@@ -270,15 +333,39 @@ pub async fn handle_provisioning_failed(
         })
     })?;
 
-    // Retry failed resources using alien-infra
-    use alien_infra::state_utils::StackStateExt;
-    let retried = stack_state
-        .retry_failed()
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to retry failed resources".to_string(),
-        })?;
+    // Every failure whose config is unchanged resumes where it stopped. A changed runtime
+    // resource is left to the planner, which updates or replaces it. A changed setup-owned one
+    // needs setup, which this runtime executor never does for it, so the retry is refused.
+    let outcome = crate::helpers::retry_failed_runtime_resources(
+        &mut stack_state,
+        current.runtime_metadata.as_ref(),
+        &config,
+    )?;
+    let blocking = outcome
+        .unresumed
+        .iter()
+        .filter(|failure| failure.setup_owned)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(error) = crate::helpers::retry_cannot_resume(&blocking) {
+        info!(%error, "Retry refused");
+        next.status = DeploymentStatus::ProvisioningFailed;
+        next.error = Some(error.into_generic());
+        next.retry_requested = false;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
 
-    info!("Retried {} failed resources: {:?}", retried.len(), retried);
+    info!(
+        "Retried {} failed resources: {:?}",
+        outcome.retried.len(),
+        outcome.retried
+    );
 
     // Transition back to Provisioning to continue deployment
     next.status = DeploymentStatus::Provisioning;

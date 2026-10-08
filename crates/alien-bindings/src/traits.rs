@@ -427,6 +427,11 @@ pub trait Vault: Binding {
     /// Gets a secret value by name.
     async fn get_secret(&self, secret_name: &str) -> Result<String>;
 
+    /// Whether a secret exists and can be read, learned from metadata only:
+    /// the value is never fetched, so a control plane may call this without
+    /// ever seeing the secret.
+    async fn secret_presence(&self, secret_name: &str) -> Result<SecretPresence>;
+
     /// Sets a secret value, creating it if it doesn't exist or updating it if it does.
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()>;
 
@@ -446,6 +451,27 @@ pub trait Vault: Binding {
     /// aliasing across vaults. Such providers should return
     /// `OperationNotSupported` rather than list under this hazard.
     async fn list_secrets(&self) -> Result<Vec<String>>;
+}
+
+/// Whether a vault secret can be used, from [`Vault::secret_presence`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretPresence {
+    /// The secret exists and a workload with read access can use it.
+    Present {
+        /// The store's identifier for the value a workload reads now (an SSM
+        /// parameter version, a Secret Manager version name, a Key Vault
+        /// version id, a Kubernetes resourceVersion). It changes when the
+        /// value is overwritten, so a workload can be restarted to pick the
+        /// new value up. Metadata only: never derived from the value.
+        version: Option<String>,
+    },
+    /// No secret by that name exists.
+    Missing,
+    /// The secret exists but cannot be used as is.
+    Invalid {
+        /// What is wrong with it, for the person who wrote it.
+        reason: String,
+    },
 }
 
 /// TLS policy used when building a Postgres connection string.
@@ -870,11 +896,32 @@ pub const MAX_BATCH_SIZE: usize = 10;
 /// - Consistent across all platforms
 pub const LEASE_SECONDS: u64 = 30;
 
+/// Outcome for one input message, in the same order as the batch inputs.
+/// Unknown delivery may have reached the queue: retrying can produce duplicates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum QueueSendResult {
+    /// The provider confirmed acceptance.
+    Sent,
+    /// The message was rejected without being accepted.
+    Rejected { code: String, message: String },
+    /// Acceptance could not be established (for example a network timeout).
+    Unknown { code: String, message: String },
+}
+
 /// A trait for queue bindings providing minimal, portable queue operations.
 #[async_trait]
 pub trait Queue: Binding {
     /// Send a message to the specified queue
     async fn send(&self, queue: &str, message: MessagePayload) -> Result<()>;
+
+    /// Send a batch using provider-native batching. Returns one outcome per input.
+    /// An outer error means no messages were attempted. No automatic retries.
+    async fn send_batch(
+        &self,
+        queue: &str,
+        messages: Vec<MessagePayload>,
+    ) -> Result<Vec<QueueSendResult>>;
 
     /// Receive up to `max_messages` (1..=10) from the specified queue
     async fn receive(&self, queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>>;

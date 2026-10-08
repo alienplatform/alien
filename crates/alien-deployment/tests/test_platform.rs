@@ -2,12 +2,14 @@
 //!
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
+use alien_bindings::Vault as _;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry,
-    ResourceLifecycle, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackSettings, StackState,
-    Storage, Worker, WorkerCode,
+    ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
+    DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+    Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata,
+    SetupUpdateAuthorization, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
+use alien_infra::{register_registry_extension, LocalComputeClusterController};
 use chrono::Utc;
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
@@ -22,6 +24,17 @@ static TEST_VAULT_ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 struct TestVaultEnv {
     _guard: MutexGuard<'static, ()>,
     _temp_dir: TempDir,
+}
+
+impl TestVaultEnv {
+    /// The customer's side of the test vault: what they write with their
+    /// cloud's CLI, outside Alien.
+    fn customer_vault(&self) -> alien_bindings::providers::vault::LocalVault {
+        alien_bindings::providers::vault::LocalVault::new(
+            "secrets".to_string(),
+            self._temp_dir.path().to_path_buf(),
+        )
+    }
 }
 
 impl Drop for TestVaultEnv {
@@ -148,6 +161,8 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
         },
         supported_platforms: None,
         inputs: Vec::new(),
+        dynamic_container_repositories: Vec::new(),
+        dynamic_container_image_resources: Vec::new(),
     }
 }
 
@@ -195,6 +210,8 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
         },
         supported_platforms: None,
         inputs: Vec::new(),
+        dynamic_container_repositories: Vec::new(),
+        dynamic_container_image_resources: Vec::new(),
     }
 }
 
@@ -235,6 +252,7 @@ fn expected_secrets_sync_hash(secret_value: &str) -> String {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
@@ -253,6 +271,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         manager_url: None,
         deployment_token: None,
         native_image_host: None,
+        volume_restores: Vec::new(),
     }
 }
 
@@ -283,7 +302,7 @@ fn create_initial_state(stack: Stack) -> DeploymentState {
 
 #[tokio::test]
 async fn test_pending_to_running_happy_path_promotes_release() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -327,7 +346,7 @@ async fn test_pending_to_running_happy_path_promotes_release() {
 
 #[tokio::test]
 async fn test_initial_setup_creates_only_frozen_resources() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack_with_storage("test-stack", "test-storage", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -371,16 +390,204 @@ async fn stale_waiting_for_machines_returns_to_provisioning() {
         &[DeploymentStatus::Provisioning],
     )
     .await;
+    assert!(state.current_release.is_none());
+    assert!(state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    let target = state.target_release.clone();
     let stale_state = DeploymentState {
         status: DeploymentStatus::WaitingForMachines,
         ..state
     };
 
-    let result = alien_deployment::step(stale_state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(stale_state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("provisioning step should succeed");
 
     assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+    let completed = run_to_completion(result.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(completed.current_release, target);
+    assert!(completed.target_release.is_none());
+    assert_eq!(
+        completed.stack_state.as_ref().unwrap().resources["test-function"].status,
+        alien_core::ResourceStatus::Running
+    );
+}
+
+#[tokio::test]
+async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
+    let config = create_test_config("target-env", false);
+    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut state = run_until_status(
+        create_initial_state(old_stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    assert!(state.current_release.is_none());
+    let frozen = state.stack_state.as_ref().unwrap().resources["archive"].clone();
+    let baseline = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .clone();
+    state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .direct_setup_revision = Some("setup-revision".into());
+
+    let mut target = create_test_stack_with_storage("test-stack", "archive", "new-worker");
+    target.resources.get_mut("new-worker").unwrap().config = alien_core::Resource::new(
+        Worker::new("new-worker".into())
+            .code(WorkerCode::Image {
+                image: "demo:target".into(),
+            })
+            .permissions("default".into())
+            .build(),
+    );
+    let target_release = ReleaseInfo {
+        release_id: Some("rel_target".into()),
+        version: Some("2.0.0".into()),
+        description: None,
+        stack: target,
+    };
+    start_update(&mut state, target_release.clone());
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
+    let pending = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .clone();
+    assert!(pending
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    assert_eq!(
+        state.runtime_metadata.as_ref().unwrap().prepared_stack,
+        baseline
+    );
+
+    // The setup-owned cluster is already Running; only its persisted inventory changes.
+    // Test controllers reconcile the workloads, and no cluster controller action is needed.
+    register_registry_extension(Box::new(|registry| {
+        registry
+            .register::<ComputeCluster>(ComputeCluster::RESOURCE_TYPE)
+            .with_controller::<LocalComputeClusterController>(Platform::Test);
+    }));
+    let cluster = ResourceEntry {
+        config: alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
+        lifecycle: ResourceLifecycle::Frozen,
+        dependencies: Vec::new(),
+        remote_access: false,
+        enabled_when: None,
+    };
+    let metadata = state.runtime_metadata.as_mut().unwrap();
+    metadata
+        .prepared_stack
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), cluster.clone());
+    metadata
+        .pending_prepared_stack
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), cluster);
+    let pending = metadata.pending_prepared_stack.clone();
+    state.platform = Platform::Machines;
+    let mut inventory = alien_core::StackResourceState::new_pending(
+        ComputeCluster::RESOURCE_TYPE.to_string(),
+        alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    inventory.status = alien_core::ResourceStatus::Running;
+    let outputs = ComputeClusterOutputs {
+        cluster_id: "demo-cluster".into(),
+        horizon_ready: true,
+        capacity_group_statuses: vec![],
+        total_machines: 0,
+    };
+    inventory.outputs = Some(alien_core::ResourceOutputs::new(outputs.clone()));
+    state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .insert("machines".into(), inventory);
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("updating should wait for inventory");
+    state = result.state;
+    assert_eq!(state.status, DeploymentStatus::WaitingForMachines);
+    assert_eq!(result.suggested_delay_ms, Some(30_000));
+    assert!(state.current_release.is_none());
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .pending_prepared_stack,
+        pending
+    );
+
+    // Round-trip the checkpoint just as a later loop invocation reloads persisted state.
+    state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut("machines")
+        .unwrap()
+        .outputs = Some(alien_core::ResourceOutputs::new(ComputeClusterOutputs {
+        total_machines: 1,
+        ..outputs
+    }));
+    state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(state.current_release, Some(target_release));
+    assert!(state.target_release.is_none());
+    let metadata = state.runtime_metadata.as_ref().unwrap();
+    assert_eq!(metadata.prepared_stack, pending);
+    assert!(metadata.pending_prepared_stack.is_none());
+    assert_eq!(
+        metadata.direct_setup_revision.as_deref(),
+        Some("setup-revision")
+    );
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert_eq!(
+        serde_json::to_value(&resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert!(!resources.contains_key("old-worker"));
+    assert_eq!(
+        resources["new-worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    let worker = resources["new-worker"]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap();
+    assert_eq!(
+        worker.code,
+        WorkerCode::Image {
+            image: "demo:target".into()
+        }
+    );
+    assert_eq!(
+        worker.environment.get("PLAIN_VAR").map(String::as_str),
+        Some("plain_value")
+    );
 }
 
 /// B) Secrets sync behavior tests
@@ -578,7 +785,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
 
 #[tokio::test]
 async fn test_running_updates_heartbeat_when_healthy() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -660,8 +867,75 @@ async fn health_failure_recovers_through_observation_without_retry_or_reprovisio
 }
 
 #[tokio::test]
+async fn explicit_retry_after_health_failure_preserves_the_running_resource() {
+    let mut stack = create_test_stack("retry-health-stack", "health-worker");
+    let worker = Worker::new("health-worker".to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .environment(HashMap::from([
+            (
+                "SIMULATE_OBSERVED_URL_REFRESH".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".to_string(),
+                "true".to_string(),
+            ),
+        ]))
+        .build();
+    stack.resources.get_mut("health-worker").unwrap().config = alien_core::Resource::new(worker);
+    let config = create_test_config("retry-health", false);
+    let state = run_to_completion(create_initial_state(stack), config.clone()).await;
+    let failed = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(failed.state.status, DeploymentStatus::RefreshFailed);
+
+    let mut retry_state = failed.state;
+    request_retry(&mut retry_state);
+    let retried = alien_deployment::step(retry_state, config.clone(), ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(retried.state.status, DeploymentStatus::Running);
+    assert!(!retried.state.retry_requested);
+    let retried_worker = &retried.state.stack_state.as_ref().unwrap().resources["health-worker"];
+    assert_eq!(
+        retried_worker.status,
+        alien_core::ResourceStatus::RefreshFailed
+    );
+    let retried_outputs = retried_worker
+        .outputs
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<alien_core::WorkerOutputs>()
+        .unwrap();
+    assert_eq!(
+        retried_outputs.identifier.as_deref(),
+        Some("test:worker:health-worker")
+    );
+
+    let observed = alien_deployment::step(retried.state, config, ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(observed.state.status, DeploymentStatus::Running);
+    let observed_worker = &observed.state.stack_state.as_ref().unwrap().resources["health-worker"];
+    let observed_outputs = observed_worker
+        .outputs
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<alien_core::WorkerOutputs>()
+        .unwrap();
+    assert_eq!(
+        observed_outputs.public_endpoints["default"].url,
+        "https://observed-2.test"
+    );
+}
+
+#[tokio::test]
 async fn persistent_worker_failure_surfaces_during_provisioning() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     // Create a function configured to fail persistently
     let function = Worker::new("test-function".to_string())
@@ -703,6 +977,8 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
         },
         supported_platforms: None,
         inputs: Vec::new(),
+        dynamic_container_repositories: Vec::new(),
+        dynamic_container_image_resources: Vec::new(),
     };
 
     let config = create_test_config("hash_v1", false);
@@ -726,7 +1002,7 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
 
 #[tokio::test]
 async fn test_update_flow_happy_path_promotes_release() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack_v1 = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -778,6 +1054,104 @@ async fn test_update_flow_happy_path_promotes_release() {
     );
 }
 
+fn worker_image_release(image: &str, release_id: &str) -> ReleaseInfo {
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.resources.get_mut("test-function").unwrap().config = alien_core::Resource::new(
+        Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: image.to_string(),
+            })
+            .permissions("default".to_string())
+            .build(),
+    );
+    release_of(release_id, stack)
+}
+
+fn deployed_worker_image(state: &DeploymentState, worker_id: &str) -> String {
+    match &state.stack_state.as_ref().unwrap().resources[worker_id]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap()
+        .code
+    {
+        WorkerCode::Image { image } => image.clone(),
+        other => panic!("expected an image worker, got {other:?}"),
+    }
+}
+
+/// A newer release can become the target while an update is still applying the
+/// stack prepared for an older one. When that older stack converges, the newer
+/// release has not been applied and must not be recorded as deployed.
+#[tokio::test]
+async fn a_release_that_supersedes_an_in_flight_update_is_applied_before_it_is_recorded() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    start_update(&mut state, worker_image_release("test:v2", "rel_v2"));
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
+    assert_eq!(
+        deployed_worker_image(&state, "test-function"),
+        "test:latest",
+        "the v2 stack is prepared but not applied yet"
+    );
+
+    // The manager rebuilds the target from the deployment record on every
+    // pass, so a superseding release replaces it mid-update.
+    let release_v3 = worker_image_release("test:v3", "rel_v3");
+    state.target_release = Some(release_v3.clone());
+
+    // v2 converges first. It is installed and must be reported as current
+    // while v3 is prepared, in case v3 never succeeds.
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdatePending]).await;
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v2");
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v2")
+    );
+    assert_eq!(
+        state.target_release.as_ref().unwrap().release_id,
+        release_v3.release_id
+    );
+
+    state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        state.current_release.as_ref().unwrap().release_id,
+        release_v3.release_id
+    );
+    assert_eq!(deployed_worker_image(&state, "test-function"), "test:v3");
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources["test-function"]
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .code,
+        WorkerCode::Image {
+            image: "test:v3".to_string()
+        },
+        "the installed baseline must be the v3 stack"
+    );
+}
+
 #[tokio::test]
 async fn setup_authorized_update_clears_authority_only_on_success() {
     let config = create_test_config("hash_v1", false);
@@ -800,7 +1174,7 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
         .as_ref()
         .and_then(|metadata| metadata.prepared_stack.as_ref())
         .unwrap()
-        .frozen_resources_digest();
+        .setup_owned_digest();
     state
         .runtime_metadata
         .as_mut()
@@ -994,20 +1368,34 @@ async fn stale_waiting_for_machines_returns_to_updating() {
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
     };
-    start_update(&mut state, release_v2);
+    start_update(&mut state, release_v2.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
     state.status = DeploymentStatus::WaitingForMachines;
 
-    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("updating step should succeed");
 
     assert_eq!(result.state.status, DeploymentStatus::Updating);
+    let completed = run_to_completion(result.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(completed.current_release, Some(release_v2));
+    assert!(completed.target_release.is_none());
+    assert!(completed
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    assert_eq!(
+        completed.stack_state.as_ref().unwrap().resources["test-function-v2"].status,
+        alien_core::ResourceStatus::Running
+    );
 }
 
 #[tokio::test]
 async fn test_update_failed_retry_gate_returns_to_update_pending() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack_v1 = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1056,6 +1444,8 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         },
         supported_platforms: None,
         inputs: Vec::new(),
+        dynamic_container_repositories: Vec::new(),
+        dynamic_container_image_resources: Vec::new(),
     };
 
     let release_v2 = ReleaseInfo {
@@ -1073,7 +1463,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         .as_ref()
         .and_then(|metadata| metadata.prepared_stack.as_ref())
         .expect("running deployment should retain its prepared stack")
-        .frozen_resources_digest();
+        .setup_owned_digest();
     state
         .runtime_metadata
         .as_mut()
@@ -1268,7 +1658,12 @@ async fn assert_failed_retry_transition(
     state.status = failed_status;
     state.stack_state = Some(StackState::new(Platform::Test));
 
-    if failed_status == DeploymentStatus::DeleteFailed {
+    // Setup and delete retries read what setup recorded; a deployment reaches either
+    // failure only after Pending wrote runtime metadata.
+    if matches!(
+        failed_status,
+        DeploymentStatus::DeleteFailed | DeploymentStatus::InitialSetupFailed
+    ) {
         state.runtime_metadata = Some(RuntimeMetadata::default());
     }
 
@@ -1320,7 +1715,7 @@ async fn test_delete_failed_retry_gate_returns_to_deleting() {
 
 #[tokio::test]
 async fn test_delete_flow_happy_path_reaches_teardown_required() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1346,7 +1741,7 @@ async fn test_delete_runtime_cleanup_reaches_teardown_required() {
     // In practice, TestWorkerController doesn't easily simulate delete failures,
     // but we can test the pattern conceptually by checking the handler exists
 
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1426,6 +1821,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
         },
         supported_platforms: None,
         inputs: Vec::new(),
+        dynamic_container_repositories: Vec::new(),
+        dynamic_container_image_resources: Vec::new(),
     }
 }
 
@@ -1491,6 +1888,8 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
         },
         supported_platforms: None,
         inputs: Vec::new(),
+        dynamic_container_repositories: Vec::new(),
+        dynamic_container_image_resources: Vec::new(),
     }
 }
 
@@ -1499,7 +1898,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
 /// accurate statuses instead of stale "Provisioning" or "Pending" indicators.
 #[tokio::test]
 async fn test_partial_failure_interrupts_in_progress_resources() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_two_function_stack_one_fails("test-stack");
     let config = create_test_config("hash_v1", false);
@@ -1566,7 +1965,7 @@ async fn test_partial_failure_interrupts_in_progress_resources() {
 /// - On retry, reset cleanly to Pending so it starts fresh
 #[tokio::test]
 async fn test_partial_failure_pending_resource_retries_from_pending() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     // sibling-fn depends on failing-fn — it will be stuck in Pending when failing-fn fails
     let stack = create_two_function_stack_dependent_one_fails("test-stack");
@@ -1632,11 +2031,506 @@ async fn test_partial_failure_pending_resource_retries_from_pending() {
     );
 }
 
+fn add_live_worker(stack: &mut Stack, worker: Worker) {
+    stack.resources.insert(
+        worker.id.clone(),
+        ResourceEntry {
+            config: alien_core::Resource::new(worker),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+}
+
+fn image_worker(id: &str, image: &str, memory_mb: u32) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
+            image: image.to_string(),
+        })
+        .memory_mb(memory_mb)
+        .permissions("default".to_string())
+        .build()
+}
+
+/// A sibling interrupted mid-create keeps the IDs its create recorded. When the corrective
+/// release also changes that sibling, the update deletes what the interrupted create made,
+/// against the config it was created with, before creating it again.
+#[tokio::test]
+async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreated() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "base-fn")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    // Release 2 adds a worker that fails at once (the test controller rejects more than
+    // 4096 MB, without retries) and a sibling whose create is still in flight then.
+    let mut stack_v2 = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack_v2, image_worker("rejected-fn", "test:v2", 5120));
+    add_live_worker(
+        &mut stack_v2,
+        image_worker("interrupted-sibling-fn", "test:v2", 1024),
+    );
+    start_update(&mut state, release_of("rel_v2", stack_v2));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+
+    let sibling = &state.stack_state.as_ref().unwrap().resources["interrupted-sibling-fn"];
+    assert_eq!(sibling.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert_eq!(
+        sibling.error.as_ref().map(|error| error.code.as_str()),
+        Some("DEPLOYMENT_INTERRUPTED")
+    );
+    assert!(
+        sibling.internal_state.is_some() && sibling.last_failed_state.is_some(),
+        "the interrupted create keeps its controller state"
+    );
+    let sibling_identifier = "test:worker:interrupted-sibling-fn";
+    assert!(alien_infra::test_worker_deletes_issued(sibling_identifier).is_empty());
+
+    // Release 3 fixes the failing worker and changes the interrupted sibling.
+    let mut stack_v3 = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack_v3, image_worker("rejected-fn", "test:v3", 1024));
+    add_live_worker(
+        &mut stack_v3,
+        image_worker("interrupted-sibling-fn", "test:v3", 1024),
+    );
+    start_update(&mut state, release_of("rel_v3", stack_v3));
+    let state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let deletes = alien_infra::test_worker_deletes_issued(sibling_identifier);
+    assert_eq!(deletes.len(), 1, "the interrupted create is deleted once");
+    assert_eq!(
+        deletes[0].code,
+        WorkerCode::Image {
+            image: "test:v2".to_string()
+        },
+        "the delete runs against the config the sibling was created with"
+    );
+    assert_eq!(
+        deployed_worker_image(&state, "interrupted-sibling-fn"),
+        "test:v3"
+    );
+    assert_eq!(deployed_worker_image(&state, "rejected-fn"), "test:v3");
+    // The rejected worker failed before its create recorded anything, so it had nothing to
+    // delete remotely.
+    assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
+}
+
+/// An injected environment variable changes after the worker's create deployed its code.
+/// Provisioning does not report the deployment Running on the old config: the create finishes,
+/// the worker is updated to the new config, and only then is the release promoted.
+#[tokio::test]
+async fn config_change_during_provisioning_is_applied_before_the_deployment_is_running() {
+    let _vault = test_vault_env().await;
+    let worker_id = "mid-provisioning-change-fn";
+    let worker_identifier = "test:worker:mid-provisioning-change-fn";
+    let mut stack = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    let with_variable = |value: &str, hash: &str| {
+        let mut config = create_test_config(hash, false);
+        config
+            .environment_variables
+            .variables
+            .push(EnvironmentVariable {
+                name: "MID_PROVISIONING_VALUE".to_string(),
+                value: value.to_string(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: Some(vec![worker_id.to_string()]),
+            });
+        config
+    };
+    let deployed_values = || {
+        alien_infra::test_worker_configs_deployed(worker_identifier)
+            .iter()
+            .map(|config| config.environment.get("MID_PROVISIONING_VALUE").cloned())
+            .collect::<Vec<_>>()
+    };
+
+    // Step with the first value until the worker's create has deployed it.
+    let first = with_variable("first", "hash_first");
+    let mut state = create_initial_state(stack);
+    for _ in 0..MAX_STEPS {
+        if !deployed_values().is_empty() {
+            break;
+        }
+        state = alien_deployment::step(state, first.clone(), ClientConfig::Test, None)
+            .await
+            .expect("step should succeed")
+            .state;
+    }
+    assert_eq!(deployed_values(), vec![Some("first".to_string())]);
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources[worker_id].status,
+        alien_core::ResourceStatus::Provisioning
+    );
+
+    let second = with_variable("second", "hash_second");
+    let state = run_to_completion(state, second).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployed_values(),
+        vec![Some("first".to_string()), Some("second".to_string())],
+        "the worker is updated to the value that arrived mid-create"
+    );
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    assert_eq!(
+        worker
+            .config
+            .downcast_ref::<Worker>()
+            .expect("worker config")
+            .environment
+            .get("MID_PROVISIONING_VALUE")
+            .map(String::as_str),
+        Some("second")
+    );
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+}
+
+/// A runtime retry does not resume a failed create whose config changed since it failed: that
+/// would finish the create with a mix of both configs and never delete what the failed one
+/// made. The retry leaves it failed, and the executor deletes it against the config it was
+/// created with before creating it with the new one.
+#[tokio::test]
+async fn provisioning_retry_replaces_a_failed_create_whose_config_changed() {
+    let _vault = test_vault_env().await;
+    let worker_id = "retry-changed-fn";
+    let worker_identifier = "test:worker:retry-changed-fn";
+    let mut stack = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    // The first attempt injects a variable that makes the worker's create fail right after
+    // it recorded the worker.
+    let mut failing_config = create_test_config("hash_v1", false);
+    failing_config
+        .environment_variables
+        .variables
+        .push(EnvironmentVariable {
+            name: "SIMULATE_CREATE_WORKER_FAILURE".to_string(),
+            value: "true".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: Some(vec![worker_id.to_string()]),
+        });
+    let mut state = run_to_completion(create_initial_state(stack), failing_config).await;
+    assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+    let failed = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(failed.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert!(failed.internal_state.is_some() && failed.last_failed_state.is_some());
+    assert!(alien_infra::test_worker_deletes_issued(worker_identifier).is_empty());
+
+    // The retry runs with the variable gone.
+    let fixed_config = create_test_config("hash_v2", false);
+    request_retry(&mut state);
+    let state = alien_deployment::step(state, fixed_config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources[worker_id].status,
+        alien_core::ResourceStatus::ProvisionFailed,
+        "the retry leaves the changed create to the planner"
+    );
+    let state = run_to_completion(state, fixed_config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let deletes = alien_infra::test_worker_deletes_issued(worker_identifier);
+    assert_eq!(deletes.len(), 1, "the failed create is deleted once");
+    assert_eq!(
+        deletes[0]
+            .environment
+            .get("SIMULATE_CREATE_WORKER_FAILURE")
+            .map(String::as_str),
+        Some("true"),
+        "the delete runs against the config the worker was created with"
+    );
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    let deployed = worker
+        .config
+        .downcast_ref::<Worker>()
+        .expect("worker config");
+    assert!(!deployed
+        .environment
+        .contains_key("SIMULATE_CREATE_WORKER_FAILURE"));
+}
+
+/// A Running deployment with this Frozen store failed mid-update at `updateConfig`, its
+/// config unchanged, and the deployment in RefreshFailed.
+async fn store_failed_mid_update(store_id: &str) -> (DeploymentState, DeploymentConfig) {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack_with_storage(
+            "retry-stack",
+            store_id,
+            "retry-fn",
+        )),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let store = state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut(store_id)
+        .unwrap();
+    let mut checkpoint = store.internal_state.clone().expect("store controller");
+    checkpoint["state"] = serde_json::json!("updateConfig");
+    store.status = alien_core::ResourceStatus::UpdateFailed;
+    store.internal_state = Some(checkpoint.clone());
+    store.last_failed_state = Some(checkpoint);
+    state.status = DeploymentStatus::RefreshFailed;
+    (state, config)
+}
+
+/// A retry resumes a failed setup-owned resource whose config is unchanged at the exact step
+/// it failed in, with runtime credentials, as the retry always did. Recovering resources
+/// stuck mid-update depends on resuming that step, not restarting the update.
+#[tokio::test]
+async fn running_retry_resumes_an_unchanged_setup_owned_failure_at_its_saved_step() {
+    let _vault = test_vault_env().await;
+    let store_id = "retry-frozen-store";
+    let (mut state, config) = store_failed_mid_update(store_id).await;
+
+    request_retry(&mut state);
+    let retried = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(retried.status, DeploymentStatus::Running);
+    assert!(retried.error.is_none());
+    let store = &retried.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(store.status, alien_core::ResourceStatus::Updating);
+    assert_eq!(
+        store.internal_state.as_ref().unwrap()["state"],
+        "updateConfig",
+        "the retry resumes the saved step, not UpdateStart"
+    );
+    assert!(store.last_failed_state.is_none());
+}
+
+/// A running deployment only refreshes, so a failure the retry cannot resume would stay failed
+/// without a word. The retry is refused instead, naming each resource and what it needs, and
+/// nothing is resumed.
+#[tokio::test]
+async fn running_retry_refuses_failures_whose_config_changed_and_names_them() {
+    let _vault = test_vault_env().await;
+    let store_id = "retry-changed-store";
+    let (mut state, config) = store_failed_mid_update(store_id).await;
+    let resources = &mut state.stack_state.as_mut().unwrap().resources;
+    resources.get_mut(store_id).unwrap().config =
+        alien_core::Resource::new(Storage::new(store_id.to_string()).versioning(true).build());
+    let worker = resources.get_mut("retry-fn").unwrap();
+    let mut old = worker.config.downcast_ref::<Worker>().unwrap().clone();
+    old.code = WorkerCode::Image {
+        image: "test:older".to_string(),
+    };
+    worker.config = alien_core::Resource::new(old);
+    let mut checkpoint = worker.internal_state.clone().unwrap();
+    checkpoint["state"] = serde_json::json!("updateCodePolling");
+    worker.status = alien_core::ResourceStatus::UpdateFailed;
+    worker.internal_state = Some(checkpoint.clone());
+    worker.last_failed_state = Some(checkpoint);
+    let before = state.stack_state.clone();
+
+    request_retry(&mut state);
+    let refused = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(refused.status, DeploymentStatus::RefreshFailed);
+    assert!(!refused.retry_requested);
+    let error = refused.error.expect("the refusal is reported");
+    assert_eq!(error.code, "RETRY_CANNOT_RESUME");
+    assert!(
+        error.message.contains(&format!("'{store_id}'")) && error.message.contains("rerun setup"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("'retry-fn'") && error.message.contains("deploy an update"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        serde_json::to_value(&refused.stack_state).unwrap(),
+        serde_json::to_value(&before).unwrap(),
+        "nothing is resumed"
+    );
+}
+
+/// An update whose replace delete is denied fails with the denial named and nothing deleted
+/// or created. Once the permission is granted, the user's retry completes the replace.
+#[tokio::test]
+async fn update_retry_completes_a_replace_once_its_delete_is_allowed() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let worker_id = "denied-replace-fn";
+    let identifier = "test:worker:denied-replace-fn";
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "base-fn")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    // Release 2 adds a worker whose create fails after it recorded the worker.
+    let mut stack_v2 = create_test_stack("test-stack", "base-fn");
+    let mut failing = image_worker(worker_id, "test:v2", 1024);
+    failing.environment.insert(
+        "SIMULATE_CREATE_WORKER_FAILURE".to_string(),
+        "true".to_string(),
+    );
+    add_live_worker(&mut stack_v2, failing);
+    start_update(&mut state, release_of("rel_v2", stack_v2));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+
+    // Release 3 fixes it, but this role may not delete the half-created worker.
+    alien_infra::deny_test_worker_deletes(identifier);
+    let mut stack_v3 = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack_v3, image_worker(worker_id, "test:v3", 1024));
+    start_update(&mut state, release_of("rel_v3", stack_v3));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert_eq!(
+        worker.error.as_ref().map(|error| error.code.as_str()),
+        Some("REPLACE_DELETE_DENIED")
+    );
+    assert!(alien_infra::test_worker_deletes_issued(identifier).is_empty());
+    assert_eq!(alien_infra::test_worker_deletes_denied(identifier), 1);
+
+    assert_eq!(alien_infra::allow_test_worker_deletes(identifier), 1);
+    request_retry(&mut state);
+    let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::UpdatePending);
+    let state = run_to_completion(state, config).await;
+    assert_eq!(
+        state.status,
+        DeploymentStatus::Running,
+        "{:?}",
+        state.stack_state.as_ref().unwrap().resources[worker_id]
+    );
+    let deletes = alien_infra::test_worker_deletes_issued(identifier);
+    assert_eq!(deletes.len(), 1, "the half-created worker is deleted once");
+    assert_eq!(deployed_worker_image(&state, worker_id), "test:v3");
+}
+
+/// A setup rerun with a corrected release does not resume the old create checkpoint of a
+/// setup-owned store whose create failed after recording its bucket. A store holds data, so
+/// it is not deleted to be replaced either: setup creates it again in place with the new
+/// config.
+#[tokio::test]
+async fn setup_retry_creates_a_failed_setup_owned_store_again_with_the_new_config() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let store_id = "setup-replaced-store";
+    let stack_with_store = |storage: Storage| {
+        let mut stack = create_test_stack("test-stack", "base-fn");
+        stack.resources.insert(
+            store_id.to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(storage),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack
+    };
+
+    let failing_store = Storage::new(store_id.to_string())
+        .cors_allowed_origins(vec![
+            alien_infra::SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN.to_string()
+        ])
+        .build();
+    let state = create_initial_state(stack_with_store(failing_store));
+    let mut state = run_until_status(
+        state,
+        config.clone(),
+        &[DeploymentStatus::InitialSetupFailed],
+    )
+    .await;
+    let failed = &state.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(failed.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert!(failed.internal_state.is_some() && failed.last_failed_state.is_some());
+    assert!(alien_infra::test_storage_deletes_issued(store_id).is_empty());
+
+    // Rerun setup with the corrected release: prepare it as the setup CLIs do, then retry.
+    let fixed_store = Storage::new(store_id.to_string()).versioning(true).build();
+    let stack_v2 = stack_with_store(fixed_store.clone());
+    state.runtime_metadata = Some(
+        alien_deployment::prepare_direct_setup_update(
+            stack_v2.clone(),
+            state.stack_state.as_ref().unwrap(),
+            &config,
+            &ClientConfig::Test,
+            state.runtime_metadata.as_ref().unwrap(),
+        )
+        .await
+        .expect("setup update should prepare"),
+    );
+    state.target_release = Some(release_of("rel_v2", stack_v2));
+    request_retry(&mut state);
+    let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the retry step should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::InitialSetup);
+    let store = &state.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(
+        store.status,
+        alien_core::ResourceStatus::ProvisionFailed,
+        "the retry leaves the changed create to the setup executor"
+    );
+    let state = run_to_completion(state, config).await;
+    assert_eq!(
+        state.status,
+        DeploymentStatus::Running,
+        "{:?}",
+        state.stack_state.as_ref().unwrap().resources[store_id]
+    );
+
+    assert!(
+        alien_infra::test_storage_deletes_issued(store_id).is_empty(),
+        "a data-holding store is never deleted to be replaced"
+    );
+    let store = &state.stack_state.as_ref().unwrap().resources[store_id];
+    assert_eq!(store.status, alien_core::ResourceStatus::Running);
+    assert_eq!(store.config, alien_core::Resource::new(fixed_store));
+}
+
 /// Dispatcher terminal sanity
 
 #[tokio::test]
 async fn test_deleted_is_noop() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1721,7 +2615,7 @@ fn release_of(release_id: &str, stack: Stack) -> ReleaseInfo {
 /// true answer on a later update recreates it.
 #[tokio::test]
 async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_live_gated_stack("gated-stack", "cache", "test-function");
     let config = create_test_config("hash_v1", false);
@@ -1769,7 +2663,7 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
 /// gone rather than finishing on the step that scrubs the link.
 #[tokio::test]
 async fn declining_a_linked_gate_deprovisions_the_store_before_the_update_completes() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let stack = create_live_gated_stack_with_linking_worker("linked-gate-stack", "cache", "api");
     let config = create_test_config("hash_v1", false);
@@ -1858,7 +2752,7 @@ fn create_live_gated_stack_with_linking_worker(
 /// every later conflicting input value.
 #[tokio::test]
 async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     // A frozen store gated with a declared default of true.
     let mut stack = create_test_stack("fixed-stack", "test-function");
@@ -1922,7 +2816,7 @@ async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
 /// the worker.
 #[tokio::test]
 async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let mut stack = create_test_stack("gated-stack", "proxy");
     stack
@@ -2022,7 +2916,7 @@ async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
 /// and the live function still deploy.
 #[tokio::test]
 async fn a_declined_gated_import_is_not_created_by_the_runner() {
-    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let _vault = test_vault_env().await;
 
     let mut stack = create_test_stack_with_storage("test-stack", "assets", "test-function");
     stack.resources.insert(
@@ -2149,5 +3043,763 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
     assert!(
         rendered.contains("archive"),
         "the refusal should name the resource that needs setup: {rendered}"
+    );
+}
+
+fn database_password_input() -> alien_core::StackInputDefinition {
+    alien_core::StackInputDefinition {
+        id: "databasePassword".to_string(),
+        kind: alien_core::StackInputKind::Secret,
+        provided_by: vec![alien_core::StackInputProvider::Deployer],
+        required: true,
+        label: "Database password".to_string(),
+        description: "Password of the customer's database".to_string(),
+        placeholder: None,
+        default: None,
+        platforms: None,
+        validation: None,
+        generate: None,
+        env: vec![alien_core::StackInputEnvironmentMapping {
+            name: "DATABASE_PASSWORD".to_string(),
+            target_resources: None,
+            var_type: None,
+        }],
+    }
+}
+
+fn worker_environment(state: &DeploymentState, worker_id: &str) -> HashMap<String, String> {
+    state.stack_state.as_ref().unwrap().resources[worker_id]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap()
+        .environment
+        .clone()
+}
+
+fn deployer_reports(state: &DeploymentState) -> Vec<alien_core::DeployerSecretReport> {
+    state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .deployer_secrets
+        .clone()
+}
+
+#[tokio::test]
+async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
+    let vault_env = test_vault_env().await;
+    let config = create_test_config("target-env", false);
+    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut state = run_until_status(
+        create_initial_state(old_stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    assert!(state.current_release.is_none());
+    let frozen = state.stack_state.as_ref().unwrap().resources["archive"].clone();
+    let baseline = state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .clone();
+    let mut target = create_test_stack_with_storage("test-stack", "archive", "new-worker");
+    target.inputs = vec![database_password_input()];
+    let target_release = ReleaseInfo {
+        release_id: Some("rel_target".into()),
+        version: Some("2.0.0".into()),
+        description: None,
+        stack: target,
+    };
+    start_update(&mut state, target_release.clone());
+    let blocked = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+    assert_eq!(blocked.status, DeploymentStatus::WaitingForSecrets);
+    assert!(blocked.current_release.is_none());
+    assert_eq!(
+        blocked.runtime_metadata.as_ref().unwrap().prepared_stack,
+        baseline
+    );
+    assert!(blocked
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    assert_eq!(
+        deployer_reports(&blocked)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "demo-secret")
+        .await
+        .unwrap();
+    let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
+    let running = run_to_completion(checkpoint, config).await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(running.current_release, Some(target_release));
+    assert!(running.target_release.is_none());
+    let metadata = running.runtime_metadata.as_ref().unwrap();
+    assert!(metadata.pending_prepared_stack.is_none());
+    assert!(metadata
+        .prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("new-worker"));
+    let resources = &running.stack_state.as_ref().unwrap().resources;
+    assert!(!resources.contains_key("old-worker"));
+    assert_eq!(
+        resources["new-worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        serde_json::to_value(&resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    assert!(!serde_json::to_string(&running)
+        .unwrap()
+        .contains("demo-secret"));
+}
+
+#[tokio::test]
+async fn test_missing_deployer_secret_blocks_workloads_until_written() {
+    use alien_bindings::Vault as _;
+
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("hash_v1", false);
+    let state = create_initial_state(stack);
+
+    let blocked = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+            DeploymentStatus::ProvisioningFailed,
+        ],
+    )
+    .await;
+
+    assert_eq!(blocked.status, DeploymentStatus::WaitingForSecrets);
+    let error = blocked
+        .error
+        .as_ref()
+        .expect("the wait names what is missing");
+    assert!(
+        error.message.contains("missing: Database password"),
+        "{}",
+        error.message
+    );
+    let reports = deployer_reports(&blocked);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Missing);
+    assert_eq!(reports[0].location.name, "input-database-password");
+    assert!(reports[0].location.cli_command.contains("'<VALUE>'"));
+    let worker = blocked
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("test-function");
+    assert!(
+        worker.is_none_or(|worker| worker.status != alien_core::ResourceStatus::Running),
+        "no workload starts while a required deployer secret is missing"
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-only-value")
+        .await
+        .unwrap();
+
+    let running = run_until_status(blocked, config, &[DeploymentStatus::Running]).await;
+
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    let alien_secrets: serde_json::Value = serde_json::from_str(
+        &worker_environment(&running, "test-function")[alien_core::ENV_ALIEN_SECRETS],
+    )
+    .unwrap();
+    assert_eq!(
+        alien_secrets["deployerSecrets"],
+        serde_json::json!([{
+            "name": "DATABASE_PASSWORD",
+            "vaultKey": "input-database-password",
+            "secretName": "input-database-password",
+            "label": "Database password",
+            "required": true,
+            "version": deployer_reports(&running)[0].version,
+        }])
+    );
+    assert!(deployer_reports(&running)[0].version.is_some());
+    assert!(
+        !serde_json::to_string(&running)
+            .unwrap()
+            .contains("customer-only-value"),
+        "the deployment state never carries the deployer's secret"
+    );
+}
+
+/// Runs an update to Running and returns the final state together with
+/// whether the worker went through an update on the way.
+async fn run_update_and_watch_worker(
+    mut state: DeploymentState,
+    config: DeploymentConfig,
+    worker_id: &str,
+) -> (DeploymentState, bool) {
+    let mut worker_updated = false;
+    for _ in 0..MAX_STEPS {
+        if state.status == DeploymentStatus::Running {
+            return (state, worker_updated);
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .expect("Step should not fail")
+            .state;
+        worker_updated |= state
+            .stack_state
+            .as_ref()
+            .and_then(|stack_state| stack_state.resources.get(worker_id))
+            .is_some_and(|worker| worker.status == alien_core::ResourceStatus::Updating);
+    }
+    panic!(
+        "Update did not reach Running after {MAX_STEPS} steps. Final status: {:?}",
+        state.status
+    );
+}
+
+fn deployer_secret_version(state: &DeploymentState, worker_id: &str) -> serde_json::Value {
+    let alien_secrets: serde_json::Value =
+        serde_json::from_str(&worker_environment(state, worker_id)[alien_core::ENV_ALIEN_SECRETS])
+            .unwrap();
+    alien_secrets["deployerSecrets"][0]["version"].clone()
+}
+
+#[tokio::test]
+async fn test_redeploy_after_deployer_secret_overwrite_restarts_workloads() {
+    use alien_bindings::Vault as _;
+
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("hash_v1", false);
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-value-v1")
+        .await
+        .unwrap();
+
+    let running = run_until_status(
+        create_initial_state(stack),
+        config.clone(),
+        &[DeploymentStatus::Running],
+    )
+    .await;
+    let v1 = deployer_secret_version(&running, "test-function");
+    assert!(
+        v1.is_string(),
+        "the worker records the version it started with"
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].version.as_ref(),
+        v1.as_str().map(str::to_string).as_ref()
+    );
+
+    // The deployer overwrites the secret with their cloud's CLI, then
+    // redeploys the same release with the same config.
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-value-v2")
+        .await
+        .unwrap();
+    let mut redeploy = running;
+    let release = redeploy.current_release.clone().unwrap();
+    start_update(&mut redeploy, release.clone());
+    let (rotated, worker_updated) =
+        run_update_and_watch_worker(redeploy, config.clone(), "test-function").await;
+
+    let v2 = deployer_secret_version(&rotated, "test-function");
+    assert!(v2.is_string());
+    assert_ne!(v1, v2, "the overwrite reaches the worker's config");
+    assert!(
+        worker_updated,
+        "the worker is updated so it restarts and reads the new value"
+    );
+    assert!(
+        !serde_json::to_string(&rotated)
+            .unwrap()
+            .contains("customer-value-v2"),
+        "the deployment state never carries the deployer's secret"
+    );
+
+    // Redeploying again without a new write changes nothing.
+    let mut again = rotated.clone();
+    start_update(&mut again, release);
+    let (unchanged, worker_updated) =
+        run_update_and_watch_worker(again, config, "test-function").await;
+
+    assert_eq!(
+        worker_environment(&unchanged, "test-function"),
+        worker_environment(&rotated, "test-function")
+    );
+    assert!(!worker_updated, "no new version, no restart");
+}
+
+#[tokio::test]
+async fn test_stored_dual_secret_presence_starts_without_vault_slots() {
+    let mut stack = create_test_stack("demo-stack", "demo-worker");
+    let mut input = database_password_input();
+    input
+        .provided_by
+        .push(alien_core::StackInputProvider::Developer);
+    stack.inputs = vec![input];
+    let mut config = create_test_config("hash_v1", false);
+    config.stored_secret_input_ids = Some(vec!["databasePassword".to_string()]);
+    assert!(config.input_values.is_empty());
+    let running = run_until_status(
+        create_initial_state(stack),
+        config,
+        &[
+            DeploymentStatus::Running,
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::ProvisioningFailed,
+        ],
+    )
+    .await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(deployer_reports(&running).is_empty());
+    let environment = worker_environment(&running, "demo-worker");
+    assert!(!environment.contains_key("DATABASE_PASSWORD"));
+    assert!(!environment.contains_key(alien_core::ENV_ALIEN_DEPLOYER_SECRETS));
+    assert!(!environment.contains_key(alien_core::ENV_ALIEN_SECRETS));
+}
+
+#[tokio::test]
+async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
+    use alien_bindings::Vault as _;
+
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack("test-stack", "test-function");
+    stack.inputs = vec![database_password_input()];
+    let mut config = create_test_config("hash_v1", false);
+    config.input_values = HashMap::from([(
+        "databasePassword".to_string(),
+        serde_json::json!("stored-before-vault-native"),
+    )]);
+    let state = create_initial_state(stack);
+
+    let running = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::WaitingForSecrets,
+            DeploymentStatus::Running,
+        ],
+    )
+    .await;
+
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+    assert!(
+        !worker_environment(&running, "test-function").contains_key(alien_core::ENV_ALIEN_SECRETS),
+        "the stored value keeps today's path until the slot is filled"
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-only-value")
+        .await
+        .unwrap();
+    let result = alien_deployment::step(running, config, ClientConfig::Test, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.state.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployer_reports(&result.state)[0].status,
+        alien_core::DeployerSecretStatus::Present,
+        "a running deployment reports the slot once it is filled"
+    );
+}
+
+/// A config built the way a manager builds one on every step (and after a restart): new
+/// snapshot object, new `created_at`, monitoring, a secret env var and a present deployer
+/// secret. Nothing in it changes between builds except timestamps.
+fn rebuilt_injected_config() -> DeploymentConfig {
+    let mut config = create_test_config("hash_drift", true);
+    config.deployment_token = Some("deployment-token".to_string());
+    config.monitoring = Some(alien_core::OtlpConfig {
+        logs_endpoint: "https://manager.example/v1/logs".to_string(),
+        logs_auth_header: "authorization=Bearer deployment-token".to_string(),
+        metrics_endpoint: Some("https://manager.example/v1/metrics".to_string()),
+        metrics_auth_header: None,
+        resource_attributes: HashMap::from([(
+            "alien.deployment_id".to_string(),
+            "dep_drift".to_string(),
+        )]),
+    });
+    config
+}
+
+fn worker_status(state: &DeploymentState, worker_id: &str) -> Option<alien_core::ResourceStatus> {
+    state
+        .stack_state
+        .as_ref()
+        .and_then(|stack_state| stack_state.resources.get(worker_id))
+        .map(|resource| resource.status)
+}
+
+/// Steps with a freshly built config every step (what a manager restart changes), recording
+/// every status the worker passes through.
+async fn step_with_rebuilt_config(
+    mut state: DeploymentState,
+    worker_id: &str,
+    until: &[DeploymentStatus],
+    seen: &mut Vec<alien_core::ResourceStatus>,
+) -> DeploymentState {
+    for _ in 0..MAX_STEPS {
+        if until.contains(&state.status) {
+            return state;
+        }
+        state = alien_deployment::step(state, rebuilt_injected_config(), ClientConfig::Test, None)
+            .await
+            .expect("step should succeed")
+            .state;
+        if let Some(status) = worker_status(&state, worker_id) {
+            seen.push(status);
+        }
+    }
+    panic!("did not reach {until:?}; final status {:?}", state.status);
+}
+
+/// Injected values that are rebuilt on every step (env snapshot with a new timestamp,
+/// monitoring, secret env, a present deployer secret) and a restart between every step never
+/// make the desired config differ from the recorded one: the worker is deployed once, never
+/// updated, the deployment reaches Running, stays quiet while Running, and a redeploy of the
+/// same release does not touch it.
+#[tokio::test]
+async fn rebuilt_injected_config_plans_no_update() {
+    let vault_env = test_vault_env().await;
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-rebuilt-fn";
+    let identifier = "test:worker:drift-rebuilt-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    let mut seen = Vec::new();
+    let running = step_with_rebuilt_config(
+        create_initial_state(stack),
+        worker_id,
+        &[
+            DeploymentStatus::Running,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::WaitingForSecrets,
+        ],
+        &mut seen,
+    )
+    .await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Updating),
+        "{seen:?}"
+    );
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        1
+    );
+    let env = worker_environment(&running, worker_id);
+    assert!(env.contains_key(alien_core::ENV_ALIEN_SECRETS));
+    assert!(env.contains_key("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"));
+
+    // A redeploy of the same release with a rebuilt config.
+    let mut redeploy = running.clone();
+    let release = redeploy.current_release.clone().unwrap();
+    start_update(&mut redeploy, release);
+    let mut seen = Vec::new();
+    let redeployed = step_with_rebuilt_config(
+        redeploy,
+        worker_id,
+        &[DeploymentStatus::Running, DeploymentStatus::UpdateFailed],
+        &mut seen,
+    )
+    .await;
+    assert_eq!(redeployed.status, DeploymentStatus::Running);
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Updating),
+        "{seen:?}"
+    );
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        1
+    );
+}
+
+/// The deployer rewrites their secret while the worker's create is in flight. The create
+/// finishes with the version it started with, then exactly one update applies the new
+/// version, and the deployment reaches Running with nothing left to plan.
+#[tokio::test]
+async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
+    let vault_env = test_vault_env().await;
+    let vault = vault_env.customer_vault();
+    vault
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-rewrite-fn";
+    let identifier = "test:worker:drift-rewrite-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+    let config = create_test_config("hash_v1", false);
+
+    let mut state = create_initial_state(stack);
+    for _ in 0..MAX_STEPS {
+        if !alien_infra::test_worker_configs_deployed(identifier).is_empty() {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+    }
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    vault
+        .set_secret("input-database-password", "value-v2")
+        .await
+        .unwrap();
+
+    let mut seen = Vec::new();
+    let mut steps = 0;
+    while state.status != DeploymentStatus::Running {
+        assert!(
+            steps < MAX_STEPS,
+            "never reached Running: {:?}",
+            state.status
+        );
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        seen.extend(worker_status(&state, worker_id));
+        steps += 1;
+    }
+    let deployed = alien_infra::test_worker_configs_deployed(identifier);
+    assert_eq!(deployed.len(), 2, "create with v1, one update with v2");
+    assert_ne!(
+        deployed[0].environment.get(alien_core::ENV_ALIEN_SECRETS),
+        deployed[1].environment.get(alien_core::ENV_ALIEN_SECRETS)
+    );
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+
+    // Running only refreshes: further steps change nothing.
+    for _ in 0..5 {
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(state.status, DeploymentStatus::Running);
+    }
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        2
+    );
+}
+
+/// Drives a deployment until the worker's failing create has recorded its config and is in
+/// flight, rewrites the deployer secret, and runs until the create fails.
+async fn fail_create_after_deployer_secret_rewrite(
+    mut state: DeploymentState,
+    config: &DeploymentConfig,
+    vault: &alien_bindings::providers::vault::LocalVault,
+    worker_id: &str,
+) -> DeploymentState {
+    for _ in 0..MAX_STEPS {
+        if worker_status(&state, worker_id) == Some(alien_core::ResourceStatus::Provisioning) {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+    }
+    assert_eq!(
+        worker_status(&state, worker_id),
+        Some(alien_core::ResourceStatus::Provisioning)
+    );
+    vault
+        .set_secret("input-database-password", "value-v2")
+        .await
+        .unwrap();
+    run_to_completion(state, config.clone()).await
+}
+
+fn worker_failing_one_attempt(id: &str) -> Worker {
+    let mut worker = image_worker(id, "test:v1", 1024);
+    // More failures than one attempt's retries, fewer than two attempts': the create fails,
+    // and a retry that resumes the saved controller succeeds, while a fresh create fails again.
+    worker.environment.insert(
+        "SIMULATE_RETRYABLE_FAILURE_COUNT".to_string(),
+        "13".to_string(),
+    );
+    worker
+}
+
+/// Provisioning phase: a create that failed after the deployer rewrote their secret is
+/// resumed by the retry (the retry comparison ignores deployer-secret metadata), then
+/// updated to the new version.
+#[tokio::test]
+async fn provisioning_retry_resumes_a_failed_create_with_deployer_only_drift() {
+    let vault_env = test_vault_env().await;
+    let vault = vault_env.customer_vault();
+    vault
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-prov-retry-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    add_live_worker(&mut stack, worker_failing_one_attempt(worker_id));
+    let config = create_test_config("hash_v1", false);
+
+    let mut failed = fail_create_after_deployer_secret_rewrite(
+        create_initial_state(stack),
+        &config,
+        &vault,
+        worker_id,
+    )
+    .await;
+    assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
+    request_retry(&mut failed);
+    let mut seen = Vec::new();
+    let mut state = failed;
+    for _ in 0..MAX_STEPS {
+        if matches!(
+            state.status,
+            DeploymentStatus::Running | DeploymentStatus::ProvisioningFailed
+        ) && !state.retry_requested
+            && !seen.is_empty()
+        {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        seen.extend(worker_status(&state, worker_id));
+    }
+    assert_eq!(state.status, DeploymentStatus::Running, "{seen:?}");
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Deleting),
+        "{seen:?}"
+    );
+}
+
+/// Update phase: the same failure in a resource the update adds. The update executor's retry
+/// uses the same deployer-metadata-insensitive comparison as the provisioning retry, so the
+/// failed create is resumed (never deleted and created again), then one update applies the
+/// new secret version.
+#[tokio::test]
+async fn update_retry_resumes_a_failed_create_with_deployer_only_drift() {
+    let vault_env = test_vault_env().await;
+    let vault = vault_env.customer_vault();
+    vault
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-upd-retry-fn";
+    let identifier = "test:worker:drift-upd-retry-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_until_status(
+        create_initial_state(stack.clone()),
+        config.clone(),
+        &[DeploymentStatus::Running],
+    )
+    .await;
+
+    add_live_worker(&mut stack, worker_failing_one_attempt(worker_id));
+    start_update(&mut state, release_of("rel_v2", stack));
+    let mut failed =
+        fail_create_after_deployer_secret_rewrite(state, &config, &vault, worker_id).await;
+    assert_eq!(failed.status, DeploymentStatus::UpdateFailed);
+    assert_eq!(
+        worker_status(&failed, worker_id),
+        Some(alien_core::ResourceStatus::ProvisionFailed)
+    );
+    request_retry(&mut failed);
+    let mut seen = Vec::new();
+    let mut state = failed;
+    for _ in 0..MAX_STEPS {
+        if matches!(
+            state.status,
+            DeploymentStatus::Running | DeploymentStatus::UpdateFailed
+        ) && !state.retry_requested
+            && !seen.is_empty()
+        {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        seen.extend(worker_status(&state, worker_id));
+    }
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Deleting)
+            && !seen.contains(&alien_core::ResourceStatus::Deleted),
+        "the failed create must be resumed, not replaced: {seen:?}"
+    );
+    assert!(alien_infra::test_worker_deletes_issued(identifier).is_empty());
+    assert_eq!(state.status, DeploymentStatus::Running, "{seen:?}");
+    let deployed = alien_infra::test_worker_configs_deployed(identifier);
+    assert_eq!(
+        deployed.len(),
+        2,
+        "the resumed create deploys the recorded version, one update the new one"
+    );
+    assert_ne!(
+        deployed[0].environment.get(alien_core::ENV_ALIEN_SECRETS),
+        deployed[1].environment.get(alien_core::ENV_ALIEN_SECRETS)
     );
 }

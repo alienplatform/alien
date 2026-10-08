@@ -76,6 +76,17 @@ variable "advanced_settings_overlay_json" {
   sensitive   = true
 }
 
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
 variable "updates_mode" {
   type        = string
   description = "How application updates are delivered after setup."
@@ -252,7 +263,7 @@ locals {
         provider   = "awsAlb"
         scheme     = "internet-facing"
         targetType = "ip"
-        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
+        subnetIds  = var.kubernetes_cluster_mode == "create" ? data.aws_subnets.kubernetes_public_selected[0].ids : []
       }
     }
     certificate = {
@@ -261,7 +272,7 @@ locals {
   }
   kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))
   deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
-  deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
+  deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "default-network"
@@ -331,37 +342,52 @@ locals {
   }
 }
 
-=== kubernetes.tf ===
-data "aws_availability_zones" "kubernetes_available" {
-  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  state            = "available"
-  exclude_zone_ids = var.unsupported_availability_zone_ids
+=== default_network.tf ===
+data "aws_vpc" "default_network_default" {
+  default = true
 }
 
+data "aws_subnets" "default_network_default" {
+  filter {
+    name = "vpc-id"
+    values = [
+      data.aws_vpc.default_network_default.id
+    ]
+  }
+}
+
+=== kubernetes.tf ===
 data "aws_eks_cluster" "kubernetes_existing" {
   count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
   name  = var.eks_cluster_name
 }
 
-data "aws_vpc" "kubernetes_default" {
-  count   = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
-  default = true
-}
-
 data "aws_availability_zones" "kubernetes_eks_supported" {
-  count            = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+  count            = var.kubernetes_cluster_mode == "create" ? 1 : 0
   state            = "available"
   exclude_zone_ids = var.unsupported_availability_zone_ids
 }
 
-data "aws_subnets" "kubernetes_default" {
-  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "use-default" ? 1 : 0
+data "aws_subnets" "kubernetes_public_selected" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
 
   filter {
-    name = "vpc-id"
-    values = [
-      data.aws_vpc.kubernetes_default[0].id
-    ]
+    name   = "subnet-id"
+    values = data.aws_subnets.default_network_default.ids
+  }
+
+  filter {
+    name   = "availability-zone-id"
+    values = data.aws_availability_zones.kubernetes_eks_supported[0].zone_ids
+  }
+}
+
+data "aws_subnets" "kubernetes_private_selected" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+
+  filter {
+    name   = "subnet-id"
+    values = data.aws_subnets.default_network_default.ids
   }
 
   filter {
@@ -405,106 +431,6 @@ resource "aws_iam_openid_connect_provider" "eks" {
   }
 }
 
-resource "aws_vpc" "kubernetes" {
-  count                = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  cidr_block           = var.vpc_cidr == "" ? "10.251.0.0/16" : var.vpc_cidr
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-  tags = {
-    Name = "$${local.resource_prefix}-kubernetes"
-  }
-}
-
-resource "aws_internet_gateway" "kubernetes" {
-  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  vpc_id = aws_vpc.kubernetes[0].id
-  tags = {
-    Name = "$${local.resource_prefix}-kubernetes"
-  }
-}
-
-resource "aws_subnet" "kubernetes_public" {
-  count                   = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
-  vpc_id                  = aws_vpc.kubernetes[0].id
-  cidr_block              = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index)
-  availability_zone       = data.aws_availability_zones.kubernetes_available[0].names[count.index]
-  map_public_ip_on_launch = true
-  tags = {
-    Name                                                 = "${local.resource_prefix}-kubernetes-public"
-    "kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared"
-    "kubernetes.io/role/elb"                             = "1"
-  }
-}
-
-resource "aws_subnet" "kubernetes_private" {
-  count             = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
-  vpc_id            = aws_vpc.kubernetes[0].id
-  cidr_block        = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index + 10)
-  availability_zone = data.aws_availability_zones.kubernetes_available[0].names[count.index]
-  tags = {
-    Name                                                 = "${local.resource_prefix}-kubernetes-private"
-    "kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared"
-    "kubernetes.io/role/internal-elb"                    = "1"
-  }
-}
-
-resource "aws_eip" "kubernetes_nat" {
-  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  domain = "vpc"
-  tags = {
-    Name = "$${local.resource_prefix}-kubernetes-nat"
-  }
-}
-
-resource "aws_nat_gateway" "kubernetes" {
-  count         = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  allocation_id = aws_eip.kubernetes_nat[0].id
-  subnet_id     = aws_subnet.kubernetes_public[0].id
-  tags = {
-    Name = "$${local.resource_prefix}-kubernetes"
-  }
-}
-
-resource "aws_route_table" "kubernetes_public" {
-  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  vpc_id = aws_vpc.kubernetes[0].id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.kubernetes[0].id
-  }
-
-  tags = {
-    Name = "$${local.resource_prefix}-kubernetes-public"
-  }
-}
-
-resource "aws_route_table" "kubernetes_private" {
-  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
-  vpc_id = aws_vpc.kubernetes[0].id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.kubernetes[0].id
-  }
-
-  tags = {
-    Name = "$${local.resource_prefix}-kubernetes-private"
-  }
-}
-
-resource "aws_route_table_association" "kubernetes_public" {
-  count          = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
-  subnet_id      = aws_subnet.kubernetes_public[count.index].id
-  route_table_id = aws_route_table.kubernetes_public[0].id
-}
-
-resource "aws_route_table_association" "kubernetes_private" {
-  count          = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
-  subnet_id      = aws_subnet.kubernetes_private[count.index].id
-  route_table_id = aws_route_table.kubernetes_private[0].id
-}
-
 resource "aws_iam_role" "kubernetes_cluster" {
   count              = var.kubernetes_cluster_mode == "create" ? 1 : 0
   name               = "${local.resource_prefix}-kubernetes-eks"
@@ -536,7 +462,7 @@ resource "aws_eks_cluster" "kubernetes" {
   bootstrap_self_managed_addons = false
 
   vpc_config {
-    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : var.network_mode == "use-default" ? data.aws_subnets.kubernetes_default[0].ids : []) : []
+    subnet_ids              = var.kubernetes_cluster_mode == "create" ? data.aws_subnets.kubernetes_private_selected[0].ids : []
     endpoint_public_access  = true
     endpoint_private_access = true
   }
@@ -659,7 +585,7 @@ data "aws_iam_policy_document" "execution_sa_assume_role" {
       test     = "StringEquals"
       variable = "${local.eks_oidc_issuer_host_path}:sub"
       values = [
-        "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
+        "system:serviceaccount:${var.kubernetes_namespace}:${trim(substr(format("%s-%s-sa", coalesce(trim(lower(replace(local.resource_prefix, "/[^a-zA-Z0-9]+/", "-")), "-"), "alien"), coalesce(trim(lower(replace("execution", "/[^a-zA-Z0-9]+/", "-")), "-"), "alien")), 0, 63), "-")}"
       ]
     }
 
@@ -710,16 +636,6 @@ resource "terraform_data" "deployment_registration" {
   }
   depends_on = [
     aws_iam_openid_connect_provider.eks,
-    aws_vpc.kubernetes,
-    aws_internet_gateway.kubernetes,
-    aws_subnet.kubernetes_public,
-    aws_subnet.kubernetes_private,
-    aws_eip.kubernetes_nat,
-    aws_nat_gateway.kubernetes,
-    aws_route_table.kubernetes_public,
-    aws_route_table.kubernetes_private,
-    aws_route_table_association.kubernetes_public,
-    aws_route_table_association.kubernetes_private,
     aws_iam_role.kubernetes_cluster,
     aws_iam_role_policy_attachment.kubernetes_cluster,
     aws_iam_role.kubernetes_node,

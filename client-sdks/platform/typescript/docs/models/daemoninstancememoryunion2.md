@@ -12,9 +12,9 @@ const value: models.MemoryDaemonInstance2 = {
 };
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

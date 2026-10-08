@@ -1,7 +1,9 @@
 use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info};
 
-use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
+use crate::core::{
+    EnvironmentVariableBuilder, ResourceControllerContext, ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     Build, BuildHeartbeatData, BuildHeartbeatStatus, BuildOutputs, GcpCloudBuildHeartbeatData,
@@ -287,24 +289,11 @@ impl GcpBuildController {
         &self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<()> {
-        use alien_permissions::{generators::GcpRuntimePermissionsGenerator, PermissionContext};
+        use alien_permissions::generators::GcpRuntimePermissionsGenerator;
 
         let config = ctx.desired_resource_config::<Build>()?;
-        let gcp_config = ctx.get_gcp_config()?;
-
-        // Build permission context for this specific build resource
-        let mut permission_context = PermissionContext::new()
-            .with_project_name(gcp_config.project_id.clone())
-            .with_region(gcp_config.region.clone())
-            .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(config.id.clone());
-        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
-            permission_context =
-                permission_context.with_deployment_name(deployment_name.to_string());
-        }
-        if let Some(ref project_number) = gcp_config.project_number {
-            permission_context = permission_context.with_project_number(project_number.clone());
-        }
+        let permission_context =
+            ResourcePermissionsHelper::build_gcp_permission_context(ctx, &config.id)?;
 
         let generator = GcpRuntimePermissionsGenerator::new();
 

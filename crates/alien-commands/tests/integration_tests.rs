@@ -923,6 +923,23 @@ mod tests {
         assert!(!replay.created);
     }
 
+    #[tokio::test]
+    async fn test_slash_command_idempotency_uses_portable_kv_key() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        let make_request = || {
+            let mut request = test_inline_create_command("target-agent", "kubernetes/get-pods");
+            request.target_resource_id = Some(server.default_target.resource_id.clone());
+            request.idempotency_key = Some("same/retry".to_string());
+            request
+        };
+
+        let first = server.create_command(make_request()).await.unwrap();
+        assert!(first.created);
+        let replay = server.create_command(make_request()).await.unwrap();
+        assert!(!replay.created);
+        assert_eq!(replay.command_id, first.command_id);
+    }
+
     /// Two requests that both pass the pre-create check report which one
     /// actually claimed the idempotency key. The loser returns the winner's
     /// command with `created: false`.

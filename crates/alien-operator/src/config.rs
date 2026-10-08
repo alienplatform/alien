@@ -93,6 +93,12 @@ pub struct OperatorConfig {
     #[builder(default)]
     pub observe_all_namespaces: bool,
 
+    /// The chart bound the dynamic container Role, so containers requested
+    /// through the API can run here. Set from `OPERATOR_DYNAMIC_CONTAINERS` in
+    /// the rendered manifest.
+    #[builder(default)]
+    pub dynamic_containers: bool,
+
     /// Vendor-provided app/release version this environment is running. Reported as
     /// a version-only `current_release` so the platform resolves a stackless release
     /// (observe). `None` for greenfield, where the deploy loop sets the release id.
@@ -110,6 +116,26 @@ pub struct OperatorConfig {
     /// Stack settings for deployment customization.
     pub stack_settings: Option<StackSettings>,
 
+    /// Accept tunnel requests from the manager for the stack's declared
+    /// tunnel endpoints. The operator dials only when the manager advertises
+    /// a tunnel URL and the stack declares at least one endpoint.
+    #[builder(default = true)]
+    pub tunnel_enabled: bool,
+
+    /// This Operator's own Deployment (in `namespace`). When set, the
+    /// Operator updates its own image to the one the manager targets.
+    pub self_update_deployment: Option<String>,
+
+    /// Prefix for resources this Operator names (Kubernetes service accounts
+    /// among them), as the chart configured it.
+    pub resource_prefix: Option<String>,
+
+    /// Air-gapped: Secret in `namespace` that bundles write targets into.
+    pub airgap_target_secret: Option<String>,
+
+    /// Air-gapped: Secret in `namespace` the Operator writes its state into.
+    pub airgap_status_secret: Option<String>,
+
     /// Allow Local runtime debug commands and shells.
     #[builder(default = false)]
     pub local_debug_enabled: bool,
@@ -122,6 +148,17 @@ impl OperatorConfig {
     /// Whether this Operator is an explicit observe-only installation.
     pub fn observes_environment(&self) -> bool {
         self.operator_permission.as_deref() == Some("observe")
+    }
+
+    /// Whether this is a Remote Operator installation, which reports the
+    /// application release it finds rather than deploying an Alien release.
+    /// Every permission tier reports it; the tier only changes what the
+    /// Operator may do.
+    pub fn reports_application_release(&self) -> bool {
+        matches!(
+            self.operator_permission.as_deref(),
+            Some("observe" | "diagnostics" | "remediation")
+        )
     }
 
     /// Check if running in airgapped mode (no sync configuration)
@@ -203,6 +240,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .api_server_port(8080)
             .build();
@@ -245,6 +283,26 @@ mod tests {
     }
 
     #[test]
+    fn every_remote_operator_tier_reports_the_application_release() {
+        let config = |permission: Option<&str>| {
+            OperatorConfig::builder()
+                .platform(Platform::Aws)
+                .maybe_operator_permission(permission.map(str::to_string))
+                .encryption_key("key")
+                .build()
+        };
+
+        for permission in ["observe", "diagnostics", "remediation"] {
+            assert!(
+                config(Some(permission)).reports_application_release(),
+                "{permission} should report the application release"
+            );
+        }
+        assert!(!config(None).reports_application_release());
+        assert!(!config(Some("diagnostics")).observes_environment());
+    }
+
+    #[test]
     fn test_deployment_approval_required() {
         let config = OperatorConfig::builder()
             .platform(Platform::Kubernetes)
@@ -260,6 +318,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .build();
 
@@ -284,6 +343,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .build();
 
@@ -308,6 +368,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .build();
 

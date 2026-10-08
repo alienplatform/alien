@@ -231,6 +231,8 @@ fn create_build_settings(
         cache_url: None,
         override_base_image,
         debug_mode: true,
+        rebuild: false,
+        pull_base_images: false,
     })
 }
 

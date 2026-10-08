@@ -1,0 +1,1 @@
+{"type":"string","description":"Reachability of the deployment's public endpoints, fixed at setup.","enum":["internet","private"],"x-readme-ref-name":"EndpointAccess"}

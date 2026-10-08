@@ -2,7 +2,8 @@
 //!
 //! The manager exposes `/v2/` as an OCI Distribution endpoint. Every request
 //! is authenticated, then forwarded to the upstream cloud registry (ECR/GAR/ACR)
-//! with injected credentials. The path is forwarded **unchanged**.
+//! with injected credentials. The path is forwarded unchanged once its repository
+//! name and trailing segments pass validation.
 //!
 //! ## Auth
 //!
@@ -114,8 +115,23 @@ impl RegistryRoutingTable {
         self.route_for_platform(platform).map(|r| r.prefix.as_str())
     }
 
+    /// Route that stores images for `platform`.
+    ///
+    /// Cloud platforms use their own registry (ECR, GAR, ACR) when one is
+    /// configured. Pull-delivered platforms (Kubernetes, Machines) have no
+    /// registry of their own: their images live in the primary registry (the
+    /// route registered as `Platform::Local`) and nodes pull them through this
+    /// manager with the deployment's token.
     pub fn route_for_platform(&self, platform: Platform) -> Option<&RegistryRoute> {
-        self.routes.iter().find(|r| r.platform == platform)
+        if let Some(route) = self.routes.iter().find(|r| r.platform == platform) {
+            return Some(route);
+        }
+        match platform {
+            Platform::Kubernetes | Platform::Machines => {
+                self.routes.iter().find(|r| r.platform == Platform::Local)
+            }
+            _ => None,
+        }
     }
 
     /// Return the list of explicitly configured (non-fallback) platforms.
@@ -434,17 +450,27 @@ async fn proxy_push(
     Query(query): Query<HashMap<String, String>>,
     body: Body,
 ) -> Response {
-    let oci_path_str = canonicalize_oci_push_path(path.trim_start_matches('/'));
+    if let Err(refused) = require_literal_oci_path(&path) {
+        return refused;
+    }
+    let oci = match parse_oci_path(&canonicalize_oci_push_path(path.trim_start_matches('/'))) {
+        Ok(oci) => oci,
+        Err(refused) => return refused,
+    };
     // The signing flow in `rewrite_location_with_upload_session_auth` signs
     // the URL's full path (`/v2/...`). axum's `Path` extractor on the
     // `/v2/{*path}` route strips the leading `/v2/`, so rebuild it before
     // calling the verifier so the path-component of the HMAC matches the
     // one used when signing.
-    let full_path = format!("/v2/{}", oci_path_str);
-    let signed_session_repo = if is_oci_upload_session_path(&full_path)
+    let full_path = format!("/v2/{}", oci.as_path());
+    let signed_session_repo = if oci.is_upload_session()
         && query.contains_key(UPLOAD_SESSION_VERSION_PARAM)
     {
         match verify_upload_session_auth(&state.config.response_signing_key, &full_path, &query) {
+            Ok(repo) if !is_valid_repository_name(&repo) => return invalid_repository_name(),
+            Ok(repo) if !same_route(&state.registry_routing_table, &repo, &oci.repo) => {
+                return invalid_upload_session_auth()
+            }
             Ok(repo) => Some(repo),
             Err(e) => return e,
         }
@@ -452,38 +478,142 @@ async fn proxy_push(
         None
     };
 
-    let repo_name = if let Some(ref repo) = signed_session_repo {
-        // Signed-URL bypass: the path's repo is implied by the signature,
-        // not by Bearer auth. Trust the signature's repo.
-        repo.clone()
+    let (repo_name, upstream_query) = if let Some(ref repo) = signed_session_repo {
+        // Signed upload session: the signature, not Bearer auth, carries the
+        // repo. It can differ from the path's repo (GAR issues sessions under
+        // its own package path) but not from its registry route.
+        let mut query = strip_upload_session_auth_params(&query);
+        strip_mount_params(&mut query);
+        (repo.clone(), query)
     } else {
         let subject = match super::auth::require_auth(&state, &headers).await {
             Ok(s) => s,
             Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
         };
-        let repo_name = extract_repo_name(&path);
-        if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
+        if let Err(e) = require_push_auth(&state, &subject, &oci.repo) {
             return e;
         }
-        repo_name
-    };
-
-    let upstream_query = if signed_session_repo.is_some() {
-        strip_upload_session_auth_params(&query)
-    } else {
-        query
+        let mut query = query;
+        // Mount parameters apply only to the upload-init POST.
+        if method == axum::http::Method::POST && oci.rest == "blobs/uploads/" {
+            restrict_mount_source(&state, &subject, &oci.repo, &mut query).await;
+        } else {
+            strip_mount_params(&mut query);
+        }
+        (oci.repo.clone(), query)
     };
     let qs = query_string(&upstream_query);
-    let oci_path = format!("{}{}", oci_path_str, qs);
     forward_to_upstream(
         &state,
         &method,
-        &oci_path,
+        &oci,
+        &qs,
         &headers,
         Some(body),
         Some(&repo_name),
     )
     .await
+}
+
+/// The digest a cross-repository blob mount copies.
+const MOUNT_PARAM: &str = "mount";
+/// The repository a cross-repository blob mount copies from.
+const MOUNT_SOURCE_PARAM: &str = "from";
+/// The registry host of a cross-host mount source.
+const MOUNT_ORIGIN_PARAM: &str = "origin";
+
+/// A mount is forwarded only when `mount` is a valid digest and `from` names a repository on the
+/// target's registry route that the caller may pull. `origin` is always dropped: the upstream
+/// resolves `from` among its own repositories. Any other mount is forwarded as a plain upload, as
+/// the registry does after a failed mount.
+async fn restrict_mount_source(
+    state: &AppState,
+    subject: &Subject,
+    repo_name: &str,
+    query: &mut HashMap<String, String>,
+) {
+    // Only the spec's lowercase keys are checked, so other casings are dropped first.
+    strip_mount_params_except(query, &[MOUNT_PARAM, MOUNT_SOURCE_PARAM]);
+    let source = match (query.get(MOUNT_PARAM), query.get(MOUNT_SOURCE_PARAM)) {
+        (Some(digest), Some(source))
+            if is_valid_digest(digest)
+                && is_mount_source_on_target_route(
+                    &state.registry_routing_table,
+                    source,
+                    repo_name,
+                ) =>
+        {
+            Some(source.clone())
+        }
+        _ => None,
+    };
+    let pullable = match source {
+        Some(source) => match validate_pull_access(state, subject, &source).await {
+            Ok(()) => true,
+            Err(refused) => {
+                if refused.status().is_server_error() {
+                    warn!(%source, status = %refused.status(), "Mount source check failed; forwarding a plain upload");
+                }
+                false
+            }
+        },
+        None => false,
+    };
+    if !pullable {
+        strip_mount_params(query);
+    }
+}
+
+/// Whether `source` is a valid repository name on the same registry route as `repo_name`.
+fn is_mount_source_on_target_route(
+    table: &RegistryRoutingTable,
+    source: &str,
+    repo_name: &str,
+) -> bool {
+    is_valid_repository_name(source) && same_route(table, source, repo_name)
+}
+
+/// Whether two repositories reach the same upstream registry, as a mount source and target or a
+/// signed session and its path must. With no routing table there is a single registry.
+fn same_route(table: &RegistryRoutingTable, a: &str, b: &str) -> bool {
+    let prefix = |repo: &str| table.resolve(repo).map(|route| route.prefix.as_str());
+    table.is_empty() || matches!((prefix(a), prefix(b)), (Some(x), Some(y)) if x == y)
+}
+
+fn strip_mount_params(query: &mut HashMap<String, String>) {
+    strip_mount_params_except(query, &[]);
+}
+
+/// Removes `mount`, `from` and `origin` in any casing, except the exact keys in `keep`.
+fn strip_mount_params_except(query: &mut HashMap<String, String>, keep: &[&str]) {
+    query.retain(|key, _| {
+        keep.contains(&key.as_str())
+            || ![MOUNT_PARAM, MOUNT_SOURCE_PARAM, MOUNT_ORIGIN_PARAM]
+                .iter()
+                .any(|param| key.eq_ignore_ascii_case(param))
+    });
+}
+
+/// The path capture is percent-decoded and the upstream URL is parsed from it again, so only a
+/// path the URL parser keeps exactly as given is forwarded: no `?`, `#`, `\`, dot or empty
+/// segment, or leftover `%`.
+fn require_literal_oci_path(path: &str) -> Result<(), Response> {
+    let path = path.trim_start_matches('/');
+    let segments = path.strip_suffix('/').unwrap_or(path);
+    let literal = !path.contains('%')
+        && !segments.split('/').any(str::is_empty)
+        && Url::parse(&format!("http://registry.invalid/v2/{path}")).is_ok_and(|url| {
+            url.path() == format!("/v2/{path}") && url.query().is_none() && url.fragment().is_none()
+        });
+    if literal {
+        Ok(())
+    } else {
+        Err(oci_error(
+            StatusCode::BAD_REQUEST,
+            "NAME_INVALID",
+            "Registry paths must name a repository literally",
+        ))
+    }
 }
 
 /// Restore the significant trailing slash on the OCI upload-init endpoint.
@@ -497,20 +627,14 @@ fn canonicalize_oci_push_path(path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// True if the path matches an OCI blob-upload-session URL —
-/// `/v2/{repo}/blobs/uploads/{session-id}` with a session-id segment after
-/// `/uploads/`. The initial POST to `/v2/{repo}/blobs/uploads/` (no
-/// session-id segment) returns false here so it still requires Bearer.
+/// An OCI upload-session URL, `/v2/{repo}/blobs/uploads/{id}`. The upload-init POST has no id and
+/// still requires Bearer. The `/v2/{repo}/uploads/{id}` form is not signed: its clients send their
+/// own auth.
 fn is_oci_upload_session_path(path: &str) -> bool {
-    let path = path.trim_start_matches('/');
-    if !path.starts_with("v2/") {
-        return false;
-    }
-    let Some(idx) = path.find("/blobs/uploads/") else {
-        return false;
-    };
-    let after = &path[idx + "/blobs/uploads/".len()..];
-    !after.is_empty() && !after.starts_with('?')
+    path.trim_start_matches('/')
+        .strip_prefix("v2/")
+        .and_then(|oci| parse_oci_path(oci).ok())
+        .is_some_and(|oci| oci.is_upload_session())
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +654,14 @@ async fn proxy_upload_session(
     Query(query): Query<HashMap<String, String>>,
     body: Body,
 ) -> Response {
+    if !is_safe_upload_session_path(original_uri.path()) {
+        return oci_error(
+            StatusCode::BAD_REQUEST,
+            "BLOB_UPLOAD_INVALID",
+            "Invalid upload session path",
+        );
+    }
+
     let subject = match super::auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
@@ -540,16 +672,26 @@ async fn proxy_upload_session(
         original_uri.path(),
         &query,
     ) {
-        Ok(repo_name) => repo_name,
+        Ok(repo_name) if is_valid_repository_name(&repo_name) => repo_name,
+        Ok(_) => return invalid_repository_name(),
         Err(e) => return e,
     };
+
+    if !same_route(
+        &state.registry_routing_table,
+        &extract_gar_upload_repo(original_uri.path()),
+        &repo_name,
+    ) {
+        return invalid_upload_session_auth();
+    }
 
     if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
         return e;
     }
 
     // Forward the full path (including /artifacts-uploads/) to upstream.
-    let upstream_query = strip_upload_session_auth_params(&query);
+    let mut upstream_query = strip_upload_session_auth_params(&query);
+    strip_mount_params(&mut upstream_query);
     let qs = query_string(&upstream_query);
     let raw_path = original_uri.path();
     let full_path = format!("{}{}", raw_path, qs);
@@ -580,13 +722,33 @@ async fn proxy_pull(
         Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
     };
 
+    if let Err(refused) = require_literal_oci_path(&path) {
+        return refused;
+    }
+    // Every pull passes the same name and reference validation before it
+    // is routed, including charts and the Operator image.
     let oci_path_str = path.trim_start_matches('/');
-    let repo_name = extract_repo_name(oci_path_str);
-    if let Err(e) = validate_pull_access(&state, &subject, &repo_name).await {
+    let oci = match parse_oci_path(oci_path_str) {
+        Ok(oci) => oci,
+        Err(refused) => return refused,
+    };
+    // Capability credentials pull nothing, charts and the Operator image
+    // included, so they are refused before the pull is routed.
+    if let Err(refused) = refuse_capability_pull(&subject) {
+        return refused;
+    }
+    if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
+        return super::charts::serve(&state, &subject, &method, oci_path_str).await;
+    }
+    if oci.repo == super::operator_image::OPERATOR_REPOSITORY {
+        return super::operator_image::serve(&state, &subject, &method, oci_path_str, &headers)
+            .await;
+    }
+    if let Err(e) = validate_pull_access(&state, &subject, &oci.repo).await {
         return e;
     }
 
-    forward_to_upstream(&state, &method, oci_path_str, &headers, None, None).await
+    forward_to_upstream(&state, &method, &oci, "", &headers, None, None).await
 }
 
 // ---------------------------------------------------------------------------
@@ -594,18 +756,19 @@ async fn proxy_pull(
 // ---------------------------------------------------------------------------
 
 /// Transparent reverse proxy: forward the OCI request to the upstream registry
-/// with injected credentials. Path is forwarded unchanged.
+/// with injected credentials. The upstream path is the validated `oci` path.
 async fn forward_to_upstream(
     state: &AppState,
     method: &axum::http::Method,
-    oci_path: &str,
+    oci: &OciPath,
+    query_string: &str,
     original_headers: &HeaderMap,
     body: Option<Body>,
     upload_session_repo: Option<&str>,
 ) -> Response {
-    let repo_name = extract_repo_name(oci_path);
+    let repo_name = oci.repo.as_str();
 
-    let artifact_registry = match load_artifact_registry_for_repo(state, &repo_name).await {
+    let artifact_registry = match load_artifact_registry_for_repo(state, repo_name).await {
         Ok(ar) => ar,
         Err(e) => return e,
     };
@@ -632,7 +795,7 @@ async fn forward_to_upstream(
             cached
         } else {
             let fresh = match artifact_registry
-                .generate_credentials(&repo_name, permissions, Some(3600))
+                .generate_credentials(repo_name, permissions, Some(3600))
                 .await
             {
                 Ok(c) => c,
@@ -665,9 +828,10 @@ async fn forward_to_upstream(
     };
 
     let upstream_url = format!(
-        "{}/v2/{}",
+        "{}/v2/{}{}",
         upstream_endpoint.trim_end_matches('/'),
-        oci_path
+        oci.as_path(),
+        query_string
     );
     forward_request(
         state,
@@ -1089,14 +1253,22 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
-/// A project-scoped capability shares the scope whose pulls skip repo validation below, so it is
-/// refused before that match.
+/// Credentials that exist to provision or push images pull nothing. A project-scoped capability
+/// shares the scope whose pulls skip repo validation, so it is refused before that match, and
+/// before charts and the Operator image are routed.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(oci_error(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Image repository provisioning credentials cannot pull images",
+        ));
+    }
+    if subject.role == Role::SandboxImagePusher {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Sandbox image push credentials cannot pull images",
         ));
     }
     Ok(())
@@ -1113,7 +1285,7 @@ async fn validate_pull_access(
     repo_name: &str,
 ) -> Result<(), Response> {
     refuse_capability_pull(subject)?;
-    let deployment_id = match &subject.scope {
+    let (deployment_id, own_project) = match &subject.scope {
         Scope::Workspace | Scope::Project { .. } => return Ok(()),
         Scope::DeploymentGroup { .. } => {
             return Err(oci_error(
@@ -1127,6 +1299,13 @@ async fn validate_pull_access(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Command credentials cannot access the registry proxy",
+            ))
+        }
+        Scope::RemoteBindings { .. } => {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Remote bindings credentials cannot access the registry proxy",
             ))
         }
         Scope::Telemetry { .. } => {
@@ -1151,7 +1330,7 @@ async fn validate_pull_access(
             {
                 return Ok(());
             }
-            deployment_id.as_str()
+            (deployment_id.as_str(), project_id.as_str())
         }
     };
 
@@ -1219,10 +1398,14 @@ async fn validate_pull_access(
                 )
             })?;
 
+        let proxy_host = state.config.base_url();
+        let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
+        let routes = &state.registry_routing_table;
+        let own_repo = |repo: &str| sandbox_repo_in_own_project(routes, repo, own_project);
         let repos = release
             .stacks
             .values()
-            .flat_map(|stack| extract_repo_names(stack))
+            .flat_map(|stack| extract_repo_names(stack, proxy_host, &own_repo))
             .collect::<Vec<_>>();
 
         // Cache the result.
@@ -1247,14 +1430,35 @@ async fn validate_pull_access(
     Ok(())
 }
 
-/// Extract the set of repo names from a release's stack.
-fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
+/// Whether a Sandbox's image repo may enter the release's list: only one in the deployment's own
+/// project, so a Sandbox naming another project's repo cannot open it to this deployment's token.
+/// An unattributable repo counts as "default", as a push to it does.
+fn sandbox_repo_in_own_project(
+    routes: &RegistryRoutingTable,
+    repo: &str,
+    own_project: &str,
+) -> bool {
+    routes.project_id_for_repo(repo).unwrap_or("default") == own_project
+}
+
+/// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
+/// registry host, the only one a sandbox image is pulled through, and `sandbox_repo_allowed`
+/// filters the repos a sandbox image may add.
+fn extract_repo_names(
+    stack: &alien_core::Stack,
+    proxy_host: &str,
+    sandbox_repo_allowed: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Worker, WorkerCode};
+    use alien_core::{
+        classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
+        DaemonCode, Sandbox, SandboxCode, Worker, WorkerCode,
+    };
 
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
+        let mut from_sandbox = false;
         let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
                 WorkerCode::Image { image } => Some(image.as_str()),
@@ -1270,6 +1474,23 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
                 DaemonCode::Image { image } => Some(image.as_str()),
                 DaemonCode::Source { .. } => None,
             }
+        } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+            // Only a registry image on this host, the rule the controller sends credentials by: a
+            // public image, catalog name or `s3://` bundle is never pulled here.
+            match &sandbox.code {
+                SandboxCode::Image { image } => match classify_azure_sandbox_image(image) {
+                    Some(AzureSandboxImage::Registry(reference))
+                        if reference
+                            .split_once('/')
+                            .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host)) =>
+                    {
+                        from_sandbox = true;
+                        Some(reference)
+                    }
+                    _ => None,
+                },
+                SandboxCode::Source { .. } => None,
+            }
         } else {
             None
         };
@@ -1278,6 +1499,9 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
             if let Some(stripped) = strip_registry_host(image_uri) {
                 let repo = stripped.split(':').next().unwrap_or(&stripped);
                 let repo = repo.split('@').next().unwrap_or(repo);
+                if from_sandbox && !sandbox_repo_allowed(repo) {
+                    continue;
+                }
                 if !repo.is_empty() && !repos.contains(&repo.to_string()) {
                     repos.push(repo.to_string());
                 }
@@ -1292,18 +1516,159 @@ fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract the repository name from an OCI path.
-///
-/// The repo name is everything before the first OCI operation keyword
-/// (/manifests/, /blobs/, /uploads/). Repo names can be multi-segment
-/// (e.g., "gcp-project/gar-repo/alien-prj-123" for GAR).
-fn extract_repo_name(oci_path: &str) -> String {
-    for keyword in &["/manifests/", "/blobs/", "/uploads/"] {
-        if let Some(idx) = oci_path.find(keyword) {
-            return oci_path[..idx].to_string();
-        }
+/// A `/v2/` request path split into a repository name that matches the OCI
+/// distribution `<name>` grammar and one known operation suffix.
+struct OciPath {
+    repo: String,
+    rest: String,
+}
+
+impl OciPath {
+    fn as_path(&self) -> String {
+        format!("{}/{}", self.repo, self.rest)
     }
-    oci_path.split('/').next().unwrap_or(oci_path).to_string()
+
+    /// `blobs/uploads/{id}`: an upload session, not the upload-init `blobs/uploads/`.
+    fn is_upload_session(&self) -> bool {
+        self.rest.starts_with("blobs/uploads/") && self.rest != "blobs/uploads/"
+    }
+}
+
+/// Names, tags, digests and session ids must match the OCI distribution grammar; the upstream
+/// URL is built from the parsed parts. The operation is taken from the end of the path, as a
+/// distribution registry routes it, so a name may contain a component such as `tags`.
+fn parse_oci_path(path: &str) -> Result<OciPath, Response> {
+    let segments: Vec<&str> = path.split('/').collect();
+    let n = segments.len();
+    let op = if n >= 4 && segments[n - 3..n - 1] == ["blobs", "uploads"] {
+        n - 3
+    } else if n >= 3
+        && matches!(
+            segments[n - 2],
+            "manifests" | "blobs" | "uploads" | "tags" | "referrers"
+        )
+    {
+        n - 2
+    } else {
+        return Err(invalid_repository_name());
+    };
+    let repo = segments[..op].join("/");
+    if !is_valid_repository_name(&repo) {
+        return Err(invalid_repository_name());
+    }
+    let refusal = match &segments[op..] {
+        ["manifests", reference] if is_valid_tag(reference) || is_valid_digest(reference) => None,
+        ["manifests", reference] if reference.contains(':') => {
+            Some(("DIGEST_INVALID", "Invalid digest"))
+        }
+        ["manifests", _] => Some(("MANIFEST_INVALID", "Invalid manifest reference")),
+        ["blobs", "uploads", ""] | ["tags", "list"] => None,
+        // Some registries issue `/v2/<name>/uploads/<id>` session URLs.
+        ["blobs", "uploads", session] | ["uploads", session]
+            if is_valid_upload_session_id(session) =>
+        {
+            None
+        }
+        ["blobs", "uploads", _] | ["uploads", _] => {
+            Some(("BLOB_UPLOAD_INVALID", "Invalid upload session id"))
+        }
+        ["blobs", digest] | ["referrers", digest] if is_valid_digest(digest) => None,
+        ["blobs", _] | ["referrers", _] => Some(("DIGEST_INVALID", "Invalid digest")),
+        _ => Some(("NAME_INVALID", "Invalid repository name or operation")),
+    };
+    if let Some((code, message)) = refusal {
+        return Err(oci_error(StatusCode::BAD_REQUEST, code, message));
+    }
+    Ok(OciPath {
+        repo,
+        rest: segments[op..].join("/"),
+    })
+}
+
+fn invalid_repository_name() -> Response {
+    oci_error(
+        StatusCode::BAD_REQUEST,
+        "NAME_INVALID",
+        "Invalid repository name",
+    )
+}
+
+/// OCI `<name>`: components `[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*` joined by `/`.
+fn is_valid_repository_name(name: &str) -> bool {
+    !name.is_empty() && name.split('/').all(is_valid_name_component)
+}
+
+fn is_valid_name_component(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    let alnum = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    if !bytes.first().is_some_and(alnum) || !bytes.last().is_some_and(alnum) {
+        return false;
+    }
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let separator_len = rest.iter().take_while(|b| !alnum(b)).count();
+        let (separator, tail) = rest.split_at(separator_len);
+        let separator_ok =
+            matches!(separator, b"" | b"." | b"_" | b"__") || separator.iter().all(|b| *b == b'-');
+        if !separator_ok {
+            return false;
+        }
+        let run = tail.iter().take_while(|b| alnum(b)).count();
+        rest = &tail[run..];
+    }
+    true
+}
+
+/// OCI tag: `[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`.
+fn is_valid_tag(tag: &str) -> bool {
+    let bytes = tag.as_bytes();
+    bytes.len() <= 128
+        && bytes
+            .first()
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// OCI digest: `[a-z0-9]+(?:[+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]+`.
+fn is_valid_digest(digest: &str) -> bool {
+    let Some((algorithm, encoded)) = digest.split_once(':') else {
+        return false;
+    };
+    let algorithm_ok = algorithm.split(['+', '.', '_', '-']).all(|part| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    });
+    algorithm_ok
+        && !encoded.is_empty()
+        && encoded
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'=' | b'_' | b'-'))
+}
+
+/// Upload session ids are opaque upstream tokens, so any single segment but a dot segment is
+/// accepted; `require_literal_oci_path` has already refused separators and `%`.
+fn is_valid_upload_session_id(id: &str) -> bool {
+    !matches!(id, "" | "." | "..")
+}
+
+/// The `/artifacts-uploads/` path is forwarded raw, so check each segment in
+/// decoded form: the upstream id alphabet is unknown, but no segment may
+/// collapse or split into another path.
+fn is_safe_upload_session_path(raw_path: &str) -> bool {
+    raw_path
+        .trim_start_matches('/')
+        .split('/')
+        .all(|segment| match urlencoding::decode(segment) {
+            Ok(decoded) => {
+                !matches!(decoded.as_ref(), "" | "." | "..")
+                    && !decoded.contains(['/', '\\', '?', '#'])
+            }
+            Err(_) => false,
+        })
 }
 
 /// Extract repo name from a GAR /artifacts-uploads/ path.
@@ -1485,11 +1850,14 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Daemon, DaemonCode, ResourceLifecycle, Stack};
+    use alien_core::{
+        Daemon, DaemonCode, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, Stack,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn the_image_repository_provisioner_cannot_pull() {
+    fn the_image_capability_roles_cannot_pull() {
         let subject = |role| Subject {
             kind: crate::auth::SubjectKind::ServiceAccount {
                 id: "platform".to_string(),
@@ -1502,10 +1870,296 @@ mod tests {
             bearer_token: String::new(),
         };
 
-        let refused = refuse_capability_pull(&subject(Role::ImageRepositoryProvisioner))
-            .expect_err("the provisioner must not reach the project-scope pull bypass");
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
+            let refused = refuse_capability_pull(&subject(role))
+                .expect_err("a capability role must not reach the project-scope pull bypass");
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
+    }
+
+    #[test]
+    fn only_a_literal_registry_path_is_forwarded() {
+        for path in [
+            "artifacts/prj_a/manifests/v1",
+            "/artifacts/prj_a/blobs/sha256:abc",
+            "artifacts/prj_a/blobs/uploads/",
+            "artifacts/prj_a/blobs/uploads/4f1c-9e_2=",
+            "artifacts/prj_a/tags/list",
+        ] {
+            assert!(require_literal_oci_path(path).is_ok(), "{path}");
+        }
+        for path in [
+            "artifacts/prj_a/blobs/uploads/?mount=sha256:abc&from=artifacts/prj_b",
+            "artifacts/prj_a/manifests/../../prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/..\\..\\prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/%2e%2e/%2e%2e/prj_b/manifests/v1",
+            "artifacts/prj_a/manifests/./v1",
+            "artifacts/prj_a/manifests/v1#frag",
+            "artifacts//prj_b/manifests/v1",
+            "artifacts/prj_a/blobs/uploads//",
+        ] {
+            let refused = require_literal_oci_path(path).expect_err(path);
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+    }
+
+    fn parsed(path: &str) -> (String, String) {
+        let oci = parse_oci_path(path).unwrap_or_else(|_| panic!("{path} should parse"));
+        assert_eq!(oci.as_path(), path, "the upstream path is the request path");
+        (oci.repo, oci.rest)
+    }
+
+    #[test]
+    fn parse_oci_path_accepts_the_names_providers_compose() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        // ECR (`{prefix}-{project}`), Local/ACR (`{prefix}/{project}`), GAR (`{gcp}/{repo}/{project}`).
+        for repo in [
+            "alien-prj_abc123",
+            "artifacts/default-prj_a",
+            "my-project/alien-repo/alien-prj-123",
+            "a__b/c.d/e---f",
+            "artifacts/default-prj_a/tags",
+            "artifacts/default-prj_a/blobs/uploads",
+            "artifacts/manifests/referrers",
+        ] {
+            for rest in [
+                "manifests/v1".to_string(),
+                "manifests/Latest_1.2-rc".to_string(),
+                format!("manifests/{digest}"),
+                format!("blobs/{digest}"),
+                "blobs/uploads/".to_string(),
+                "blobs/uploads/9f0b2f0f-3a1c-4e2b-8b1e-0c7d7f7e1a2b".to_string(),
+                "uploads/9f0b2f0f-3a1c-4e2b-8b1e-0c7d7f7e1a2b".to_string(),
+                "tags/list".to_string(),
+                format!("referrers/{digest}"),
+            ] {
+                let path = format!("{repo}/{rest}");
+                assert_eq!(parsed(&path), (repo.to_string(), rest));
+            }
+        }
+    }
+
+    /// Repository names in the shapes the artifact registry bindings compose, with the references
+    /// and session ids push and pull clients send for them.
+    #[test]
+    fn parse_oci_path_accepts_the_repository_names_and_references_clients_send() {
+        let project = "prj_0a1b2c3d4e5f6g7h8i9j0k1l2m3n";
+        let repos = [
+            // ECR `{prefix}-{project}`, and the prefix alone.
+            format!("alien-artifacts-{project}"),
+            format!("alien/agents-{project}"),
+            format!("e2e-21-artifact-registry-{project}"),
+            "alien-e2e".to_string(),
+            // GAR `{gcp-project}/{repository}/{project}`.
+            format!("my-gcp-project-1/alien-artifacts/{project}"),
+            format!("a1b2c3d4-artifact-registry/{project}"),
+            "alien-test-mgmt/alien-e2e/default".to_string(),
+            // ACR with no prefix, and the prefix alone.
+            project.to_string(),
+            "azure-e2e".to_string(),
+            // Local `{prefix}/{project}` and the embedded registry's two-segment names.
+            format!("artifacts/{project}"),
+            "artifacts/default".to_string(),
+            "artifacts/sandbox-image".to_string(),
+            // Nested names under a project.
+            format!("artifacts/{project}/api/worker.v2"),
+        ];
+        let sha256 = format!("sha256:{}", "0123456789abcdef".repeat(4));
+        let sha512 = format!("sha512:{}", "0123456789abcdef".repeat(8));
+        let rests = [
+            // Tags `alien-build` and the CLI generate, and common hand-written ones.
+            "manifests/api-3k9x2m1q".to_string(),
+            "manifests/remote-sandbox-src-0123456789abcdef".to_string(),
+            "manifests/sandbox-v1".to_string(),
+            "manifests/v1.2.3".to_string(),
+            "manifests/latest".to_string(),
+            "manifests/_internal".to_string(),
+            format!("manifests/{}", "t".repeat(128)),
+            format!("manifests/{sha256}"),
+            format!("manifests/{sha512}"),
+            format!("blobs/{sha256}"),
+            format!("blobs/{sha512}"),
+            format!("referrers/{sha256}"),
+            "tags/list".to_string(),
+            "blobs/uploads/".to_string(),
+            // Session ids are opaque: UUIDs, base64url with padding, and other literal segments.
+            "blobs/uploads/00000000-0000-4000-8000-000000000001".to_string(),
+            "blobs/uploads/AJ-x_y0Zq==".to_string(),
+            "blobs/uploads/Zm9v,YmFy;(1)!".to_string(),
+            "uploads/9f0b2f0f-3a1c-4e2b-8b1e-0c7d7f7e1a2b".to_string(),
+        ];
+        for repo in &repos {
+            for rest in &rests {
+                let path = format!("{repo}/{rest}");
+                assert_eq!(parsed(&path), (repo.clone(), rest.clone()));
+                assert!(require_literal_oci_path(&path).is_ok(), "{path}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_oci_path_refuses_paths_outside_the_grammar_with_the_part_that_failed() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        for (path, code) in [
+            ("artifacts/default-prj_a/../x/manifests/v1", "NAME_INVALID"),
+            ("artifacts/default-prj_a/./manifests/v1", "NAME_INVALID"),
+            ("artifacts//default-prj_a/manifests/v1", "NAME_INVALID"),
+            ("/artifacts/default-prj_a/manifests/v1", "NAME_INVALID"),
+            ("artifacts/Default-prj_a/manifests/v1", "NAME_INVALID"),
+            // The router decodes `%XX` before this parser, so a `%` left here is literal.
+            ("artifacts/default-prj_a%2e/manifests/v1", "NAME_INVALID"),
+            ("artifacts/-prj/manifests/v1", "NAME_INVALID"),
+            ("artifacts/prj_/manifests/v1", "NAME_INVALID"),
+            ("artifacts/a___b/manifests/v1", "NAME_INVALID"),
+            ("artifacts/a._b/manifests/v1", "NAME_INVALID"),
+            ("manifests/v1", "NAME_INVALID"),
+            ("_catalog", "NAME_INVALID"),
+            ("artifacts/default-prj_a", "NAME_INVALID"),
+            ("artifacts/default-prj_a/manifests/v1/../v2", "NAME_INVALID"),
+            ("artifacts/default-prj_a/tags/other", "NAME_INVALID"),
+            ("artifacts/default-prj_a/manifests/..", "MANIFEST_INVALID"),
+            ("artifacts/default-prj_a/manifests/-v1", "MANIFEST_INVALID"),
+            (
+                "artifacts/default-prj_a/manifests/sha256:",
+                "DIGEST_INVALID",
+            ),
+            ("artifacts/default-prj_a/manifests/v1?x", "MANIFEST_INVALID"),
+            ("artifacts/default-prj_a/blobs/sha256", "DIGEST_INVALID"),
+            ("artifacts/default-prj_a/blobs/SHA256:abc", "DIGEST_INVALID"),
+            ("artifacts/default-prj_a/blobs/uploads", "DIGEST_INVALID"),
+            (
+                &*format!("artifacts/default-prj_a/referrers/{digest}x!"),
+                "DIGEST_INVALID",
+            ),
+            (
+                "artifacts/default-prj_a/blobs/uploads/..",
+                "BLOB_UPLOAD_INVALID",
+            ),
+            ("artifacts/default-prj_a/uploads/", "BLOB_UPLOAD_INVALID"),
+            ("artifacts/default-prj_a/uploads/..", "BLOB_UPLOAD_INVALID"),
+            (
+                "artifacts/default-prj_a/blobs/uploads/.",
+                "BLOB_UPLOAD_INVALID",
+            ),
+            ("artifacts/default-prj_a/uploads/.", "BLOB_UPLOAD_INVALID"),
+            ("artifacts/default-prj_a/blobs/uploads/a/b", "NAME_INVALID"),
+        ] {
+            let response = parse_oci_path(path)
+                .err()
+                .unwrap_or_else(|| panic!("{path} should be refused"));
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["errors"][0]["code"], code, "{path}");
+        }
+        assert!(!is_valid_tag(&"a".repeat(129)));
+        assert!(is_valid_tag(&"a".repeat(128)));
+    }
+
+    #[test]
+    fn mount_sources_must_be_valid_names_on_the_target_route() {
+        let table = RegistryRoutingTable::new(vec![
+            registry_route("alien", Platform::Aws, "aws"),
+            registry_route("artifacts/default", Platform::Local, "local"),
+        ])
+        .unwrap();
+        let target = "alien-prj_a";
+        assert!(is_mount_source_on_target_route(
+            &table,
+            "alien-prj_a/base",
+            target
+        ));
+        assert!(is_mount_source_on_target_route(
+            &table,
+            "alien-prj_b",
+            target
+        ));
+        // Same project id, resolved on another route.
+        assert!(!is_mount_source_on_target_route(
+            &table,
+            "artifacts/default-prj_a",
+            target
+        ));
+        assert!(!is_mount_source_on_target_route(
+            &table,
+            "other/prj_a",
+            target
+        ));
+        assert!(!is_mount_source_on_target_route(
+            &table,
+            "alien-prj_a/../x",
+            target
+        ));
+        assert!(!is_mount_source_on_target_route(
+            &table,
+            "Alien-prj_a",
+            target
+        ));
+        assert!(!is_mount_source_on_target_route(
+            &table,
+            "alien-prj_a",
+            "other/prj_a"
+        ));
+        // With no routing table there is one registry, so any valid name shares its route.
+        let single = RegistryRoutingTable::new(vec![]).unwrap();
+        assert!(is_mount_source_on_target_route(
+            &single,
+            "artifacts/prj_b",
+            "artifacts/prj_a"
+        ));
+        assert!(!is_mount_source_on_target_route(
+            &single,
+            "Artifacts/prj_b",
+            "artifacts/prj_a"
+        ));
+    }
+
+    #[test]
+    fn signed_sessions_stay_on_one_registry_route() {
+        let table = RegistryRoutingTable::new(vec![
+            registry_route("alien", Platform::Aws, "aws"),
+            registry_route("my-gcp/alien-repo", Platform::Gcp, "gcp"),
+        ])
+        .unwrap();
+        assert!(same_route(&table, "alien-prj_a", "alien-prj_b"));
+        assert!(same_route(
+            &table,
+            "my-gcp/alien-repo/prj_a",
+            "my-gcp/alien-repo/pkg"
+        ));
+        assert!(!same_route(
+            &table,
+            "alien-prj_a",
+            "my-gcp/alien-repo/prj_a"
+        ));
+        assert!(!same_route(&table, "elsewhere/x", "other/y"));
+        let single = RegistryRoutingTable::new(vec![]).unwrap();
+        assert!(same_route(&single, "elsewhere/x", "other/y"));
+    }
+
+    #[test]
+    fn upload_session_paths_refuse_dot_and_encoded_separator_segments() {
+        assert!(is_safe_upload_session_path(
+            "/artifacts-uploads/namespaces/cloud-project/repositories/artifacts/uploads/AJ-x_y=="
+        ));
+        for path in [
+            "/artifacts-uploads/namespaces/p/repositories/r/../s/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r/%2e%2E/s/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r/.%2e/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r/./uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r/%2e/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r%2fs/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r%5cs/uploads/1",
+            "/artifacts-uploads/namespaces/p//uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r%3fs/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r%23s/uploads/1",
+            "/artifacts-uploads/namespaces/p/repositories/r%c0%ae/uploads/1",
+        ] {
+            assert!(!is_safe_upload_session_path(path), "{path}");
+        }
     }
 
     #[test]
@@ -1533,35 +2187,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_repo_name_flat() {
-        assert_eq!(extract_repo_name("alien-e2e/manifests/v1"), "alien-e2e");
-    }
-
-    #[test]
-    fn test_extract_repo_name_gar_multi_segment() {
-        assert_eq!(
-            extract_repo_name("my-project/alien-repo/alien-prj-123/manifests/v1"),
-            "my-project/alien-repo/alien-prj-123"
-        );
-    }
-
-    #[test]
-    fn test_extract_repo_name_blobs() {
-        assert_eq!(
-            extract_repo_name("alien-e2e/blobs/sha256:abc123"),
-            "alien-e2e"
-        );
-    }
-
-    #[test]
-    fn test_extract_repo_name_uploads() {
-        assert_eq!(
-            extract_repo_name("alien-e2e/blobs/uploads/uuid-123"),
-            "alien-e2e"
-        );
-    }
-
-    #[test]
     fn extract_repo_names_includes_daemon_image_resources() {
         let daemon = Daemon::new("host-loader".to_string())
             .code(DaemonCode::Image {
@@ -1574,9 +2199,93 @@ mod tests {
             .build();
 
         assert_eq!(
-            extract_repo_names(&stack),
+            extract_repo_names(&stack, "manager.example.com", &|_| true),
             vec!["artifacts/prj_test".to_string()]
         );
+    }
+
+    /// A sandbox image on this host is pulled through the proxy, so its repo is in the release; a
+    /// public image elsewhere, a catalog name or an `s3://` bundle is never pulled here.
+    #[test]
+    fn extract_repo_names_includes_sandbox_registry_images_only() {
+        let sandbox = |id: &str, image: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                sandbox(
+                    "agents",
+                    "manager.example.com/artifacts/prj_test:sandbox-v1",
+                ),
+                ResourceLifecycle::Frozen,
+            )
+            .add(sandbox("catalog", "ubuntu"), ResourceLifecycle::Frozen)
+            .add(
+                sandbox("public", "docker.io/library/python:3.14-slim"),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                sandbox("bundle", "s3://bucket/sandbox/bundle.zip"),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        assert_eq!(
+            extract_repo_names(&stack, "manager.example.com", &|_| true),
+            vec!["artifacts/prj_test".to_string()]
+        );
+    }
+
+    /// A sandbox image in another project's repository is left out of the release's list.
+    #[test]
+    fn extract_repo_names_leaves_out_a_sandbox_image_of_another_project() {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "manager.example.com/artifacts/prj_other:sandbox-v1".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build();
+
+        assert!(extract_repo_names(&stack, "manager.example.com", &|repo| {
+            repo != "artifacts/prj_other"
+        })
+        .is_empty());
+    }
+
+    #[test]
+    fn a_sandbox_repo_counts_only_in_its_own_project() {
+        let routes =
+            RegistryRoutingTable::new(vec![registry_route("artifacts", Platform::Aws, "aws")])
+                .unwrap();
+
+        assert!(sandbox_repo_in_own_project(
+            &routes,
+            "artifacts/prj_a",
+            "prj_a"
+        ));
+        assert!(!sandbox_repo_in_own_project(
+            &routes,
+            "artifacts/prj_b",
+            "prj_a"
+        ));
+        assert!(!sandbox_repo_in_own_project(&routes, "elsewhere", "prj_a"));
+        assert!(sandbox_repo_in_own_project(&routes, "elsewhere", "default"));
     }
 
     #[test]
@@ -2055,10 +2764,24 @@ mod tests {
             "v2/alien-artifacts/host-loader/blobs/uploads/abc-123"
         ));
 
+        assert!(is_oci_upload_session_path(
+            "/v2/repo/blobs/uploads/a.b_c~d=e+f:g-h"
+        ));
+
         // Other OCI paths.
         assert!(!is_oci_upload_session_path("/v2/repo/manifests/latest"));
         assert!(!is_oci_upload_session_path("/v2/repo/blobs/sha256:abc"));
         assert!(!is_oci_upload_session_path("/artifacts-uploads/something"));
+        // A name may contain `blobs/uploads` components; the operation is the path's end.
+        assert!(!is_oci_upload_session_path(
+            "/v2/repo/blobs/uploads/blobs/uploads/"
+        ));
+        assert!(!is_oci_upload_session_path(
+            "/v2/repo/blobs/uploads/manifests/latest"
+        ));
+        assert!(is_oci_upload_session_path(
+            "/v2/repo/blobs/uploads/blobs/uploads/abc-123"
+        ));
     }
 
     #[test]

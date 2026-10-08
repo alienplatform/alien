@@ -1,0 +1,12 @@
+apiVersion: v2
+name: alien-manager
+description: The Alien manager, the control plane for software you run in environments you don't control.
+type: application
+version: 3.3.30
+appVersion: "3.3.30"
+home: https://alien.dev/docs/self-hosting
+sources:
+  - https://github.com/alienplatform/alien
+keywords:
+  - alien
+  - control-plane

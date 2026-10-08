@@ -45,7 +45,7 @@ impl Default for ControlState {
 }
 
 /// Control gRPC server implementation
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ControlGrpcServer {
     /// Shared state
     state: Arc<RwLock<ControlState>>,
@@ -176,27 +176,22 @@ impl ControlGrpcServer {
             channels.insert(task_id.clone(), result_tx);
         }
 
-        // Send the task
-        let receiver_count = self
-            .task_tx
-            .send(task)
-            .map_err(|e| format!("Failed to send task: {}", e))?;
-
-        debug!(task_id = %task_id, receiver_count = receiver_count, "Task broadcast to subscribers, waiting for result");
-
-        // Wait for result with timeout
-        let result = tokio::time::timeout(timeout, result_rx.recv())
-            .await
-            .map_err(|_| {
-                warn!(task_id = %task_id, timeout_secs = timeout.as_secs(), "Task result timeout — app never sent result");
-                "Task result timeout".to_string()
-            })?
-            .ok_or_else(|| {
-                warn!(task_id = %task_id, "Result channel closed without sending result");
-                "Result channel closed".to_string()
-            })?;
-
-        debug!(task_id = %task_id, success = result.as_ref().map(|r| r.success).unwrap_or(false), "Received task result from app");
+        let result = async {
+            let receiver_count = self.task_tx
+                .send(task)
+                .map_err(|error| format!("Failed to send task: {}", error))?;
+            debug!(task_id = %task_id, receiver_count, "Task broadcast to subscribers, waiting for result");
+            let result = tokio::time::timeout(timeout, result_rx.recv())
+                .await
+                .map_err(|_| {
+                    warn!(task_id = %task_id, timeout_secs = timeout.as_secs(), "Task result timeout — app never sent result");
+                    "Task result timeout".to_string()
+                })?
+                .ok_or_else(|| "Result channel closed".to_string())?;
+            debug!(task_id = %task_id, success = result.as_ref().map(|r| r.success).unwrap_or(false), "Received task result from app");
+            result
+        }
+        .await;
 
         // Clean up channel
         {

@@ -847,6 +847,143 @@
         }
       }
     },
+    "/v1/deployments/{id}/bundle-signature": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "sign_deployment_bundle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleSignatureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signature over the manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleSignatureResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/bundle-sources": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_bundle_sources",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "releaseId",
+            "in": "query",
+            "description": "Release whose chart to use.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the chart and Operator image come from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleSources"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/channel": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "set_deployment_channel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDeploymentChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The deployment follows the channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRoutingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/delete": {
       "post": {
         "tags": [
@@ -937,6 +1074,110 @@
         }
       }
     },
+    "/v1/deployments/{id}/logs": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_logs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Most recent entries to return (default 200, max 5000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only entries at or after this time (RFC 3339). Inclusive, so a caller\nfollowing logs doesn't miss entries that share its last timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentLogsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/pin": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "set_deployment_pin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDeploymentPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The deployment's pin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRoutingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/redeploy": {
       "post": {
         "tags": [
@@ -1003,6 +1244,327 @@
         }
       }
     },
+    "/v1/deployments/{id}/routing": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_routing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel and pin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRoutingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/status-report": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "import_deployment_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Report applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusReportResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/target": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment_target",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "releaseId",
+            "in": "query",
+            "description": "Release to target; defaults to the deployment's pin or channel.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Target the deployment converges to",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "get_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vault_name",
+            "in": "path",
+            "description": "Vault name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSecretResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment or secret not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "set_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vault_name",
+            "in": "path",
+            "description": "Vault name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Secret set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultMutationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "delete_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vault_name",
+            "in": "path",
+            "description": "Vault name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultMutationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/initialize": {
       "post": {
         "tags": [
@@ -1040,6 +1602,118 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/manager": {
+      "get": {
+        "tags": [
+          "manager"
+        ],
+        "operationId": "manager_info",
+        "responses": {
+          "200": {
+            "description": "Manager information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagerInfoResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/release-channels": {
+      "get": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "list_manager_release_channels",
+        "responses": {
+          "200": {
+            "description": "Release channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReleaseChannelsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "create_manager_release_channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReleaseChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Channel created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseChannelResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/release-channels/{name}": {
+      "delete": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "delete_manager_release_channel",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Channel name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Channel deleted"
           }
         },
         "security": [
@@ -1173,6 +1847,52 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/releases/{id}/promote": {
+      "post": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "promote_manager_release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Release ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The channel now points at the release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseChannelResponse"
                 }
               }
             }
@@ -1408,6 +2128,94 @@
         ]
       }
     },
+    "/v1/tokens": {
+      "get": {
+        "tags": [
+          "tokens"
+        ],
+        "operationId": "list_tokens",
+        "responses": {
+          "200": {
+            "description": "Tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTokensResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "`POST /v1/tokens` — create a scoped token (admin only).",
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Token created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedTokenResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "operationId": "delete_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Token ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Token revoked"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/whoami": {
       "get": {
         "tags": [
@@ -1496,13 +2304,6 @@
             "items": {
               "$ref": "#/components/schemas/AcquiredDeploymentResponse"
             }
-          },
-          "notAcquired": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/UnacquiredDeployment"
-            },
-            "description": "Bounded reasons for explicitly requested deployments that were not acquired.\nEmpty for discovery-style batch acquisition."
           }
         }
       },
@@ -1526,11 +2327,89 @@
       "AgentSyncRequest": {
         "allOf": [
           {
-            "$ref": "#/components/schemas/AgentSyncRequestBase"
+            "type": "object",
+            "required": [
+              "deploymentId"
+            ],
+            "properties": {
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OperatorCapabilityReport"
+                }
+              },
+              "currentState": {
+                "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
+              },
+              "deploymentId": {
+                "type": "string"
+              },
+              "executionClaim": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ExecutionClaim"
+                  }
+                ]
+              },
+              "observedInventoryBatches": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ObservedInventoryBatch"
+                }
+              },
+              "operationsReport": {
+                "nullable": true,
+                "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/OperationsReport"
+                  }
+                ]
+              },
+              "operatorVersion": {
+                "type": "string",
+                "nullable": true
+              },
+              "resourceHeartbeats": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ResourceHeartbeat"
+                },
+                "description": "Managed resource status samples emitted by pull-mode deployment steps."
+              },
+              "session": {
+                "type": "string"
+              },
+              "supportsExecutionClaims": {
+                "type": "boolean"
+              },
+              "supportsTunnels": {
+                "type": "boolean",
+                "description": "Absent for Operators that predate container tunnels."
+              }
+            }
           },
           {
             "type": "object",
             "properties": {
+              "application": {
+                "nullable": true,
+                "description": "Application release the Operator observed in its environment.\nOpaque to OSS beyond forwarding it to `reconcile_request()`.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ObservedApplicationReport"
+                  }
+                ]
+              },
+              "dynamicContainers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DynamicContainerReport"
+                },
+                "description": "Absent for older Operators. This report has no secret values.",
+                "nullable": true
+              },
               "operatorImage": {
                 "nullable": true,
                 "description": "Exact immutable Operator image identity reported by the running process.",
@@ -1543,67 +2422,7 @@
             }
           }
         ],
-        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
-      },
-      "AgentSyncRequestBase": {
-        "type": "object",
-        "required": [
-          "deploymentId"
-        ],
-        "properties": {
-          "capabilities": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OperatorCapabilityReport"
-            }
-          },
-          "currentState": {
-            "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
-          },
-          "deploymentId": {
-            "type": "string"
-          },
-          "executionClaim": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ExecutionClaim"
-              }
-            ]
-          },
-          "observedInventoryBatches": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ObservedInventoryBatch"
-            }
-          },
-          "operationsReport": {
-            "nullable": true,
-            "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OperationsReport"
-              }
-            ]
-          },
-          "operatorVersion": {
-            "type": "string",
-            "nullable": true
-          },
-          "resourceHeartbeats": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ResourceHeartbeat"
-            },
-            "description": "Managed resource status samples emitted by pull-mode deployment steps."
-          },
-          "session": {
-            "type": "string"
-          },
-          "supportsExecutionClaims": {
-            "type": "boolean"
-          }
-        }
+        "description": "Body of `POST /v1/sync`."
       },
       "AgentSyncResponse": {
         "type": "object",
@@ -1625,6 +2444,14 @@
             ]
           },
           "target": {},
+          "targetDynamicContainers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetDynamicContainer"
+            },
+            "description": "Complete release-independent target set. Older embedders omit it.",
+            "nullable": true
+          },
           "targetOperationsBundleSet": {
             "nullable": true,
             "description": "Bundles the Operator should download to catch up to the target\nenabled-plugin-set hash. Opaque passthrough from the embedder's\n`DeploymentStore::reconcile`; `None` in OSS.",
@@ -1633,6 +2460,16 @@
                 "$ref": "#/components/schemas/TargetOperationsBundleSet"
               }
             ]
+          },
+          "targetOperatorImage": {
+            "type": "string",
+            "description": "Operator image this manager's charts install. Operators that manage\ntheir own workload update to it. Absent when the manager serves no\ncharts.",
+            "nullable": true
+          },
+          "tunnelUrl": {
+            "type": "string",
+            "description": "Base URL operators open tunnel connections to. Absent when this manager\ndoes not accept tunnels; operators then never dial.",
+            "nullable": true
           }
         }
       },
@@ -2362,6 +3199,36 @@
                 "type": "string",
                 "enum": [
                   "imds"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Container credentials endpoint: ECS task roles and EKS Pod Identity.",
+            "required": [
+              "endpoint",
+              "type"
+            ],
+            "properties": {
+              "authorization_token": {
+                "type": "string",
+                "description": "Authorization header value for the endpoint",
+                "nullable": true
+              },
+              "authorization_token_file": {
+                "type": "string",
+                "description": "File holding the authorization header value, re-read on each\nrefresh because the platform rotates it",
+                "nullable": true
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "Credentials endpoint URL"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "container"
                 ]
               }
             }
@@ -5391,6 +6258,73 @@
           }
         }
       },
+      "BundleSignatureRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/deployments/{id}/bundle-signature`.",
+        "required": [
+          "manifest"
+        ],
+        "properties": {
+          "manifest": {
+            "type": "string",
+            "description": "The bundle's `manifest.json`, base64-encoded, exactly as packaged."
+          }
+        }
+      },
+      "BundleSignatureResponse": {
+        "type": "object",
+        "description": "A signature over a bundle manifest.",
+        "required": [
+          "signature",
+          "publicKey"
+        ],
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "`ed25519:<base64>` public key that verifies it."
+          },
+          "signature": {
+            "type": "string",
+            "description": "`ed25519:<base64>` signature over the manifest bytes."
+          }
+        }
+      },
+      "BundleSource": {
+        "type": "object",
+        "description": "One OCI artifact and how to authenticate when pulling it.",
+        "required": [
+          "reference",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/SourceCredentials"
+          },
+          "reference": {
+            "type": "string"
+          }
+        }
+      },
+      "BundleSources": {
+        "type": "object",
+        "description": "The artifacts a bundle carries besides the release's own images.",
+        "required": [
+          "chart"
+        ],
+        "properties": {
+          "chart": {
+            "$ref": "#/components/schemas/BundleSource",
+            "description": "The Helm chart, as an OCI reference (`registry/repository:version`)."
+          },
+          "deployCli": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolDownload"
+            },
+            "description": "`alien-deploy` builds for the site, matching this manager."
+          }
+        }
+      },
       "ClientApi": {
         "type": "string",
         "description": "A public API accepted from an application client.",
@@ -6225,6 +7159,36 @@
           }
         ]
       },
+      "ContainerImageIdentity": {
+        "type": "object",
+        "description": "Image a running container reports.",
+        "required": [
+          "name",
+          "image"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "Registry manifest digest in `sha256:<hex>` form, when the runtime\nreports one.",
+            "nullable": true
+          },
+          "image": {
+            "type": "string",
+            "description": "Image reference reported by the container runtime."
+          },
+          "name": {
+            "type": "string",
+            "description": "Container name."
+          }
+        }
+      },
+      "CreatableTokenType": {
+        "type": "string",
+        "description": "Token kinds an admin can create through the API.",
+        "enum": [
+          "tunnel"
+        ]
+      },
       "CreateCommandRequest": {
         "type": "object",
         "description": "Request to create a new command",
@@ -6316,6 +7280,18 @@
           "name"
         ],
         "properties": {
+          "environmentVariables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVariable"
+            },
+            "description": "Environment variables applied to each deployment the group creates."
+          },
+          "inputValues": {
+            "type": "object",
+            "description": "Stack input values applied to each deployment the group creates.",
+            "additionalProperties": {}
+          },
           "maxDeployments": {
             "type": "integer",
             "format": "int64"
@@ -6342,6 +7318,11 @@
               "$ref": "#/components/schemas/EnvironmentVariable"
             },
             "nullable": true
+          },
+          "inputValues": {
+            "type": "object",
+            "description": "Stack input values, by input name. Stored with the deployment and read by every\ndeployment step, like the values a setup collects.",
+            "additionalProperties": {}
           },
           "name": {
             "type": "string"
@@ -6382,6 +7363,24 @@
           }
         }
       },
+      "CreateReleaseChannelRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/release-channels`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Lowercase letters, digits and hyphens, starting with a letter."
+          },
+          "releaseId": {
+            "type": "string",
+            "description": "Release the channel starts at.",
+            "nullable": true
+          }
+        }
+      },
       "CreateReleaseRequest": {
         "type": "object",
         "required": [
@@ -6389,6 +7388,11 @@
           "projectId"
         ],
         "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Channel the release advances; `production` when absent. Deployments\nfollowing the channel roll out to it.",
+            "nullable": true
+          },
           "gitMetadata": {
             "nullable": true,
             "allOf": [
@@ -6407,6 +7411,22 @@
         },
         "additionalProperties": false
       },
+      "CreateTokenRequest": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "deploymentGroupId": {
+            "type": "string",
+            "description": "Limit the token to one deployment group's deployments.",
+            "nullable": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/CreatableTokenType"
+          }
+        }
+      },
       "CreateTokenResponse": {
         "type": "object",
         "required": [
@@ -6421,6 +7441,25 @@
             "type": "string"
           }
         }
+      },
+      "CreatedTokenResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TokenResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "The raw token. Shown once; only its hash is stored."
+              }
+            }
+          }
+        ]
       },
       "CustomCertificateConfig": {
         "type": "object",
@@ -6653,20 +7692,6 @@
           }
         }
       },
-      "DeploymentAcquireUnavailableReason": {
-        "type": "string",
-        "description": "Why an explicitly requested deployment was not acquired.\n\nThese reasons are intentionally bounded and do not identify the session\nthat owns a competing lease.",
-        "enum": [
-          "contended",
-          "deferred",
-          "statusMismatch",
-          "deploymentModelMismatch",
-          "platformMismatch",
-          "setupMethodMismatch",
-          "acquireModeMismatch",
-          "limitReached"
-        ]
-      },
       "DeploymentGroupMinimal": {
         "type": "object",
         "required": [
@@ -6841,6 +7866,31 @@
           }
         }
       },
+      "DeploymentRoutingResponse": {
+        "type": "object",
+        "description": "What a deployment follows and the release that makes it run.",
+        "required": [
+          "deploymentId",
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          },
+          "deploymentId": {
+            "type": "string"
+          },
+          "pinnedReleaseId": {
+            "type": "string",
+            "nullable": true
+          },
+          "releaseId": {
+            "type": "string",
+            "description": "The release the deployment is sent: the pin, else the channel's release.",
+            "nullable": true
+          }
+        }
+      },
       "DomainSettings": {
         "type": "object",
         "description": "Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.",
@@ -6863,6 +7913,66 @@
             ]
           }
         }
+      },
+      "DynamicContainerHealthCheck": {
+        "type": "object",
+        "required": [
+          "path",
+          "port"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "DynamicContainerReport": {
+        "type": "object",
+        "description": "What the Operator observed after applying one target generation.",
+        "required": [
+          "name",
+          "generation",
+          "status"
+        ],
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DynamicContainerStatus"
+          }
+        }
+      },
+      "DynamicContainerStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "failing",
+          "stopped"
+        ]
+      },
+      "EndpointAccess": {
+        "type": "string",
+        "description": "Reachability of the deployment's public endpoints, fixed at setup.",
+        "enum": [
+          "internet",
+          "private"
+        ]
       },
       "Envelope": {
         "type": "object",
@@ -8348,6 +9458,18 @@
           }
         }
       },
+      "GetSecretResponse": {
+        "type": "object",
+        "description": "Response body for getting a secret.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "GitMetadata": {
         "type": "object",
         "properties": {
@@ -8616,6 +9738,11 @@
                 "$ref": "#/components/schemas/Platform"
               }
             ]
+          },
+          "resourcePrefix": {
+            "type": "string",
+            "description": "Stable prefix for resources owned by this deployment.",
+            "nullable": true
           },
           "scope": {
             "type": "string",
@@ -9785,6 +10912,12 @@
           "ownerReferences"
         ],
         "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerImageIdentity"
+            }
+          },
           "cpu": {
             "nullable": true,
             "allOf": [
@@ -10487,6 +11620,20 @@
           }
         }
       },
+      "ListReleaseChannelsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseChannelResponse"
+            }
+          }
+        }
+      },
       "ListReleasesResponse": {
         "type": "object",
         "required": [
@@ -10499,6 +11646,20 @@
               "$ref": "#/components/schemas/ReleaseResponse"
             },
             "description": "Releases the caller may read, newest first."
+          }
+        }
+      },
+      "ListTokensResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenResponse"
+            }
           }
         }
       },
@@ -11645,6 +12806,60 @@
         ],
         "description": "Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount."
       },
+      "ManagerCapabilities": {
+        "type": "object",
+        "required": [
+          "tunnels",
+          "charts"
+        ],
+        "properties": {
+          "charts": {
+            "type": "boolean",
+            "description": "Helm charts at `oci://<registryHost>/charts/<stack>`."
+          },
+          "tunnels": {
+            "type": "boolean",
+            "description": "Requests into deployments through `/v1/deployments/{id}/tunnels/...`."
+          }
+        }
+      },
+      "ManagerInfoResponse": {
+        "type": "object",
+        "required": [
+          "url",
+          "registryHost",
+          "version",
+          "capabilities"
+        ],
+        "properties": {
+          "bundleSigningKey": {
+            "type": "string",
+            "description": "Public key (`ed25519:<base64>`) that air-gapped environments verify\nbundles from this manager with.",
+            "nullable": true
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ManagerCapabilities",
+            "description": "Features this manager serves."
+          },
+          "operatorImage": {
+            "type": "string",
+            "description": "Operator image the charts this manager serves install.",
+            "nullable": true
+          },
+          "registryHost": {
+            "type": "string",
+            "description": "Registry host (`host[:port]`) release images and charts are pulled from."
+          },
+          "url": {
+            "type": "string",
+            "description": "Public URL deployments and customers use to reach this manager."
+          },
+          "version": {
+            "type": "string",
+            "description": "Manager version."
+          }
+        }
+      },
       "MetricSample": {
         "type": "object",
         "required": [
@@ -11985,6 +13200,82 @@
         ],
         "description": "Network configuration for the stack.\n\nControls how VPC/VNet networking is provisioned. Users configure this in\n`StackSettings`; the Network resource itself is auto-generated by preflights.\n\n## Egress policy\n\nContainer cluster VMs are configured for egress based on the mode:\n\n- `UseDefault` → VMs get ephemeral public IPs (no NAT is provisioned)\n- `Create` → VMs use private IPs; Alien provisions a NAT gateway for outbound access\n- `ByoVpc*` / `ByoVnet*` → no public IPs assigned; customer manages egress\n\nFor production workloads, use `Create`. For fast dev/test iteration, `UseDefault` is\nsufficient. For environments with existing VPCs, use the appropriate `ByoVpc*` variant."
       },
+      "ObservedApplicationImage": {
+        "type": "object",
+        "description": "A container image running in one observed application workload.",
+        "required": [
+          "workload",
+          "container",
+          "image"
+        ],
+        "properties": {
+          "container": {
+            "type": "string",
+            "description": "Container name within the workload."
+          },
+          "digest": {
+            "type": "string",
+            "description": "Registry manifest digest in `sha256:<hex>` form, when the runtime\nreports one.",
+            "nullable": true
+          },
+          "image": {
+            "type": "string",
+            "description": "Image reference reported by the container runtime."
+          },
+          "workload": {
+            "type": "string",
+            "description": "Inventory identity of the workload, matching the `rawIdentity` of its\nobserved resource sample (for example `apps/v1:Deployment:shop:api`)."
+          }
+        }
+      },
+      "ObservedApplicationReport": {
+        "type": "object",
+        "description": "Application release the Operator observes running in its environment.\n\nThis identifies the customer's application, not the Operator: the\nOperator's own image is reported separately as [`OperatorImageReport`].",
+        "required": [
+          "source",
+          "complete",
+          "observedAt"
+        ],
+        "properties": {
+          "chartName": {
+            "type": "string",
+            "description": "Helm chart name from the workloads' `helm.sh/chart` label. Present only\nwhen every labelled workload names the same chart.",
+            "nullable": true
+          },
+          "chartVersion": {
+            "type": "string",
+            "description": "Helm chart version from the same label.",
+            "nullable": true
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether every workload kind could be listed. When `false`, the chart\nand images describe only the workloads the Operator could read."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedApplicationImage"
+            },
+            "description": "Distinct container images running in the observed workloads."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the workloads were read."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ObservedApplicationSource",
+            "description": "Where this identity was read from."
+          }
+        }
+      },
+      "ObservedApplicationSource": {
+        "type": "string",
+        "description": "Where the Operator read the application identity from.",
+        "enum": [
+          "kubernetes"
+        ]
+      },
       "ObservedCounts": {
         "type": "object",
         "properties": {
@@ -12107,6 +13398,13 @@
           },
           "health": {
             "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerImageIdentity"
+            },
+            "description": "Distinct container images the resource's running instances report, when\nthe provider exposes them."
           },
           "labels": {
             "type": "object",
@@ -12521,6 +13819,18 @@
         ],
         "description": "Storage backend representation for different presigned request types"
       },
+      "PromoteReleaseRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/releases/{id}/promote`.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          }
+        }
+      },
       "ProviderFleetStatus": {
         "type": "object",
         "required": [
@@ -12810,6 +14120,53 @@
           "text"
         ]
       },
+      "RecentLogEntry": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "severity",
+          "message",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string",
+            "description": "Workload that produced the entry (OTLP `service.name`).",
+            "nullable": true
+          },
+          "severity": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecentLogsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecentLogEntry"
+            },
+            "description": "Oldest first."
+          }
+        }
+      },
       "ReconcileRequest": {
         "type": "object",
         "required": [
@@ -12881,6 +14238,35 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "ReleaseChannelResponse": {
+        "type": "object",
+        "description": "A release channel.",
+        "required": [
+          "name",
+          "updatedAt",
+          "deployments"
+        ],
+        "properties": {
+          "currentReleaseId": {
+            "type": "string",
+            "description": "Release the channel points at; absent until one is published or promoted to it.",
+            "nullable": true
+          },
+          "deployments": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deployments following the channel, pinned or not.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -13204,7 +14590,7 @@
           },
           "diskImage": {
             "type": "string",
-            "description": "Catalog disk image every sandbox is created from."
+            "description": "Catalog name or registry image every sandbox is created from. A registry image is\nstarted from the disk image built from it, found by label in the group."
           },
           "idlePauseSeconds": {
             "type": "integer",
@@ -13247,6 +14633,47 @@
           "containerName": {
             "type": "string",
             "description": "Blob container authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteDynamodbKvBinding": {
+        "type": "object",
+        "description": "Concrete DynamoDB KV topology returned to remote clients.",
+        "required": [
+          "tableName",
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string",
+            "description": "AWS region of the table."
+          },
+          "tableName": {
+            "type": "string",
+            "description": "DynamoDB table authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteFirestoreKvBinding": {
+        "type": "object",
+        "description": "Concrete Firestore KV topology returned to remote clients.",
+        "required": [
+          "projectId",
+          "databaseId",
+          "collectionName"
+        ],
+        "properties": {
+          "collectionName": {
+            "type": "string",
+            "description": "Firestore collection holding this store's entries."
+          },
+          "databaseId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -13319,13 +14746,17 @@
       },
       "RemoteGcpSandboxBinding": {
         "type": "object",
-        "description": "Concrete Agent Platform topology returned to remote clients.\n\nNo egress field, unlike the other two clouds: the policy lives on the environment template\nnamed below, so it travels with the template rather than as a flag the client must read.",
+        "description": "Concrete Agent Platform topology returned to remote clients.\n\nThe egress policy itself lives on the environment template named below; `allow_egress` reports\nit so a client can decide without reading the template.",
         "required": [
           "engine",
           "template",
           "region"
         ],
         "properties": {
+          "allowEgress": {
+            "type": "boolean",
+            "description": "Whether the declaration asked for open egress, as the template enforces it. Sent only when\ntrue: released clients reject unknown fields, so a deny binding must stay byte-identical."
+          },
           "engine": {
             "type": "string",
             "description": "Reasoning engine the credential lease authorizes sandboxes under."
@@ -13378,6 +14809,22 @@
         },
         "additionalProperties": false
       },
+      "RemotePubsubQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "topic",
+          "subscription"
+        ],
+        "properties": {
+          "subscription": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          }
+        }
+      },
       "RemoteS3StorageBinding": {
         "type": "object",
         "description": "Concrete S3 topology returned to remote clients.",
@@ -13391,6 +14838,34 @@
           }
         },
         "additionalProperties": false
+      },
+      "RemoteServiceBusQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "namespace",
+          "queueName"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string"
+          },
+          "queueName": {
+            "type": "string"
+          }
+        }
+      },
+      "RemoteSqsQueueBinding": {
+        "type": "object",
+        "description": "Concrete send-only queue topology returned to remote clients.",
+        "required": [
+          "queueUrl"
+        ],
+        "properties": {
+          "queueUrl": {
+            "type": "string"
+          }
+        }
       },
       "RemoteStackManagementHeartbeatData": {
         "oneOf": [
@@ -13493,6 +14968,28 @@
           }
         }
       },
+      "RemoteTableStorageKvBinding": {
+        "type": "object",
+        "description": "Concrete Azure Table Storage KV topology returned to remote clients.",
+        "required": [
+          "resourceGroupName",
+          "accountName",
+          "tableName"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string"
+          },
+          "resourceGroupName": {
+            "type": "string"
+          },
+          "tableName": {
+            "type": "string",
+            "description": "Table authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
       "RenewRequest": {
         "type": "object",
         "required": [
@@ -13536,6 +15033,30 @@
           "pluginVersion": {
             "type": "string",
             "description": "Version of the plugin that owns this operation."
+          }
+        }
+      },
+      "ReportedTelemetry": {
+        "type": "object",
+        "description": "One OTLP batch from the environment.",
+        "required": [
+          "signal",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "OTLP protobuf, base64."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The site's sequence number for the batch. The manager keeps the\nhighest one it has passed on and skips any it already has, so a\nreport sent again doesn't duplicate telemetry.",
+            "nullable": true
+          },
+          "signal": {
+            "type": "string",
+            "description": "`logs`, `metrics` or `traces`."
           }
         }
       },
@@ -13652,6 +15173,168 @@
                 "type": "string",
                 "enum": [
                   "gcs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Sqs queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteSqsQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "sqs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Pubsub queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemotePubsubQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "pubsub"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Send-only Servicebus queue and a short-lived credential lease.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteServiceBusQueueBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "servicebus"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS DynamoDB KV table and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteDynamodbKvBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "dynamodb"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GCP Firestore KV collection and an access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteFirestoreKvBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "firestore"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Table Storage KV table and a storage-audience access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteTableStorageKvBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "tablestorage"
                 ]
               }
             }
@@ -14837,6 +16520,48 @@
           }
         }
       },
+      "SetDeploymentChannelRequest": {
+        "type": "object",
+        "description": "Body of `PUT /v1/deployments/{id}/channel`.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string"
+          }
+        }
+      },
+      "SetDeploymentPinRequest": {
+        "type": "object",
+        "description": "Body of `PUT /v1/deployments/{id}/pin`.",
+        "properties": {
+          "releaseId": {
+            "type": "string",
+            "description": "Release to pin to; absent unpins and returns to the channel's release.",
+            "nullable": true
+          }
+        }
+      },
+      "SetSecretRequest": {
+        "type": "object",
+        "description": "Request body for setting a secret.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "SourceCredentials": {
+        "type": "string",
+        "enum": [
+          "caller",
+          "anonymous"
+        ]
+      },
       "StackByPlatform": {
         "type": "object",
         "description": "The release API accepts stacks keyed by platform.\nOnly one platform stack needs to be present.",
@@ -15104,6 +16829,10 @@
               }
             ]
           },
+          "endpointAccess": {
+            "$ref": "#/components/schemas/EndpointAccess",
+            "description": "Who can reach public endpoints. Private access requires AWS managed containers.\nThis choice cannot change after setup; create a new deployment to change it."
+          },
           "externalBindings": {
             "type": "object",
             "description": "External bindings for pre-existing infrastructure.\nAllows using existing resources (MinIO, Redis, shared Container Apps\nEnvironment, etc.) instead of having Alien provision them.\nRequired for Kubernetes platform, optional for cloud platforms.",
@@ -15175,6 +16904,49 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/StackResourceState"
             }
+          }
+        }
+      },
+      "StatusReport": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "object",
+            "description": "Deployment state as the environment's Operator last recorded it.",
+            "additionalProperties": {}
+          },
+          "telemetry": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportedTelemetry"
+            },
+            "description": "Telemetry the Operator buffered, as the OTLP batches it received."
+          }
+        }
+      },
+      "StatusReportResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "telemetryAccepted"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "telemetryAccepted": {
+            "type": "integer",
+            "description": "Telemetry batches passed to the telemetry backend.",
+            "minimum": 0
+          },
+          "telemetryThrough": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest batch the manager has passed on for this deployment, across\nreports.",
+            "nullable": true
           }
         }
       },
@@ -15350,6 +17122,80 @@
         ],
         "description": "Request to submit a command response (from deployment)"
       },
+      "TargetDynamicContainer": {
+        "type": "object",
+        "description": "One release-independent container the Operator should run in its namespace.\nThe manager sends the complete set on every sync. An empty set removes\ncontainers previously owned by this deployment.",
+        "required": [
+          "name",
+          "generation",
+          "image",
+          "cpu",
+          "memory",
+          "replicas",
+          "ports",
+          "deleted"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "healthCheck": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DynamicContainerHealthCheck"
+              }
+            ]
+          },
+          "image": {
+            "type": "string"
+          },
+          "memory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "replicas": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "secretEnv": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "suspendedReason": {
+            "type": "string",
+            "description": "Stop an installed workload when its release no longer admits the image.",
+            "nullable": true
+          }
+        }
+      },
       "TargetOperationsBundleSet": {
         "type": "object",
         "description": "Target operations-bundle set for the Operator to converge its loaded\nplugin registry toward, independent of any release/config target — a\nplugin can be enabled with no release change, so this is not nested under\n`TargetDeployment`.",
@@ -15379,6 +17225,54 @@
           "approval-required"
         ]
       },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "tokenType",
+          "keyPrefix",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "deploymentGroupId": {
+            "type": "string",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "keyPrefix": {
+            "type": "string"
+          },
+          "tokenType": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolDownload": {
+        "type": "object",
+        "description": "A downloadable build of a tool.",
+        "required": [
+          "platform",
+          "url"
+        ],
+        "properties": {
+          "platform": {
+            "type": "string",
+            "description": "`<os>-<arch>`, e.g. `linux-x86_64`."
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "TraceContext": {
         "type": "object",
         "description": "W3C Trace Context propagated with a command lease.\n\nThe values are kept in their standard wire form so receivers can attach\nthem to handler telemetry without inventing separate trace/span fields.",
@@ -15393,27 +17287,6 @@
           "tracestate": {
             "type": "string",
             "description": "Optional W3C `tracestate` header value.",
-            "nullable": true
-          }
-        }
-      },
-      "UnacquiredDeployment": {
-        "type": "object",
-        "description": "Atomic outcome for one explicitly requested deployment that was not acquired.",
-        "required": [
-          "deploymentId",
-          "reason"
-        ],
-        "properties": {
-          "deploymentId": {
-            "type": "string"
-          },
-          "reason": {
-            "$ref": "#/components/schemas/DeploymentAcquireUnavailableReason"
-          },
-          "retryAfter": {
-            "type": "string",
-            "format": "date-time",
             "nullable": true
           }
         }
@@ -15599,6 +17472,18 @@
             "type": "boolean"
           },
           "stale": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VaultMutationResponse": {
+        "type": "object",
+        "description": "Response body for successful Vault mutations.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
             "type": "boolean"
           }
         }
@@ -15863,6 +17748,10 @@
     {
       "name": "bindings",
       "description": "Remote resource binding resolution"
+    },
+    {
+      "name": "vault",
+      "description": "Deployment Vault secret management"
     },
     {
       "name": "telemetry",

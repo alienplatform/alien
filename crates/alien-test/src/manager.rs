@@ -592,9 +592,9 @@ impl TestManager {
 
                 return alien_manager::standalone_config::CommandsSection {
                     kv: Some(KvBinding::dynamodb(table.clone(), region)),
-                    storage: Some(StorageBinding::S3(S3StorageBinding {
-                        bucket_name: BindingValue::Value(bucket.clone()),
-                    })),
+                    storage: Some(StorageBinding::S3(S3StorageBinding::bucket(
+                        BindingValue::Value(bucket.clone()),
+                    ))),
                 };
             }
         }

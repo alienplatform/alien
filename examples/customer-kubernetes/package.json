@@ -1,0 +1,9 @@
+{
+  "name": "customer-kubernetes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@alienplatform/core": "^3.3.26"
+  }
+}

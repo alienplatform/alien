@@ -7,14 +7,14 @@ import { KeyHeartbeatDataAwsKms } from "@alienplatform/manager-api/models";
 
 let value: KeyHeartbeatDataAwsKms = {
   data: {
-    enabled: false,
+    enabled: true,
     keyArn: "<value>",
     keySpec: "<value>",
     keyState: "<value>",
     keyUsage: "<value>",
     status: {
-      health: "unknown",
-      lifecycle: "deleted",
+      health: "healthy",
+      lifecycle: "running",
     },
   },
   provider: "aws-kms",

@@ -3,7 +3,7 @@
 //! Provides [`NetworkArgs`] (a clap `Args` struct) and [`parse_network_settings`] to convert
 //! CLI flags into [`alien_core::NetworkSettings`].
 
-use alien_core::{NetworkSettings, Platform};
+use alien_core::{EndpointAccess, NetworkSettings, Platform};
 use clap::Args;
 
 /// Network mode for the `--network` flag.
@@ -47,6 +47,10 @@ impl std::fmt::Display for NetworkMode {
 #[derive(Args, Debug, Clone)]
 #[command(next_help_heading = "Network options")]
 pub struct NetworkArgs {
+    /// Who can reach public endpoints: internet or private (AWS managed containers only).
+    #[arg(long, value_parser = parse_endpoint_access)]
+    pub endpoint_access: Option<EndpointAccess>,
+
     /// Network mode: auto, use-default, create, byo.
     ///
     /// auto         — system decides (create VPC if containers need it, skip otherwise)
@@ -107,6 +111,14 @@ pub struct NetworkArgs {
     /// Private subnet name (byo mode, Azure)
     #[arg(long)]
     pub private_subnet_name: Option<String>,
+}
+
+fn parse_endpoint_access(value: &str) -> std::result::Result<EndpointAccess, String> {
+    match value {
+        "internet" => Ok(EndpointAccess::Internet),
+        "private" => Ok(EndpointAccess::Private),
+        _ => Err("expected internet or private".to_string()),
+    }
 }
 
 /// Parse CLI network flags into `Option<NetworkSettings>`.
@@ -281,6 +293,7 @@ mod tests {
 
     fn default_args() -> NetworkArgs {
         NetworkArgs {
+            endpoint_access: None,
             network_mode: NetworkMode::Auto,
             network_cidr: None,
             availability_zones: None,

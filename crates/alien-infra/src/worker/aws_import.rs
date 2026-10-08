@@ -61,12 +61,16 @@ impl ResourceImporter for AwsWorkerImporter {
             rest_deployment_id: None,
             rest_base_path: None,
             domain_name: None,
+            domain_confirmed: false,
+            domain_create_token: None,
+            certificate_import_token: None,
             load_balancer: None,
             certificate_issued_at: None,
             uses_custom_domain: false,
             s3_permission_statement_ids: data.s3_permission_statement_ids,
             eventbridge_rule_names: data.eventbridge_rule_names,
             eventbridge_permission_statement_ids: data.eventbridge_permission_statement_ids,
+            delete_removed_something: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

@@ -17,7 +17,8 @@ pub use azure_runtime::{
     AzureRuntimePermissionsGenerator,
 };
 pub use gcp_runtime::{
-    custom_role_permission_set_prefix, custom_role_prefix, GcpBindingResourceKind,
-    GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding, GcpIamBindings,
-    GcpIamCondition, GcpRuntimePermissionsGenerator,
+    custom_role_description_names_prefix, custom_role_namespace_for_prefix,
+    custom_role_permission_set_prefix, custom_role_prefix, legacy_custom_role_namespace_for_prefix,
+    GcpBindingResourceKind, GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding,
+    GcpIamBindings, GcpIamCondition, GcpRuntimePermissionsGenerator,
 };

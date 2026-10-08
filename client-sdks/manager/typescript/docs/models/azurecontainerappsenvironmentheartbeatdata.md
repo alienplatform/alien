@@ -11,7 +11,7 @@ let value: AzureContainerAppsEnvironmentHeartbeatData = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "forbidden",
         severity: "info",
         source: "<value>",
       },

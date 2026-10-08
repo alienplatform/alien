@@ -57,6 +57,7 @@ async fn create_test_group(store: &SqliteDeploymentStore) -> String {
             CreateDeploymentGroupParams {
                 name: "test-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -416,6 +417,7 @@ async fn list_by_deployment_group() {
             CreateDeploymentGroupParams {
                 name: "group-a".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -427,6 +429,7 @@ async fn list_by_deployment_group() {
             CreateDeploymentGroupParams {
                 name: "group-b".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -473,6 +476,7 @@ async fn list_by_deployment_group_and_name() {
             CreateDeploymentGroupParams {
                 name: "group-a".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -484,6 +488,7 @@ async fn list_by_deployment_group_and_name() {
             CreateDeploymentGroupParams {
                 name: "group-b".to_string(),
                 max_deployments: 10,
+                setup: Default::default(),
             },
         )
         .await
@@ -1515,6 +1520,7 @@ async fn group_count_computed() {
             CreateDeploymentGroupParams {
                 name: "counted-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -2047,7 +2053,10 @@ async fn resolve_target_shorthand_single_worker_push() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
-    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap();
     assert_eq!(
         resolved.target,
         CommandTarget::new("w1", CommandTargetType::Worker)
@@ -2064,7 +2073,10 @@ async fn resolve_target_explicit_daemon_is_pull() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
-    let resolved = registry.resolve_target(&dep_id, Some("d1")).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", Some("d1"))
+        .await
+        .unwrap();
     assert_eq!(
         resolved.target,
         CommandTarget::new("d1", CommandTargetType::Daemon)
@@ -2082,7 +2094,10 @@ async fn resolve_target_ambiguous_is_409() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
-    let err = registry.resolve_target(&dep_id, None).await.unwrap_err();
+    let err = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap_err();
     assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
     assert_eq!(err.http_status_code, Some(409));
 }
@@ -2095,7 +2110,10 @@ async fn resolve_target_none_is_422() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
-    let err = registry.resolve_target(&dep_id, None).await.unwrap_err();
+    let err = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap_err();
     assert_eq!(err.code, "NO_COMMAND_TARGETS");
     assert_eq!(err.http_status_code, Some(422));
 }
@@ -2109,7 +2127,7 @@ async fn resolve_target_unknown_is_404() {
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
     let err = registry
-        .resolve_target(&dep_id, Some("nope"))
+        .resolve_target(&dep_id, "test-command", Some("nope"))
         .await
         .unwrap_err();
     assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
@@ -2117,7 +2135,7 @@ async fn resolve_target_unknown_is_404() {
 
     // An explicit empty id never falls back to shorthand.
     let err = registry
-        .resolve_target(&dep_id, Some(""))
+        .resolve_target(&dep_id, "test-command", Some(""))
         .await
         .unwrap_err();
     assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
@@ -2133,7 +2151,10 @@ async fn resolve_target_worker_on_kubernetes_is_pull() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Kubernetes, StackSettings::default()).await;
 
-    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap();
     assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
 }
 
@@ -2145,7 +2166,10 @@ async fn resolve_target_worker_on_local_is_push() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Local, StackSettings::default()).await;
 
-    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap();
     assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Push);
 }
 
@@ -2161,7 +2185,10 @@ async fn resolve_target_worker_pull_model_is_pull() {
     };
     let (registry, dep_id) = registry_with_release(stack, Platform::Aws, settings).await;
 
-    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap();
     assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
 }
 
@@ -2173,7 +2200,10 @@ async fn resolve_target_container_always_pull() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
-    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap();
     assert_eq!(
         resolved.target,
         CommandTarget::new("c1", CommandTargetType::Container)
@@ -2193,7 +2223,7 @@ async fn resolve_target_colon_id_is_invalid() {
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
     let err = registry
-        .resolve_target(&dep_id, Some("w1:pending:1"))
+        .resolve_target(&dep_id, "test-command", Some("w1:pending:1"))
         .await
         .unwrap_err();
     assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
@@ -2214,7 +2244,10 @@ async fn create_command_round_trips_target_columns() {
     let (registry, dep_id) =
         registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
 
-    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let resolved = registry
+        .resolve_target(&dep_id, "test-command", None)
+        .await
+        .unwrap();
     let expected = CommandTarget::new("d1", CommandTargetType::Daemon);
     let metadata = registry
         .create_command(

@@ -123,15 +123,25 @@ impl AwsRemoteBindingsController {
                 Ok(response) => {
                     if let Some(policy_names) = response.list_role_policies_result.policy_names {
                         for policy_name in &policy_names.member {
-                            client
-                                .delete_role_policy(role_name, policy_name)
-                                .await
-                                .context(ErrorData::CloudPlatformError {
-                                    message: format!(
-                                        "Failed to remove Remote Bindings policy '{policy_name}'"
-                                    ),
-                                    resource_id: Some(resource_id.clone()),
-                                })?;
+                            match client.delete_role_policy(role_name, policy_name).await {
+                                Ok(()) => {}
+                                Err(error)
+                                    if matches!(
+                                        error.error,
+                                        Some(
+                                            alien_client_core::ErrorData::RemoteResourceNotFound { .. }
+                                        )
+                                    ) => {}
+                                Err(error) => {
+                                    return Err(error.context(ErrorData::CloudPlatformError {
+                                        message: format!(
+                                            "Failed to remove Remote Bindings policy \
+                                             '{policy_name}'"
+                                        ),
+                                        resource_id: Some(resource_id.clone()),
+                                    }));
+                                }
+                            }
                         }
                     }
                 }
@@ -216,4 +226,140 @@ fn trust_policy(managing_role_arn: &str) -> String {
         }],
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_aws_clients::iam::{
+        ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
+    };
+    use alien_core::{Platform, RemoteBindings, ResourceStatus};
+
+    use super::*;
+    use crate::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+
+    /// Setup writes each published resource's grant onto this role and never records it, so the
+    /// role's delete is what revokes them: every inline policy goes before the role.
+    #[tokio::test]
+    async fn delete_removes_every_inline_policy_then_the_role() {
+        assert_eq!(
+            delete_with(|| Ok(())).await,
+            (
+                Ok(ResourceStatus::Deleted),
+                vec![
+                    "policy:alien-agents-remote-access".to_string(),
+                    "role".to_string()
+                ]
+            )
+        );
+    }
+
+    /// A listed policy another step already removed is gone, not a failure.
+    #[tokio::test]
+    async fn delete_passes_a_policy_already_removed() {
+        let gone = || {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM Role Policy".to_string(),
+                    resource_name: "alien-agents-remote-access".to_string(),
+                },
+            ))
+        };
+        assert_eq!(
+            delete_with(gone).await,
+            (
+                Ok(ResourceStatus::Deleted),
+                vec![
+                    "policy:alien-agents-remote-access".to_string(),
+                    "role".to_string()
+                ]
+            )
+        );
+    }
+
+    /// DeleteRole refuses a role that still holds a policy, so a policy that could not be removed
+    /// stops the delete before the role.
+    #[tokio::test]
+    async fn delete_stops_before_the_role_when_a_policy_cannot_be_removed() {
+        let denied = || {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "IAM Role Policy".to_string(),
+                    resource_name: "alien-agents-remote-access".to_string(),
+                },
+            ))
+        };
+        assert_eq!(
+            delete_with(denied).await,
+            (
+                Err("CLOUD_PLATFORM_ERROR".to_string()),
+                vec!["policy:alien-agents-remote-access".to_string()]
+            )
+        );
+    }
+
+    async fn delete_with(
+        policy_answer: fn() -> alien_client_core::Result<()>,
+    ) -> (std::result::Result<ResourceStatus, String>, Vec<String>) {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut iam = MockIamApi::new();
+        iam.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: vec!["alien-agents-remote-access".to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let seen = calls.clone();
+        iam.expect_delete_role_policy()
+            .withf(|role, _| role == "test-access")
+            .times(1)
+            .returning(move |_, policy| {
+                seen.lock().unwrap().push(format!("policy:{policy}"));
+                policy_answer()
+            });
+        let seen = calls.clone();
+        iam.expect_delete_role()
+            .withf(|role| role == "test-access")
+            .times(0..=1)
+            .returning(move |_| {
+                seen.lock().unwrap().push("role".to_string());
+                Ok(())
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteBindings::new("access".to_string()).build())
+            .controller(AwsRemoteBindingsController {
+                state: AwsRemoteBindingsState::Ready,
+                role_arn: Some("arn:aws:iam::123456789012:role/test-access".to_string()),
+                role_name: Some("test-access".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.delete().unwrap();
+        let outcome = executor
+            .run_until_terminal()
+            .await
+            .map(|()| executor.status())
+            .map_err(|error| error.code);
+
+        let calls = calls.lock().unwrap().clone();
+        (outcome, calls)
+    }
 }

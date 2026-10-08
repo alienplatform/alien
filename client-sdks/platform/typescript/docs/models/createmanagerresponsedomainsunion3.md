@@ -9,9 +9,9 @@
 const value: models.CreateManagerResponseDomains3 = {};
 ```
 
-### `any`
+### `string`
 
 ```typescript
-const value: any = "<value>";
+const value: string = "<value>";
 ```
 

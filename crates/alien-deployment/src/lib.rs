@@ -5,9 +5,11 @@
 //! deployment steps.
 
 mod deleting;
+pub use deleting::destroy_without_runtime;
 mod error;
 mod helpers;
 mod initial_setup;
+pub use initial_setup::{retry_failed_setup_resources, setup_run_has_pending_update};
 pub mod loop_contract;
 pub mod manager_api_transport;
 mod observe;
@@ -219,8 +221,15 @@ pub async fn step(
             provisioning::handle_provisioning(current, config, client_config, service_provider)
                 .await?
         }
-        DeploymentStatus::WaitingForMachines => {
-            if current.current_release.is_some() && current.target_release.is_some() {
+        DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
+            // An update can replace the initial target before any release has settled.
+            let has_pending_target = current
+                .runtime_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
+            if has_pending_target
+                || (current.current_release.is_some() && current.target_release.is_some())
+            {
                 updating::handle_updating(current, config, client_config, service_provider).await?
             } else {
                 provisioning::handle_provisioning(current, config, client_config, service_provider)

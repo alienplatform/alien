@@ -3,7 +3,9 @@
 //! The agent periodically calls `POST /v1/sync` with a `SyncRequest` and
 //! receives a `SyncResponse` containing the target deployment state.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::{
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
@@ -178,6 +180,74 @@ pub struct TargetOperationsBundleSet {
     pub bundles: Vec<OperationsBundleDownload>,
 }
 
+/// One release-independent container the Operator should run in its namespace.
+/// The manager sends the complete set on every sync. An empty set removes
+/// containers previously owned by this deployment.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDynamicContainer {
+    pub name: String,
+    pub generation: u64,
+    pub image: String,
+    pub cpu: String,
+    pub memory: String,
+    pub replicas: u32,
+    pub ports: Vec<u16>,
+    pub deleted: bool,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub secret_env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<DynamicContainerHealthCheck>,
+    /// Stop an installed workload when its release no longer admits the image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspended_reason: Option<String>,
+}
+
+// Never include secret values in sync diagnostics.
+impl std::fmt::Debug for TargetDynamicContainer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TargetDynamicContainer")
+            .field("name", &self.name)
+            .field("generation", &self.generation)
+            .field("image", &self.image)
+            .field("replicas", &self.replicas)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicContainerHealthCheck {
+    pub path: String,
+    pub port: u16,
+}
+
+/// What the Operator observed after applying one target generation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicContainerReport {
+    pub name: String,
+    pub generation: u64,
+    pub status: DynamicContainerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum DynamicContainerStatus {
+    Pending,
+    Running,
+    Failing,
+    Stopped,
+}
+
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,6 +260,11 @@ pub struct SyncRequest {
     /// Signals that this Operator persists and echoes execution claims.
     #[serde(default)]
     pub supports_execution_claims: bool,
+    /// Signals that this Operator understands container tunnels. Older
+    /// Operators reject stacks that declare one, so the manager leaves
+    /// tunnels out of their targets.
+    #[serde(default)]
+    pub supports_tunnels: bool,
     /// Exact update claim returned by the previous sync response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_claim: Option<SyncExecutionClaim>,
@@ -223,6 +298,60 @@ pub struct SyncRequest {
     pub operations_report: Option<OperationsReport>,
 }
 
+/// Where the Operator read the application identity from.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ObservedApplicationSource {
+    /// Labels and pod statuses of the observed Kubernetes workloads.
+    Kubernetes,
+}
+
+/// A container image running in one observed application workload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedApplicationImage {
+    /// Inventory identity of the workload, matching the `rawIdentity` of its
+    /// observed resource sample (for example `apps/v1:Deployment:shop:api`).
+    pub workload: String,
+    /// Container name within the workload.
+    pub container: String,
+    /// Image reference reported by the container runtime.
+    pub image: String,
+    /// Registry manifest digest in `sha256:<hex>` form, when the runtime
+    /// reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+/// Application release the Operator observes running in its environment.
+///
+/// This identifies the customer's application, not the Operator: the
+/// Operator's own image is reported separately as [`OperatorImageReport`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedApplicationReport {
+    /// Where this identity was read from.
+    pub source: ObservedApplicationSource,
+    /// Helm chart name from the workloads' `helm.sh/chart` label. Present only
+    /// when every labelled workload names the same chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_name: Option<String>,
+    /// Helm chart version from the same label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_version: Option<String>,
+    /// Distinct container images running in the observed workloads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ObservedApplicationImage>,
+    /// Whether every workload kind could be listed. When `false`, the chart
+    /// and images describe only the workloads the Operator could read.
+    pub complete: bool,
+    /// When the workloads were read.
+    pub observed_at: DateTime<Utc>,
+}
+
 /// Extensible wire input for sync metadata that is not part of the
 /// long-standing [`SyncRequest`] struct-literal contract.
 #[derive(Debug, Clone, Serialize)]
@@ -234,6 +363,13 @@ pub struct SyncInput {
     /// older installations that do not carry an image receipt.
     #[serde(skip_serializing_if = "Option::is_none")]
     operator_image: Option<OperatorImageReport>,
+    /// Application release observed in the environment. Absent when the
+    /// Operator observed none or predates this report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application: Option<ObservedApplicationReport>,
+    /// Absent for older Operators. An empty report means no containers remain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dynamic_containers: Option<Vec<DynamicContainerReport>>,
 }
 
 impl SyncInput {
@@ -243,6 +379,8 @@ impl SyncInput {
         SyncInputBuilder {
             request,
             operator_image: None,
+            application: None,
+            dynamic_containers: None,
         }
     }
 }
@@ -252,6 +390,8 @@ impl SyncInput {
 pub struct SyncInputBuilder {
     request: SyncRequest,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<DynamicContainerReport>>,
 }
 
 impl SyncInputBuilder {
@@ -261,11 +401,24 @@ impl SyncInputBuilder {
         self
     }
 
+    /// Attach the application release observed in the environment.
+    pub fn application(mut self, application: ObservedApplicationReport) -> Self {
+        self.application = Some(application);
+        self
+    }
+
+    pub fn dynamic_containers(mut self, reports: Vec<DynamicContainerReport>) -> Self {
+        self.dynamic_containers = Some(reports);
+        self
+    }
+
     /// Finish the serializable sync payload.
     pub fn build(self) -> SyncInput {
         SyncInput {
             request: self.request,
             operator_image: self.operator_image,
+            application: self.application,
+            dynamic_containers: self.dynamic_containers,
         }
     }
 }
@@ -301,6 +454,18 @@ pub struct SyncResponse {
     /// loaded hash to decide whether to download anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_operations_bundle_set: Option<TargetOperationsBundleSet>,
+    /// Complete release-independent target set. None means the manager does
+    /// not support this protocol; Some(empty) means remove owned containers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dynamic_containers: Option<Vec<TargetDynamicContainer>>,
+    /// Base URL the Operator opens tunnel connections to. None means the
+    /// manager does not accept tunnels, so the Operator never dials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel_url: Option<String>,
+    /// Operator image the manager wants this Operator to run. Operators that
+    /// manage their own workload update to it; None means no opinion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_operator_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -330,6 +495,7 @@ mod tests {
             deployment_id: "dep_abc123".to_string(),
             session: "operator-test".to_string(),
             supports_execution_claims: true,
+            supports_tunnels: true,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -374,6 +540,9 @@ mod tests {
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
@@ -390,6 +559,9 @@ mod tests {
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
@@ -483,6 +655,9 @@ mod tests {
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
+            target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
 
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -532,6 +707,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -561,6 +737,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -637,6 +814,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
+            supports_tunnels: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -698,6 +876,9 @@ mod tests {
                     url: "https://storage.example.com/bundle.zip?sig=abc".to_string(),
                 }],
             }),
+            target_dynamic_containers: None,
+            tunnel_url: None,
+            target_operator_image: None,
         };
 
         let json = serde_json::to_value(&resp).unwrap();
@@ -722,5 +903,43 @@ mod tests {
         let json = serde_json::json!({});
         let resp: SyncResponse = serde_json::from_value(json).unwrap();
         assert!(resp.target_operations_bundle_set.is_none());
+    }
+
+    #[test]
+    fn dynamic_container_sync_preserves_empty_target_and_hides_secrets_in_debug() {
+        let old_manager_response: SyncResponse = serde_json::from_str("{}").unwrap();
+        assert!(old_manager_response.target_dynamic_containers.is_none());
+
+        let empty_target = SyncResponse {
+            execution_claim: None,
+            current_state: None,
+            target: None,
+            commands_url: None,
+            target_operations_bundle_set: None,
+            target_dynamic_containers: Some(vec![]),
+            tunnel_url: None,
+            target_operator_image: None,
+        };
+        let json = serde_json::to_value(&empty_target).unwrap();
+        assert_eq!(json["targetDynamicContainers"], serde_json::json!([]));
+
+        let target = TargetDynamicContainer {
+            name: "api".to_string(),
+            generation: 2,
+            image: "example.com/api@sha256:abc".to_string(),
+            cpu: "0.5".to_string(),
+            memory: "512Mi".to_string(),
+            replicas: 1,
+            ports: vec![8080],
+            deleted: false,
+            env: BTreeMap::new(),
+            secret_env: BTreeMap::from([("TOKEN".to_string(), "private-value".to_string())]),
+            health_check: None,
+            suspended_reason: None,
+        };
+        assert!(!format!("{target:?}").contains("private-value"));
+        let roundtrip: TargetDynamicContainer =
+            serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+        assert_eq!(roundtrip, target);
     }
 }

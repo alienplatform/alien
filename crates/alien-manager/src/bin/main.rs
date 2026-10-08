@@ -9,11 +9,10 @@ use std::sync::Arc;
 use alien_manager::{
     standalone_config::ManagerTomlConfig,
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
-    traits::{CreateTokenParams, TokenStore, TokenType},
+    traits::TokenStore,
     AlienManager, ManagerConfig,
 };
 use clap::Parser;
-use sha2::{Digest, Sha256};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -114,18 +113,63 @@ async fn build_standalone_server(
     toml_config: &ManagerTomlConfig,
 ) -> AlienManager {
     let addr_display = format!("{}:{}", config.host, config.port);
-    let (token_store, admin_token) = bootstrap_standalone_admin_token(&config).await;
+    let state_dir = config
+        .state_dir
+        .clone()
+        .expect("the manager config always resolves a state directory");
+    std::fs::create_dir_all(&state_dir).unwrap_or_else(|e| {
+        panic!(
+            "Failed to create state directory {}: {}",
+            state_dir.display(),
+            e
+        )
+    });
+    let db_path = config
+        .db_path
+        .clone()
+        .expect("the manager config always resolves a database path");
+    let db = Arc::new(
+        SqliteDatabase::new_with_key(
+            &db_path.to_string_lossy(),
+            toml_config.database.encryption_key.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("Failed to initialize database: {}", e)),
+    );
+    let token_store: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(db));
 
-    // Derive command response signing key from the admin token.
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(admin_token.as_bytes());
-    hasher.update(b":commands-response-signing");
-    config.response_signing_key = hasher.finalize().to_vec();
+    let admin_token = alien_manager::bootstrap::ensure_admin_token(
+        token_store.as_ref(),
+        &state_dir,
+        std::env::var(alien_manager::bootstrap::ADMIN_TOKEN_ENV).ok(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("Failed to set up the admin token: {e}"));
+    if let alien_manager::bootstrap::AdminToken::Generated(token) = &admin_token {
+        println!("Generated admin token (shown once; save it securely):");
+        println!("  {token}");
+        println!();
+        println!("Connect the CLI:");
+        println!(
+            "  alien login --manager {} --token {token}",
+            config.base_url()
+        );
+        println!();
+    }
+    config.response_signing_key = alien_manager::bootstrap::response_signing_key(&state_dir)
+        .unwrap_or_else(|e| panic!("Failed to set up the response signing key: {e}"));
+    let bundle_signing_key = alien_manager::bootstrap::bundle_signing_key(&state_dir)
+        .unwrap_or_else(|e| panic!("Failed to set up the bundle signing key: {e}"));
 
     // Build the server with standalone defaults
     let server = AlienManager::builder(config)
         .token_store(token_store)
+        .tunnels()
+        .charts(alien_manager::routes::charts::ChartSettings::new(
+            toml_config.operator.image.clone(),
+            toml_config.operator.insecure_registry,
+        ))
+        .bundle_signing_key(bundle_signing_key)
         .with_standalone_defaults(toml_config)
         .await
         .expect("Failed to set up standalone defaults")
@@ -150,125 +194,4 @@ async fn build_standalone_server(
     println!();
 
     server
-}
-
-/// Bootstrap admin token for standalone mode.
-///
-/// On first run: generates an `ax_admin_<uuid>` token, writes it to `{state_dir}/admin-token`,
-/// hashes it with SHA-256, and stores it in SQLite via TokenStore.
-/// On subsequent runs: reads the existing token from the file and verifies it exists in the DB.
-/// Returns the pre-created TokenStore so the builder reuses the same DB connection.
-async fn bootstrap_standalone_admin_token(config: &ManagerConfig) -> (Arc<dyn TokenStore>, String) {
-    let state_dir = config
-        .state_dir
-        .as_ref()
-        .expect("state_dir is required for standalone mode");
-
-    std::fs::create_dir_all(state_dir).unwrap_or_else(|e| {
-        panic!(
-            "Failed to create state directory {}: {}",
-            state_dir.display(),
-            e
-        )
-    });
-
-    let db_path = config
-        .db_path
-        .as_ref()
-        .expect("db_path is required for standalone mode");
-
-    let token_path = state_dir.join("admin-token");
-
-    // Read or generate admin token
-    let token = if !token_path.exists() {
-        let token = format!(
-            "ax_admin_{}",
-            uuid::Uuid::new_v4().to_string().replace('-', "")
-        );
-        alien_core::file_utils::write_secret_file(&token_path, token.as_bytes()).unwrap_or_else(
-            |e| {
-                panic!(
-                    "Failed to write admin token to {}: {}",
-                    token_path.display(),
-                    e
-                )
-            },
-        );
-
-        println!("Generated admin token (save this securely):");
-        println!("  {}", token);
-        println!();
-        println!("Set it as ALIEN_API_KEY when using the CLI:");
-        println!(
-            "  export ALIEN_MANAGER_URL=http://localhost:{}",
-            config.port
-        );
-        println!("  export ALIEN_API_KEY={}", token);
-        println!();
-        token
-    } else {
-        let token = std::fs::read_to_string(&token_path).unwrap_or_else(|e| {
-            panic!(
-                "Failed to read admin token from {}: {}",
-                token_path.display(),
-                e
-            )
-        });
-        let token = token.trim().to_string();
-        tracing::info!("Using existing admin token from {}", token_path.display());
-        token
-    };
-
-    // Create SQLite database and token store
-    let db = Arc::new(
-        SqliteDatabase::new(&db_path.to_string_lossy())
-            .await
-            .unwrap_or_else(|e| panic!("Failed to initialize database: {}", e)),
-    );
-
-    let token_store: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(db.clone()));
-
-    // Compute SHA-256 hash and bootstrap the token into the DB
-    let key_hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        hex::encode(hasher.finalize())
-    };
-    let key_prefix = token[..12.min(token.len())].to_string();
-
-    match token_store.validate_token(&key_hash).await {
-        Ok(Some(_)) => {
-            tracing::info!("Admin token already registered in database");
-        }
-        Ok(None) => {
-            token_store
-                .create_token(CreateTokenParams {
-                    token_type: TokenType::Admin,
-                    key_prefix,
-                    key_hash,
-                    deployment_group_id: None,
-                    deployment_id: None,
-                })
-                .await
-                .expect("Failed to bootstrap admin token");
-            tracing::info!("Admin token bootstrapped into database");
-        }
-        Err(e) => {
-            panic!("Failed to check existing token: {}", e);
-        }
-    }
-
-    println!("Quick start:");
-    println!(
-        "  export ALIEN_MANAGER_URL=http://localhost:{}",
-        config.port
-    );
-    println!("  export ALIEN_API_KEY={}", token);
-    println!();
-    println!("  alien build --platform local");
-    println!("  alien release --platform local --yes");
-    println!("  alien onboard my-fleet");
-    println!();
-
-    (token_store, token)
 }

@@ -6,17 +6,18 @@ use crate::{
     optional_events_read, optional_metrics_read, OptionalKubernetesReadStatus, Result,
 };
 use alien_core::{
-    HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
-    KubernetesContainerHeartbeatData, KubernetesDaemonHeartbeatData, KubernetesEventInvolvedObject,
-    KubernetesEventSnapshot, KubernetesEventSource, KubernetesOwnerReference,
-    KubernetesPodRuntimeUnitStatus, KubernetesWorkerHeartbeatData, KubernetesWorkloadCondition,
-    KubernetesWorkloadKind, KubernetesWorkloadStatus, MetricSample, MetricUnit, ObservedHealth,
-    ProviderLifecycleState, ResourceHeartbeatData, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
+    ContainerImageIdentity, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
+    HeartbeatIssueSeverity, KubernetesContainerHeartbeatData, KubernetesDaemonHeartbeatData,
+    KubernetesEventInvolvedObject, KubernetesEventSnapshot, KubernetesEventSource,
+    KubernetesOwnerReference, KubernetesPodRuntimeUnitStatus, KubernetesWorkerHeartbeatData,
+    KubernetesWorkloadCondition, KubernetesWorkloadKind, KubernetesWorkloadStatus, MetricSample,
+    MetricUnit, ObservedHealth, ProviderLifecycleState, ResourceHeartbeatData,
+    WorkloadHeartbeatStatus, WorkloadReplicaStatus,
 };
 use k8s_openapi::api::apps::v1::{
     DaemonSet, DaemonSetStatus, Deployment, DeploymentStatus, StatefulSet, StatefulSetStatus,
 };
-use k8s_openapi::api::core::v1::{Event, Pod};
+use k8s_openapi::api::core::v1::{ContainerStatus, Event, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 
 const MAX_EVENTS: usize = 20;
@@ -517,7 +518,30 @@ fn pod_instance_status(
             .collect(),
         cpu,
         memory,
+        containers: container_statuses.iter().map(container_image).collect(),
     }
+}
+
+fn container_image(status: &ContainerStatus) -> ContainerImageIdentity {
+    ContainerImageIdentity {
+        name: status.name.clone(),
+        image: status.image.clone(),
+        digest: repository_digest(&status.image_id).or_else(|| repository_digest(&status.image)),
+    }
+}
+
+/// Registry manifest digest from a `repository@sha256:<hex>` reference, such
+/// as a container status `imageID` (`docker-pullable://repo@sha256:...`). A
+/// bare `sha256:<hex>` image ID names a local image, not a registry manifest,
+/// so it yields nothing.
+fn repository_digest(reference: &str) -> Option<String> {
+    let (_, digest) = reference.rsplit_once('@')?;
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    .then(|| digest.to_string())
 }
 
 fn pod_metric_samples(
@@ -724,6 +748,52 @@ mod tests {
     }
 
     #[test]
+    fn pod_instance_reports_each_container_image_and_registry_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let local_image_id = format!("sha256:{}", "b".repeat(64));
+        let pod = Pod {
+            status: Some(PodStatus {
+                container_statuses: Some(vec![
+                    ContainerStatus {
+                        name: "api".to_string(),
+                        image: "registry.example.com/shop/api:2.4.1".to_string(),
+                        image_id: format!(
+                            "docker-pullable://registry.example.com/shop/api@{digest}"
+                        ),
+                        ..Default::default()
+                    },
+                    ContainerStatus {
+                        name: "proxy".to_string(),
+                        image: "envoyproxy/envoy:v1.31".to_string(),
+                        image_id: local_image_id,
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let instance = pod_instance_status(&pod, None);
+
+        assert_eq!(
+            instance.containers,
+            vec![
+                ContainerImageIdentity {
+                    name: "api".to_string(),
+                    image: "registry.example.com/shop/api:2.4.1".to_string(),
+                    digest: Some(digest),
+                },
+                ContainerImageIdentity {
+                    name: "proxy".to_string(),
+                    image: "envoyproxy/envoy:v1.31".to_string(),
+                    digest: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn workload_snapshot_marks_ready_and_partial_collection() {
         let workload = KubernetesWorkload::Deployment(Deployment {
             metadata: ObjectMeta {
@@ -924,6 +994,7 @@ mod tests {
                 value,
                 unit: MetricUnit::Bytes,
             }),
+            containers: vec![],
         }
     }
 }

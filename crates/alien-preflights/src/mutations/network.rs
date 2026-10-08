@@ -9,12 +9,13 @@
 //!   (auto-created as an isolated VPC with sensible defaults)
 
 use crate::compile_time::stack_requires_network;
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Network, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle, Stack,
     StackState,
 };
+use alien_error::AlienError;
 use async_trait::async_trait;
 use tracing::{debug, info};
 
@@ -47,10 +48,17 @@ impl StackMutation for NetworkMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
-        let target_platform = match stack_state.platform {
-            Platform::Aws | Platform::Gcp | Platform::Azure => stack_state.platform,
-            _ => return false,
+        let target_platform = if stack_state.platform == Platform::Kubernetes {
+            config.base_platform.unwrap_or(stack_state.platform)
+        } else {
+            stack_state.platform
         };
+        if !matches!(
+            target_platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            return false;
+        }
 
         // Don't create a duplicate if network already exists
         if stack
@@ -61,22 +69,15 @@ impl StackMutation for NetworkMutation {
             return false;
         }
 
-        match &config.stack_settings.network {
-            Some(network_settings) => {
-                // Explicit settings: verify BYO-VPC matches target platform
-                matches!(
-                    (network_settings, target_platform),
-                    (NetworkSettings::UseDefault, _)
-                        | (NetworkSettings::Create { .. }, _)
-                        | (NetworkSettings::ByoVpcAws { .. }, Platform::Aws)
-                        | (NetworkSettings::ByoVpcGcp { .. }, Platform::Gcp)
-                        | (NetworkSettings::ByoVnetAzure { .. }, Platform::Azure)
-                )
-            }
-            None => {
-                // Auto-create when the stack has resources that require VPC networking
-                stack_requires_network(stack)
-            }
+        if config.stack_settings.network.is_some() {
+            // Validate explicit settings in mutate, so an incompatible BYO choice
+            // is reported instead of silently omitting the required network.
+            return true;
+        }
+        if stack_state.platform == Platform::Kubernetes {
+            kubernetes_requires_cloud_network(stack, config)
+        } else {
+            stack_requires_network(stack)
         }
     }
 
@@ -86,6 +87,31 @@ impl StackMutation for NetworkMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let target_platform = if stack_state.platform == Platform::Kubernetes {
+            config.base_platform.unwrap_or(stack_state.platform)
+        } else {
+            stack_state.platform
+        };
+        if let Some(settings) = &config.stack_settings.network {
+            let matches_platform = matches!(
+                (settings, target_platform),
+                (
+                    NetworkSettings::UseDefault | NetworkSettings::Create { .. },
+                    _
+                ) | (NetworkSettings::ByoVpcAws { .. }, Platform::Aws)
+                    | (NetworkSettings::ByoVpcGcp { .. }, Platform::Gcp)
+                    | (NetworkSettings::ByoVnetAzure { .. }, Platform::Azure)
+            );
+            if !matches_platform {
+                return Err(AlienError::new(ErrorData::StackMutationFailed {
+                    mutation_name: self.description().to_string(),
+                    message: format!(
+                        "BYO network settings do not match target platform {target_platform:?}"
+                    ),
+                    resource_id: Some("default-network".to_string()),
+                }));
+            }
+        }
         let network_settings = config.stack_settings.network.clone().unwrap_or_else(|| {
             info!(
                 platform = ?stack_state.platform,
@@ -123,6 +149,40 @@ impl StackMutation for NetworkMutation {
     }
 }
 
+/// Kubernetes workloads and logical compute pools use the existing cluster network.
+/// Cloud databases and a setup-managed cluster still need cloud network resources.
+fn kubernetes_requires_cloud_network(stack: &Stack, config: &DeploymentConfig) -> bool {
+    if stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::Postgres>()
+            .is_some()
+    }) {
+        return true;
+    }
+    if let Some(cluster) = stack
+        .resources()
+        .find_map(|(_, entry)| entry.config.downcast_ref::<alien_core::KubernetesCluster>())
+    {
+        return cluster.ownership == alien_core::KubernetesClusterOwnership::Managed;
+    }
+    let has_workloads = stack.resources().any(|(_, entry)| {
+        matches!(
+            entry.config.resource_type().as_ref(),
+            "container" | "worker" | "daemon"
+        )
+    });
+    has_workloads
+        && config
+            .stack_settings
+            .kubernetes
+            .as_ref()
+            .and_then(|settings| settings.cluster.as_ref())
+            .is_none_or(|settings| {
+                settings.ownership == alien_core::KubernetesClusterOwnership::Managed
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +195,8 @@ mod tests {
 
     fn create_test_stack() -> Stack {
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources: IndexMap::new(),
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -274,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_not_run_with_mismatched_byo_settings() {
+    fn test_explicit_byo_settings_are_validated_in_mutation() {
         let stack = create_test_stack();
         let stack_state = create_stack_state(Platform::Gcp);
         let config = create_deployment_config(Some(NetworkSettings::ByoVpcAws {
@@ -285,7 +347,7 @@ mod tests {
         }));
 
         let mutation = NetworkMutation;
-        assert!(!mutation.should_run(&stack, &stack_state, &config));
+        assert!(mutation.should_run(&stack, &stack_state, &config));
     }
 
     #[test]
@@ -393,13 +455,13 @@ mod tests {
     }
 
     #[test]
-    fn test_should_not_auto_create_on_kubernetes_with_cloud_base_platform() {
+    fn test_managed_kubernetes_workloads_require_cloud_network() {
         let stack = create_stack_with_container();
         let stack_state = create_stack_state(Platform::Kubernetes);
         let config = create_deployment_config_with_base(None, Platform::Gcp);
 
         let mutation = NetworkMutation;
-        assert!(!mutation.should_run(&stack, &stack_state, &config));
+        assert!(mutation.should_run(&stack, &stack_state, &config));
     }
 
     #[tokio::test]
@@ -456,5 +518,135 @@ mod tests {
         let network_entry = mutated_stack.resources.get("default-network").unwrap();
         let network = network_entry.config.downcast_ref::<Network>().unwrap();
         assert_eq!(network.settings, NetworkSettings::UseDefault);
+    }
+    fn add_frozen<T: alien_core::ResourceDefinition>(stack: &mut Stack, resource: T) {
+        let resource = alien_core::Resource::new(resource);
+        stack.resources.insert(
+            resource.id().to_string(),
+            ResourceEntry {
+                config: resource,
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_kubernetes_cloud_databases_get_network_and_dependency_order() {
+        for provider in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = create_stack_state(Platform::Kubernetes);
+            let config =
+                create_deployment_config_with_base(Some(NetworkSettings::UseDefault), provider);
+            let mut stack = create_stack_with_container();
+            add_frozen(
+                &mut stack,
+                alien_core::Postgres::new("database".to_string()).build(),
+            );
+            add_frozen(
+                &mut stack,
+                alien_core::ComputeCluster::new("pool".to_string()).build(),
+            );
+            assert!(NetworkMutation.should_run(&stack, &state, &config));
+            let stack = NetworkMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            let stack = crate::mutations::KubernetesClusterMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            let stack = crate::mutations::InfrastructureDependenciesMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            let network = stack.resources["default-network"]
+                .config
+                .downcast_ref::<Network>()
+                .unwrap();
+            assert_eq!(network.settings, NetworkSettings::UseDefault);
+            assert_eq!(
+                stack.resources["default-network"].lifecycle,
+                ResourceLifecycle::Frozen
+            );
+            let network_ref =
+                alien_core::ResourceRef::new(Network::RESOURCE_TYPE, "default-network");
+            assert!(stack.resources["database"]
+                .dependencies
+                .contains(&network_ref));
+            assert!(stack.resources["kubernetes"]
+                .dependencies
+                .contains(&network_ref));
+            assert!(!stack.resources["api"].dependencies.contains(&network_ref));
+            assert!(!stack.resources["pool"].dependencies.contains(&network_ref));
+        }
+    }
+
+    #[tokio::test]
+    async fn borrowed_compute_and_existing_kubernetes_do_not_create_cloud_network() {
+        for provider in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = create_stack_state(Platform::Kubernetes);
+            let config = create_deployment_config_with_base(None, provider);
+            let compute_only = Stack::new("existing".to_string())
+                .add(
+                    alien_core::ComputeCluster::new("pool".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            assert!(!NetworkMutation.should_run(&compute_only, &state, &config));
+            let mut existing = create_stack_with_container();
+            add_frozen(
+                &mut existing,
+                alien_core::KubernetesCluster::new("kubernetes".to_string())
+                    .provider(alien_core::KubernetesClusterProvider::Generic)
+                    .ownership(alien_core::KubernetesClusterOwnership::Existing)
+                    .namespace("application".to_string())
+                    .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+                    .build(),
+            );
+            assert!(!NetworkMutation.should_run(&existing, &state, &config));
+            let mut database = existing;
+            add_frozen(
+                &mut database,
+                alien_core::Postgres::new("database".to_string()).build(),
+            );
+            assert!(NetworkMutation.should_run(&database, &state, &config));
+            let stack = NetworkMutation
+                .mutate(database, &state, &config)
+                .await
+                .unwrap();
+            assert!(matches!(
+                stack.resources["default-network"]
+                    .config
+                    .downcast_ref::<Network>()
+                    .unwrap()
+                    .settings,
+                NetworkSettings::Create { .. }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn kubernetes_cloud_base_rejects_incompatible_byo_network_before_setup() {
+        let state = create_stack_state(Platform::Kubernetes);
+        let config = create_deployment_config_with_base(
+            Some(NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-existing".to_string(),
+                public_subnet_ids: vec![],
+                private_subnet_ids: vec![],
+                security_group_ids: vec![],
+            }),
+            Platform::Gcp,
+        );
+        let stack = create_stack_with_container();
+        assert!(NetworkMutation.should_run(&stack, &state, &config));
+        let error = NetworkMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("BYO network settings do not match"));
     }
 }

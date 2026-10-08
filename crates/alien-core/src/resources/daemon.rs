@@ -78,7 +78,9 @@ pub struct Daemon {
     /// compute backends. Kubernetes and Local runtimes ignore this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
-    pub permissions: String,
+    /// Named workload permission profile. Absent means no workload cloud identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<String>,
     pub code: DaemonCode,
     /// CPU resource requirements for each daemon instance.
     #[builder(default = default_daemon_cpu())]
@@ -122,8 +124,8 @@ pub struct Daemon {
 impl Daemon {
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("daemon");
 
-    pub fn get_permissions(&self) -> &str {
-        &self.permissions
+    pub fn get_permissions(&self) -> Option<&str> {
+        self.permissions.as_deref()
     }
 
     fn validate_public_endpoints(&self) -> Result<()> {
@@ -275,6 +277,12 @@ impl ResourceDefinition for Daemon {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // A create that timed out may already run replicas; deleting it stops them all, while
+        // creating it again updates the daemon in place.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut dependencies = self.links.clone();
         if let Some(cluster) = &self.cluster {
@@ -287,7 +295,7 @@ impl ResourceDefinition for Daemon {
     }
 
     fn get_permissions(&self) -> Option<&str> {
-        Some(&self.permissions)
+        self.permissions.as_deref()
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
@@ -380,6 +388,35 @@ impl ResourceOutputsDefinition for DaemonOutputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_without_permissions_preserves_links_without_an_identity() {
+        let storage = crate::Storage::new("objects".to_string()).build();
+        let daemon = Daemon::new("observer".to_string())
+            .code(DaemonCode::Image {
+                image: "observer:latest".to_string(),
+            })
+            .link(&storage)
+            .build();
+        assert_eq!(daemon.get_permissions(), None);
+        assert_eq!(ResourceDefinition::get_permissions(&daemon), None);
+        assert_eq!(daemon.get_dependencies(), daemon.links);
+        assert_eq!(daemon.links[0].id(), "objects");
+        let json = serde_json::to_value(&daemon).unwrap();
+        assert!(json.get("permissions").is_none());
+        let decoded: Daemon = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, daemon);
+
+        let mut explicit = serde_json::to_value(&daemon).unwrap();
+        explicit["permissions"] = serde_json::json!("reader");
+        let decoded: Daemon = serde_json::from_value(explicit.clone()).unwrap();
+        assert_eq!(decoded.get_permissions(), Some("reader"));
+        assert_eq!(
+            ResourceDefinition::get_permissions(&decoded),
+            Some("reader")
+        );
+        assert_eq!(serde_json::to_value(decoded).unwrap(), explicit);
+    }
 
     #[test]
     fn daemon_serializes_with_resource_type() {

@@ -78,6 +78,8 @@ export interface StoragePutAttributes {
 
 /** Options for {@link Storage.put}. */
 export interface StoragePutOptions {
+  /** Atomic write precondition. `"absent"` creates only when the path does not exist. */
+  condition?: "absent"
   attributes?: StoragePutAttributes
 }
 
@@ -223,8 +225,21 @@ export interface QueueMessage {
   attempt: number
 }
 
+/** One outcome per input. Retrying unknown delivery can produce duplicates. */
+export type QueueSendResult =
+  | { status: "sent" }
+  | { status: "rejected"; code: string; message: string }
+  | { status: "unknown"; code: string; message: string }
+
+/** Remote queues have send-only cloud permissions. */
+export type RemoteQueue = Pick<Queue, "send" | "sendText" | "sendBatch" | "sendBatchText">
+
 /** A resolved queue binding. */
 export interface Queue {
+  /** Send JSON messages using native batching. Results retain input order. */
+  sendBatch(messages: unknown[]): Promise<QueueSendResult[]>
+  /** Send raw text messages using native batching. */
+  sendBatchText(messages: string[]): Promise<QueueSendResult[]>
   /** Send a JSON message (the object is serialized with `JSON.stringify`). */
   send(message: unknown): Promise<void>
   /** Send a raw text message. */
@@ -377,12 +392,33 @@ export interface Vault {
 
 /** A live sandbox. */
 export interface SandboxInstance {
-  /** Sandbox id, which is what every later call addresses. */
+  /**
+   * Provider-scoped sandbox id, which is what every later call addresses.
+   *
+   * This returned value is authoritative: a provider may allocate an id different from the one
+   * requested at creation. Persist it durably before starting work so a replacement process can
+   * reconnect with `get` or `getOrCreate`, or clean up with `terminate`.
+   */
   sandboxId: string
   /** Lifecycle state. */
   state: "starting" | "running" | "paused" | "terminated"
   /** Increments when a sandbox is replaced, so a stale handle is detectable. */
   generation: number
+}
+
+/**
+ * An authenticated way to reach a port inside a sandbox: send requests to `endpoint` with every
+ * header in `headers`, and ask for a new one before it expires.
+ */
+export interface SandboxPreview {
+  /** Endpoint the request must be sent to. */
+  endpoint: string
+  /** Headers that must accompany every request. */
+  headers: Record<string, string>
+  /** Ports this preview admits; a request to any other port is refused upstream. */
+  allowedPorts: number[]
+  /** Seconds until the preview expires. `0` means it does not expire (the local backend). */
+  expiresInSeconds: number
 }
 
 /** A sandbox from `getOrCreate`, and which of the two things happened. */
@@ -395,6 +431,14 @@ export interface ResolvedSandbox {
 
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
+  /**
+   * A provider-scoped id to reconnect to when passed to `getOrCreate`, or a requested id when a
+   * sandbox is created.
+   *
+   * Providers are not required to honor a requested creation id. Always read and persist the
+   * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
+   * the id of the resulting sandbox.
+   */
   sandboxId?: string
   tenantKey?: string
   /** Environment every command in the sandbox starts with. */
@@ -523,6 +567,8 @@ export interface Sandbox {
   readFile(sandboxId: string, path: string): Promise<Buffer>
   /** Writes files into the sandbox. Requires `files`. Parent directories are created as needed. */
   writeFiles(sandboxId: string, files: Record<string, Buffer | string>): Promise<void>
+  /** Mints an authenticated preview of a port the sandbox declares. Requires `preview`. */
+  preview(sandboxId: string, port: number): Promise<SandboxPreview>
   /**
    * Pauses a sandbox, preserving state. Requires `pauseResume`.
    *

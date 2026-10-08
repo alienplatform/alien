@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
-use super::{decode_version, encode_version, validate_key, validate_value};
+use super::{
+    decode_version, encode_version, validate_key, validate_value_with_limit,
+    FIRESTORE_MAX_VALUE_BYTES,
+};
 
 /// Firestore document for KV storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,7 +394,7 @@ impl Kv for GcpFirestoreKv {
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<PutOptions>) -> Result<bool> {
         validate_key(key)?;
-        validate_value(&value)?;
+        validate_value_with_limit(&value, FIRESTORE_MAX_VALUE_BYTES)?;
 
         let options = options.unwrap_or_default();
 

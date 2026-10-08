@@ -434,3 +434,149 @@ fn gcp_remote_ai_invoke_permissions_attach_to_access_identity() {
     );
     assert_terraform_valid(&module, "gcp_remote_ai_invoke_permissions");
 }
+
+#[test]
+fn gcp_default_network_is_resolved_during_mocked_plan() {
+    for network in [
+        alien_core::NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        },
+        alien_core::NetworkSettings::UseDefault,
+    ] {
+        let dynamic = matches!(network, alien_core::NetworkSettings::Create { .. });
+        let settings = StackSettings {
+            network: Some(network),
+            ..StackSettings::default()
+        };
+        let stack = Stack::new("default-vpc".to_string())
+            .add(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(settings.network.clone().unwrap())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, TerraformTarget::Gcp, settings);
+        let mut files: super::helpers::test_utils::LinterFiles = module
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect();
+        files.insert("tests/default.tftest.hcl".to_string(), r#"
+mock_provider "google" {
+  mock_data "google_compute_network" { defaults = { self_link = "projects/example/global/networks/default" } }
+  mock_data "google_compute_subnetwork" { defaults = { self_link = "projects/example/regions/us-central1/subnetworks/default", ip_cidr_range = "10.128.0.0/20" } }
+}
+variables {
+  name = "test-network"
+  gcp_project = "example"
+  gcp_region = "us-central1"
+  token = "test-token"
+  management_url = "https://example.com"
+  network_mode = "use-default"
+  network_name = "ignored"
+  subnet_name = "ignored"
+  network_region = "us-east1"
+}
+run "default_network" {
+  command = plan
+  assert {
+    condition = data.google_compute_network.default_network[0].name == "default"
+    error_message = "Default mode must look up the default VPC"
+  }
+  assert {
+    condition = data.google_compute_subnetwork.default_network_existing_subnet[0].name == "default" && data.google_compute_subnetwork.default_network_existing_subnet[0].region == var.gcp_region
+    error_message = "Default mode must resolve the regional default subnet"
+  }
+}
+"#.to_string());
+        if !dynamic {
+            let test = files.get_mut("tests/default.tftest.hcl").unwrap();
+            *test = test
+                .replace("default_network[0]", "default_network")
+                .replace(
+                    "default_network_existing_subnet[0]",
+                    "default_network_subnet",
+                )
+                .replace("  network_mode = \"use-default\"\n", "")
+                .replace("  network_name = \"ignored\"\n", "")
+                .replace("  subnet_name = \"ignored\"\n", "")
+                .replace("  network_region = \"us-east1\"\n", "");
+        }
+        super::helpers::test_utils::terraform_test(&files).assert_ok("GCP default network plan");
+    }
+}
+
+#[test]
+fn explicit_management_storage_signing_uses_the_management_account_policy() {
+    let stack = Stack::new("example".to_string())
+        .add(
+            Storage::new("objects".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .management(ManagementPermissions::Extend(
+            PermissionProfile::new().resource("objects", ["storage/data-read"]),
+        ))
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, content)| content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = hcl::parse(&rendered).expect("module parses");
+    let signing_roles: Vec<_> = body
+        .blocks()
+        .filter(|block| {
+            block.labels().first().map(|label| label.as_str())
+                == Some("google_project_iam_custom_role")
+                && block.body().attributes().any(|attr| {
+                    attr.key() == "permissions"
+                        && attr.expr()
+                            == &hcl::Expression::Array(vec![hcl::Expression::String(
+                                "iam.serviceAccounts.signBlob".to_string(),
+                            )])
+                })
+        })
+        .collect();
+    assert_eq!(signing_roles.len(), 1);
+    let role = format!(
+        "google_project_iam_custom_role.{}[0].name",
+        signing_roles[0].labels()[1].as_str()
+    );
+    let grants: Vec<_> = body
+        .blocks()
+        .filter(|block| {
+            block
+                .body()
+                .attributes()
+                .any(|attr| attr.key() == "role" && matches!(attr.expr(), hcl::Expression::Conditional(condition) if condition.true_expr.to_string() == role))
+        })
+        .collect();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(
+        grants[0].labels()[0].as_str(),
+        "google_service_account_iam_member"
+    );
+    let attribute = |key: &str| {
+        grants[0]
+            .body()
+            .attributes()
+            .find(|attr| attr.key() == key)
+            .expect("required binding attribute")
+            .expr()
+            .to_string()
+    };
+    assert_eq!(attribute("service_account_id"), "\"projects/${var.gcp_project}/serviceAccounts/${google_service_account.management.account_id}@${var.gcp_project}.iam.gserviceaccount.com\"");
+    assert_eq!(
+        attribute("member"),
+        "\"serviceAccount:${google_service_account.management.email}\""
+    );
+    assert_terraform_valid(&module, "explicit management storage signing");
+}

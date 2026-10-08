@@ -26,6 +26,7 @@ rand = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 glob = { workspace = true }
+regex = { workspace = true }
 async-trait = "0.1"
 base64 = { workspace = true }
 object_store = { workspace = true }
@@ -39,6 +40,8 @@ which = "6.0"
 
 
 [dev-dependencies]
+container-registry = { workspace = true, features = ["test-support"] }
+httpmock = { workspace = true }
 dockdash = { workspace = true, features = ["test-utils"] }
 alien-build = { path = ".", features = ["test-utils"] }
 workspace_root = { workspace = true }

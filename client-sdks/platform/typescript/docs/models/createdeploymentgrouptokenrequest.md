@@ -5,7 +5,15 @@
 ```typescript
 import { CreateDeploymentGroupTokenRequest } from "@alienplatform/platform-api/models";
 
-let value: CreateDeploymentGroupTokenRequest = {};
+let value: CreateDeploymentGroupTokenRequest = {
+  deploymentSetupConfig: {
+    validatedReleaseSelection: {
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseChannel: "<value>",
+      platform: "aws",
+    },
+  },
+};
 ```
 
 ## Fields

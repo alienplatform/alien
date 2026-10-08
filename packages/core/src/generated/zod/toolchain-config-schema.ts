@@ -15,6 +15,11 @@ export const ToolchainConfigSchema = z.union([z.object({
     "binaryName": z.string().describe("Name of the compiled binary (defaults to package.json name if not specified)").nullish(),
 "type": z.enum(["typescript"])
     }), z.object({
+    "command": z.array(z.string()).describe("Process argv used to start the application"),
+"package": z.string().describe("Workspace package to install (omit for a single-package project)").nullish(),
+"pythonVersion": z.string().describe("Python version used by the runtime image (defaults to 3.12)").nullish(),
+"type": z.enum(["python"])
+    }), z.object({
     "buildArgs": z.object({
     
     }).catchall(z.string()).describe("Build arguments for docker build").nullish(),

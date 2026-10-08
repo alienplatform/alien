@@ -121,7 +121,7 @@ Parameters:
     Default: ''
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
+    Description: Optional custom domain. Leave unset to use the deployment-managed endpoint.
     Default: ''
   HostedZoneId:
     Type: String
@@ -132,6 +132,13 @@ Parameters:
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
     AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
   UpdatesMode:
     Type: String
     Description: How updates are applied after setup registration.
@@ -309,6 +316,15 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -370,6 +386,15 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
     Type: AWS::EC2::Subnet
@@ -431,6 +456,15 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -578,6 +612,15 @@ Resources:
         Value: default-network
       - Key: resource-type
         Value: network
+    DependsOn:
+    - ExecutionSaRole
+    - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
+    - ManagementRoleManagedPermissions1
+    - MailerRuleSetActivatorRole
+    - RegistryPullRole
+    - RegistryPushRole
     Condition: NetworkModeCreate
   ExecutionSaRole:
     Type: AWS::IAM::Role
@@ -711,6 +754,14 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
           Sid: ManageLambdaFunctions
         - Action:
+          - logs:CreateLogGroup
+          - logs:DeleteLogGroup
+          - logs:PutRetentionPolicy
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+          Sid: ManageLambdaLogGroups
+        - Action:
           - lambda:CreateEventSourceMapping
           - lambda:DeleteEventSourceMapping
           - lambda:GetEventSourceMapping
@@ -796,6 +847,7 @@ Resources:
           - acm:DeleteCertificate
           - acm:DescribeCertificate
           - acm:ImportCertificate
+          - acm:ListTagsForCertificate
           Condition:
             StringEquals:
               aws:ResourceTag/deployment:
@@ -805,6 +857,12 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ManageTlsCertificates
+        - Action:
+          - acm:ListCertificates
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ListTlsCertificates
         - Action:
           - apigateway:POST
           - apigateway:PUT
@@ -1641,6 +1699,8 @@ Resources:
           Ref: ManagingRoleArn
       StackSettings:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -1674,7 +1734,7 @@ Resources:
           Fn::If:
           - HasDomainName
           - customDomains:
-              default:
+              public-api:
                 domain:
                   Ref: DomainName
                 certificate:
@@ -1990,6 +2050,8 @@ Outputs:
     Value:
       Fn::ToJsonString:
         deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -2023,7 +2085,7 @@ Outputs:
           Fn::If:
           - HasDomainName
           - customDomains:
-              default:
+              public-api:
                 domain:
                   Ref: DomainName
                 certificate:

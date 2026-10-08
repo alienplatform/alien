@@ -125,8 +125,13 @@ impl ResourceDefinition for Postgres {
         &self.id
     }
 
+    fn replace_after_failed_create_is_safe(&self) -> bool {
+        // Deleting it destroys the database contents.
+        false
+    }
+
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        // The network dependency is added by NetworkMutation on cloud platforms and
+        // The network dependency is added by infrastructure preflights on cloud platforms and
         // is irrelevant on Local; cloud controllers reach the network via
         // require_dependency() at runtime, so nothing is declared statically here.
         Vec::new()

@@ -1,11 +1,9 @@
 use crate::error::{ErrorData, Result};
-use crate::{PreflightRegistry, PreflightSummary};
+use crate::{CheckResult, CompileTimeCheck, PreflightRegistry, PreflightSummary};
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use alien_error::{AlienError, Context};
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "runtime-checks")]
-use crate::CheckResult;
 #[cfg(feature = "runtime-checks")]
 use alien_core::ClientConfig;
 
@@ -36,50 +34,26 @@ impl PreflightRunner {
         info!("Running compile-time checks for platform {:?}", platform);
 
         let checks = self.registry.get_compile_time_checks(stack, platform);
-        let mut results = Vec::new();
-
-        for check in checks {
-            debug!("Running check: {}", check.description());
-
-            let mut result =
-                check
-                    .check(stack, platform)
-                    .await
-                    .context(ErrorData::CompileTimeCheckFailed {
-                        check_name: check.description().to_string(),
-                        message: "Check execution failed".to_string(),
-                        resource_id: None,
-                    })?;
-
-            result = result.with_check_metadata(check.code(), check.description());
-
-            if !result.success {
-                error!(check = %check.description(), "Compile-time check failed");
-                for msg in &result.errors {
-                    error!(check = %check.description(), "  {}", msg);
-                }
-            }
-
-            for warning in &result.warnings {
-                warn!(check = %check.description(), "  Warning: {}", warning);
-            }
-
-            results.push(result);
-        }
-
+        let results = run_stack_checks(checks, stack, platform).await?;
         Ok(PreflightSummary::from_results(results))
     }
 
-    /// Run stack compatibility checks between two stacks
+    /// Run stack compatibility checks between two stacks.
+    ///
+    /// The Frozen check runs on every call rather than from the registry, because it needs the
+    /// installed stack's platform, which a registered check cannot be given.
     pub async fn run_compatibility_checks(
         &self,
         old_stack: &Stack,
         new_stack: &Stack,
         config: &DeploymentConfig,
+        platform: Platform,
     ) -> Result<PreflightSummary> {
         info!("Running stack compatibility checks");
 
-        let checks = self.registry.get_compatibility_checks();
+        let frozen_check = crate::compatibility::FrozenResourcesUnchangedCheck { platform };
+        let mut checks = self.registry.get_compatibility_checks();
+        checks.push(&frozen_check);
         let mut results = Vec::new();
 
         for check in checks {
@@ -342,8 +316,12 @@ impl PreflightRunner {
     ) -> Result<PreflightSummary> {
         info!("Running build-time preflights for platform {:?}", platform);
 
-        // Run compile-time checks only - mutations are now deployment-time only
-        let check_summary = self.run_compile_time_checks(stack, platform).await?;
+        // Run compile-time checks only - mutations are now deployment-time only. Build-time-only
+        // checks apply to new stacks, never to ones that are already released.
+        let mut checks = self.registry.get_compile_time_checks(stack, platform);
+        checks.extend(self.registry.get_build_time_checks(stack, platform));
+        let check_summary =
+            PreflightSummary::from_results(run_stack_checks(checks, stack, platform).await?);
 
         // If checks failed, return early with the error summary
         if !check_summary.success {
@@ -391,15 +369,26 @@ impl PreflightRunner {
 
         // Run compile-time checks first (fast, no cloud API calls)
         let compile_summary = self.run_compile_time_checks(&stack, platform).await?;
+        let compile_checks_succeeded = compile_summary.success;
         all_results.extend(compile_summary.results);
 
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
-        let setup_update_authorized = setup_authority
-            == Some(alien_core::InitialSetupAuthority::DirectSetup)
-            || setup_update_authorization.is_some_and(|authorization| {
-                setup_update_authorization_matches(old_stack, &mutated_stack, authorization)
+        let direct_setup = setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
+        let hashed_target = match old_stack {
+            Some(_) if !direct_setup => Some(without_declined_live_resources(
+                &mutated_stack,
+                &config.input_values,
+                platform,
+            )?),
+            _ => None,
+        };
+        let setup_update_authorized = direct_setup
+            || hashed_target.as_ref().is_some_and(|target| {
+                setup_update_authorization.is_some_and(|authorization| {
+                    setup_update_authorization_matches(old_stack, target, authorization)
+                })
             });
 
         let prerequisite_summary = self
@@ -415,17 +404,21 @@ impl PreflightRunner {
         if let Some(old_stack) = old_stack {
             if !setup_update_authorized {
                 let compatibility_summary = self
-                    .run_compatibility_checks(old_stack, &mutated_stack, config)
+                    .run_compatibility_checks(old_stack, &mutated_stack, config, platform)
                     .await?;
                 // These checks compare the prepared target with installed resources,
                 // including runtime-owned capacity changes. Do not duplicate that
                 // decision using a hash of the unprepared release.
-                if !compatibility_summary.success && all_results.iter().all(|result| result.success)
-                {
+                // Setup is where missing target prerequisites (such as a new
+                // external binding) can be supplied. They must not hide the
+                // independently required Frozen handoff behind a generic error.
+                // Intrinsically invalid releases still fail ordinary validation.
+                if !compatibility_summary.success && compile_checks_succeeded {
                     return Err(AlienError::new(ErrorData::SetupRequired {
                         message: compatibility_summary
                             .results
                             .iter()
+                            .chain(all_results.iter())
                             .flat_map(|result| result.errors.iter().cloned())
                             .collect::<Vec<_>>()
                             .join("; "),
@@ -474,14 +467,38 @@ impl PreflightRunner {
     }
 }
 
+/// The target as the setup re-import hashed it: without the declined Live resources an update
+/// strips only after these preflights. The compatibility checks keep the unstripped target, whose
+/// gated resources carry the exemptions those checks read.
+#[cfg(feature = "runtime-checks")]
+fn without_declined_live_resources(
+    stack: &Stack,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+    platform: Platform,
+) -> Result<Stack> {
+    let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
+    let declined =
+        alien_core::declined_live_resources(stack, input_values, &answers, &still_frozen_gating)
+            .map_err(|message| {
+                AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
+                    check_name: "Every runtime gate resolves to a boolean".to_string(),
+                    message,
+                    platform: Some(platform.to_string()),
+                })
+            })?;
+    let mut projected = stack.clone();
+    alien_core::remove_declined_resources(&mut projected, &declined);
+    Ok(projected)
+}
+
 fn setup_update_authorization_matches(
     old_stack: Option<&Stack>,
     target_stack: &Stack,
     authorization: &alien_core::SetupUpdateAuthorization,
 ) -> bool {
     old_stack.is_some_and(|old_stack| {
-        old_stack.frozen_resources_digest() == authorization.baseline_frozen_digest
-    }) && target_stack.frozen_resources_digest() == authorization.target_frozen_digest
+        old_stack.setup_owned_digest() == authorization.baseline_frozen_digest
+    }) && target_stack.setup_owned_digest() == authorization.target_frozen_digest
 }
 
 impl Default for PreflightRunner {
@@ -498,6 +515,8 @@ mod setup_update_authorization_tests {
 
     fn empty_stack() -> Stack {
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "stack".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],
@@ -509,8 +528,8 @@ mod setup_update_authorization_tests {
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
         SetupUpdateAuthorization {
             nonce: "revision".to_string(),
-            baseline_frozen_digest: stack.frozen_resources_digest(),
-            target_frozen_digest: stack.frozen_resources_digest(),
+            baseline_frozen_digest: stack.setup_owned_digest(),
+            target_frozen_digest: stack.setup_owned_digest(),
             release_id: "release".to_string(),
             setup_target: "target".to_string(),
             setup_fingerprint: "fingerprint".to_string(),
@@ -538,11 +557,7 @@ mod setup_update_authorization_tests {
             .allow_frozen_changes(false)
             .external_bindings(alien_core::ExternalBindings::default())
             .build();
-        let mut registry = crate::PreflightRegistry::new();
-        registry.add_compatibility_check(Box::new(
-            crate::compatibility::FrozenResourcesUnchangedCheck,
-        ));
-        let runner = PreflightRunner::with_registry(registry);
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
         let state = StackState::new(Platform::Local);
         let client = ClientConfig::Local {
             state_directory: "/unused".to_string(),
@@ -618,4 +633,275 @@ mod setup_update_authorization_tests {
             None, &stack, &authority
         ));
     }
+
+    #[cfg(feature = "runtime-checks")]
+    fn sandbox_stack(
+        lifecycle: alien_core::ResourceLifecycle,
+        image: &str,
+        private_base_image: Option<&str>,
+    ) -> Stack {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .maybe_private_base_image(private_base_image.map(str::to_string))
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        Stack::new("stack".to_string())
+            .add(sandbox, lifecycle)
+            .build()
+    }
+
+    /// A Live sandbox beside the Frozen network a deny connector attaches to.
+    #[cfg(feature = "runtime-checks")]
+    fn live_sandbox_stack(
+        image: &str,
+        private_base_image: Option<&str>,
+        egress: alien_core::SandboxEgress,
+    ) -> Stack {
+        let mut stack = sandbox_stack(
+            alien_core::ResourceLifecycle::Live,
+            image,
+            private_base_image,
+        );
+        stack.resources.shift_insert(
+            0,
+            "net".to_string(),
+            alien_core::ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Network::new("net".to_string())
+                        .settings(alien_core::NetworkSettings::Create {
+                            cidr: Some("10.0.0.0/16".to_string()),
+                            availability_zones: 2,
+                        })
+                        .build(),
+                ),
+                lifecycle: alien_core::ResourceLifecycle::Frozen,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let sandbox = stack.resources.get_mut("agents").expect("sandbox");
+        let mut config = sandbox
+            .config
+            .downcast_ref::<alien_core::Sandbox>()
+            .expect("sandbox")
+            .clone();
+        config.egress = egress;
+        sandbox.config = alien_core::Resource::new(config);
+        stack
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn deployment_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build()
+    }
+
+    /// A blocked repository change must clear on the setup rerun: the rerun's authorization is
+    /// minted from the digests of the installed and target stacks, so those must differ.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_live_sandbox_setup_input_change_blocks_until_setup_reruns() {
+        use alien_core::SandboxEgress::{Allow, Deny};
+        const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
+        const V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
+        const V2: &str = "s3://bucket/sandbox-bundle/v2/bundle.zip";
+        let old = live_sandbox_stack(V1, Some(BASE_A), Allow);
+        let runner = PreflightRunner::with_registry({
+            let mut registry = crate::PreflightRegistry::new();
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::SandboxSetupInputsUnchangedCheck,
+            ));
+            registry
+        });
+        let config = deployment_config();
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+
+        let tag_only = live_sandbox_stack(
+            V2,
+            Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
+            Allow,
+        );
+        runner
+            .run_deployment_time_preflights(
+                tag_only,
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect("a new tag and bundle roll without setup");
+
+        for (target, input) in [
+            (
+                live_sandbox_stack(
+                    V2,
+                    Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+                    Allow,
+                ),
+                "build role policy",
+            ),
+            (live_sandbox_stack(V2, Some(BASE_A), Deny), "egress"),
+        ] {
+            let error = runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .expect_err("a setup input change needs setup");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                error.message.contains("agents") && error.message.contains(input),
+                "{input}: {}",
+                error.message
+            );
+
+            let rerun = SetupUpdateAuthorization {
+                nonce: "revision".to_string(),
+                baseline_frozen_digest: old.setup_owned_digest(),
+                target_frozen_digest: target.setup_owned_digest(),
+                release_id: "release".to_string(),
+                setup_target: "target".to_string(),
+                setup_fingerprint: "fingerprint".to_string(),
+                setup_fingerprint_version: 1,
+            };
+            assert_ne!(rerun.baseline_frozen_digest, rerun.target_frozen_digest);
+            let (_, _, authorized) = runner
+                .run_deployment_time_preflights(
+                    target,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    Some(&rerun),
+                    None,
+                )
+                .await
+                .expect("the setup rerun applies the blocked update");
+            assert!(authorized, "{input}");
+        }
+    }
+
+    /// The Frozen check is built from the installed stack's platform, so only an Azure or GCP
+    /// install may roll a Frozen sandbox's image without setup.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn azure_and_gcp_frozen_sandboxes_roll_their_image_without_setup() {
+        let old = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "ubuntu", None);
+        let target = sandbox_stack(alien_core::ResourceLifecycle::Frozen, "debian", None);
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
+        let config = deployment_config();
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+
+        for platform in [Platform::Azure, Platform::Gcp] {
+            runner
+                .run_compatibility_checks(&old, &target, &config, platform)
+                .await
+                .map(|summary| assert!(summary.success, "{platform}: {:?}", summary.results))
+                .expect("checks run");
+        }
+        let on_aws = runner
+            .run_compatibility_checks(&old, &target, &config, Platform::Aws)
+            .await
+            .expect("checks run");
+        assert!(!on_aws.success, "an AWS Frozen image change needs setup");
+
+        for platform in [Platform::Azure, Platform::Gcp] {
+            runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &StackState::new(platform),
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("a {platform} deployment rolls the image: {error:?}")
+                });
+        }
+        let error = runner
+            .run_deployment_time_preflights(
+                target,
+                &StackState::new(Platform::Local),
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("the deployment's own platform is neither Azure nor GCP");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+    }
+}
+
+/// Run stack checks that need no cloud access, logging each failure and warning.
+async fn run_stack_checks(
+    checks: Vec<&dyn CompileTimeCheck>,
+    stack: &Stack,
+    platform: Platform,
+) -> Result<Vec<CheckResult>> {
+    let mut results = Vec::new();
+
+    for check in checks {
+        debug!("Running check: {}", check.description());
+
+        let mut result =
+            check
+                .check(stack, platform)
+                .await
+                .context(ErrorData::CompileTimeCheckFailed {
+                    check_name: check.description().to_string(),
+                    message: "Check execution failed".to_string(),
+                    resource_id: None,
+                })?;
+
+        result = result.with_check_metadata(check.code(), check.description());
+
+        if !result.success {
+            error!(check = %check.description(), "Compile-time check failed");
+            for msg in &result.errors {
+                error!(check = %check.description(), "  {}", msg);
+            }
+        }
+
+        for warning in &result.warnings {
+            warn!(check = %check.description(), "  Warning: {}", warning);
+        }
+
+        results.push(result);
+    }
+
+    Ok(results)
 }

@@ -15,6 +15,7 @@
 mod emitter;
 mod emitters;
 mod generator;
+mod package;
 mod registry;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -28,5 +29,9 @@ pub use generator::{
     HelmOptions, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
     OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
     OperatorScope, ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
+};
+pub use package::{
+    apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,
+    PackageDefaults,
 };
 pub use registry::HelmRegistry;

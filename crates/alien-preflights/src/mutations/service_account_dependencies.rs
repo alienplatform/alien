@@ -26,9 +26,16 @@ impl StackMutation for ServiceAccountDependenciesMutation {
     fn should_run(
         &self,
         stack: &Stack,
-        _stack_state: &StackState,
-        _config: &DeploymentConfig,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
     ) -> bool {
+        // Cloud-backed Kubernetes creates setup-owned cloud identities; plain
+        // Kubernetes and Machines do not have these resources to depend on.
+        let identity_platform = config.base_platform.unwrap_or(stack_state.platform);
+        if stack_state.platform == Platform::Machines || identity_platform == Platform::Kubernetes {
+            return false;
+        }
+
         // Run if stack has permission profiles with resource-scoped permissions
         for (_profile_name, profile) in &stack.permissions.profiles {
             for (resource_id, _permission_set_ids) in &profile.0 {
@@ -264,6 +271,8 @@ mod tests {
         ));
 
         Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {
@@ -297,26 +306,38 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn plain_kubernetes_keeps_management_sa_dependencies() {
+    #[test]
+    fn plain_kubernetes_does_not_add_missing_service_account_dependencies() {
         let stack = stack_with_management_scoped_vault();
-        let result = ServiceAccountDependenciesMutation
-            .mutate(
-                stack,
-                &StackState::new(Platform::Kubernetes),
-                &empty_config(None),
-            )
-            .await
-            .unwrap();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        assert!(!ServiceAccountDependenciesMutation.should_run(
+            &stack,
+            &stack_state,
+            &empty_config(None),
+        ));
+    }
 
-        let secrets = result.resources.get("secrets").unwrap();
-        assert!(
-            secrets
-                .dependencies
-                .iter()
-                .any(|dependency| dependency.id() == "management-sa"),
-            "plain Kubernetes management still depends on a stack-local management-sa"
-        );
+    #[test]
+    fn runtime_identity_platforms_skip_workload_service_account_dependencies() {
+        let stack = Stack::new("daemon-stack".to_string())
+            .add(
+                Daemon::new("agent".to_string())
+                    .code(DaemonCode::Image {
+                        image: "agent:latest".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        for platform in [Platform::Kubernetes, Platform::Machines] {
+            assert!(!ServiceAccountDependenciesMutation.should_run(
+                &stack,
+                &StackState::new(platform),
+                &empty_config(None),
+            ));
+        }
     }
 
     #[tokio::test]
@@ -336,19 +357,24 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build();
-        let stack_state = StackState::new(Platform::Local);
-        let config = empty_config(None);
-
-        assert!(ServiceAccountDependenciesMutation.should_run(&stack, &stack_state, &config));
-        let result = ServiceAccountDependenciesMutation
-            .mutate(stack, &stack_state, &config)
-            .await
-            .unwrap();
-
-        let daemon = result.resources.get("agent").unwrap();
-        assert!(daemon.dependencies.iter().any(|dependency| {
-            dependency.resource_type() == &ServiceAccount::RESOURCE_TYPE
-                && dependency.id() == "execution-sa"
-        }));
+        for (platform, base) in [
+            (Platform::Local, None),
+            (Platform::Kubernetes, Some(Platform::Aws)),
+            (Platform::Kubernetes, Some(Platform::Gcp)),
+            (Platform::Kubernetes, Some(Platform::Azure)),
+        ] {
+            let stack_state = StackState::new(platform);
+            let config = empty_config(base);
+            assert!(ServiceAccountDependenciesMutation.should_run(&stack, &stack_state, &config));
+            let result = ServiceAccountDependenciesMutation
+                .mutate(stack.clone(), &stack_state, &config)
+                .await
+                .unwrap();
+            let daemon = result.resources.get("agent").unwrap();
+            assert!(daemon.dependencies.iter().any(|dependency| {
+                dependency.resource_type() == &ServiceAccount::RESOURCE_TYPE
+                    && dependency.id() == "execution-sa"
+            }));
+        }
     }
 }

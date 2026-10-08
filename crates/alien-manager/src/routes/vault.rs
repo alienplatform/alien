@@ -1,11 +1,12 @@
 //! Vault secret management endpoints.
 //!
-//! Allows setting and getting secrets in a deployment's vault via the manager
+//! Allows setting, getting, and deleting secrets in a deployment's vault via the manager
 //! API. The manager resolves the deployment's credentials and vault
 //! configuration, then delegates to the appropriate cloud vault provider.
 //!
 //! `PUT  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — set a secret
 //! `GET  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — get a secret
+//! `DELETE /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — delete a secret
 
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{bindings::VaultBinding, ManagementPermissions, Platform, Stack, StackState};
@@ -27,20 +28,29 @@ use crate::traits::DeploymentRecord;
 
 /// Request body for setting a secret.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SetSecretRequest {
     pub value: String,
 }
 
 /// Response body for getting a secret.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct GetSecretResponse {
     pub value: String,
+}
+
+/// Response body for successful Vault mutations.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct VaultMutationResponse {
+    pub ok: bool,
 }
 
 pub fn router() -> Router<AppState> {
     Router::new().route(
         "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}",
-        put(set_secret).get(get_secret),
+        put(set_secret).get(get_secret).delete(delete_secret),
     )
 }
 
@@ -194,12 +204,30 @@ fn vault_binding_params(
         })
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    put,
+    path = "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}",
+    tag = "vault",
+    params(
+        ("id" = String, Path, description = "Deployment ID"),
+        ("vault_name" = String, Path, description = "Vault name"),
+        ("key" = String, Path, description = "Secret name"),
+    ),
+    request_body = SetSecretRequest,
+    responses(
+        (status = 200, description = "Secret set", body = VaultMutationResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Deployment not found"),
+    ),
+    security(("bearer" = []))
+))]
 async fn set_secret(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
     Json(body): Json<SetSecretRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<VaultMutationResponse>> {
     let subject = auth::require_auth(&state, &headers).await?;
     let deployment = state
         .deployment_store
@@ -216,7 +244,7 @@ async fn set_secret(
     }
     ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
 
-    info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Setting vault secret");
+    info!(deployment_id = %deployment_id, vault_name = %vault_name, "Setting vault secret");
 
     let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
 
@@ -225,7 +253,6 @@ async fn set_secret(
             error = %err,
             deployment_id = %deployment_id,
             vault_name = %vault_name,
-            key = %key,
             "Failed to set vault secret"
         );
         return Err(err.context(ErrorData::InternalError {
@@ -233,10 +260,27 @@ async fn set_secret(
         }));
     }
 
-    info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Vault secret set");
-    Ok(Json(serde_json::json!({ "ok": true })))
+    info!(deployment_id = %deployment_id, vault_name = %vault_name, "Vault secret set");
+    Ok(Json(VaultMutationResponse { ok: true }))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}",
+    tag = "vault",
+    params(
+        ("id" = String, Path, description = "Deployment ID"),
+        ("vault_name" = String, Path, description = "Vault name"),
+        ("key" = String, Path, description = "Secret name"),
+    ),
+    responses(
+        (status = 200, description = "Secret value", body = GetSecretResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Deployment or secret not found"),
+    ),
+    security(("bearer" = []))
+))]
 async fn get_secret(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -258,7 +302,7 @@ async fn get_secret(
     }
     ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-read").await?;
 
-    info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Getting vault secret");
+    info!(deployment_id = %deployment_id, vault_name = %vault_name, "Getting vault secret");
 
     let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
 
@@ -269,7 +313,6 @@ async fn get_secret(
                 error = %err,
                 deployment_id = %deployment_id,
                 vault_name = %vault_name,
-                key = %key,
                 "Failed to get vault secret"
             );
             return Err(err.context(ErrorData::InternalError {
@@ -279,6 +322,58 @@ async fn get_secret(
     };
 
     Ok(Json(GetSecretResponse { value }))
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    delete,
+    path = "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}",
+    tag = "vault",
+    params(
+        ("id" = String, Path, description = "Deployment ID"),
+        ("vault_name" = String, Path, description = "Vault name"),
+        ("key" = String, Path, description = "Secret name"),
+    ),
+    responses(
+        (status = 200, description = "Secret deleted", body = VaultMutationResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Deployment not found"),
+    ),
+    security(("bearer" = []))
+))]
+async fn delete_secret(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((deployment_id, vault_name, key)): Path<(String, String, String)>,
+) -> Result<Json<VaultMutationResponse>> {
+    let subject = auth::require_auth(&state, &headers).await?;
+    let deployment = state
+        .deployment_store
+        .get_deployment(&subject, &deployment_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to load deployment".to_string(),
+        })?
+        .ok_or_else(|| ErrorData::not_found_deployment(&deployment_id))?;
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return Err(ErrorData::forbidden(
+            "Access denied: cannot mutate vault for this deployment",
+        ));
+    }
+    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
+
+    info!(deployment_id = %deployment_id, vault_name = %vault_name, "Deleting vault secret");
+
+    let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
+    vault
+        .delete_secret(&key)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to delete secret".to_string(),
+        })?;
+
+    info!(deployment_id = %deployment_id, vault_name = %vault_name, "Vault secret deleted");
+    Ok(Json(VaultMutationResponse { ok: true }))
 }
 
 #[cfg(test)]

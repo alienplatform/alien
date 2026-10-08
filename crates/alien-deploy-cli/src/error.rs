@@ -78,6 +78,15 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A request to the manager failed or was refused.
+    #[error(
+        code = "MANAGER_REQUEST_FAILED",
+        message = "Manager request failed: {message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    ManagerRequestFailed { message: String },
+
     #[error(
         code = "JSON_ERROR",
         message = "JSON {operation} failed: {reason}",

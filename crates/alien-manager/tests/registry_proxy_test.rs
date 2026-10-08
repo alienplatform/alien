@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bollard::image::CreateImageOptions;
-use bollard::Docker;
 use container_registry::ContainerRegistry;
 use futures_util::StreamExt;
 
@@ -282,6 +281,7 @@ async fn setup() -> TestSetup {
             CreateDeploymentGroupParams {
                 name: "test-group".to_string(),
                 max_deployments: 100,
+                setup: Default::default(),
             },
         )
         .await
@@ -638,23 +638,15 @@ async fn test_proxy_pull_manifest_and_blob() {
 /// This test verifies that: Docker connects, authenticates via Basic auth, and
 /// the proxy correctly routes the initial manifest request.
 #[tokio::test]
+#[ignore = "requires a Docker engine and reachable registry proxy"]
 async fn test_proxy_pull_with_bollard() {
     let s = setup().await;
 
-    // Connect to Docker daemon
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Skipping bollard test — Docker not available: {}", e);
-            return;
-        }
-    };
-
-    // Verify Docker is reachable
-    if docker.ping().await.is_err() {
-        eprintln!("Skipping bollard test — Docker daemon not reachable");
-        return;
-    }
+    let docker = alien_local::connect_docker().expect("selected Docker endpoint initializes");
+    docker
+        .ping()
+        .await
+        .expect("selected Docker engine is reachable");
 
     let manager_host = s.manager_url.strip_prefix("http://").unwrap();
     let image_ref = format!("{}/artifacts/test-fn", manager_host);

@@ -1,0 +1,1 @@
+{"type":"object","required":["path","port"],"properties":{"path":{"type":"string"},"port":{"type":"integer","format":"int32","minimum":0}},"x-readme-ref-name":"DynamicContainerHealthCheck"}

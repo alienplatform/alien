@@ -21,7 +21,11 @@ pub struct AwsIamStatement {
     /// List of IAM actions
     pub action: Vec<String>,
     /// List of resource ARNs
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource: Vec<String>,
+    /// ARN patterns the statement excludes, rendered as `NotResource` in place of `Resource`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_resource: Vec<String>,
     /// Optional conditions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<IndexMap<String, IndexMap<String, String>>>,
@@ -131,6 +135,10 @@ impl AwsRuntimePermissionsGenerator {
 
             let resources =
                 VariableInterpolator::interpolate_string_list(&binding_spec.resources, context)?;
+            let not_resources = VariableInterpolator::interpolate_string_list(
+                &binding_spec.not_resources,
+                context,
+            )?;
             let conditions = self.extract_conditions(binding_spec, context)?;
 
             let statement_id = self.statement_id(
@@ -145,6 +153,7 @@ impl AwsRuntimePermissionsGenerator {
                 effect: platform_permission.effect.as_str().to_string(),
                 action: actions.clone(),
                 resource: resources,
+                not_resource: not_resources,
                 condition: if conditions.is_empty() {
                     None
                 } else {
@@ -251,6 +260,7 @@ mod tests {
             effect: "Allow".to_string(),
             action: vec!["ec2:DescribeInstances".to_string()],
             resource: vec!["*".to_string()],
+            not_resource: Vec::new(),
             condition: None,
         }
     }

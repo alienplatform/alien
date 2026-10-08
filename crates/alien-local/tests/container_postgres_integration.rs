@@ -101,6 +101,7 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
                 command: Some(vec!["sleep".to_string(), "300".to_string()]),
                 ports: vec![],
                 public_endpoint: None,
+                health_check_port: None,
                 env_vars: HashMap::new(),
                 stateful: false,
                 ordinal: None,

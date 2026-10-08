@@ -1,0 +1,35 @@
+{
+  "id": "remote-stack-management/protect-management-role",
+  "description": "Refuses the management identity any change to its own IAM role",
+  "platforms": {
+    "aws": [
+      {
+        // Other sets grant role writes on `role/${stackPrefix}-*`, which names this role too, and
+        // only setup changes it. Its managed policies need no Deny: no derived set grants a
+        // policy-version write. The same grants still reach the other `${stackPrefix}-*` roles.
+        "label": "deny-management-role-changes",
+        "effect": "Deny",
+        "grant": {
+          "actions": [
+            "iam:DeleteRole",
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:AttachRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePermissionsBoundary",
+            "iam:DeleteRolePermissionsBoundary",
+            "iam:UpdateRole",
+            "iam:TagRole",
+            "iam:UntagRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"]
+          }
+        }
+      }
+    ]
+  }
+}

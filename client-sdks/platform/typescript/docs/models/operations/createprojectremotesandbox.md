@@ -6,7 +6,7 @@
 import { CreateProjectRemoteSandbox } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectRemoteSandbox = {
-  enabled: false,
+  enabled: true,
 };
 ```
 
@@ -14,7 +14,9 @@ let value: CreateProjectRemoteSandbox = {
 
 | Field                                                                          | Type                                                                           | Required                                                                       | Description                                                                    |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `enabled`                                                                      | *boolean*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |
+| `enabled`                                                                      | *true*                                                                         | :heavy_check_mark:                                                             | N/A                                                                            |
+| `customImage`                                                                  | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `baseImage`                                                                    | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `azure`                                                                        | [operations.CreateProjectAzure](../../models/operations/createprojectazure.md) | :heavy_minus_sign:                                                             | N/A                                                                            |
+| `gcp`                                                                          | [operations.CreateProjectGcp](../../models/operations/createprojectgcp.md)     | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `maxLifetimeSeconds`                                                           | *number*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |

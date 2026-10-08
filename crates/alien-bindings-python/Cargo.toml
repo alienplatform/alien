@@ -1,0 +1,39 @@
+[package]
+name = "alien-bindings-python"
+version.workspace = true
+edition.workspace = true
+description = "Python bindings for Alien application resources"
+license-file.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["all-platforms", "platform-sdk"]
+all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]
+aws = ["alien-bindings/aws"]
+gcp = ["alien-bindings/gcp"]
+azure = ["alien-bindings/azure"]
+kubernetes = ["alien-bindings/kubernetes"]
+local = ["alien-bindings/local"]
+test = ["alien-bindings/test"]
+platform-sdk = ["alien-bindings/platform-sdk"]
+
+[dependencies]
+alien-ai-gateway = { workspace = true }
+alien-bindings = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true }
+pyo3 = { workspace = true, features = ["abi3-py310"] }
+pyo3-async-runtimes = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+temp-env = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

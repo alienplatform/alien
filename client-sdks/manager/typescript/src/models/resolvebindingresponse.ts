@@ -43,6 +43,14 @@ import {
   RemoteBlobStorageBinding$inboundSchema,
 } from "./remoteblobstoragebinding.js";
 import {
+  RemoteDynamodbKvBinding,
+  RemoteDynamodbKvBinding$inboundSchema,
+} from "./remotedynamodbkvbinding.js";
+import {
+  RemoteFirestoreKvBinding,
+  RemoteFirestoreKvBinding$inboundSchema,
+} from "./remotefirestorekvbinding.js";
+import {
   RemoteGcpClientConfig,
   RemoteGcpClientConfig$inboundSchema,
 } from "./remotegcpclientconfig.js";
@@ -63,9 +71,25 @@ import {
   RemoteGcsStorageBinding$inboundSchema,
 } from "./remotegcsstoragebinding.js";
 import {
+  RemotePubsubQueueBinding,
+  RemotePubsubQueueBinding$inboundSchema,
+} from "./remotepubsubqueuebinding.js";
+import {
   RemoteS3StorageBinding,
   RemoteS3StorageBinding$inboundSchema,
 } from "./remotes3storagebinding.js";
+import {
+  RemoteServiceBusQueueBinding,
+  RemoteServiceBusQueueBinding$inboundSchema,
+} from "./remoteservicebusqueuebinding.js";
+import {
+  RemoteSqsQueueBinding,
+  RemoteSqsQueueBinding$inboundSchema,
+} from "./remotesqsqueuebinding.js";
+import {
+  RemoteTableStorageKvBinding,
+  RemoteTableStorageKvBinding$inboundSchema,
+} from "./remotetablestoragekvbinding.js";
 
 /**
  * GCP Agent Platform reasoning engine and a GCP access token.
@@ -76,8 +100,8 @@ export type ResolveBindingResponseSandboxGcpAgentPlatform = {
    *
    * @remarks
    *
-   * No egress field, unlike the other two clouds: the policy lives on the environment template
-   * named below, so it travels with the template rather than as a flag the client must read.
+   * The egress policy itself lives on the environment template named below; `allow_egress` reports
+   * it so a client can decide without reading the template.
    */
   binding: RemoteGcpSandboxBinding;
   /**
@@ -240,6 +264,120 @@ export type ResolveBindingResponseKms = {
 };
 
 /**
+ * Azure Table Storage KV table and a storage-audience access token.
+ */
+export type ResolveBindingResponseTablestorage = {
+  /**
+   * Concrete Azure Table Storage KV topology returned to remote clients.
+   */
+  binding: RemoteTableStorageKvBinding;
+  /**
+   * Response-safe Azure client configuration containing one storage-audience
+   *
+   * @remarks
+   * access token for the stack's Remote Bindings identity.
+   */
+  clientConfig: RemoteAzureClientConfig;
+  expiresAt: string;
+  service: "tablestorage";
+};
+
+/**
+ * GCP Firestore KV collection and an access token.
+ */
+export type ResolveBindingResponseFirestore = {
+  /**
+   * Concrete Firestore KV topology returned to remote clients.
+   */
+  binding: RemoteFirestoreKvBinding;
+  /**
+   * Response-safe GCP client configuration. Refreshable source credentials and
+   *
+   * @remarks
+   * service endpoint overrides cannot be represented by this type.
+   */
+  clientConfig: RemoteGcpClientConfig;
+  expiresAt: string;
+  service: "firestore";
+};
+
+/**
+ * AWS DynamoDB KV table and an AWS session.
+ */
+export type ResolveBindingResponseDynamodb = {
+  /**
+   * Concrete DynamoDB KV topology returned to remote clients.
+   */
+  binding: RemoteDynamodbKvBinding;
+  /**
+   * Response-safe AWS client configuration. The public contract deliberately
+   *
+   * @remarks
+   * has no static, profile, metadata, or web-identity credential variants.
+   */
+  clientConfig: RemoteAwsClientConfig;
+  expiresAt: string;
+  service: "dynamodb";
+};
+
+/**
+ * Send-only Servicebus queue and a short-lived credential lease.
+ */
+export type ResolveBindingResponseServicebus = {
+  /**
+   * Concrete send-only queue topology returned to remote clients.
+   */
+  binding: RemoteServiceBusQueueBinding;
+  /**
+   * Response-safe Azure client configuration containing one storage-audience
+   *
+   * @remarks
+   * access token for the stack's Remote Bindings identity.
+   */
+  clientConfig: RemoteAzureClientConfig;
+  expiresAt: string;
+  service: "servicebus";
+};
+
+/**
+ * Send-only Pubsub queue and a short-lived credential lease.
+ */
+export type ResolveBindingResponsePubsub = {
+  /**
+   * Concrete send-only queue topology returned to remote clients.
+   */
+  binding: RemotePubsubQueueBinding;
+  /**
+   * Response-safe GCP client configuration. Refreshable source credentials and
+   *
+   * @remarks
+   * service endpoint overrides cannot be represented by this type.
+   */
+  clientConfig: RemoteGcpClientConfig;
+  expiresAt: string;
+  service: "pubsub";
+};
+
+/**
+ * Send-only Sqs queue and a short-lived credential lease.
+ */
+export type ResolveBindingResponseSqs = {
+  /**
+   * Concrete send-only queue topology returned to remote clients.
+   */
+  binding: RemoteSqsQueueBinding;
+  /**
+   * Response-safe AWS client configuration. The public contract deliberately
+   *
+   * @remarks
+   * has no static, profile, metadata, or web-identity credential variants.
+   */
+  clientConfig: RemoteAwsClientConfig;
+  expiresAt: string;
+  service: "sqs";
+};
+
+/**
  * Google Cloud Storage and a Remote Bindings identity access token.
  */
 export type ResolveBindingResponseGcs = {
@@ -306,6 +444,12 @@ export type ResolveBindingResponse =
   | ResolveBindingResponseS3
   | ResolveBindingResponseBlob
   | ResolveBindingResponseGcs
+  | ResolveBindingResponseSqs
+  | ResolveBindingResponsePubsub
+  | ResolveBindingResponseServicebus
+  | ResolveBindingResponseDynamodb
+  | ResolveBindingResponseFirestore
+  | ResolveBindingResponseTablestorage
   | ResolveBindingResponseKms
   | ResolveBindingResponseCloudKms
   | ResolveBindingResponseKeyVaultKey
@@ -514,6 +658,133 @@ export function resolveBindingResponseKmsFromJSON(
 }
 
 /** @internal */
+export const ResolveBindingResponseTablestorage$inboundSchema: z.ZodType<
+  ResolveBindingResponseTablestorage,
+  unknown
+> = z.object({
+  binding: RemoteTableStorageKvBinding$inboundSchema,
+  clientConfig: RemoteAzureClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("tablestorage"),
+});
+
+export function resolveBindingResponseTablestorageFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseTablestorage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveBindingResponseTablestorage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseTablestorage' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseFirestore$inboundSchema: z.ZodType<
+  ResolveBindingResponseFirestore,
+  unknown
+> = z.object({
+  binding: RemoteFirestoreKvBinding$inboundSchema,
+  clientConfig: RemoteGcpClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("firestore"),
+});
+
+export function resolveBindingResponseFirestoreFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseFirestore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseFirestore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseFirestore' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseDynamodb$inboundSchema: z.ZodType<
+  ResolveBindingResponseDynamodb,
+  unknown
+> = z.object({
+  binding: RemoteDynamodbKvBinding$inboundSchema,
+  clientConfig: RemoteAwsClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("dynamodb"),
+});
+
+export function resolveBindingResponseDynamodbFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseDynamodb, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseDynamodb$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseDynamodb' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseServicebus$inboundSchema: z.ZodType<
+  ResolveBindingResponseServicebus,
+  unknown
+> = z.object({
+  binding: RemoteServiceBusQueueBinding$inboundSchema,
+  clientConfig: RemoteAzureClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("servicebus"),
+});
+
+export function resolveBindingResponseServicebusFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseServicebus, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseServicebus$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseServicebus' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponsePubsub$inboundSchema: z.ZodType<
+  ResolveBindingResponsePubsub,
+  unknown
+> = z.object({
+  binding: RemotePubsubQueueBinding$inboundSchema,
+  clientConfig: RemoteGcpClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("pubsub"),
+});
+
+export function resolveBindingResponsePubsubFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponsePubsub, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponsePubsub$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponsePubsub' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseSqs$inboundSchema: z.ZodType<
+  ResolveBindingResponseSqs,
+  unknown
+> = z.object({
+  binding: RemoteSqsQueueBinding$inboundSchema,
+  clientConfig: RemoteAwsClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("sqs"),
+});
+
+export function resolveBindingResponseSqsFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseSqs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseSqs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseSqs' from JSON`,
+  );
+}
+
+/** @internal */
 export const ResolveBindingResponseGcs$inboundSchema: z.ZodType<
   ResolveBindingResponseGcs,
   unknown
@@ -584,6 +855,12 @@ export const ResolveBindingResponse$inboundSchema: z.ZodType<
   z.lazy(() => ResolveBindingResponseS3$inboundSchema),
   z.lazy(() => ResolveBindingResponseBlob$inboundSchema),
   z.lazy(() => ResolveBindingResponseGcs$inboundSchema),
+  z.lazy(() => ResolveBindingResponseSqs$inboundSchema),
+  z.lazy(() => ResolveBindingResponsePubsub$inboundSchema),
+  z.lazy(() => ResolveBindingResponseServicebus$inboundSchema),
+  z.lazy(() => ResolveBindingResponseDynamodb$inboundSchema),
+  z.lazy(() => ResolveBindingResponseFirestore$inboundSchema),
+  z.lazy(() => ResolveBindingResponseTablestorage$inboundSchema),
   z.lazy(() => ResolveBindingResponseKms$inboundSchema),
   z.lazy(() => ResolveBindingResponseCloudKms$inboundSchema),
   z.lazy(() => ResolveBindingResponseKeyVaultKey$inboundSchema),

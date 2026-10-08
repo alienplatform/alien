@@ -6,6 +6,10 @@
 //! recompilation.
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::path::Path;
+
+/// Default location of the operator configuration packaged in a container image.
+pub const OPERATOR_CONFIG_PATH: &str = "/etc/alien/operator-config.json";
 
 /// Magic bytes at the end of a binary with embedded config.
 pub const MAGIC_BYTES: &[u8; 8] = b"WLCFG001";
@@ -105,6 +109,12 @@ pub fn load_embedded_config<T: DeserializeOwned>() -> Result<Option<T>, Embedded
     load_embedded_config_from_path(&exe_path)
 }
 
+/// Load a JSON configuration file.
+pub fn load_config_file<T: DeserializeOwned>(path: &Path) -> Result<T, EmbeddedConfigError> {
+    let data = std::fs::read(path).map_err(EmbeddedConfigError::Io)?;
+    serde_json::from_slice(&data).map_err(EmbeddedConfigError::Deserialization)
+}
+
 /// Load embedded configuration from a specific binary path.
 pub fn load_embedded_config_from_path<T: DeserializeOwned>(
     path: &std::path::Path,
@@ -150,11 +160,27 @@ pub fn append_embedded_config<T: Serialize>(
     binary_data: &[u8],
     config: &T,
 ) -> Result<Vec<u8>, EmbeddedConfigError> {
+    let trailer = encode_embedded_config_trailer(config)?;
+
+    let mut result = Vec::with_capacity(binary_data.len() + trailer.len());
+    result.extend_from_slice(binary_data);
+    result.extend_from_slice(&trailer);
+
+    Ok(result)
+}
+
+/// Encode the self-contained trailer appended to a binary with embedded config.
+///
+/// Writes: JSON payload + 4-byte LE length + magic bytes. Keeping this separate
+/// lets object stores compose an existing binary with a small configuration
+/// object without downloading and uploading the binary again.
+pub fn encode_embedded_config_trailer<T: Serialize>(
+    config: &T,
+) -> Result<Vec<u8>, EmbeddedConfigError> {
     let json_bytes = serde_json::to_vec(config).map_err(EmbeddedConfigError::Deserialization)?;
     let json_len = json_bytes.len() as u32;
 
-    let mut result = Vec::with_capacity(binary_data.len() + json_bytes.len() + FOOTER_SIZE);
-    result.extend_from_slice(binary_data);
+    let mut result = Vec::with_capacity(json_bytes.len() + FOOTER_SIZE);
     result.extend_from_slice(&json_bytes);
     result.extend_from_slice(&json_len.to_le_bytes());
     result.extend_from_slice(MAGIC_BYTES);
@@ -185,6 +211,37 @@ impl std::error::Error for EmbeddedConfigError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_trailer_matches_append_output_exactly() {
+        let config = DeployCliConfig {
+            token: Some("secret".into()),
+            deployment_group_id: Some("dg_123".into()),
+            default_platform: Some("aws".into()),
+            api_base_url: Some("https://api.example.com".into()),
+            agent_binary_url: None,
+            machine_bundle_url: None,
+            install_script_url: None,
+            setup_revision: Some("revision".into()),
+            token_env_var: Some("EXAMPLE_TOKEN".into()),
+            name: Some("example-deploy".into()),
+            display_name: Some("Example Deploy".into()),
+        };
+        let binary = b"an existing executable";
+
+        let appended = append_embedded_config(binary, &config).expect("config should append");
+        let trailer = encode_embedded_config_trailer(&config).expect("trailer should encode");
+
+        assert_eq!(appended, [binary.as_slice(), trailer.as_slice()].concat());
+
+        let loaded: DeployCliConfig = load_embedded_config_from_path_bytes(&appended)
+            .expect("appended config should parse")
+            .expect("appended config should exist");
+        assert_eq!(loaded.token, config.token);
+        assert_eq!(loaded.deployment_group_id, config.deployment_group_id);
+        assert_eq!(loaded.setup_revision, config.setup_revision);
+        assert_eq!(loaded.name, config.name);
+    }
 
     #[test]
     fn test_roundtrip_deploy_cli_config() {
@@ -259,6 +316,41 @@ mod tests {
         assert_eq!(loaded.display_name, config.display_name);
         assert_eq!(loaded.env_prefix, config.env_prefix);
         assert_eq!(loaded.label_domain, config.label_domain);
+    }
+
+    #[test]
+    fn operator_config_roundtrips_through_packaged_file() {
+        let config = OperatorConfig {
+            manager_url: None,
+            token: None,
+            deployment_id: None,
+            sync_interval_secs: 17,
+            name: Some("acme-operator".into()),
+            brand: Some("acme".into()),
+            display_name: Some("Acme Operator".into()),
+            env_prefix: Some("ACME".into()),
+            label_domain: Some("acme.dev".into()),
+        };
+        let path = std::env::temp_dir().join(format!(
+            "alien-operator-config-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&config).expect("serialize operator config"),
+        )
+        .expect("write operator config");
+
+        let loaded: OperatorConfig = load_config_file(&path).expect("load operator config");
+
+        assert_eq!(loaded.sync_interval_secs, 17);
+        assert_eq!(loaded.name.as_deref(), Some("acme-operator"));
+        assert_eq!(loaded.brand.as_deref(), Some("acme"));
+        assert_eq!(loaded.display_name.as_deref(), Some("Acme Operator"));
+        assert_eq!(loaded.env_prefix.as_deref(), Some("ACME"));
+        assert_eq!(loaded.label_domain.as_deref(), Some("acme.dev"));
+        std::fs::remove_file(path).expect("remove operator config");
     }
 
     /// Helper that works on in-memory bytes (for tests that don't need files).

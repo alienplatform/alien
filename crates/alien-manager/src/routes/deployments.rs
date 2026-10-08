@@ -38,6 +38,10 @@ pub struct CreateDeploymentRequest {
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     #[serde(default)]
     pub resource_prefix: Option<String>,
+    /// Stack input values, by input name. Stored with the deployment and read by every
+    /// deployment step, like the values a setup collects.
+    #[serde(default)]
+    pub input_values: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -238,6 +242,37 @@ fn representative_public_url(
         })
 }
 
+/// A group id as given, or the id of the one group with that name. A value that is neither is
+/// returned unchanged, so the filter matches nothing, as before.
+async fn resolve_deployment_group_id(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    id_or_name: String,
+) -> Result<String, alien_error::AlienError> {
+    if state
+        .deployment_store
+        .get_deployment_group(subject, &id_or_name)
+        .await?
+        .is_some()
+    {
+        return Ok(id_or_name);
+    }
+    let mut named = state
+        .deployment_store
+        .list_deployment_groups(subject)
+        .await?
+        .into_iter()
+        .filter(|group| group.name == id_or_name);
+    match (named.next(), named.next()) {
+        (Some(group), None) => Ok(group.id),
+        (Some(_), Some(_)) => Err(ErrorData::bad_request(format!(
+            "More than one deployment group is named '{id_or_name}'; filter by its ID"
+        ))
+        .into_generic()),
+        (None, _) => Ok(id_or_name),
+    }
+}
+
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
@@ -418,6 +453,10 @@ async fn create_deployment(
             return ErrorData::forbidden("Command credentials cannot create deployments")
                 .into_response();
         }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            return ErrorData::forbidden("Remote bindings credentials cannot create deployments")
+                .into_response();
+        }
         crate::auth::Scope::Telemetry { .. } => {
             return ErrorData::forbidden("Telemetry credentials cannot create deployments")
                 .into_response();
@@ -452,12 +491,28 @@ async fn create_deployment(
         .into_response();
     }
 
-    // Auto-assign latest release if available
-    let desired_release_id = match state.release_store.get_latest_release(&subject).await {
-        Ok(Some(release)) => Some(release.id),
-        Ok(None) => None,
-        Err(e) => return e.into_response(),
-    };
+    // Start at the release the default channel points at (the latest
+    // release on a manager without channels).
+    let starting_release =
+        match super::channels::release_for_deployment(&state, &subject, None).await {
+            Ok(release) => release,
+            Err(e) => return e.into_response(),
+        };
+    let desired_release_id = starting_release.as_ref().map(|release| release.id.clone());
+
+    // Generated secret inputs get their value now, once, and keep it in the
+    // stored input values for every later update.
+    let mut input_values = req.input_values;
+    if let Some(stack) = starting_release
+        .as_ref()
+        .and_then(|release| release.stacks.get(&req.platform))
+    {
+        crate::generated_inputs::generate_missing_input_values(
+            &stack.inputs,
+            req.platform,
+            &mut input_values,
+        );
+    }
 
     // Create the deployment first (token is set after).
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
@@ -493,7 +548,7 @@ async fn create_deployment(
                 stack_state,
                 environment_variables: req.environment_variables,
                 public_subdomain: None,
-                input_values: Default::default(),
+                input_values,
                 setup_item: None,
                 deployment_token: Some(raw_token.clone()),
             },
@@ -578,7 +633,30 @@ async fn list_deployments(
             ..
         } => Some(deployment_group_id.clone()),
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
-            query.deployment_group_id.clone()
+            match query.deployment_group_id.as_deref() {
+                // Clients may pass a group name where an ID is expected, as the
+                // hosted API accepts; resolve it the same way.
+                Some(group) if !group.starts_with("dg_") => {
+                    match state
+                        .deployment_store
+                        .list_deployment_groups(&subject)
+                        .await
+                    {
+                        Ok(groups) => Some(
+                            groups
+                                .into_iter()
+                                .find(|dg| {
+                                    dg.name == group
+                                        && state.authz.can_read_deployment_group(&subject, dg)
+                                })
+                                .map(|dg| dg.id)
+                                .unwrap_or_else(|| group.to_string()),
+                        ),
+                        Err(e) => return e.into_response(),
+                    }
+                }
+                other => other.map(str::to_string),
+            }
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
@@ -588,10 +666,25 @@ async fn list_deployments(
             return ErrorData::forbidden("Command credentials cannot list deployments")
                 .into_response();
         }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            return ErrorData::forbidden("Remote bindings credentials cannot list deployments")
+                .into_response();
+        }
         crate::auth::Scope::Telemetry { .. } => {
             return ErrorData::forbidden("Telemetry credentials cannot list deployments")
                 .into_response();
         }
+    };
+
+    // The filter takes a group id or, as the platform's does, a group name: `<group>/<name>`
+    // deployment specs pass whatever the user typed, and `alien dev` names its group
+    // `local-dev` under a generated id.
+    let deployment_group_id = match deployment_group_id {
+        Some(id_or_name) => match resolve_deployment_group_id(&state, &subject, id_or_name).await {
+            Ok(id) => Some(id),
+            Err(e) => return e.into_response(),
+        },
+        None => None,
     };
 
     if query.name.is_some() && deployment_group_id.is_none() {
@@ -607,12 +700,17 @@ async fn list_deployments(
         ..Default::default()
     };
 
-    let deployments = match state
+    // The store narrows by scope; authz decides per item, as for deployment
+    // groups, so capability tokens (e.g. tunnel callers) see nothing.
+    let deployments: Vec<_> = match state
         .deployment_store
         .list_deployments(&subject, &filter)
         .await
     {
-        Ok(d) => d,
+        Ok(d) => d
+            .into_iter()
+            .filter(|deployment| state.authz.can_read_deployment(&subject, deployment))
+            .collect(),
         Err(e) => return e.into_response(),
     };
 
@@ -622,7 +720,11 @@ async fn list_deployments(
         std::collections::HashMap::new();
 
     let mut items = Vec::with_capacity(deployments.len());
-    for d in &deployments {
+    // A store need not filter by caller (SQLite does not), so `Authz` decides per item.
+    for d in deployments
+        .iter()
+        .filter(|d| state.authz.can_read_deployment(&subject, d))
+    {
         let dg_minimal = if include_dg {
             if let Some(cached) = dg_cache.get(&d.deployment_group_id) {
                 cached.clone()
@@ -871,15 +973,7 @@ async fn retry_deployment(
         return ErrorData::forbidden("Cannot retry deployment").into_response();
     }
 
-    let retryable_failed_statuses = [
-        "preflights-failed",
-        "initial-setup-failed",
-        "provisioning-failed",
-        "refresh-failed",
-        "update-failed",
-        "delete-failed",
-    ];
-    if !retryable_failed_statuses.contains(&deployment.status.as_str()) {
+    if !retry_accepted(&deployment) {
         return ErrorData::bad_request(format!(
             "Deployment '{}' is in status '{}' and cannot be retried",
             deployment.id, deployment.status
@@ -896,6 +990,28 @@ async fn retry_deployment(
     }
 
     Json(serde_json::json!({ "success": true })).into_response()
+}
+
+/// Whether a retry can move this deployment back to work.
+///
+/// Failed statuses retry their last operation. A deployment can also sit in
+/// `provisioning` with an installed release and no desired release: a setup
+/// run handed it back with no update to apply. A manager that runs only
+/// pending updates never takes that deployment, so a retry must reach the
+/// store, which repeats the installed release.
+fn retry_accepted(deployment: &DeploymentRecord) -> bool {
+    const RETRYABLE_FAILED_STATUSES: [&str; 6] = [
+        "preflights-failed",
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ];
+    let handed_off_without_update = deployment.status == "provisioning"
+        && deployment.current_release_id.is_some()
+        && deployment.desired_release_id.is_none();
+    RETRYABLE_FAILED_STATUSES.contains(&deployment.status.as_str()) || handed_off_without_update
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -1085,6 +1201,21 @@ mod tests {
             .in_sequence(&mut sequence)
             .return_once(move |_, _| Ok(deployment_remains.then_some(deployment)));
 
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/delete")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"action":"cleanup"}"#))
+            .expect("request should build");
+        send(deployment_store, request).await
+    }
+
+    /// Serve `request` through the deployments router over `deployment_store`.
+    async fn send(
+        deployment_store: MockDeploymentStore,
+        request: Request<Body>,
+    ) -> (StatusCode, serde_json::Value) {
         let temp = tempfile::tempdir().expect("test directory should be created");
         let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
             LocalKv::new(temp.path().join("kv"))
@@ -1130,14 +1261,13 @@ mod tests {
                     .expect("empty registry routing table should initialize"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            tunnels: None,
+            charts: None,
+            release_channels: None,
+            bundle_signing_key: None,
+            bundle_sources: None,
+            log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
-        let request = Request::builder()
-            .method("POST")
-            .uri("/v1/deployments/deployment-1/delete")
-            .header(http::header::AUTHORIZATION, "Bearer test-token")
-            .header(http::header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"action":"cleanup"}"#))
-            .expect("request should build");
         let response = router()
             .with_state(state)
             .oneshot(request)
@@ -1152,6 +1282,123 @@ mod tests {
             status,
             serde_json::from_slice(&body).expect("response should contain JSON"),
         )
+    }
+
+    /// `<group>/<name>` specs send the group's name: `alien dev` names its group `local-dev`
+    /// under a generated id, and the list must find deployments in it.
+    #[tokio::test]
+    async fn list_resolves_a_deployment_group_by_name() {
+        let mut deployment_store = MockDeploymentStore::new();
+        deployment_store
+            .expect_get_deployment_group()
+            .returning(|_, _| Ok(None));
+        deployment_store
+            .expect_list_deployment_groups()
+            .returning(|_| {
+                Ok(vec![crate::traits::DeploymentGroupRecord {
+                    id: "dg_generated".to_string(),
+                    workspace_id: "default".to_string(),
+                    project_id: "default".to_string(),
+                    name: "local-dev".to_string(),
+                    max_deployments: 100,
+                    deployment_count: 1,
+                    setup: Default::default(),
+                    created_at: Utc::now(),
+                }])
+            });
+        deployment_store
+            .expect_list_deployments()
+            .withf(|_, filter| {
+                filter.deployment_group_id.as_deref() == Some("dg_generated")
+                    && filter.name.as_deref() == Some("deployment-1")
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(vec![DeploymentRecord {
+                    deployment_group_id: "dg_generated".to_string(),
+                    ..deployment_record()
+                }])
+            });
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/v1/deployments?deploymentGroupId=local-dev&name=deployment-1")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, json) = send(deployment_store, request).await;
+
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["items"][0]["id"], "deployment-1");
+        assert_eq!(json["items"][0]["deploymentGroupId"], "dg_generated");
+    }
+
+    async fn retry_route_response(
+        deployment: DeploymentRecord,
+        store_receives_retry: bool,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut deployment_store = MockDeploymentStore::new();
+        deployment_store
+            .expect_get_deployment()
+            .times(1)
+            .return_once(move |_, _| Ok(Some(deployment)));
+        deployment_store
+            .expect_set_retry_requested()
+            .withf(|_, id| id == "deployment-1")
+            .times(usize::from(store_receives_retry))
+            .returning(|_, _| Ok(()));
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/retry")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .body(Body::empty())
+            .expect("request should build");
+        send(deployment_store, request).await
+    }
+
+    /// A setup run that handed a running deployment back at `provisioning` with
+    /// nothing to apply leaves it with no driver; retry is how it recovers.
+    #[tokio::test]
+    async fn retry_reaches_the_store_for_a_handoff_without_an_update() {
+        let stranded = DeploymentRecord {
+            status: "provisioning".to_string(),
+            current_release_id: Some("rel_installed".to_string()),
+            desired_release_id: None,
+            ..deployment_record()
+        };
+
+        let (status, json) = retry_route_response(stranded, true).await;
+
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["success"], true);
+    }
+
+    #[tokio::test]
+    async fn retry_refuses_a_provisioning_deployment_that_has_work() {
+        for (current, desired) in [
+            // First installation: the manager is provisioning the desired release.
+            (None, Some("rel_first")),
+            // Update handoff: the manager is applying the desired release.
+            (Some("rel_installed"), Some("rel_target")),
+        ] {
+            let provisioning = DeploymentRecord {
+                status: "provisioning".to_string(),
+                current_release_id: current.map(str::to_string),
+                desired_release_id: desired.map(str::to_string),
+                ..deployment_record()
+            };
+
+            let (status, json) = retry_route_response(provisioning, false).await;
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+            assert!(
+                json["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("cannot be retried")),
+                "{json}"
+            );
+        }
     }
 
     #[tokio::test]

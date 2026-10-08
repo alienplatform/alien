@@ -6,6 +6,10 @@ mod stack_commands;
 mod stack_input;
 pub use stack_input::*;
 
+mod deployer_secrets;
+pub use deployer_secrets::*;
+pub mod vault_naming;
+
 pub mod permissions;
 pub use permissions::*;
 
@@ -27,12 +31,17 @@ pub use build_targets::*;
 mod error;
 pub use error::*;
 
+#[cfg(feature = "bundle-signature")]
+pub mod bundle_signature;
 mod resource;
 pub mod sandbox_capability;
 #[cfg(feature = "sandbox-capability")]
 pub mod sandbox_capability_token;
 
+pub mod sandbox_build_role;
+pub mod sandbox_egress;
 pub mod sandbox_image;
+pub mod sandbox_setup_inputs;
 
 #[cfg(feature = "sandbox-process")]
 pub mod sandbox_process;
@@ -43,6 +52,9 @@ pub use ownership::*;
 
 mod gateability;
 pub use gateability::*;
+
+mod gate_resolution;
+pub use gate_resolution::*;
 
 mod tags;
 pub use tags::*;

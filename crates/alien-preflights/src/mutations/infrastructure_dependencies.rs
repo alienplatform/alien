@@ -1,9 +1,10 @@
 //! Infrastructure Dependencies mutation that adds dependencies from user resources to infrastructure resources.
 
+use crate::compile_time::network_required::resource_requires_network;
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
+    DeploymentConfig, Network, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -35,7 +36,8 @@ impl StackMutation for InfrastructureDependenciesMutation {
         matches!(
             stack_state.platform,
             Platform::Azure | Platform::Gcp | Platform::Kubernetes
-        ) || remote_stack_management_id(stack).is_some()
+        ) || stack.resources.contains_key("default-network")
+            || remote_stack_management_id(stack).is_some()
             || remote_bindings_id(stack).is_some()
     }
 
@@ -43,7 +45,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         let platform = stack_state.platform;
         info!(
@@ -59,8 +61,24 @@ impl StackMutation for InfrastructureDependenciesMutation {
                 continue;
             };
             let resource_type = entry.config.resource_type();
-            let deps =
-                self.get_dependencies_for_resource(&stack, &resource_id, &resource_type, platform);
+            // Frozen cloud infrastructure keeps its base-provider dependencies;
+            // Kubernetes workloads and logical pools retain Kubernetes placement.
+            let resource_platform = if platform == Platform::Kubernetes
+                && entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                && !matches!(
+                    resource_type.as_ref(),
+                    "compute-cluster" | "kubernetes-cluster"
+                ) {
+                config.base_platform.unwrap_or(platform)
+            } else {
+                platform
+            };
+            let deps = self.get_dependencies_for_resource(
+                &stack,
+                &resource_id,
+                &resource_type,
+                resource_platform,
+            );
 
             if let Some(entry) = stack.resources.get_mut(&resource_id) {
                 for dependency in deps {
@@ -106,6 +124,52 @@ impl InfrastructureDependenciesMutation {
             dependencies.push(ResourceRef::new(
                 alien_core::AzureResourceGroup::RESOURCE_TYPE,
                 "default-resource-group",
+            ));
+        }
+
+        // AWS and GCP consumers need network outputs before they provision.
+        // On Azure, the Container Apps environment needs the network, while
+        // Postgres also requires the network's dedicated Private Endpoint subnet.
+        let waits_for_network = match platform {
+            Platform::Aws | Platform::Gcp => {
+                stack.resources.get(resource_id).is_some_and(|entry| {
+                    resource_requires_network(entry) || resource_type.as_ref() == "worker"
+                })
+            }
+            Platform::Azure => {
+                resource_type == &alien_core::AzureContainerAppsEnvironment::RESOURCE_TYPE
+                    || resource_type == &alien_core::Postgres::RESOURCE_TYPE
+            }
+            _ => false,
+        };
+        if waits_for_network && stack.resources.contains_key("default-network") {
+            dependencies.push(ResourceRef::new(Network::RESOURCE_TYPE, "default-network"));
+        }
+
+        if resource_type == &Network::RESOURCE_TYPE {
+            let activation = match platform {
+                Platform::Azure => Some("enable-network"),
+                Platform::Gcp => Some("enable-compute-engine"),
+                _ => None,
+            };
+            if let Some(id) = activation.filter(|id| stack.resources.contains_key(*id)) {
+                dependencies.push(ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    id,
+                ));
+            }
+        }
+
+        if platform == Platform::Azure
+            && stack
+                .resources
+                .get(resource_id)
+                .is_some_and(super::secrets_vault::azure_resource_needs_vault)
+            && stack.resources.contains_key(alien_core::SECRETS_VAULT_ID)
+        {
+            dependencies.push(ResourceRef::new(
+                alien_core::Vault::RESOURCE_TYPE,
+                alien_core::SECRETS_VAULT_ID,
             ));
         }
 
@@ -249,7 +313,32 @@ impl InfrastructureDependenciesMutation {
                 ]
             }
 
+            (Platform::Azure, "postgres") => vec![
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-postgresql",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-network",
+                ),
+            ],
+
             // GCP dependencies
+            (Platform::Gcp, "postgres") => vec![
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-cloud-sql",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-compute-engine",
+                ),
+                ResourceRef::new(
+                    alien_core::ServiceActivation::RESOURCE_TYPE,
+                    "enable-secret-manager",
+                ),
+            ],
             (Platform::Gcp, "worker") => {
                 vec![ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,
@@ -402,9 +491,9 @@ mod tests {
     use alien_core::{
         AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
         KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-        KubernetesHeartbeatMode, RemoteBindings, Resource, ResourceEntry, ResourceLifecycle,
-        ServiceAccount, ServiceActivation, StackSettings, Storage, Worker, WorkerCode,
-        WorkerTrigger,
+        KubernetesHeartbeatMode, NetworkSettings, Postgres, RemoteBindings, Resource,
+        ResourceEntry, ResourceLifecycle, ServiceAccount, ServiceActivation, StackSettings,
+        Storage, Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -414,6 +503,83 @@ mod tests {
             hash: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn postgres_waits_for_discovered_default_network() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutation = InfrastructureDependenciesMutation;
+        assert!(mutation.should_run(&stack, &stack_state, &config));
+        let stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        assert_eq!(
+            stack.resources["database"].dependencies,
+            vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")]
+        );
+        assert!(stack.resources["default-network"].dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn azure_postgres_and_container_environment_wait_for_network() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::ByoVnetAzure {
+                        vnet_resource_id: "vnet-id".to_string(),
+                        public_subnet_name: "public".to_string(),
+                        private_subnet_name: "private".to_string(),
+                        application_gateway_subnet_name: None,
+                        private_endpoint_subnet_name: Some("private-endpoints".to_string()),
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                alien_core::AzureContainerAppsEnvironment::new("default-container-env".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = crate::runner::PreflightRunner::new()
+            .apply_mutations(stack, &StackState::new(Platform::Azure), &config)
+            .await
+            .unwrap();
+        assert!(crate::compile_time::validate_stack_dependencies(&result).success);
+        assert!(result.resources["database"]
+            .dependencies
+            .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")));
+        assert!(result.resources["default-container-env"]
+            .dependencies
+            .contains(&ResourceRef::new(Network::RESOURCE_TYPE, "default-network")));
     }
 
     #[tokio::test]
@@ -455,6 +621,8 @@ mod tests {
         );
 
         let stack = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
             id: "test-stack".to_string(),
             resources,
             permissions: PermissionsConfig {

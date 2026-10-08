@@ -4,11 +4,15 @@
 */
 
 import * as z from "zod";
+import { ContainerImageIdentitySchema } from "./container-image-identity-schema.js";
 import { KubernetesOwnerReferenceSchema } from "./kubernetes-owner-reference-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
 
 export const KubernetesPodRuntimeUnitStatusSchema = z.object({
-    get "cpu"(){
+    get "containers"(){
+                return z.array(ContainerImageIdentitySchema.describe("Image a running container reports.")).optional()
+              },
+get "cpu"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 get "memory"(){

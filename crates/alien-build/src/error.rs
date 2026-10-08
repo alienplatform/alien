@@ -121,6 +121,34 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// Reading an image manifest from a container registry failed.
+    #[error(
+        code = "IMAGE_LOOKUP_FAILED",
+        message = "Failed to look up container image '{image}': {reason}",
+        retryable = "true",
+        internal = "false"
+    )]
+    ImageLookupFailed {
+        /// Image reference that was looked up
+        image: String,
+        /// Reason for the lookup failure
+        reason: String,
+    },
+
+    /// An image manifest cannot be read from its registry, for a reason a retry does not change.
+    #[error(
+        code = "IMAGE_LOOKUP_REJECTED",
+        message = "Container image '{image}' could not be read from its registry: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ImageLookupRejected {
+        /// Image reference that was looked up
+        image: String,
+        /// Safe explanation that excludes registry credentials and signed URLs
+        reason: String,
+    },
+
     /// Container registry rejected an image push for a deterministic reason.
     #[error(
         code = "IMAGE_PUSH_REJECTED",

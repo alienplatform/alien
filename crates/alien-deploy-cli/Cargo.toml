@@ -45,6 +45,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 # Utilities
+bon = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4"] }
@@ -58,6 +59,7 @@ getrandom = "0.2"
 tempfile = { workspace = true }
 flate2 = { workspace = true }
 hex = { workspace = true }
+oci-client = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }
 base64 = { workspace = true }

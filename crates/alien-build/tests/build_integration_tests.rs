@@ -141,6 +141,8 @@ async fn test_build_stack_with_missing_file_should_error() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -202,6 +204,8 @@ async fn test_build_stack_with_glob_matching_no_files_should_succeed() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -255,6 +259,8 @@ async fn test_build_stack_with_direct_file_path() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -308,6 +314,8 @@ async fn test_build_stack_with_direct_directory_path() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -369,6 +377,8 @@ async fn test_build_stack_with_glob_patterns_matching_files() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -437,6 +447,8 @@ async fn test_build_stack_with_glob_patterns_matching_directories() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -478,6 +490,8 @@ async fn test_build_stack_with_missing_directory_should_error() {
         cache_url: None,
         override_base_image: None,
         debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;

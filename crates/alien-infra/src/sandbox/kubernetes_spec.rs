@@ -64,10 +64,9 @@ pub(crate) fn sandbox_pod_with_labels(
 ) -> Pod {
     let image = match &sandbox.code {
         SandboxCode::Image { image } => image.clone(),
-        // Unreachable through any supported path: `Sandbox::validate_for_platform` refuses
-        // Source on every platform, because no backend builds a sandbox image. Left as an empty
-        // string rather than a panic — the API server rejects a pod with no image at create,
-        // which fails an operator loudly without taking it down.
+        // `validate_for_platform` refuses Source off AWS and Kubernetes preflights against this
+        // platform, so this is unreachable. Empty rather than a panic: the API server rejects a
+        // pod with no image at create, failing an operator loudly without taking it down.
         SandboxCode::Source { .. } => String::new(),
     };
 

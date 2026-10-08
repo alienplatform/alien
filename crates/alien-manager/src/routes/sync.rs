@@ -16,11 +16,12 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 
 use alien_core::{
     sync::{
-        OperationsReport, OperatorCapabilityReport, OperatorImageReport, TargetDeployment,
-        TargetOperationsBundleSet,
+        ObservedApplicationReport, OperationsReport, OperatorCapabilityReport, OperatorImageReport,
+        TargetDeployment, TargetOperationsBundleSet,
     },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
+    StackState,
 };
 use alien_error::AlienError;
 
@@ -146,6 +147,9 @@ pub struct AgentSyncRequest {
     pub session: String,
     #[serde(default)]
     pub supports_execution_claims: bool,
+    /// Absent for Operators that predate container tunnels.
+    #[serde(default)]
+    pub supports_tunnels: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -168,18 +172,28 @@ pub struct AgentSyncRequest {
     pub operations_report: Option<OperationsReport>,
 }
 
-/// Inbound sync payload that adds optional receipts without expanding the
-/// public [`AgentSyncRequest`] struct literal.
+// Adds optional receipts without expanding the public [`AgentSyncRequest`]
+// struct literal. The API documents it as `AgentSyncRequest`, the body
+// clients send.
+/// Body of `POST /v1/sync`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "openapi", schema(as = AgentSyncRequest))]
 #[serde(rename_all = "camelCase")]
 struct AgentSyncWireRequest {
     #[serde(flatten)]
+    #[cfg_attr(feature = "openapi", schema(inline))]
     request: AgentSyncRequest,
     /// Exact immutable Operator image identity reported by the running process.
     #[serde(default)]
     operator_image: Option<OperatorImageReport>,
+    /// Application release the Operator observed in its environment.
+    /// Opaque to OSS beyond forwarding it to `reconcile_request()`.
+    #[serde(default)]
+    application: Option<ObservedApplicationReport>,
+    /// Absent for older Operators. This report has no secret values.
+    #[serde(default)]
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,6 +219,18 @@ pub struct AgentSyncResponse {
     /// `DeploymentStore::reconcile`; `None` in OSS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_operations_bundle_set: Option<TargetOperationsBundleSet>,
+    /// Complete release-independent target set. Older embedders omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+    /// Base URL operators open tunnel connections to. Absent when this manager
+    /// does not accept tunnels; operators then never dial.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_url: Option<String>,
+    /// Operator image this manager's charts install. Operators that manage
+    /// their own workload update to it. Absent when the manager serves no
+    /// charts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_operator_image: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -222,6 +248,9 @@ pub enum InitialDesiredRelease {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
     pub name: Option<String>,
+    /// Stable prefix for resources owned by this deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_prefix: Option<String>,
     pub platform: Option<Platform>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
@@ -562,6 +591,14 @@ async fn reconcile(
     )
     .await
     {
+        // The state is already persisted, and for a deletion the record may be gone, so the
+        // caller cannot repeat this cleanup. Leave the unrevoked grant in the manager's log.
+        tracing::error!(
+            deployment_id = %req.deployment_id,
+            status = ?final_state.status,
+            error = %error,
+            "Registry access cleanup failed after the deployment state was persisted"
+        );
         return error.into_response();
     }
 
@@ -644,6 +681,10 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
+        sync::{
+            ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
+            SyncInput, SyncRequest,
+        },
         DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
         ExternalBindings, Platform, ReleaseInfo, ResourceHeartbeatData, RuntimeMetadata, Stack,
         StackSettings, StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
@@ -655,13 +696,86 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
-        deployment_state_from_record, deployment_target_release_id, management_platform,
-        may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
-        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
-        InitialDesiredRelease, InitializeRequest, ReconcileRequest,
+        agent_needs_initial_state_hydration, agent_report_completes_claim,
+        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
+        deployment_target_release_id, management_platform, may_deliver_agent_target,
+        preserve_recorded_gate_answers, release_stack_platform, should_ignore_agent_state_report,
+        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
+        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
+        ReconcileRequest,
     };
+
+    #[tokio::test]
+    async fn completed_receipt_recovery_returns_only_an_acknowledgment() {
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_acknowledge_completed_execution()
+            .times(2)
+            .withf(|_, deployment, session, claim| {
+                deployment == "dep_test"
+                    && session == "session_test"
+                    && claim.operation_id == "operation_test"
+                    && claim.attempt_id == "attempt_test"
+            })
+            .returning(|_, _, _, _| Ok(true));
+        let request: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test", "session": "session_test",
+            "supportsExecutionClaims": true,
+            "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
+            "currentState": { "status": "running" },
+        }))
+        .expect("valid replay request");
+        for error in ["DEPLOYMENT_UPDATE_CLAIM_LOST", "DEPLOYMENT_LEASE_LOST"] {
+            let response = super::acknowledge_completed_claim(
+                &store,
+                &crate::auth::Subject::system(),
+                &request,
+                error,
+                Some("https://manager.example.test".into()),
+            )
+            .await
+            .expect("acknowledge completed receipt")
+            .expect("successful recovery");
+            assert_eq!(
+                serde_json::to_value(response).expect("serialize acknowledgment"),
+                json!({"tunnelUrl": "https://manager.example.test"})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_errors_and_uncompleted_claims_are_not_acknowledged() {
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_acknowledge_completed_execution()
+            .times(1)
+            .returning(|_, _, _, _| Ok(false));
+        let request: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test", "session": "session_test",
+            "executionClaim": { "operationId": "operation_test", "attemptId": "attempt_test" },
+        }))
+        .expect("valid request");
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "SYNC_FAILED",
+            None,
+        )
+        .await
+        .expect("unrelated error")
+        .is_none());
+        assert!(super::acknowledge_completed_claim(
+            &store,
+            &crate::auth::Subject::system(),
+            &request,
+            "DEPLOYMENT_UPDATE_CLAIM_LOST",
+            None,
+        )
+        .await
+        .expect("live claim is not recovered")
+        .is_none());
+    }
 
     #[test]
     fn release_stack_platform_keeps_imported_kubernetes_deployment_platform() {
@@ -771,6 +885,60 @@ mod tests {
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
         assert!(!req.supports_execution_claims);
+        assert!(
+            !req.supports_tunnels,
+            "Operators that predate tunnels don't send the flag"
+        );
+    }
+
+    #[test]
+    fn tunnels_are_removed_for_operators_that_predate_them() {
+        let container = |id: &str, tunnel: Option<u16>| {
+            alien_core::Container::new(id.to_string())
+                .code(alien_core::ContainerCode::Image {
+                    image: "api:latest".to_string(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .port(8080)
+                .maybe_tunnel(tunnel.map(|port| alien_core::ContainerTunnel { port }))
+                .permissions("execution".to_string())
+                .build()
+        };
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(
+                container("api", Some(8080)),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container("worker", None),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert!(crate::routes::sync::remove_container_tunnels(&mut stack));
+        let json = serde_json::to_value(&stack).unwrap();
+        assert!(
+            !json.to_string().contains("\"tunnel\""),
+            "no container may carry a tunnel: {json}"
+        );
+        // The rest of the container is delivered unchanged.
+        let api = stack
+            .resources()
+            .find(|(id, _)| id.as_str() == "api")
+            .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
+            .expect("api container");
+        assert_eq!(api.ports.len(), 1);
+        assert!(
+            !crate::routes::sync::remove_container_tunnels(&mut stack),
+            "nothing left to remove"
+        );
     }
 
     #[test]
@@ -792,6 +960,37 @@ mod tests {
             .validate()
             .expect("operator image receipt should be valid");
         assert_eq!(req.request.deployment_id, "dep_test");
+    }
+
+    #[test]
+    fn agent_sync_wire_request_receives_the_operator_application_report() {
+        let application = ObservedApplicationReport {
+            source: ObservedApplicationSource::Kubernetes,
+            chart_name: Some("shop".to_string()),
+            chart_version: Some("1.4.0".to_string()),
+            images: vec![ObservedApplicationImage {
+                workload: "apps/v1:Deployment:shop:api".to_string(),
+                container: "api".to_string(),
+                image: "registry.example.com/shop/api:1.4.0".to_string(),
+                digest: Some(format!("sha256:{}", "a".repeat(64))),
+            }],
+            complete: true,
+            observed_at: "2026-09-24T10:00:00Z".parse().unwrap(),
+        };
+        let operator_request: SyncRequest =
+            serde_json::from_value(json!({ "deploymentId": "dep_test" })).unwrap();
+        let wire = serde_json::to_value(
+            SyncInput::builder(operator_request)
+                .application(application.clone())
+                .build(),
+        )
+        .unwrap();
+
+        let req: AgentSyncWireRequest = serde_json::from_value(wire).unwrap();
+
+        assert_eq!(req.request.deployment_id, "dep_test");
+        assert_eq!(req.application, Some(application));
+        assert_eq!(req.operator_image, None);
     }
 
     #[test]
@@ -955,6 +1154,7 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             false,
+            false,
             &deployment
         ));
     }
@@ -966,7 +1166,31 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             true,
+            true,
             &deployment
+        ));
+    }
+
+    #[test]
+    fn hydrates_seeded_resource_prefix_before_first_execution_claim() {
+        let deployment = deployment_record_with_state(
+            "pending",
+            Some(StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "chart-release".to_string(),
+            )),
+        );
+        let report = serde_json::to_value(uninitialized_state()).unwrap();
+
+        assert!(agent_needs_initial_state_hydration(
+            &deployment,
+            Some(&report),
+            false,
+        ));
+        assert!(!agent_needs_initial_state_hydration(
+            &deployment,
+            Some(&report),
+            true,
         ));
     }
 
@@ -977,7 +1201,30 @@ mod tests {
 
         assert!(should_return_current_state_for_agent_sync(
             false,
+            false,
             &deployment
+        ));
+    }
+
+    #[test]
+    fn returns_imported_state_before_an_unclaimed_initial_target() {
+        let deployment = deployment_record_with_state(
+            "pending",
+            Some(StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "helm-release".to_string(),
+            )),
+        );
+
+        assert!(should_return_current_state_for_agent_sync(
+            false,
+            true,
+            &deployment,
+        ));
+        assert!(!should_return_current_state_for_agent_sync(
+            false,
+            false,
+            &deployment,
         ));
     }
 
@@ -1153,11 +1400,14 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, stored_values);
+        assert!(config.stored_secret_input_ids.is_none());
 
         // A control-plane-supplied config owns the values when present.
         let control_plane_values =
             HashMap::from([("enableAnalytics".to_string(), serde_json::json!(false))]);
         deployment.deployment_config = Some(DeploymentConfig {
+            stored_secret_input_ids: Some(vec!["apiKey".to_string()]),
+
             input_values: control_plane_values.clone(),
             ..test_deployment_config()
         });
@@ -1172,6 +1422,26 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, control_plane_values);
+        assert_eq!(
+            config.stored_secret_input_ids,
+            Some(vec!["apiKey".to_string()])
+        );
+
+        deployment
+            .deployment_config
+            .as_mut()
+            .unwrap()
+            .stored_secret_input_ids = Some(Vec::new());
+        let empty = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(empty.stored_secret_input_ids, Some(Vec::new()));
 
         // A config from a control plane that predates gate answers has an
         // empty map; the stored answers must stand in, not the defaults.
@@ -1187,6 +1457,7 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, stored_values);
+        assert!(config.stored_secret_input_ids.is_none());
     }
 
     fn uninitialized_state() -> DeploymentState {
@@ -1206,6 +1477,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            stored_secret_input_ids: None,
             input_values: Default::default(),
             deployment_name: None,
             stack_settings: StackSettings::default(),
@@ -1228,6 +1500,7 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+            volume_restores: Vec::new(),
         }
     }
 
@@ -1316,20 +1589,58 @@ async fn reconcile_agent_report(
     subject: &crate::auth::Subject,
     data: ReconcileData,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
+    dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
 ) -> Result<crate::traits::ReconcileOutcome, AlienError> {
-    match operator_image {
-        Some(operator_image) => {
-            store
-                .reconcile_request(
-                    subject,
-                    ReconcileInput::builder(data)
-                        .operator_image(operator_image)
-                        .build(),
-                )
-                .await
-        }
-        None => store.reconcile(subject, data).await,
+    if operator_image.is_none() && application.is_none() && dynamic_containers.is_none() {
+        return store.reconcile(subject, data).await;
     }
+    let mut request = ReconcileInput::builder(data);
+    if let Some(operator_image) = operator_image {
+        request = request.operator_image(operator_image);
+    }
+    if let Some(application) = application {
+        request = request.application(application);
+    }
+    if let Some(reports) = dynamic_containers {
+        request = request.dynamic_containers(reports);
+    }
+    store.reconcile_request(subject, request.build()).await
+}
+
+/// A completed receipt grants no authority to replay a report or take new work.
+async fn acknowledge_completed_claim(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &crate::auth::Subject,
+    request: &AgentSyncRequest,
+    error_code: &str,
+    tunnel_url: Option<String>,
+) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
+    if !matches!(
+        error_code,
+        "DEPLOYMENT_LEASE_LOST" | "DEPLOYMENT_UPDATE_CLAIM_LOST"
+    ) {
+        return Ok(None);
+    }
+    let Some(claim) = request.execution_claim.as_ref() else {
+        return Ok(None);
+    };
+    if !store
+        .acknowledge_completed_execution(subject, &request.deployment_id, &request.session, claim)
+        .await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(AgentSyncResponse {
+        execution_claim: None,
+        current_state: None,
+        target: None,
+        commands_url: None,
+        target_operations_bundle_set: None,
+        target_dynamic_containers: None,
+        tunnel_url,
+        target_operator_image: None,
+    }))
 }
 
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
@@ -1347,12 +1658,15 @@ async fn reconcile_agent_report(
         ("bearer" = [])
     )
 ))]
+
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(AgentSyncWireRequest {
         request: req,
         operator_image,
+        application,
+        dynamic_containers,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
@@ -1398,6 +1712,19 @@ async fn agent_sync(
             )
             .await
         {
+            match acknowledge_completed_claim(
+                state.deployment_store.as_ref(),
+                &subject,
+                &req,
+                &error.code,
+                state.tunnels.as_ref().map(|_| state.config.base_url()),
+            )
+            .await
+            {
+                Ok(Some(response)) => return Json(response).into_response(),
+                Ok(None) => {}
+                Err(ack_error) => return ack_error.into_response(),
+            }
             return error.into_response();
         }
     }
@@ -1408,6 +1735,7 @@ async fn agent_sync(
     let mut ignored_agent_state_report = false;
     let mut reported_claim_is_terminal = false;
     let mut target_operations_bundle_set = None;
+    let mut target_dynamic_containers = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
     if let Some(current_state_value) = req.current_state.as_ref().filter(|_| {
@@ -1456,18 +1784,34 @@ async fn agent_sync(
                         &subject,
                         reconcile_data,
                         operator_image.clone(),
+                        application.clone(),
+                        dynamic_containers.clone(),
                     )
                     .await;
 
                     match reconcile_result {
                         Err(e) => {
                             if report_has_claim {
+                                match acknowledge_completed_claim(
+                                    state.deployment_store.as_ref(),
+                                    &subject,
+                                    &req,
+                                    &e.code,
+                                    state.tunnels.as_ref().map(|_| state.config.base_url()),
+                                )
+                                .await
+                                {
+                                    Ok(Some(response)) => return Json(response).into_response(),
+                                    Ok(None) => {}
+                                    Err(ack_error) => return ack_error.into_response(),
+                                }
                                 return e.into_response();
                             }
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
+                            target_dynamic_containers = outcome.target_dynamic_containers;
                             if let Err(error) =
                                 crate::registry_access::cleanup_deleted_registry_access(
                                     state.deployment_store.as_ref(),
@@ -1605,94 +1949,20 @@ async fn agent_sync(
             None
         };
 
-        let release_stack_platform = release_stack_platform(deployment.platform);
-        let management_platform =
-            management_platform(deployment.platform, deployment.base_platform);
-
-        // Resolve management config (same pattern as push-mode deployment loop).
-        // 1. From deployment record (platform API / private managers)
-        // 2. From credential resolver (derived from management binding env vars)
-        let management_config = if let Some(mc) = deployment.management_config.clone() {
-            Some(mc)
-        } else {
-            state
-                .credential_resolver
-                .resolve_management_config(management_platform)
-                .await
-                .unwrap_or(None)
-        };
-
-        // Image pull credentials are no longer passed through the sync response.
-        // Pull-model agents pull images through the manager's /v2/ registry proxy.
-        // Push-model Azure Container Apps also use the proxy (they support any registry).
-        // Only AWS Lambda and GCP Cloud Run pull directly from native registries.
-
-        // Extract the agent's deployment token from the Authorization header.
-        // This is reused for pull auth — no new tokens created.
+        // Reused for image pull auth: no new tokens created.
         let agent_token = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.strip_prefix("Bearer "))
             .map(|t| t.to_string());
-
-        let manager_url = state.config.base_url();
-
-        // Derive native image host for Lambda/Cloud Run so controllers
-        // can resolve proxy URIs to native ECR/GAR URIs.
-        let native_image_host = crate::registry_access::derive_native_image_host(
-            &state.bindings_provider,
-            &state.target_bindings_providers,
-            &management_platform,
-        )
-        .await;
-
         match release {
             Some(r) => {
-                let stack = match r.stacks.get(&release_stack_platform) {
-                    Some(s) => s.clone(),
-                    None => {
-                        return ErrorData::internal(format!(
-                            "Release {} does not contain a stack for platform {}",
-                            r.id, release_stack_platform
-                        ))
-                        .into_response();
-                    }
-                };
-
-                let env_vars: Vec<EnvironmentVariable> = deployment
-                    .user_environment_variables
-                    .clone()
-                    .unwrap_or_default();
-
-                // Records loaded for sync always carry stack settings; in a
-                // handler, answer with a 500 rather than panic-dropping the
-                // connection if that invariant is ever broken.
-                let stack_settings = match deployment.stack_settings.clone() {
-                    Some(settings) => settings,
-                    None => {
-                        return ErrorData::internal("synced deployment is missing stack_settings")
-                            .into_response();
-                    }
-                };
-                let config = build_target_deployment_config(
-                    &deployment,
-                    stack_settings,
-                    management_config,
-                    env_vars,
-                    manager_url,
-                    agent_token,
-                    native_image_host,
-                );
-
-                Some(TargetDeployment {
-                    release_info: ReleaseInfo {
-                        release_id: Some(r.id),
-                        version: None,
-                        description: None,
-                        stack,
-                    },
-                    config,
-                })
+                match build_pull_target(&state, &deployment, r, agent_token, req.supports_tunnels)
+                    .await
+                {
+                    Ok(target) => Some(target),
+                    Err(response) => return response,
+                }
             }
             None => None,
         }
@@ -1700,8 +1970,23 @@ async fn agent_sync(
         None
     };
 
-    let should_return_current_state =
-        should_return_current_state_for_agent_sync(ignored_agent_state_report, &deployment);
+    // Return the seeded state before an unclaimed first target starts, and
+    // restore authoritative state when an agent reports an empty snapshot.
+    let unclaimed_initial_state = agent_needs_initial_state_hydration(
+        &deployment,
+        req.current_state.as_ref(),
+        report_has_claim,
+    );
+    let agent_state_uninitialized = req
+        .current_state
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
+        .is_some_and(|state| agent_state_is_uninitialized(&state));
+    let should_return_current_state = should_return_current_state_for_agent_sync(
+        ignored_agent_state_report || unclaimed_initial_state,
+        agent_state_uninitialized,
+        &deployment,
+    );
     let current_state = if should_return_current_state {
         let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
@@ -1731,6 +2016,7 @@ async fn agent_sync(
                         || !req.capabilities.is_empty()
                         || req.operator_version.is_some()
                         || operator_image.is_some()
+                        || application.is_some()
                         || req.operations_report.is_some())
                 {
                     let reconcile_data = ReconcileData {
@@ -1751,6 +2037,8 @@ async fn agent_sync(
                         &subject,
                         reconcile_data,
                         operator_image.clone(),
+                        application.clone(),
+                        dynamic_containers.clone(),
                     )
                     .await;
 
@@ -1764,6 +2052,7 @@ async fn agent_sync(
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
+                            target_dynamic_containers = outcome.target_dynamic_containers;
                         }
                     }
                 }
@@ -1796,8 +2085,190 @@ async fn agent_sync(
         },
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
+        target_dynamic_containers,
+        tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
+        target_operator_image: state
+            .charts
+            .as_ref()
+            .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
     })
     .into_response()
+}
+
+/// The target a pull deployment converges to for `release`: the release's
+/// stack for the deployment's platform and the deployment's configuration.
+/// Sync delivers it to connected Operators; air-gapped bundles carry it.
+/// Remove tunnel declarations from every container in `stack`, for Operators
+/// that would otherwise reject the whole target. Returns whether any were
+/// removed.
+fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
+    let mut removed = false;
+    for (_, entry) in stack.resources_mut() {
+        if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
+            removed |= container.tunnel.take().is_some();
+        }
+    }
+    removed
+}
+
+pub(crate) async fn build_pull_target(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    r: crate::traits::ReleaseRecord,
+    agent_token: Option<String>,
+    operator_supports_tunnels: bool,
+) -> Result<TargetDeployment, Response> {
+    let release_stack_platform = release_stack_platform(deployment.platform);
+    let management_platform = management_platform(deployment.platform, deployment.base_platform);
+
+    // Resolve management config (same pattern as push-mode deployment loop).
+    // 1. From deployment record (platform API / private managers)
+    // 2. From credential resolver (derived from management binding env vars)
+    let management_config = if let Some(mc) = deployment.management_config.clone() {
+        Some(mc)
+    } else {
+        state
+            .credential_resolver
+            .resolve_management_config(management_platform)
+            .await
+            .unwrap_or(None)
+    };
+
+    // Image pull credentials are no longer passed through the sync response.
+    // Pull-model agents pull images through the manager's /v2/ registry proxy.
+    // Push-model Azure Container Apps also use the proxy (they support any registry).
+    // Only AWS Lambda and GCP Cloud Run pull directly from native registries.
+
+    let manager_url = state.config.base_url();
+
+    // Derive native image host for Lambda/Cloud Run so controllers
+    // can resolve proxy URIs to native ECR/GAR URIs.
+    let native_image_host = crate::registry_access::derive_native_image_host(
+        &state.bindings_provider,
+        &state.target_bindings_providers,
+        &management_platform,
+    )
+    .await;
+
+    let mut stack = match r.stacks.get(&release_stack_platform) {
+        Some(s) => s.clone(),
+        None => {
+            return Err(ErrorData::internal(format!(
+                "Release {} does not contain a stack for platform {}",
+                r.id, release_stack_platform
+            ))
+            .into_response());
+        }
+    };
+
+    if !operator_supports_tunnels && remove_container_tunnels(&mut stack) {
+        tracing::info!(
+            deployment_id = %deployment.id,
+            release_id = %r.id,
+            "Operator predates container tunnels; delivering the release without them. Upgrade the Operator to enable tunnels."
+        );
+    }
+
+    let mut env_vars: Vec<EnvironmentVariable> = deployment
+        .user_environment_variables
+        .clone()
+        .unwrap_or_default();
+    // Inputs mapped to environment variables resolve against the
+    // target release, so a release that adds a mapped input takes
+    // effect without re-onboarding. Variables the deployment already
+    // carries win: embedders that resolve inputs themselves (into the
+    // deployment's variables) keep their values, and those mappings aren't
+    // resolved a second time. An input's other mappings still apply.
+    let unresolved_inputs: Vec<_> = stack
+        .inputs
+        .iter()
+        .filter_map(|input| {
+            let mut input = input.clone();
+            input.env.retain(|mapping| {
+                !env_vars
+                    .iter()
+                    .any(|existing| existing.name == mapping.name)
+            });
+            (!input.env.is_empty()).then_some(input)
+        })
+        .collect();
+    let input_env = match alien_core::resolve_stack_input_environment_variables(
+        &unresolved_inputs,
+        &deployment.input_values,
+        deployment.platform,
+    ) {
+        Ok(variables) => variables,
+        Err(e) => {
+            return Err(ErrorData::bad_request(format!(
+                "Deployment input values do not resolve for release {}: {}",
+                r.id, e.message
+            ))
+            .into_response());
+        }
+    };
+    for variable in input_env {
+        if !env_vars
+            .iter()
+            .any(|existing| existing.name == variable.name)
+        {
+            env_vars.push(variable);
+        }
+    }
+
+    // Records loaded for sync always carry stack settings; in a
+    // handler, answer with a 500 rather than panic-dropping the
+    // connection if that invariant is ever broken.
+    let stack_settings = match deployment.stack_settings.clone() {
+        Some(settings) => settings,
+        None => {
+            return Err(
+                ErrorData::internal("synced deployment is missing stack_settings").into_response(),
+            );
+        }
+    };
+    let mut config = build_target_deployment_config(
+        &deployment,
+        stack_settings,
+        management_config,
+        env_vars,
+        manager_url,
+        agent_token,
+        native_image_host,
+    );
+    // Workloads export OTLP to this manager when it forwards
+    // telemetry, the same wiring push deployments get. Stored
+    // monitoring config from an embedder takes precedence.
+    if config.monitoring.is_none() {
+        config.monitoring = default_monitoring(&state.config, &deployment);
+    }
+
+    Ok(TargetDeployment {
+        release_info: ReleaseInfo {
+            release_id: Some(r.id),
+            version: None,
+            description: None,
+            stack,
+        },
+        config,
+    })
+}
+
+fn default_monitoring(
+    config: &crate::config::ManagerConfig,
+    deployment: &DeploymentRecord,
+) -> Option<alien_core::OtlpConfig> {
+    let forwards = config.otlp_endpoint.is_some() || config.enable_local_log_ingest();
+    let token = deployment.deployment_token.as_ref()?;
+    forwards.then(|| alien_core::OtlpConfig {
+        logs_endpoint: format!("{}/v1/logs", config.base_url()),
+        logs_auth_header: format!("authorization=Bearer {token}"),
+        metrics_endpoint: Some(format!("{}/v1/metrics", config.base_url())),
+        metrics_auth_header: Some(format!("authorization=Bearer {token}")),
+        resource_attributes: std::collections::HashMap::from([(
+            "alien.deployment_id".to_string(),
+            deployment.id.clone(),
+        )]),
+    })
 }
 
 fn release_stack_platform(platform: Platform) -> Platform {
@@ -1827,6 +2298,9 @@ fn build_target_deployment_config(
                 .filter(|values| !values.is_empty())
                 .unwrap_or_else(|| deployment.input_values.clone()),
         )
+        .maybe_stored_secret_input_ids(
+            deployment_config.and_then(|config| config.stored_secret_input_ids.clone()),
+        )
         .maybe_management_config(management_config)
         .environment_variables(EnvironmentVariablesSnapshot {
             variables: env_vars,
@@ -1845,6 +2319,11 @@ fn build_target_deployment_config(
         .maybe_manager_url(Some(manager_url))
         .maybe_deployment_token(agent_token)
         .maybe_native_image_host(native_image_host)
+        .volume_restores(
+            deployment_config
+                .map(|config| config.volume_restores.clone())
+                .unwrap_or_default(),
+        )
         .build()
 }
 
@@ -1940,6 +2419,19 @@ fn agent_state_is_uninitialized(state: &DeploymentState) -> bool {
         && state.runtime_metadata.is_none()
 }
 
+fn agent_needs_initial_state_hydration(
+    deployment: &DeploymentRecord,
+    reported_state: Option<&serde_json::Value>,
+    has_execution_claim: bool,
+) -> bool {
+    !has_execution_claim
+        && deployment_has_authoritative_state(deployment)
+        && reported_state
+            .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
+            .as_ref()
+            .is_some_and(agent_state_is_uninitialized)
+}
+
 fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
     deployment.stack_state.is_some()
         || deployment.environment_info.is_some()
@@ -1950,9 +2442,13 @@ fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
 
 fn should_return_current_state_for_agent_sync(
     ignored_agent_state_report: bool,
+    agent_state_uninitialized: bool,
     deployment: &DeploymentRecord,
 ) -> bool {
-    ignored_agent_state_report || deployment.retry_requested || deployment_is_deleting(deployment)
+    ignored_agent_state_report
+        || (agent_state_uninitialized && deployment_has_authoritative_state(deployment))
+        || deployment.retry_requested
+        || deployment_is_deleting(deployment)
 }
 
 fn deployment_is_deleting(deployment: &DeploymentRecord) -> bool {
@@ -2153,6 +2649,16 @@ async fn initialize(
                 .name
                 .unwrap_or_else(|| format!("agent-{}", &ids::deployment_id()[3..9]));
             let platform = req.platform.unwrap_or(Platform::Kubernetes);
+            let stack_state = match req.resource_prefix {
+                Some(resource_prefix) => {
+                    if !alien_core::is_valid_resource_prefix(&resource_prefix) {
+                        return ErrorData::bad_request(alien_core::RESOURCE_PREFIX_ERROR_MESSAGE)
+                            .into_response();
+                    }
+                    Some(StackState::with_resource_prefix(platform, resource_prefix))
+                }
+                None => None,
+            };
             let base_platform = match validate_initialize_base_platform(platform, req.base_platform)
             {
                 Ok(base_platform) => base_platform,
@@ -2166,6 +2672,19 @@ async fn initialize(
                 .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
+                if let Some(requested) = &stack_state {
+                    if existing
+                        .stack_state
+                        .as_ref()
+                        .map(|state| &state.resource_prefix)
+                        != Some(&requested.resource_prefix)
+                    {
+                        return ErrorData::bad_request(
+                            "Deployment already uses a different resource prefix",
+                        )
+                        .into_response();
+                    }
+                }
                 let (raw_token, key_prefix, key_hash) =
                     ids::generate_token(TokenType::Deployment.prefix());
                 return match state
@@ -2198,12 +2717,70 @@ async fn initialize(
                     Err(e) => return e.into_response(),
                 };
 
-            // Create deployment with a token (reuse the agent's Bearer token)
-            let dep_token = headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.strip_prefix("Bearer "))
-                .map(|t| t.to_string());
+            // The deployment's own token: what its workloads use for image
+            // pulls and telemetry. Never the group token the Operator
+            // registered with, which can create deployments.
+            let (raw_token, key_prefix, key_hash) =
+                ids::generate_token(TokenType::Deployment.prefix());
+            let dep_token = Some(raw_token.clone());
+
+            // The release a deployment created here starts on. Install values
+            // come from the deployer, who may not choose a generated secret:
+            // refuse them before anything is created.
+            let starting_release =
+                match super::channels::release_for_deployment(&state, &subject, None).await {
+                    Ok(release) => release,
+                    Err(e) => return e.into_response(),
+                };
+            if let Some(stack) = starting_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                if let Err(e) = crate::generated_inputs::reject_generated_input_values(
+                    &stack.inputs,
+                    &req.input_values,
+                ) {
+                    return e.into_response();
+                }
+            }
+
+            // Developer-provided setup on the group applies to every deployment
+            // it creates; values supplied by the deployer at install win.
+            let group_setup = match state
+                .deployment_store
+                .get_deployment_group(&subject, &dg_id)
+                .await
+            {
+                Ok(Some(group)) => group.setup,
+                Ok(None) => {
+                    return AlienError::new(ErrorData::DeploymentGroupNotFound {
+                        deployment_group_id: dg_id.clone(),
+                    })
+                    .into_response();
+                }
+                Err(e) => return e.into_response(),
+            };
+            let mut input_values = group_setup.input_values;
+            input_values.extend(req.input_values);
+            let environment_variables = (!group_setup.environment_variables.is_empty())
+                .then_some(group_setup.environment_variables);
+
+            // Generated secret inputs get their value from the starting
+            // release's stack now, once, and keep it in the stored input
+            // values for every later update.
+            let initial_release = (req.initial_desired_release == InitialDesiredRelease::Active)
+                .then_some(starting_release)
+                .flatten();
+            if let Some(stack) = initial_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                crate::generated_inputs::generate_missing_input_values(
+                    &stack.inputs,
+                    platform,
+                    &mut input_values,
+                );
+            }
 
             let deployment = match state
                 .deployment_store
@@ -2217,10 +2794,10 @@ async fn initialize(
                         platform,
                         base_platform,
                         stack_settings: settings,
-                        stack_state: None,
-                        environment_variables: None,
+                        stack_state,
+                        environment_variables,
                         public_subdomain: None,
-                        input_values: req.input_values,
+                        input_values,
                         setup_item: req.setup_item,
                         deployment_token: dep_token,
                     },
@@ -2231,21 +2808,20 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
 
-            if req.initial_desired_release == InitialDesiredRelease::Active {
-                // Initialize is the agent's own bootstrap: keep the caller's
-                // subject for reads and writes so embedders can authorize
-                // against the agent's scope rather than a service credential.
-                if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
-                    let _ = state
-                        .deployment_store
-                        .set_deployment_desired_release(&subject, &deployment.id, &release.id)
-                        .await;
+            // Initialize is the agent's own bootstrap: keep the caller's
+            // subject for reads and writes so embedders can authorize
+            // against the agent's scope rather than a service credential.
+            if let Some(release) = &initial_release {
+                if let Err(e) = state
+                    .deployment_store
+                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
+                    .await
+                {
+                    return e.into_response();
                 }
             }
 
-            // Create a deployment token for the new deployment
-            let (raw_token, key_prefix, key_hash) =
-                ids::generate_token(TokenType::Deployment.prefix());
+            // Record the deployment token minted above.
             match state
                 .token_store
                 .create_token(CreateTokenParams {
@@ -2272,48 +2848,54 @@ async fn initialize(
             }
         }
         crate::auth::Scope::Workspace | crate::auth::Scope::Project { .. } => {
-            // Admin / workspace tokens on standalone managers: find the most
-            // recent deployment and assign the agent to it. Self-hosted
-            // workflow where the operator creates a deployment via the API
-            // and then starts an agent with the admin token.
-            let filter = DeploymentFilter {
-                deployment_group_id: None,
-                deployment_ids: None,
-                statuses: None,
-                platforms: None,
-                limit: Some(1),
-                ..DeploymentFilter::default()
-            };
-            match state
+            // Self-hosted flow: the operator creates a deployment, then starts an agent with a
+            // workspace or project token. Being listed is not a sync grant, so the agent gets
+            // the newest deployment `Authz` lets the caller sync.
+            let filter = DeploymentFilter::default();
+            let deployments = match state
                 .deployment_store
                 .list_deployments(&subject, &filter)
                 .await
             {
-                Ok(deployments) if !deployments.is_empty() => {
-                    let deployment = &deployments[0];
-                    let deployment_id = deployment.id.clone();
-                    tracing::info!(
-                        %deployment_id,
-                        "Admin token: assigning agent to existing deployment"
-                    );
-                    Json(InitializeResponse {
-                        deployment_model: super::deployments::deployment_model_for_record(
-                            deployment,
-                        ),
-                        deployment_id,
-                        token: None,
-                    })
-                    .into_response()
-                }
-                Ok(_) => ErrorData::bad_request(
+                Ok(deployments) => deployments,
+                Err(e) => return e.into_response(),
+            };
+            // Only deployments the caller may read count, so a 400 reveals nothing it could not
+            // list itself.
+            if !deployments
+                .iter()
+                .any(|deployment| state.authz.can_read_deployment(&subject, deployment))
+            {
+                return ErrorData::bad_request(
                     "No deployments found. Create a deployment before initializing an agent.",
                 )
-                .into_response(),
-                Err(e) => e.into_response(),
+                .into_response();
             }
+            let Some(deployment) = deployments
+                .iter()
+                .find(|deployment| state.authz.can_sync_deployment(&subject, deployment))
+            else {
+                return ErrorData::forbidden("Caller cannot assign an agent to any deployment")
+                    .into_response();
+            };
+            let deployment_id = deployment.id.clone();
+            tracing::info!(
+                %deployment_id,
+                "Workspace or project token: assigning agent to existing deployment"
+            );
+            Json(InitializeResponse {
+                deployment_model: super::deployments::deployment_model_for_record(deployment),
+                deployment_id,
+                token: None,
+            })
+            .into_response()
         }
         crate::auth::Scope::Commands { .. } => {
             ErrorData::forbidden("Command credentials cannot initialize deployments")
+                .into_response()
+        }
+        crate::auth::Scope::RemoteBindings { .. } => {
+            ErrorData::forbidden("Remote bindings credentials cannot initialize deployments")
                 .into_response()
         }
         crate::auth::Scope::Telemetry { .. } => {

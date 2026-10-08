@@ -4,11 +4,14 @@ use crate::{
     block::{attr, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, nested_block, required_label, resource_prefix_template, tags,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
+        nested_block, required_label, resource_prefix_template, tags,
     },
     expr,
 };
-use alien_core::{import::EmitContext, Kv, Result};
+use alien_core::{import::EmitContext, ErrorData, Kv, RemoteBindings, Result};
+use alien_error::AlienError;
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -67,7 +70,40 @@ impl TfEmitter for AwsKvEmitter {
             ],
         );
 
-        Ok(TfFragment::default().with_resource(table))
+        let mut fragment = TfFragment::default().with_resource(table);
+        if let Some(definition) =
+            alien_core::remote_bindings::remote_binding_for_entry(ctx.resource)
+        {
+            if let Some(access_label) = ctx.stack.resources().find_map(|(id, entry)| {
+                (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+                    .then(|| ctx.name_for(id))
+                    .flatten()
+            }) {
+                let permission_set = alien_permissions::get_permission_set(
+                    definition.permission_set,
+                )
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "Remote KV permission set {} is not registered",
+                            definition.permission_set
+                        ),
+                    })
+                })?;
+                let context = aws_terraform_permission_context()
+                    .with_resource_name(format!("${{aws_dynamodb_table.{label}.name}}"));
+                emit_iam_role_policy_for_target_with_label(
+                    &mut fragment,
+                    access_label,
+                    permission_set,
+                    &format!("{label}_remote_access"),
+                    &format!("access-{}", kv.id()),
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
+        }
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {

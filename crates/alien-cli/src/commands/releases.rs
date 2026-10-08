@@ -112,7 +112,7 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             if channel.is_some() || all_channels {
                 return Err(alien_error::AlienError::new(
                     ErrorData::ConfigurationError {
-                        message: "Release channel filters require platform mode.".to_string(),
+                        message: "This manager lists every release; `alien releases channels` shows the release each channel points at.".to_string(),
                     },
                 ));
             }
@@ -138,8 +138,22 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             channel,
             project,
             json,
-        } => promote_release_task(&ctx, &id, &channel, project.as_deref(), json).await,
+        } => {
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), json).await?;
+                return crate::commands::release_channels_manager::promote(
+                    &client, &id, &channel, json,
+                )
+                .await;
+            }
+            promote_release_task(&ctx, &id, &channel, project.as_deref(), json).await
+        }
         ReleasesCmd::Channels { project, json } => {
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), json).await?;
+                return crate::commands::release_channels_manager::list_channels(&client, json)
+                    .await;
+            }
             list_channels_task(&ctx, project.as_deref(), json).await
         }
         ReleasesCmd::CreateChannel {
@@ -147,11 +161,36 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             project,
             release,
             json,
-        } => create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await,
+        } => {
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), json).await?;
+                return crate::commands::release_channels_manager::create_channel(
+                    &client,
+                    &name,
+                    release.as_deref(),
+                    json,
+                )
+                .await;
+            }
+            create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await
+        }
         ReleasesCmd::DeleteChannel { name, project } => {
+            if !ctx.is_platform() {
+                let client = manager_client(&ctx, project.as_deref(), false).await?;
+                return crate::commands::release_channels_manager::delete_channel(&client, &name)
+                    .await;
+            }
             delete_channel_task(&ctx, &name, project.as_deref()).await
         }
     }
+}
+
+async fn manager_client(
+    ctx: &ExecutionMode,
+    project: Option<&str>,
+    json: bool,
+) -> Result<alien_manager_api::Client> {
+    crate::commands::deployments::resolve_manager_client(ctx, project, !json).await
 }
 
 #[cfg(feature = "platform")]
@@ -192,7 +231,7 @@ async fn list_platform_releases_task(
         println!("(no releases)");
         return Ok(());
     }
-    let mut table = make_table(&["ID", "Created", "Commit", "Ref", "Channels"]);
+    let mut table = make_table(&["ID", "Title", "Created", "Commit", "Ref", "Channels"]);
     for release in &response.items {
         let value = serde_json::to_value(release).unwrap_or_default();
         let text = |pointer: &str| {
@@ -204,6 +243,7 @@ async fn list_platform_releases_task(
         };
         table.add_row(vec![
             comfy_table::Cell::new(release.id.to_string()),
+            comfy_table::Cell::new(text("/title")),
             comfy_table::Cell::new(release.created_at.to_string()),
             comfy_table::Cell::new(text("/gitMetadata/commitSha")),
             comfy_table::Cell::new(text("/gitMetadata/commitRef")),
@@ -231,7 +271,7 @@ async fn list_platform_releases_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -288,7 +328,7 @@ async fn list_channels_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -356,7 +396,7 @@ async fn create_channel_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -396,7 +436,7 @@ async fn delete_channel_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release channels require platform mode.".to_string(),
+            message: "This manager doesn't support release channels: every release goes to every deployment.".to_string(),
         },
     ))
 }
@@ -502,7 +542,7 @@ async fn promote_release_task(
 ) -> Result<()> {
     Err(alien_error::AlienError::new(
         ErrorData::ConfigurationError {
-            message: "Release promotion requires platform mode.".to_string(),
+            message: "This manager doesn't support release promotion: every release goes to every deployment.".to_string(),
         },
     ))
 }

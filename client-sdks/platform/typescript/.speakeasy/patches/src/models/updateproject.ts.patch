@@ -1,0 +1,32 @@
+diff --git a/src/models/updateproject.ts b/src/models/updateproject.ts
+--- a/src/models/updateproject.ts
++++ b/src/models/updateproject.ts
+@@ -1439,3 +1439,28 @@
+ export function updateProjectToJSON(updateProject: UpdateProject): string {
+   return JSON.stringify(UpdateProject$outboundSchema.parse(updateProject));
+ }
++
++// Preserve published model imports across generator naming changes.
++export const UpdateProjectBinaryTarget = UpdateProjectPackagesConfigBinaryTarget;
++export type UpdateProjectBinaryTarget = UpdateProjectPackagesConfigBinaryTarget;
++export const UpdateProjectBinaryTarget$outboundSchema = UpdateProjectPackagesConfigBinaryTarget$outboundSchema;
++export type UpdateProjectCli = UpdateProjectPackagesConfigCli;
++export type UpdateProjectCli$Outbound = UpdateProjectPackagesConfigCli$Outbound;
++export const UpdateProjectCli$outboundSchema = UpdateProjectPackagesConfigCli$outboundSchema;
++export const updateProjectCliToJSON = updateProjectPackagesConfigCliToJSON;
++export type UpdateProjectCloudformation = UpdateProjectPackagesConfigCloudformation;
++export type UpdateProjectCloudformation$Outbound = UpdateProjectPackagesConfigCloudformation$Outbound;
++export const UpdateProjectCloudformation$outboundSchema = UpdateProjectPackagesConfigCloudformation$outboundSchema;
++export const updateProjectCloudformationToJSON = updateProjectPackagesConfigCloudformationToJSON;
++export type UpdateProjectHelm = UpdateProjectPackagesConfigHelm;
++export type UpdateProjectHelm$Outbound = UpdateProjectPackagesConfigHelm$Outbound;
++export const UpdateProjectHelm$outboundSchema = UpdateProjectPackagesConfigHelm$outboundSchema;
++export const updateProjectHelmToJSON = updateProjectPackagesConfigHelmToJSON;
++export type UpdateProjectOperatorImage = UpdateProjectPackagesConfigOperatorImage;
++export type UpdateProjectOperatorImage$Outbound = UpdateProjectPackagesConfigOperatorImage$Outbound;
++export const UpdateProjectOperatorImage$outboundSchema = UpdateProjectPackagesConfigOperatorImage$outboundSchema;
++export const updateProjectOperatorImageToJSON = updateProjectPackagesConfigOperatorImageToJSON;
++export type UpdateProjectTerraform = UpdateProjectPackagesConfigTerraform;
++export type UpdateProjectTerraform$Outbound = UpdateProjectPackagesConfigTerraform$Outbound;
++export const UpdateProjectTerraform$outboundSchema = UpdateProjectPackagesConfigTerraform$outboundSchema;
++export const updateProjectTerraformToJSON = updateProjectPackagesConfigTerraformToJSON;

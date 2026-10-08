@@ -13,7 +13,8 @@ use super::helpers::{
     snapshot_module,
 };
 use alien_core::{
-    AzureResourceGroup, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
+    AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
+    Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
@@ -33,6 +34,58 @@ fn storage_data_read_service_account() -> ServiceAccount {
                 .clone(),
         )
         .build()
+}
+
+#[test]
+fn kubernetes_compute_pools_do_not_emit_cloud_fleets_or_choices() {
+    let baseline = Stack::new("portable".to_string()).build();
+    let stack = Stack::new("portable".to_string())
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "apps".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 3,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .dynamic_container_pool("apps".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        compute: Some(ComputeSettings {
+            pools: [(
+                "apps".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("provider-machine".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        ..Default::default()
+    };
+    // Compare the complete install artifact, including registration and advanced
+    // settings. No cloud emitter exists for this resource in the built-in registry:
+    // accidentally dispatching it to a cloud backend fails before comparison.
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        let expected = render(&baseline, target, StackSettings::default());
+        let actual = render(&stack, target, settings.clone());
+        assert_eq!(
+            actual.files, expected.files,
+            "logical pools changed {target:?} infrastructure"
+        );
+    }
 }
 
 #[test]
@@ -88,13 +141,13 @@ fn eks_overlay_use_default_network_emits_az_filtered_default_vpc_subnets() {
 
     // The default VPC + AZ-filtered subnet data sources must be present.
     assert!(
-        rendered.contains("data \"aws_vpc\" \"kubernetes_default\""),
-        "expected `data aws_vpc kubernetes_default` block, got:\n{}",
+        rendered.contains("data \"aws_vpc\" \"default_network_default\""),
+        "expected `data aws_vpc default_network_default` block, got:\n{}",
         rendered
     );
     assert!(
-        rendered.contains("data \"aws_subnets\" \"kubernetes_default\""),
-        "expected `data aws_subnets kubernetes_default` block"
+        rendered.contains("data \"aws_subnets\" \"default_network_default\""),
+        "expected `data aws_subnets default_network_default` block"
     );
     assert!(
         rendered.contains("exclude_zone_ids = var.unsupported_availability_zone_ids"),
@@ -103,7 +156,7 @@ fn eks_overlay_use_default_network_emits_az_filtered_default_vpc_subnets() {
     // The EKS subnet_ids ternary must route through the default data source
     // for use-default. Looking for the specific terminal branch is enough.
     assert!(
-        rendered.contains("data.aws_subnets.kubernetes_default[0].ids"),
+        rendered.contains("data.aws_subnets.default_network_default.ids"),
         "expected EKS subnet_ids to reference the default-VPC subnet data source"
     );
     // The variable itself must be declared with AZ IDs (not names) as the
@@ -539,6 +592,48 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
 }
 
 #[test]
+fn eks_created_network_with_irsa_and_remote_management_is_valid() {
+    let stack = Stack::new("eks-created-network-identity".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("kubernetes", ["kubernetes-cluster/heartbeat"]),
+        ))
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            storage_data_read_service_account(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    assert_terraform_valid(&module, "eks_created_network_identity");
+}
+
+#[test]
 fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
     let stack = Stack::new("eks-custom-exposure".to_string())
         .add(
@@ -923,4 +1018,71 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
     assert!(rendered.contains("data.google_client_config.current.access_token"));
     assert!(!rendered.contains("client-certificate-data"));
     assert!(!rendered.contains("client-key-data"));
+}
+
+#[test]
+fn eks_declared_network_is_shared_with_cluster_in_every_mode() {
+    for network in [
+        NetworkSettings::UseDefault,
+        NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        },
+        NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-0123456789abcdef0".to_string(),
+            public_subnet_ids: vec!["subnet-public".to_string()],
+            private_subnet_ids: vec!["subnet-private".to_string()],
+            security_group_ids: vec!["sg-0123456789abcdef0".to_string()],
+        },
+    ] {
+        let stack = Stack::new("shared-network".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(network)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(KubernetesClusterProvider::Eks)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+        let rendered = module
+            .iter()
+            .map(|(_, v)| v.as_ref())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        assert!(!rendered.contains("resource \"aws_vpc\" \"kubernetes\""));
+        assert!(!rendered.contains("resource \"aws_subnet\" \"kubernetes_private\""));
+        assert!(rendered.contains("data.aws_subnets.kubernetes_private_selected[0].ids"));
+        assert!(rendered.contains("data.aws_subnets.kubernetes_public_selected[0].ids"));
+        // Provider validation checks every generated reference against the actual topology.
+        assert_terraform_valid(&module, "eks_shared_network");
+    }
+}
+
+#[test]
+fn aks_brought_network_uses_data_subnet_for_node_pool() {
+    let stack = Stack::new("aks-byo".to_string())
+        .add(Network::new("default-network".to_string()).settings(NetworkSettings::ByoVnetAzure {
+            vnet_resource_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/shared/providers/Microsoft.Network/virtualNetworks/shared".to_string(),
+            public_subnet_name: "public".to_string(), private_subnet_name: "private".to_string(),
+            application_gateway_subnet_name: None, private_endpoint_subnet_name: None,
+        }).build(), ResourceLifecycle::Frozen)
+        .add(KubernetesCluster::new("kubernetes".to_string()).provider(KubernetesClusterProvider::Aks)
+            .ownership(KubernetesClusterOwnership::Managed).namespace("default".to_string()).heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata).build(), ResourceLifecycle::Frozen).build();
+    let module = render(&stack, TerraformTarget::Aks, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, v)| v.as_ref())
+        .collect::<Vec<&str>>()
+        .join("\n");
+    assert!(rendered.contains("vnet_subnet_id = data.azurerm_subnet.default_network_private.id"));
+    assert_terraform_valid(&module, "aks_byo_shared_network");
 }

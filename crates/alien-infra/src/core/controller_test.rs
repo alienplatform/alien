@@ -266,6 +266,30 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
+/// Asserts that no wait suggested during one phase (create, update, delete) is shorter than
+/// `min_delay`; a shorter wait would hammer the cloud API in production.
+pub fn assert_polling_delays(delays: &[Duration], min_delay: Duration, phase: &str) {
+    assert!(
+        delays.iter().all(|delay| *delay >= min_delay),
+        "{phase} polls should each wait at least {min_delay:?}, got {delays:?}"
+    );
+}
+
+/// How [`SingleControllerExecutor`] waits between controller steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DelayMode {
+    /// Record each suggested delay and continue at once. Mocked providers answer
+    /// immediately, so sleeping only adds wall-clock time.
+    #[default]
+    Record,
+    /// Sleep for each suggested delay. For tests against real cloud APIs.
+    Real,
+}
+
+/// Longest delay a controller may suggest between steps. Anything longer is a polling bug
+/// (for example a seconds/milliseconds mix-up) that would stall a real deployment.
+pub const MAX_SUGGESTED_DELAY: Duration = Duration::from_secs(10 * 60);
+
 /// A simplified executor for testing a single controller.
 ///
 /// This executor allows you to test a controller in isolation, including update and delete operations.
@@ -323,6 +347,8 @@ pub struct SingleControllerExecutor {
     monitoring: Option<alien_core::OtlpConfig>,
     // Domain metadata for public resources (certificates, DNS)
     domain_metadata: Option<DomainMetadata>,
+    // Volume restore requests carried in the deployment config
+    volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     // Public endpoint URL overrides for testing.
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     // Stack and state
@@ -336,6 +362,10 @@ pub struct SingleControllerExecutor {
     resource_prefix: String,
     // Heartbeats emitted by the most recent step.
     last_heartbeats: Vec<ResourceHeartbeat>,
+    initial_setup_authority: alien_core::InitialSetupAuthority,
+    // How to wait between steps, and the delays the controller suggested so far.
+    delay_mode: DelayMode,
+    suggested_delays: Vec<Duration>,
 }
 
 impl SingleControllerExecutor {
@@ -387,10 +417,11 @@ impl SingleControllerExecutor {
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
                 .maybe_public_endpoints(self.public_endpoints.clone())
+                .volume_restores(self.volume_restores.clone())
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
-            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            initial_setup_authority: self.initial_setup_authority,
             heartbeat_collector: HeartbeatCollector::default(),
         };
 
@@ -408,6 +439,50 @@ impl SingleControllerExecutor {
         }
 
         Ok(step_result)
+    }
+
+    /// Every delay the controller suggested between steps, in order. Tests assert on these
+    /// to pin polling behavior; with the default [`DelayMode::Record`] they are not slept.
+    pub fn suggested_delays(&self) -> &[Duration] {
+        &self.suggested_delays
+    }
+
+    /// Returns the delays recorded since the last call and clears them, so a test can check
+    /// one phase (create, update, delete) at a time.
+    pub fn take_suggested_delays(&mut self) -> Vec<Duration> {
+        std::mem::take(&mut self.suggested_delays)
+    }
+
+    /// Records the controller's suggested delay, rejects an implausible one, and waits
+    /// before the next step according to the executor's [`DelayMode`].
+    async fn wait_for_next_step(&mut self, suggested: Option<Duration>) -> Result<()> {
+        if let Some(delay) = suggested {
+            debug!("Controller suggested delay of {:?}", delay);
+            if delay > MAX_SUGGESTED_DELAY {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Controller suggested waiting {delay:?} before its next step; \
+                         more than {MAX_SUGGESTED_DELAY:?} would stall a real deployment"
+                    ),
+                    operation: Some("wait_for_next_step".to_string()),
+                    resource_id: Some(self.resource_id.clone()),
+                }));
+            }
+            self.suggested_delays.push(delay);
+        }
+
+        match self.delay_mode {
+            DelayMode::Record => {
+                #[cfg(not(target_arch = "wasm32"))]
+                tokio::task::yield_now().await;
+            }
+            DelayMode::Real => {
+                // Without a suggestion, a short pause keeps a live loop from spinning.
+                #[cfg(not(target_arch = "wasm32"))]
+                tokio::time::sleep(suggested.unwrap_or(Duration::from_millis(50))).await;
+            }
+        }
+        Ok(())
     }
 
     /// Runs the controller until it reaches a "synced" state.
@@ -437,15 +512,7 @@ impl SingleControllerExecutor {
             // Don't wait for suggested delays once we're synced - heartbeats suggest delays
             // but we want to stop as soon as we reach the desired state
             if !self.is_synced() {
-                if let Some(delay) = step_result.suggested_delay {
-                    debug!("Controller suggested delay of {:?}", delay);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(delay).await;
-                } else {
-                    // Small delay to prevent tight loops
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+                self.wait_for_next_step(step_result.suggested_delay).await?;
             }
 
             step_count += 1;
@@ -486,13 +553,7 @@ impl SingleControllerExecutor {
 
             let step_result = self.step().await?;
             if self.controller.get_status() != expected {
-                if let Some(delay) = step_result.suggested_delay {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(delay).await;
-                } else {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+                self.wait_for_next_step(step_result.suggested_delay).await?;
             }
 
             step_count += 1;
@@ -591,6 +652,55 @@ impl SingleControllerExecutor {
     }
 
     /// Gets the current status of the controller.
+    /// Runs `f` with the controller context the next step would see, for
+    /// checks that are not steps (for example `needs_update`).
+    pub fn with_context<T>(&self, f: impl FnOnce(&ResourceControllerContext<'_>) -> T) -> T {
+        let desired_config = self
+            .desired_stack
+            .resources
+            .get(&self.resource_id)
+            .map(|entry| entry.config.clone())
+            .expect("the resource is in the desired stack");
+        let deployment_config = DeploymentConfig::builder()
+            .stack_settings(self.stack_settings.clone())
+            .maybe_management_config(self.management_config.clone())
+            .maybe_compute_backend(self.compute_backend.clone())
+            .environment_variables(self.environment_variables.clone())
+            .maybe_monitoring(self.monitoring.clone())
+            .external_bindings(self.external_bindings.clone())
+            .allow_frozen_changes(false)
+            .maybe_domain_metadata(self.domain_metadata.clone())
+            .maybe_public_endpoints(self.public_endpoints.clone())
+            .volume_restores(self.volume_restores.clone())
+            .manager_url("https://test-manager.alien.dev".to_string())
+            .deployment_token("test-deployment-token".to_string())
+            .build();
+        let context = ResourceControllerContext {
+            desired_config: &desired_config,
+            platform: self.platform,
+            client_config: self.client_config.clone(),
+            state: &self.stack_state,
+            resource_prefix: &self.resource_prefix,
+            registry: &self.registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        f(&context)
+    }
+
+    /// Whether the controller asks for an update with an unchanged config.
+    pub fn needs_update(&self) -> Result<bool> {
+        self.with_context(|ctx| self.controller.needs_update(ctx))
+    }
+
+    /// Replaces the volume restore requests the next steps see in the deployment config.
+    pub fn set_volume_restores(&mut self, requests: Vec<alien_core::VolumeRestoreRequest>) {
+        self.volume_restores = requests;
+    }
+
     pub fn status(&self) -> ResourceStatus {
         self.controller.get_status()
     }
@@ -621,6 +731,7 @@ impl SingleControllerExecutor {
 /// Builder for SingleControllerExecutor
 pub struct SingleControllerExecutorBuilder {
     resource: Option<Resource>,
+    previous_resource: Option<Resource>,
     controller: Option<Box<dyn ResourceController>>,
     platform: Option<Platform>,
     stack_settings: StackSettings,
@@ -630,17 +741,25 @@ pub struct SingleControllerExecutorBuilder {
     external_bindings: ExternalBindings,
     monitoring: Option<alien_core::OtlpConfig>,
     domain_metadata: Option<DomainMetadata>,
+    // Volume restore requests carried in the deployment config
+    volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
+    stack_resources: Vec<(Resource, ResourceLifecycle)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
+    initial_setup_authority: alien_core::InitialSetupAuthority,
+    resource_prefix: String,
+    permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
+    delay_mode: DelayMode,
 }
 
 impl SingleControllerExecutorBuilder {
     fn new() -> Self {
         Self {
             resource: None,
+            previous_resource: None,
             controller: None,
             platform: None,
             stack_settings: StackSettings::default(),
@@ -654,18 +773,54 @@ impl SingleControllerExecutorBuilder {
             external_bindings: ExternalBindings::default(),
             monitoring: None,
             domain_metadata: None,
+            volume_restores: Vec::new(),
             public_endpoints: None,
             dependencies: Vec::new(),
+            stack_resources: Vec::new(),
             service_provider: None,
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            resource_prefix: "test".to_string(),
+            permission_profiles: Vec::new(),
+            delay_mode: DelayMode::default(),
         }
+    }
+
+    /// Sleeps for each delay the controller suggests. Use it for tests that drive real
+    /// cloud APIs; mocked tests keep the default, which records delays without sleeping.
+    pub fn real_delays(mut self) -> Self {
+        self.delay_mode = DelayMode::Real;
+        self
+    }
+
+    /// Sets the deployment's resource prefix. Defaults to `test`.
+    pub fn resource_prefix(mut self, resource_prefix: impl Into<String>) -> Self {
+        self.resource_prefix = resource_prefix.into();
+        self
+    }
+
+    /// Sets the authority the controller runs under. Direct setup's by default; an update or
+    /// the runtime loop runs as `ImportedHandoff`.
+    pub fn initial_setup_authority(mut self, authority: alien_core::InitialSetupAuthority) -> Self {
+        self.initial_setup_authority = authority;
+        self
     }
 
     /// Sets the main resource's lifecycle in stack and state. Live by default; a controller
     /// that branches on ownership needs the Frozen shape to be constructible too.
     pub fn resource_lifecycle(mut self, lifecycle: ResourceLifecycle) -> Self {
         self.resource_lifecycle = lifecycle;
+        self
+    }
+
+    /// Adds a permission profile to the stack, next to the default one every test stack has.
+    pub fn permission_profile(
+        mut self,
+        name: impl Into<String>,
+        profile: alien_core::permissions::PermissionProfile,
+    ) -> Self {
+        self.permission_profiles.push((name.into(), profile));
         self
     }
 
@@ -711,6 +866,12 @@ impl SingleControllerExecutorBuilder {
         self
     }
 
+    /// Sets the volume restore requests in the deployment config.
+    pub fn volume_restores(mut self, requests: Vec<alien_core::VolumeRestoreRequest>) -> Self {
+        self.volume_restores = requests;
+        self
+    }
+
     /// Sets public endpoint URL overrides for testing.
     /// Overrides the FQDN-derived URL from domain_metadata, useful for pointing
     /// readiness probes at mock HTTP servers during tests.
@@ -726,6 +887,12 @@ impl SingleControllerExecutorBuilder {
     }
 
     /// Sets the controller to test.
+    /// Restores the previous config when resuming a persisted update handler.
+    pub fn previous_resource<R: ResourceDefinition>(mut self, resource: R) -> Self {
+        self.previous_resource = Some(Resource::new(resource));
+        self
+    }
+
     pub fn controller(mut self, controller: impl ResourceController + 'static) -> Self {
         self.controller = Some(Box::new(controller));
         self
@@ -747,6 +914,18 @@ impl SingleControllerExecutorBuilder {
         let resource_ref = ResourceRef::new(resource.resource_type(), resource.id());
         self.dependencies
             .push((resource_ref, resource, Box::new(controller)));
+        self
+    }
+
+    /// Adds a resource the stack declares that the main resource does not depend on, not yet
+    /// created. For a controller whose behaviour depends on what else is in the stack.
+    pub fn with_stack_resource<R: ResourceDefinition>(
+        mut self,
+        resource: R,
+        lifecycle: ResourceLifecycle,
+    ) -> Self {
+        self.stack_resources
+            .push((Resource::new(resource), lifecycle));
         self
     }
 
@@ -974,6 +1153,28 @@ impl SingleControllerExecutorBuilder {
             stack_state.resources.insert(dep_id, stack_resource_state);
         }
 
+        for (other, lifecycle) in &self.stack_resources {
+            stack_resources.insert(
+                other.id().to_string(),
+                ResourceEntry {
+                    config: other.clone(),
+                    lifecycle: *lifecycle,
+                    dependencies: vec![],
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack_state.resources.insert(
+                other.id().to_string(),
+                StackResourceState::new_pending(
+                    other.resource_type().to_string(),
+                    other.clone(),
+                    Some(*lifecycle),
+                    vec![],
+                ),
+            );
+        }
+
         // Add the main resource
         let status = controller.get_status();
         let outputs = controller.get_outputs();
@@ -1006,6 +1207,7 @@ impl SingleControllerExecutorBuilder {
             .resource_type(resource.resource_type().to_string())
             .status(status)
             .config(resource.clone())
+            .maybe_previous_config(self.previous_resource)
             .maybe_internal_state(internal_state)
             .maybe_outputs(outputs)
             .lifecycle(self.resource_lifecycle)
@@ -1032,6 +1234,7 @@ impl SingleControllerExecutorBuilder {
 
         let mut permissions = IndexMap::new();
         permissions.insert("default-profile".to_string(), default_profile);
+        permissions.extend(self.permission_profiles.clone());
 
         let mut stack = Stack {
             id: "test-stack".to_string(),
@@ -1042,10 +1245,12 @@ impl SingleControllerExecutorBuilder {
             },
             supported_platforms: None,
             inputs: vec![],
+            dynamic_container_repositories: vec![],
+            dynamic_container_image_resources: vec![],
         };
 
         // Set resource prefix in stack state
-        stack_state.resource_prefix = "test".to_string();
+        stack_state.resource_prefix = self.resource_prefix.clone();
 
         // Apply mutations only (skip compile-time checks) to process the stack
         let preflight_runner = PreflightRunner::new();
@@ -1169,6 +1374,7 @@ impl SingleControllerExecutorBuilder {
             external_bindings: self.external_bindings,
             monitoring: self.monitoring,
             domain_metadata: self.domain_metadata,
+            volume_restores: self.volume_restores,
             public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,
@@ -1176,8 +1382,11 @@ impl SingleControllerExecutorBuilder {
             service_provider: self
                 .service_provider
                 .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
-            resource_prefix: "test".to_string(),
+            resource_prefix: self.resource_prefix,
             last_heartbeats: Vec::new(),
+            initial_setup_authority: self.initial_setup_authority,
+            delay_mode: self.delay_mode,
+            suggested_delays: Vec::new(),
         })
     }
 }
@@ -1232,4 +1441,57 @@ pub fn test_azure_storage_account() -> AzureStorageAccount {
 /// Creates a standard test Azure Service Bus Namespace dependency
 pub fn test_azure_service_bus_namespace() -> AzureServiceBusNamespace {
     AzureServiceBusNamespace::new("default-service-bus-namespace".to_string()).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker::TestWorkerController;
+
+    async fn test_executor() -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(test_function_1())
+            .controller(TestWorkerController::default())
+            .platform(Platform::Test)
+            .build()
+            .await
+            .expect("executor should build")
+    }
+
+    #[tokio::test]
+    async fn records_suggested_delays_without_sleeping() {
+        let mut executor = test_executor().await;
+        let started = std::time::Instant::now();
+
+        executor
+            .wait_for_next_step(Some(Duration::from_secs(30)))
+            .await
+            .expect("a 30 s delay is within the limit");
+        executor
+            .wait_for_next_step(None)
+            .await
+            .expect("no suggestion is fine");
+
+        assert_eq!(executor.suggested_delays(), &[Duration::from_secs(30)]);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the default mode must not sleep"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_delay_that_would_stall_a_deployment() {
+        let mut executor = test_executor().await;
+
+        let error = executor
+            .wait_for_next_step(Some(MAX_SUGGESTED_DELAY + Duration::from_secs(1)))
+            .await
+            .expect_err("a delay over the limit should fail the run");
+
+        assert!(
+            error.to_string().contains("would stall a real deployment"),
+            "unexpected error: {error}"
+        );
+        assert!(executor.suggested_delays().is_empty());
+    }
 }
