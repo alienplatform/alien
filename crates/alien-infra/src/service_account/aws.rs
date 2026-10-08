@@ -37,6 +37,9 @@ pub struct AwsServiceAccountController {
     pub(crate) role_name: Option<String>,
     /// Whether stack-level permissions have been applied
     pub(crate) stack_permissions_applied: bool,
+    /// Last trust policy installed by privileged setup; absent in older checkpoints.
+    #[serde(default)]
+    pub(crate) assume_role_policy: Option<String>,
 }
 
 #[controller]
@@ -69,7 +72,7 @@ impl AwsServiceAccountController {
 
         let role_request = CreateRoleRequest::builder()
             .role_name(role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
+            .assume_role_policy_document(assume_role_policy.clone())
             .description(match ctx.deployment_name_for_metadata() {
                 Some(deployment_name) => format!(
                     "Runtime IAM role for {deployment_name}. Resource prefix: {}. Resource: {}.",
@@ -105,6 +108,7 @@ impl AwsServiceAccountController {
             "IAM role created successfully"
         );
 
+        self.assume_role_policy = Some(assume_role_policy);
         self.role_name = Some(role_name);
         self.role_arn = Some(role_arn);
 
@@ -305,6 +309,37 @@ impl AwsServiceAccountController {
                 state: Ready,
                 suggested_delay: None,
             });
+        }
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: "service-account trust changes require privileged setup; regenerate and rerun setup".to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        let policy = Self::generate_assume_role_policy_for_service_account(config, ctx)?;
+        let client = ctx.service_provider.get_aws_iam_client(ctx.get_aws_config()?).await?;
+        let role_name = self.role_name.as_ref().unwrap();
+        client.update_assume_role_policy(role_name, &policy).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to update trust policy for IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            },
+        )?;
+        self.assume_role_policy = Some(policy);
+        Ok(HandlerAction::Continue {
+            state: UpdatingStackPermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingStackPermissions, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_stack_permissions(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: "service-account policy changes require privileged setup; regenerate and rerun setup".to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
         }
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -606,6 +641,15 @@ impl AwsServiceAccountController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Ok(false);
+        }
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        Ok(self.assume_role_policy.as_deref()
+            != Some(Self::generate_assume_role_policy_for_service_account(config, ctx)?.as_str()))
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(role_arn), Some(role_name)) = (&self.role_arn, &self.role_name) {
             Some(ResourceOutputs::new(ServiceAccountOutputs {
@@ -812,6 +856,9 @@ impl AwsServiceAccountController {
             }
         }
 
+        services.sort();
+        role_arns.sort();
+
         // Build trust policy statements
         let mut statements = Vec::new();
 
@@ -1002,6 +1049,7 @@ impl AwsServiceAccountController {
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
             stack_permissions_applied: true,
+            assume_role_policy: None,
             _internal_stay_count: None,
         }
     }
@@ -1162,9 +1210,19 @@ mod tests {
             },
             service_overrides: None,
         };
+        let existing = std::env::var("ALIEN_TEST_TRUST_EXISTING").as_deref() == Ok("1");
+        let resource = ServiceAccount::new("execution-sa".to_string()).build();
+        let controller = if existing {
+            AwsServiceAccountController {
+                state: AwsServiceAccountState::Ready,
+                role_name: Some(format!("{prefix}-execution-sa")),
+                role_arn: Some(format!("arn:aws:iam::{}:role/{prefix}-execution-sa", config.account_id)),
+                ..Default::default()
+            }
+        } else { AwsServiceAccountController::default() };
         let mut executor = SingleControllerExecutor::builder()
-            .resource(ServiceAccount::new("execution-sa".to_string()).build())
-            .controller(AwsServiceAccountController::default())
+            .resource(resource.clone())
+            .controller(controller)
             .platform(Platform::Aws)
             .client_config(alien_core::ClientConfig::Aws(Box::new(config)))
             .resource_prefix(prefix)
@@ -1172,7 +1230,35 @@ mod tests {
             .with_stack_resource(ComputeCluster::new("compute".to_string()).build(), alien_core::ResourceLifecycle::Frozen)
             .real_delays()
             .build().await.unwrap();
+        if existing {
+            assert!(executor.needs_update().unwrap(), "legacy checkpoint must request setup reconciliation");
+            executor.update(resource).unwrap();
+        }
         executor.run_until_status(ResourceStatus::Running).await.unwrap();
+        assert!(!executor.needs_update().unwrap(), "trust must converge after setup");
+    }
+
+    #[tokio::test]
+    async fn resumed_trust_and_policy_updates_reject_runtime_authority_before_iam() {
+        for state in [AwsServiceAccountState::UpdateStart, AwsServiceAccountState::UpdatingStackPermissions] {
+            let controller = AwsServiceAccountController {
+                state,
+                role_name: Some("test-reader-sa".to_string()),
+                role_arn: Some("arn:aws:iam::123456789012:role/test-reader-sa".to_string()),
+                ..Default::default()
+            };
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(ServiceAccount::new("reader-sa".to_string()).build())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .with_test_dependencies()
+                .build().await.unwrap();
+            assert!(!executor.needs_update().unwrap());
+            let error = executor.step().await.unwrap_err();
+            assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+        }
     }
 
     #[tokio::test]
@@ -1198,6 +1284,9 @@ mod tests {
                 ..Default::default()
             };
             let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_update_assume_role_policy()
+                .times(usize::from(direct_setup))
+                .returning(|_, _| Ok(()));
             iam.expect_delete_role_policy()
                 .times(usize::from(direct_setup))
                 .returning(|_, _| Ok(()));
@@ -1205,7 +1294,7 @@ mod tests {
             let mut provider = MockPlatformServiceProvider::new();
             provider
                 .expect_get_aws_iam_client()
-                .times(usize::from(direct_setup))
+                .times(2 * usize::from(direct_setup))
                 .returning(move |_| Ok(iam.clone()));
             let mut executor = SingleControllerExecutor::builder()
                 .resource(legacy)
@@ -1219,6 +1308,7 @@ mod tests {
                 .unwrap();
             executor.update(captured.clone()).unwrap();
             executor.step().await.unwrap();
+            if direct_setup { executor.step().await.unwrap(); }
             assert_eq!(
                 executor.status(),
                 if direct_setup {

@@ -14,6 +14,7 @@ from botocore.exceptions import ClientError
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--expect-isolated-denied', action='store_true')
+    parser.add_argument('--existing-legacy', action='store_true')
     args = parser.parse_args()
     region, account = os.environ['AWS_TARGET_REGION'], os.environ['AWS_TARGET_ACCOUNT_ID']
     session = boto3.Session(aws_access_key_id=os.environ['AWS_TARGET_ACCESS_KEY_ID'],
@@ -58,11 +59,20 @@ def main():
             policy = {'Version': '2012-10-17', 'Statement': [{
                 'Effect': 'Allow', 'Action': 'sts:AssumeRole', 'Resource': destination}]}
             iam.put_role_policy(RoleName=name, PolicyName='test-chain', PolicyDocument=json.dumps(policy))
-        env = dict(os.environ, ALIEN_TEST_TRUST_PREFIX=prefix)
+        if args.existing_legacy:
+            iam.create_role(RoleName=workload, AssumeRolePolicyDocument=json.dumps({
+                'Version': '2012-10-17', 'Statement': [{
+                    'Effect': 'Allow', 'Principal': {'AWS': f'arn:aws:iam::{account}:root'},
+                    'Action': 'sts:AssumeRole', 'Condition': {'ArnEquals': {
+                        'aws:PrincipalArn': f'arn:aws:iam::{account}:role/{prefix}-compute-role'}}}]}),
+                Tags=[{'Key': 'alien.dev/test-run', 'Value': prefix}])
+            check('legacy workload trust installed before setup update')
+        env = dict(os.environ, ALIEN_TEST_TRUST_PREFIX=prefix,
+                   ALIEN_TEST_TRUST_EXISTING='1' if args.existing_legacy else '0')
         subprocess.run(['cargo', 'test', '-p', 'alien-infra', '--all-features', '--lib',
                         'live_create_service_account_for_compute_nodes', '--', '--ignored', '--nocapture'],
                        check=True, env=env)
-        check('workload role created through the actual Alien controller')
+        check('workload role reconciled through the actual Alien controller')
         nodes = [assume(session.client('sts'), f'arn:aws:iam::{account}:role/{name}') for name in created]
         legacy = assume(nodes[0], destination)
         assert legacy.get_caller_identity()['Account'] == account
