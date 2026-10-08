@@ -1318,17 +1318,10 @@ async fn deploy_task_with_environment(
     };
     // A deployment group token passed for an existing deployment, with its group.
     let mut supplied_group_token: Option<(String, String)> = None;
+    let resuming_existing = existing_deployment.is_some();
     let tracked_deployment = match existing_deployment {
         Some(deployment) => {
             info!("Found tracked deployment '{}'", resolved_args.name);
-            if resolved_args.public_subdomain.is_some() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "public-subdomain".to_string(),
-                    message: "--public-subdomain can only be set when creating a new deployment."
-                        .to_string(),
-                }));
-            }
-
             match args.token.as_ref() {
                 Some(provided_token) if deployment.api_key != *provided_token => {
                     match validate_token(provided_token, &base_url).await? {
@@ -1588,6 +1581,35 @@ async fn deploy_task_with_environment(
         }
     };
 
+    if resuming_existing {
+        if let Some(requested) = resolved_args.public_subdomain.as_deref() {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "public-subdomain".to_string(),
+                    message: "An existing standalone deployment cannot change its public subdomain. Omit --public-subdomain when resuming it.".to_string(),
+                }));
+            }
+            let existing = create_platform_client(&tracked_deployment.api_key, &base_url)?
+                .get_deployment()
+                .id(&tracked_deployment.deployment_id)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("reading deployment {}", tracked_deployment.deployment_id),
+                    url: None,
+                })?
+                .into_inner();
+            validate_existing_public_subdomain(
+                requested,
+                existing
+                    .public_subdomain
+                    .as_ref()
+                    .map(|value| value.as_str()),
+            )?;
+        }
+    }
+
     steps.complete(
         0,
         Some(format!(
@@ -1714,8 +1736,8 @@ async fn deploy_task_with_environment(
 
     // Setup runs with setup authority for the deployment group; the
     // deployment token keeps configuring the runtime.
-    let setup_client = match plan {
-        ExistingDeploymentPlan::SetupUpdate { retry } => {
+    let (setup_client, setup_token) = match plan {
+        ExistingDeploymentPlan::SetupUpdate { .. } => {
             let deployment_group_id = deployment_group_id.as_deref().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "A setup update needs the deployment's group from the platform"
@@ -1751,20 +1773,13 @@ async fn deploy_task_with_environment(
                 &plan.setup_reason(&status),
             )
             .await?;
-            if retry {
-                request_deployment_retry(
-                    &base_url,
-                    &setup_token,
-                    &tracked_deployment.deployment_id,
-                )
-                .await?;
-            }
-            Some(alien_manager_api::Client::new_with_client(
+            let client = alien_manager_api::Client::new_with_client(
                 &manager_ctx.manager_url,
                 deployment_manager_http_client(&setup_token, manager_ctx.workspace.as_deref())?,
-            ))
+            );
+            (Some(client), Some(setup_token))
         }
-        _ => None,
+        _ => (None, None),
     };
     // The client that holds the lock: setup authority for a setup update.
     let lock_client = setup_client.as_ref().unwrap_or(&manager_client);
@@ -1828,10 +1843,6 @@ async fn deploy_task_with_environment(
         current.retry_requested = true;
     }
 
-    if let Some(stack_state) = current.stack_state.as_ref() {
-        steps.sync_deployment_resources(&stack_state.resources);
-    }
-
     // Build minimal deployment config
     let stack_settings: alien_core::StackSettings = deployment
         .stack_settings
@@ -1886,9 +1897,31 @@ async fn deploy_task_with_environment(
         ExistingDeploymentPlan::InitialSetup | ExistingDeploymentPlan::SetupUpdate { .. }
     );
 
+    // A local retry flag does not make a failed platform operation claimable.
+    // Validate the resume configuration first, then requeue with the same
+    // authority that will acquire execution. The API rejects a live contender.
+    if ctx.is_platform()
+        && matches!(
+            current.status,
+            DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetupFailed
+                | DeploymentStatus::ProvisioningFailed
+                | DeploymentStatus::UpdateFailed
+                | DeploymentStatus::RefreshFailed
+        )
+    {
+        request_deployment_retry(
+            &base_url,
+            setup_token.as_deref().unwrap_or(deployment_token),
+            &tracked_deployment.deployment_id,
+        )
+        .await?;
+    }
+    steps.activate(2, Some("Waiting for execution ownership".to_string()));
+
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
-    let acquired_deployment = if setup_owned_status {
+    let acquisition = if setup_owned_status {
         acquire_setup_run_deployment(
             lock_client,
             &tracked_deployment.deployment_id,
@@ -1896,9 +1929,6 @@ async fn deploy_task_with_environment(
             stack_settings.deployment_model,
         )
         .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire setup deployment lock".to_string(),
-        })?
     } else {
         acquire_deployment_with_payload(
             &manager_client,
@@ -1907,9 +1937,37 @@ async fn deploy_task_with_environment(
             stack_settings.deployment_model,
         )
         .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to acquire deployment lock".to_string(),
-        })?
+    };
+    let acquired_deployment = match acquisition {
+        Ok(deployment) => deployment,
+        Err(error) => {
+            if ctx.is_platform()
+                && completed_after_acquisition_miss(
+                    &error,
+                    &base_url,
+                    deployment_token,
+                    &tracked_deployment.deployment_id,
+                )
+                .await?
+            {
+                steps.complete(2, Some("Completed by manager".to_string()));
+                steps.skip(3, Some("Already running".to_string()));
+                drop(steps);
+                println!(
+                    "{}",
+                    success_line("Deployment completed while waiting for execution ownership.")
+                );
+                return Ok(());
+            }
+            return Err(error).context(ErrorData::ConfigurationError {
+                message: if setup_owned_status {
+                    "Failed to acquire setup deployment lock"
+                } else {
+                    "Failed to acquire deployment lock"
+                }
+                .to_string(),
+            });
+        }
     };
 
     if let Some(acquired_config) = acquired_deployment
@@ -2003,6 +2061,13 @@ async fn deploy_task_with_environment(
         current = prepared;
     }
 
+    steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
+    let progress_steps = steps.clone();
+    let on_progress: alien_deployment::runner::ProgressCallback = Box::new(move |progress| {
+        if let Some(stack_state) = progress.stack_state {
+            progress_steps.sync_deployment_resources(&stack_state.resources);
+        }
+    });
     let runner_result = alien_deployment::runner::run_step_loop(
         &mut current,
         &mut config,
@@ -2011,9 +2076,10 @@ async fn deploy_task_with_environment(
         &policy,
         &transport,
         None,
-        None,
+        Some(&on_progress),
     )
     .await;
+    drop(on_progress);
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
         (result.loop_result.outcome == LoopOutcome::Failure)
             .then(|| result.loop_result.final_status.clone())
@@ -2691,6 +2757,21 @@ where
     Ok(session.token)
 }
 
+fn validate_existing_public_subdomain(requested: &str, existing: Option<&str>) -> Result<()> {
+    if existing == Some(requested) {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "public-subdomain".to_string(),
+        message: match existing {
+            Some(existing) => format!(
+                "This deployment already uses public subdomain '{existing}'. It cannot be changed by alien deploy; retry with --public-subdomain {existing} or omit the flag."
+            ),
+            None => "This deployment has no public subdomain. Omit --public-subdomain when resuming it; alien deploy cannot change an existing deployment's routing.".to_string(),
+        },
+    }))
+}
+
 /// The deployment's group and active update, read from the platform with the
 /// deployment token.
 async fn platform_deployment_progress(
@@ -2715,6 +2796,51 @@ async fn platform_deployment_progress(
         .and_then(|update_state| update_state.active.0.as_ref())
         .and_then(|operation| ActiveUpdate::from_status(operation.status));
     Ok((deployment.deployment_group_id.to_string(), active_update))
+}
+
+/// A status rejection can mean the manager completed between our read and
+/// acquisition. Confirm convergence from one authoritative snapshot. Other
+/// rejection reasons and transport errors must retain their original failure.
+async fn completed_after_acquisition_miss(
+    error: &AlienError,
+    base_url: &str,
+    deployment_token: &str,
+    deployment_id: &str,
+) -> Result<bool> {
+    let Some(error) = std::iter::successors(Some(error), |error| error.source.as_deref())
+        .find(|error| error.code == "DEPLOYMENT_ACQUIRE_UNAVAILABLE")
+    else {
+        return Ok(false);
+    };
+    let reason = error
+        .context
+        .as_ref()
+        .and_then(|context| context["reason"].as_str());
+    if !matches!(reason, Some("statusMismatch" | "acquireModeMismatch")) {
+        return Ok(false);
+    }
+    let deployment = create_platform_client(deployment_token, base_url)?
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!(
+                "checking whether deployment {deployment_id} completed during acquisition"
+            ),
+            url: None,
+        })?
+        .into_inner();
+    Ok(
+        deployment.status == alien_platform_api::types::DeploymentDetailResponseStatus::Running
+            && deployment.current_release_id.is_some()
+            && deployment.desired_release_id.is_none()
+            && deployment
+                .update_state
+                .as_ref()
+                .is_some_and(|state| state.active.0.is_none() && state.next.0.is_none()),
+    )
 }
 
 /// Prepares an installed deployment for a setup run: the target release's
@@ -2797,10 +2923,234 @@ async fn request_deployment_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::time::{timeout, Duration};
+
+    fn acquisition_miss(reason: &str) -> AlienError {
+        serde_json::from_value(serde_json::json!({
+            "code": "DEPLOYMENT_ACQUIRE_UNAVAILABLE",
+            "message": "The deployment cannot be acquired",
+            "context": {"reason": reason},
+            "retryable": false,
+            "internal": false,
+        }))
+        .expect("wire acquisition error")
+    }
+
+    fn completed_deployment_response() -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("dep_{}", "a".repeat(28)),
+            "name": "test-deployment",
+            "status": "running",
+            "projectId": format!("prj_{}", "a".repeat(28)),
+            "platform": "aws",
+            "deploymentProtocolVersion": 1,
+            "deploymentGroupId": format!("dg_{}", "a".repeat(28)),
+            "purpose": "application",
+            "stackSettings": {},
+            "releaseChannel": "production",
+            "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "managerId": format!("mgr_{}", "a".repeat(28)),
+            "workspaceId": format!("ws_{}", "a".repeat(24)),
+            "currentReleaseId": format!("rel_{}", "a".repeat(28)),
+            "desiredReleaseId": null,
+            "updateState": {"active": null, "next": null, "latest": null},
+        })
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_confirms_completion_through_acquisition_helpers() {
+        for (setup, structured_response) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let server = MockServer::start_async().await;
+            let acquisition = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    let reason = if setup {
+                        "acquireModeMismatch"
+                    } else {
+                        "statusMismatch"
+                    };
+                    if structured_response {
+                        then.status(200).json_body(serde_json::json!({
+                            "deployments": [],
+                            "notAcquired": [{
+                                "deploymentId": "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "reason": reason,
+                            }],
+                        }));
+                    } else {
+                        then.status(409)
+                            .json_body(serde_json::to_value(acquisition_miss(reason)).unwrap());
+                    }
+                })
+                .await;
+            let completion = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/deployments/dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                    then.status(200).json_body(completed_deployment_response());
+                })
+                .await;
+            let client = alien_manager_api::Client::new(&server.base_url());
+            let id = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            let error = if setup {
+                acquire_setup_run_deployment(
+                    &client,
+                    id,
+                    "test-session",
+                    alien_core::DeploymentModel::Push,
+                )
+                .await
+            } else {
+                acquire_deployment_with_payload(
+                    &client,
+                    id,
+                    "test-session",
+                    alien_core::DeploymentModel::Push,
+                )
+                .await
+            }
+            .expect_err("manager rejects acquisition after completion");
+            assert_eq!(
+                error.code == "DEPLOYMENT_ACQUIRE_UNAVAILABLE",
+                structured_response
+            );
+            assert!(
+                completed_after_acquisition_miss(&error, &server.base_url(), "test-token", id)
+                    .await
+                    .unwrap(),
+                "setup={setup}, structured_response={structured_response}: {error:?}"
+            );
+            acquisition.assert_hits_async(1).await;
+            completion.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_confirms_completion_without_hiding_pending_work() {
+        let operation = serde_json::json!({
+            "id": format!("duop_{}", "a".repeat(28)),
+            "status": "queued",
+            "reasons": [],
+            "targetReleaseId": format!("rel_{}", "b".repeat(28)),
+            "changedKeys": [],
+            "requestedAt": "2026-01-01T00:00:00Z",
+        });
+        let mut cases = vec![("completed", completed_deployment_response(), true)];
+        for status in ["updating", "update-failed", "deleted"] {
+            let mut body = completed_deployment_response();
+            body["status"] = serde_json::json!(status);
+            cases.push((status, body, false));
+        }
+        for field in ["active", "next"] {
+            let mut body = completed_deployment_response();
+            body["updateState"][field] = operation.clone();
+            cases.push((field, body, false));
+        }
+        let mut desired = completed_deployment_response();
+        desired["desiredReleaseId"] = serde_json::json!(format!("rel_{}", "b".repeat(28)));
+        cases.push(("desired release", desired, false));
+        let mut uninstalled = completed_deployment_response();
+        uninstalled["currentReleaseId"] = serde_json::Value::Null;
+        cases.push(("uninstalled", uninstalled, false));
+        let mut incomplete = completed_deployment_response();
+        incomplete.as_object_mut().unwrap().remove("updateState");
+        cases.push(("old response without update state", incomplete, false));
+        for reason in ["statusMismatch", "acquireModeMismatch"] {
+            for (label, body, expected) in &cases {
+                let server = MockServer::start_async().await;
+                let response = server
+                    .mock_async(|when, then| {
+                        when.method(GET)
+                            .path("/v1/deployments/dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                        then.status(200).json_body(body.clone());
+                    })
+                    .await;
+                let completed = completed_after_acquisition_miss(
+                    &acquisition_miss(reason),
+                    &server.base_url(),
+                    "test-token",
+                    "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+                .await
+                .expect("authoritative completion read");
+                assert_eq!(completed, *expected, "{reason}: {label}");
+                response.assert_hits_async(1).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_preserves_other_rejections_and_transport_errors() {
+        let server = MockServer::start_async().await;
+        let response = server
+            .mock_async(|when, then| {
+                when.method(GET);
+                then.status(200).json_body(completed_deployment_response());
+            })
+            .await;
+        for reason in ["notFound", "platformMismatch", "contended", "deferred"] {
+            assert!(!completed_after_acquisition_miss(
+                &acquisition_miss(reason),
+                &server.base_url(),
+                "test-token",
+                "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .await
+            .unwrap());
+        }
+        let mut transport = acquisition_miss("statusMismatch");
+        transport.code = "HTTP_RESPONSE_ERROR".to_string();
+        assert!(!completed_after_acquisition_miss(
+            &transport,
+            &server.base_url(),
+            "test-token",
+            "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .await
+        .unwrap());
+        response.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn acquisition_miss_requires_a_successful_completion_read() {
+        let server = MockServer::start_async().await;
+        let response = server
+            .mock_async(|when, then| {
+                when.method(GET);
+                then.status(503);
+            })
+            .await;
+        completed_after_acquisition_miss(
+            &acquisition_miss("statusMismatch"),
+            &server.base_url(),
+            "test-token",
+            "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .await
+        .expect_err("failed read cannot establish successful deployment");
+        response.assert_hits_async(1).await;
+    }
+
+    #[test]
+    fn an_existing_public_subdomain_can_be_repeated_but_not_changed() {
+        validate_existing_public_subdomain("release", Some("release")).unwrap();
+        let changed = validate_existing_public_subdomain("other", Some("release")).unwrap_err();
+        assert_eq!(changed.code, "VALIDATION_ERROR");
+        assert!(changed.message.contains("--public-subdomain release"));
+        let absent = validate_existing_public_subdomain("release", None).unwrap_err();
+        assert!(absent.message.contains("Omit --public-subdomain"));
+    }
 
     #[test]
     fn token_file_uses_the_existing_token_path_and_trims_whitespace() {

@@ -581,7 +581,8 @@ async fn acquire_deployment_with_statuses(
             })
             .send()
             .await
-            .into_sdk_error()
+            .into_sdk_error_reading_body()
+            .await
             .context(alien_error::GenericError {
                 message: "Failed to acquire sync lock".to_string(),
             })?;
