@@ -93,7 +93,8 @@ impl GcpStorageController {
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
-        let lifecycle_confirmed = gcs_lifecycle_matches(created_bucket.lifecycle.as_ref(), &lifecycle);
+        let lifecycle_confirmed =
+            gcs_lifecycle_matches(created_bucket.lifecycle.as_ref(), &lifecycle);
         self.bucket_name = Some(created_bucket.name.unwrap_or_else(|| bucket_name.clone()));
         if lifecycle_confirmed {
             self.lifecycle_revision = Some(lifecycle_revision);
@@ -818,7 +819,9 @@ fn gcs_lifecycle_revision(resource_id: &str, lifecycle: &Lifecycle) -> Result<St
 /// Whether the lifecycle GCS returned for a bucket has the expected rules, in order. Compares
 /// only the fields this controller sends.
 fn gcs_lifecycle_matches(observed: Option<&Lifecycle>, expected: &Lifecycle) -> bool {
-    fn fields(lifecycle: Option<&Lifecycle>) -> Vec<(Option<&str>, Option<i32>, Option<&[String]>)> {
+    fn fields(
+        lifecycle: Option<&Lifecycle>,
+    ) -> Vec<(Option<&str>, Option<i32>, Option<&[String]>)> {
         lifecycle
             .and_then(|lifecycle| lifecycle.rule.as_deref())
             .unwrap_or_default()
@@ -826,7 +829,9 @@ fn gcs_lifecycle_matches(observed: Option<&Lifecycle>, expected: &Lifecycle) -> 
             .map(|rule| {
                 let condition = rule.condition.as_ref();
                 (
-                    rule.action.as_ref().map(|action| action.action_type.as_str()),
+                    rule.action
+                        .as_ref()
+                        .map(|action| action.action_type.as_str()),
                     condition.and_then(|condition| condition.age),
                     condition.and_then(|condition| condition.matches_prefix.as_deref()),
                 )
@@ -1792,7 +1797,10 @@ mod lifecycle_prefix_tests {
             .unwrap();
 
         executor
-            .update(storage(vec![rule(7, Some("cache/")), rule(1, Some("tmp/"))]))
+            .update(storage(vec![
+                rule(7, Some("cache/")),
+                rule(1, Some("tmp/")),
+            ]))
             .unwrap();
         executor.run_until_terminal().await.unwrap();
 
@@ -1852,14 +1860,12 @@ mod lifecycle_prefix_tests {
             .external_bindings(ExternalBindings::default())
             .build();
         let bodies = Arc::new(Mutex::new(Vec::new()));
-        let executor = StackExecutor::builder(
-            &stack,
-            ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
-        )
-        .deployment_config(&config)
-        .service_provider(gcs(bodies.clone(), echo))
-        .build()
-        .unwrap();
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
+                .deployment_config(&config)
+                .service_provider(gcs(bodies.clone(), echo))
+                .build()
+                .unwrap();
         let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
         let mut resource = StackResourceState::new_pending(
             Storage::RESOURCE_TYPE.to_string(),
