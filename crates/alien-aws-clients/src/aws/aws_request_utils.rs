@@ -333,6 +333,52 @@ pub async fn sign_send_json_once<T: DeserializeOwned + Send + 'static>(
     builder.sign_aws_request(config)?.send_json::<T>().await
 }
 
+/// Sign the request and deserialize a JSON response into `T`, retrying only errors for which
+/// `retry_when` is true.
+pub async fn sign_send_json_retrying_when<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &AwsSignConfig,
+    retry_when: fn(&AlienError<ErrorData>) -> bool,
+) -> Result<T> {
+    builder
+        .sign_aws_request(config)?
+        .with_retry()
+        .retry_only_when(retry_when)
+        .send_json::<T>()
+        .await
+}
+
+/// Whether a JSON-protocol service rejected the request for its rate limit. The request was not
+/// acted on, so sending it again is safe even for a create.
+pub fn is_json_throttling(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError {
+            http_status,
+            http_response_text,
+            ..
+        }) => {
+            *http_status == 429
+                || http_response_text.as_deref().is_some_and(|text| {
+                    ["ThrottlingException", "TooManyRequestsException"]
+                        .iter()
+                        .any(|code| text.contains(code))
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether a read failed for a reason that may pass: throttling, a 5xx or a transport error.
+/// A 4xx answer (denied, not found, invalid) is final.
+pub fn is_transient_json_error(error: &AlienError<ErrorData>) -> bool {
+    match &error.error {
+        Some(ErrorData::HttpResponseError { http_status, .. }) => {
+            *http_status >= 500 || is_json_throttling(error)
+        }
+        _ => error.retryable,
+    }
+}
+
 /// Sign, retry and deserialize an XML response into `T`.
 pub async fn sign_send_xml<T: DeserializeOwned + Send + 'static>(
     builder: RequestBuilder,

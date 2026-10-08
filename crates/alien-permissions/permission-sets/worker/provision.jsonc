@@ -89,12 +89,13 @@
       {
         // The worker controller creates the function's log group before the
         // function, so its logs get a retention period instead of the
-        // never-expiring group Lambda creates on first invoke. Both actions
-        // authorize against the log group ARN.
+        // never-expiring group Lambda creates on first invoke, and deletes it
+        // with the function. The actions authorize against the log group ARN,
+        // which carries the function's own name.
         "label": "manage-lambda-log-groups",
-        "description": "Create CloudWatch log groups for this application's Lambda functions and set how long they keep logs.",
+        "description": "Create and delete CloudWatch log groups for this application's Lambda functions and set how long they keep logs.",
         "grant": {
-          "actions": ["logs:CreateLogGroup", "logs:PutRetentionPolicy"]
+          "actions": ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DeleteLogGroup"]
         },
         "binding": {
           "stack": {
@@ -308,7 +309,8 @@
             "acm:ImportCertificate",
             "acm:AddTagsToCertificate",
             "acm:DeleteCertificate",
-            "acm:DescribeCertificate"
+            "acm:DescribeCertificate",
+            "acm:ListTagsForCertificate"
           ]
         },
         "binding": {
@@ -330,6 +332,25 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
+          }
+        }
+      },
+      {
+        // ListCertificates supports no resource-level scoping or condition keys; AWS
+        // evaluates it against `*` only. It returns certificate ARNs and domain names.
+        // Used with ListTagsForCertificate to find a certificate whose import response
+        // was lost by the create token it was tagged with.
+        "label": "list-tls-certificates",
+        "description": "List ACM certificates (AWS supports this action only on all resources).",
+        "grant": {
+          "actions": ["acm:ListCertificates"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },

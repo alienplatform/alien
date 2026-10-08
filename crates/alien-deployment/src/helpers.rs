@@ -115,6 +115,10 @@ pub(crate) struct RetryOutcome {
 /// One the stack no longer declares is not resumed either, and the executor deletes it. Failed
 /// deletes always resume, because the planner does not restart a delete that has failed, and
 /// failed refreshes always resume, because a refresh only reads.
+///
+/// "Unchanged" is [`alien_infra::retry_config_unchanged`], the comparison the update executor
+/// also uses: deployer-secret metadata is ignored. A resumed flow runs on the metadata recorded
+/// when it started, and a follow-up update applies the new value once it is Running.
 pub(crate) fn resume_unchanged_failed_resources(
     stack_state: &mut StackState,
     target_stack: &Stack,
@@ -134,8 +138,7 @@ pub(crate) fn resume_unchanged_failed_resources(
         }
         let declared = target_stack.resources.get(resource_id);
         let unchanged = declared.is_some_and(|entry| {
-            without_deployer_secret_metadata(&entry.config)
-                == without_deployer_secret_metadata(&resource_state.config)
+            alien_infra::retry_config_unchanged(&resource_state.config, &entry.config)
                 && entry.combined_dependencies() == resource_state.dependencies
         });
         let always_resumes = matches!(
@@ -160,35 +163,6 @@ pub(crate) fn resume_unchanged_failed_resources(
         }
     }
     Ok(outcome)
-}
-
-/// `resource` without the deployer-secret metadata injected into workload environments.
-///
-/// That metadata follows the secret store (a slot filled, a value rewritten under a new
-/// version) and is refreshed while the deployment runs, independent of any release. A failure
-/// whose config differs only there is still the same create or update, and resuming it reads
-/// the current metadata, so the retry comparison ignores it.
-fn without_deployer_secret_metadata(resource: &alien_core::Resource) -> alien_core::Resource {
-    fn strip(environment: &mut HashMap<String, String>) {
-        environment.remove(ENV_ALIEN_DEPLOYER_SECRETS);
-        if let Some(secrets) = environment.get_mut(ENV_ALIEN_SECRETS) {
-            if let Ok(mut config) = serde_json::from_str::<AlienSecretsConfig>(secrets) {
-                config.deployer_secrets.clear();
-                if let Ok(stripped) = serde_json::to_string(&config) {
-                    *secrets = stripped;
-                }
-            }
-        }
-    }
-    let mut resource = resource.clone();
-    if let Some(worker) = resource.downcast_mut::<Worker>() {
-        strip(&mut worker.environment);
-    } else if let Some(container) = resource.downcast_mut::<alien_core::Container>() {
-        strip(&mut container.environment);
-    } else if let Some(daemon) = resource.downcast_mut::<alien_core::Daemon>() {
-        strip(&mut daemon.environment);
-    }
-    resource
 }
 
 /// Prepares the failed resources of `stack_state` for a retry of provisioning or of a running

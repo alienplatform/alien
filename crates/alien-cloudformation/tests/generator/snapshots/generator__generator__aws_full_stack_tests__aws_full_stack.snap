@@ -755,6 +755,7 @@ Resources:
           Sid: ManageLambdaFunctions
         - Action:
           - logs:CreateLogGroup
+          - logs:DeleteLogGroup
           - logs:PutRetentionPolicy
           Effect: Allow
           Resource:
@@ -846,6 +847,7 @@ Resources:
           - acm:DeleteCertificate
           - acm:DescribeCertificate
           - acm:ImportCertificate
+          - acm:ListTagsForCertificate
           Condition:
             StringEquals:
               aws:ResourceTag/deployment:
@@ -855,6 +857,12 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ManageTlsCertificates
+        - Action:
+          - acm:ListCertificates
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ListTlsCertificates
         - Action:
           - apigateway:POST
           - apigateway:PUT

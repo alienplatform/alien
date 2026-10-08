@@ -2129,6 +2129,88 @@ async fn interrupted_sibling_with_changed_config_is_deleted_before_it_is_recreat
     assert!(alien_infra::test_worker_deletes_issued("test:worker:rejected-fn").is_empty());
 }
 
+/// An injected environment variable changes after the worker's create deployed its code.
+/// Provisioning does not report the deployment Running on the old config: the create finishes,
+/// the worker is updated to the new config, and only then is the release promoted.
+#[tokio::test]
+async fn config_change_during_provisioning_is_applied_before_the_deployment_is_running() {
+    let _vault = test_vault_env().await;
+    let worker_id = "mid-provisioning-change-fn";
+    let worker_identifier = "test:worker:mid-provisioning-change-fn";
+    let mut stack = create_test_stack("test-stack", "base-fn");
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    let with_variable = |value: &str, hash: &str| {
+        let mut config = create_test_config(hash, false);
+        config
+            .environment_variables
+            .variables
+            .push(EnvironmentVariable {
+                name: "MID_PROVISIONING_VALUE".to_string(),
+                value: value.to_string(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: Some(vec![worker_id.to_string()]),
+            });
+        config
+    };
+    let deployed_values = || {
+        alien_infra::test_worker_configs_deployed(worker_identifier)
+            .iter()
+            .map(|config| config.environment.get("MID_PROVISIONING_VALUE").cloned())
+            .collect::<Vec<_>>()
+    };
+
+    // Step with the first value until the worker's create has deployed it.
+    let first = with_variable("first", "hash_first");
+    let mut state = create_initial_state(stack);
+    for _ in 0..MAX_STEPS {
+        if !deployed_values().is_empty() {
+            break;
+        }
+        state = alien_deployment::step(state, first.clone(), ClientConfig::Test, None)
+            .await
+            .expect("step should succeed")
+            .state;
+    }
+    assert_eq!(deployed_values(), vec![Some("first".to_string())]);
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources[worker_id].status,
+        alien_core::ResourceStatus::Provisioning
+    );
+
+    let second = with_variable("second", "hash_second");
+    let state = run_to_completion(state, second).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        deployed_values(),
+        vec![Some("first".to_string()), Some("second".to_string())],
+        "the worker is updated to the value that arrived mid-create"
+    );
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    assert_eq!(
+        worker
+            .config
+            .downcast_ref::<Worker>()
+            .expect("worker config")
+            .environment
+            .get("MID_PROVISIONING_VALUE")
+            .map(String::as_str),
+        Some("second")
+    );
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+}
+
 /// A runtime retry does not resume a failed create whose config changed since it failed: that
 /// would finish the create with a mix of both configs and never delete what the failed one
 /// made. The retry leaves it failed, and the executor deletes it against the config it was
@@ -3369,5 +3451,361 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
         deployer_reports(&result.state)[0].status,
         alien_core::DeployerSecretStatus::Present,
         "a running deployment reports the slot once it is filled"
+    );
+}
+
+/// A config built the way a manager builds one on every step (and after a restart): new
+/// snapshot object, new `created_at`, monitoring, a secret env var and a present deployer
+/// secret. Nothing in it changes between builds except timestamps.
+fn rebuilt_injected_config() -> DeploymentConfig {
+    let mut config = create_test_config("hash_drift", true);
+    config.deployment_token = Some("deployment-token".to_string());
+    config.monitoring = Some(alien_core::OtlpConfig {
+        logs_endpoint: "https://manager.example/v1/logs".to_string(),
+        logs_auth_header: "authorization=Bearer deployment-token".to_string(),
+        metrics_endpoint: Some("https://manager.example/v1/metrics".to_string()),
+        metrics_auth_header: None,
+        resource_attributes: HashMap::from([(
+            "alien.deployment_id".to_string(),
+            "dep_drift".to_string(),
+        )]),
+    });
+    config
+}
+
+fn worker_status(state: &DeploymentState, worker_id: &str) -> Option<alien_core::ResourceStatus> {
+    state
+        .stack_state
+        .as_ref()
+        .and_then(|stack_state| stack_state.resources.get(worker_id))
+        .map(|resource| resource.status)
+}
+
+/// Steps with a freshly built config every step (what a manager restart changes), recording
+/// every status the worker passes through.
+async fn step_with_rebuilt_config(
+    mut state: DeploymentState,
+    worker_id: &str,
+    until: &[DeploymentStatus],
+    seen: &mut Vec<alien_core::ResourceStatus>,
+) -> DeploymentState {
+    for _ in 0..MAX_STEPS {
+        if until.contains(&state.status) {
+            return state;
+        }
+        state = alien_deployment::step(state, rebuilt_injected_config(), ClientConfig::Test, None)
+            .await
+            .expect("step should succeed")
+            .state;
+        if let Some(status) = worker_status(&state, worker_id) {
+            seen.push(status);
+        }
+    }
+    panic!("did not reach {until:?}; final status {:?}", state.status);
+}
+
+/// Injected values that are rebuilt on every step (env snapshot with a new timestamp,
+/// monitoring, secret env, a present deployer secret) and a restart between every step never
+/// make the desired config differ from the recorded one: the worker is deployed once, never
+/// updated, the deployment reaches Running, stays quiet while Running, and a redeploy of the
+/// same release does not touch it.
+#[tokio::test]
+async fn rebuilt_injected_config_plans_no_update() {
+    let vault_env = test_vault_env().await;
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-rebuilt-fn";
+    let identifier = "test:worker:drift-rebuilt-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+
+    let mut seen = Vec::new();
+    let running = step_with_rebuilt_config(
+        create_initial_state(stack),
+        worker_id,
+        &[
+            DeploymentStatus::Running,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::WaitingForSecrets,
+        ],
+        &mut seen,
+    )
+    .await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Updating),
+        "{seen:?}"
+    );
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        1
+    );
+    let env = worker_environment(&running, worker_id);
+    assert!(env.contains_key(alien_core::ENV_ALIEN_SECRETS));
+    assert!(env.contains_key("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"));
+
+    // A redeploy of the same release with a rebuilt config.
+    let mut redeploy = running.clone();
+    let release = redeploy.current_release.clone().unwrap();
+    start_update(&mut redeploy, release);
+    let mut seen = Vec::new();
+    let redeployed = step_with_rebuilt_config(
+        redeploy,
+        worker_id,
+        &[DeploymentStatus::Running, DeploymentStatus::UpdateFailed],
+        &mut seen,
+    )
+    .await;
+    assert_eq!(redeployed.status, DeploymentStatus::Running);
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Updating),
+        "{seen:?}"
+    );
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        1
+    );
+}
+
+/// The deployer rewrites their secret while the worker's create is in flight. The create
+/// finishes with the version it started with, then exactly one update applies the new
+/// version, and the deployment reaches Running with nothing left to plan.
+#[tokio::test]
+async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
+    let vault_env = test_vault_env().await;
+    let vault = vault_env.customer_vault();
+    vault
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-rewrite-fn";
+    let identifier = "test:worker:drift-rewrite-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+    let config = create_test_config("hash_v1", false);
+
+    let mut state = create_initial_state(stack);
+    for _ in 0..MAX_STEPS {
+        if !alien_infra::test_worker_configs_deployed(identifier).is_empty() {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+    }
+    assert_eq!(state.status, DeploymentStatus::Provisioning);
+    vault
+        .set_secret("input-database-password", "value-v2")
+        .await
+        .unwrap();
+
+    let mut seen = Vec::new();
+    let mut steps = 0;
+    while state.status != DeploymentStatus::Running {
+        assert!(
+            steps < MAX_STEPS,
+            "never reached Running: {:?}",
+            state.status
+        );
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        seen.extend(worker_status(&state, worker_id));
+        steps += 1;
+    }
+    let deployed = alien_infra::test_worker_configs_deployed(identifier);
+    assert_eq!(deployed.len(), 2, "create with v1, one update with v2");
+    assert_ne!(
+        deployed[0].environment.get(alien_core::ENV_ALIEN_SECRETS),
+        deployed[1].environment.get(alien_core::ENV_ALIEN_SECRETS)
+    );
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+
+    // Running only refreshes: further steps change nothing.
+    for _ in 0..5 {
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(state.status, DeploymentStatus::Running);
+    }
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        2
+    );
+}
+
+/// Drives a deployment until the worker's failing create has recorded its config and is in
+/// flight, rewrites the deployer secret, and runs until the create fails.
+async fn fail_create_after_deployer_secret_rewrite(
+    mut state: DeploymentState,
+    config: &DeploymentConfig,
+    vault: &alien_bindings::providers::vault::LocalVault,
+    worker_id: &str,
+) -> DeploymentState {
+    for _ in 0..MAX_STEPS {
+        if worker_status(&state, worker_id) == Some(alien_core::ResourceStatus::Provisioning) {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+    }
+    assert_eq!(
+        worker_status(&state, worker_id),
+        Some(alien_core::ResourceStatus::Provisioning)
+    );
+    vault
+        .set_secret("input-database-password", "value-v2")
+        .await
+        .unwrap();
+    run_to_completion(state, config.clone()).await
+}
+
+fn worker_failing_one_attempt(id: &str) -> Worker {
+    let mut worker = image_worker(id, "test:v1", 1024);
+    // More failures than one attempt's retries, fewer than two attempts': the create fails,
+    // and a retry that resumes the saved controller succeeds, while a fresh create fails again.
+    worker.environment.insert(
+        "SIMULATE_RETRYABLE_FAILURE_COUNT".to_string(),
+        "13".to_string(),
+    );
+    worker
+}
+
+/// Provisioning phase: a create that failed after the deployer rewrote their secret is
+/// resumed by the retry (the retry comparison ignores deployer-secret metadata), then
+/// updated to the new version.
+#[tokio::test]
+async fn provisioning_retry_resumes_a_failed_create_with_deployer_only_drift() {
+    let vault_env = test_vault_env().await;
+    let vault = vault_env.customer_vault();
+    vault
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-prov-retry-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    add_live_worker(&mut stack, worker_failing_one_attempt(worker_id));
+    let config = create_test_config("hash_v1", false);
+
+    let mut failed = fail_create_after_deployer_secret_rewrite(
+        create_initial_state(stack),
+        &config,
+        &vault,
+        worker_id,
+    )
+    .await;
+    assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
+    request_retry(&mut failed);
+    let mut seen = Vec::new();
+    let mut state = failed;
+    for _ in 0..MAX_STEPS {
+        if matches!(
+            state.status,
+            DeploymentStatus::Running | DeploymentStatus::ProvisioningFailed
+        ) && !state.retry_requested
+            && !seen.is_empty()
+        {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        seen.extend(worker_status(&state, worker_id));
+    }
+    assert_eq!(state.status, DeploymentStatus::Running, "{seen:?}");
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Deleting),
+        "{seen:?}"
+    );
+}
+
+/// Update phase: the same failure in a resource the update adds. The update executor's retry
+/// uses the same deployer-metadata-insensitive comparison as the provisioning retry, so the
+/// failed create is resumed (never deleted and created again), then one update applies the
+/// new secret version.
+#[tokio::test]
+async fn update_retry_resumes_a_failed_create_with_deployer_only_drift() {
+    let vault_env = test_vault_env().await;
+    let vault = vault_env.customer_vault();
+    vault
+        .set_secret("input-database-password", "value-v1")
+        .await
+        .unwrap();
+    let worker_id = "drift-upd-retry-fn";
+    let identifier = "test:worker:drift-upd-retry-fn";
+    let mut stack = create_test_stack("test-stack", "drift-base-fn");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_until_status(
+        create_initial_state(stack.clone()),
+        config.clone(),
+        &[DeploymentStatus::Running],
+    )
+    .await;
+
+    add_live_worker(&mut stack, worker_failing_one_attempt(worker_id));
+    start_update(&mut state, release_of("rel_v2", stack));
+    let mut failed =
+        fail_create_after_deployer_secret_rewrite(state, &config, &vault, worker_id).await;
+    assert_eq!(failed.status, DeploymentStatus::UpdateFailed);
+    assert_eq!(
+        worker_status(&failed, worker_id),
+        Some(alien_core::ResourceStatus::ProvisionFailed)
+    );
+    request_retry(&mut failed);
+    let mut seen = Vec::new();
+    let mut state = failed;
+    for _ in 0..MAX_STEPS {
+        if matches!(
+            state.status,
+            DeploymentStatus::Running | DeploymentStatus::UpdateFailed
+        ) && !state.retry_requested
+            && !seen.is_empty()
+        {
+            break;
+        }
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        seen.extend(worker_status(&state, worker_id));
+    }
+    assert!(
+        !seen.contains(&alien_core::ResourceStatus::Deleting)
+            && !seen.contains(&alien_core::ResourceStatus::Deleted),
+        "the failed create must be resumed, not replaced: {seen:?}"
+    );
+    assert!(alien_infra::test_worker_deletes_issued(identifier).is_empty());
+    assert_eq!(state.status, DeploymentStatus::Running, "{seen:?}");
+    let deployed = alien_infra::test_worker_configs_deployed(identifier);
+    assert_eq!(
+        deployed.len(),
+        2,
+        "the resumed create deploys the recorded version, one update the new one"
+    );
+    assert_ne!(
+        deployed[0].environment.get(alien_core::ENV_ALIEN_SECRETS),
+        deployed[1].environment.get(alien_core::ENV_ALIEN_SECRETS)
     );
 }

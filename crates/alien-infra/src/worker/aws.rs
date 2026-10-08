@@ -4,6 +4,11 @@ use tracing::{debug, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
 
+use crate::core::aws_tag_scoped::{
+    certificates_imported_with_token, delete_imported_certificate, delete_tag_scoped,
+    is_remote_access_denied, is_remote_not_found, with_import_token, TagScopedDelete,
+    CREATE_ATTEMPT_TAG,
+};
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
@@ -43,6 +48,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
+use uuid::Uuid;
 
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
 
@@ -90,11 +96,16 @@ fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool
     )
 }
 
-fn is_remote_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
-    matches!(
-        &error.error,
-        Some(CloudClientErrorData::RemoteAccessDenied { .. })
-    )
+/// Whether `tags` hold every one of `expected`.
+fn carries_tags(
+    tags: Option<&HashMap<String, String>>,
+    expected: &HashMap<String, String>,
+) -> bool {
+    tags.is_some_and(|tags| {
+        expected
+            .iter()
+            .all(|(key, value)| tags.get(key) == Some(value))
+    })
 }
 
 fn replace_lambda_notification_config(
@@ -214,6 +225,107 @@ impl AwsWorkerController {
         }
     }
 
+    /// Settles a domain name recorded before its create was confirmed. The name stays, now
+    /// confirmed, when the domain exists with this worker's tags. It is forgotten when the
+    /// domain does not exist or is not this worker's: a domain the role cannot read is one of
+    /// those, because the read is granted only for domains carrying the stack's tags. Any other
+    /// error keeps the name, so the delete retries.
+    async fn confirm_recorded_domain(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &Worker,
+    ) -> Result<()> {
+        let Some(domain_name) = self.domain_name.clone() else {
+            return Ok(());
+        };
+        let aws_cfg = ctx.get_aws_config()?;
+        // The delete runs against the config the worker was created with, which picked the
+        // API Gateway flavor its domain was made in.
+        let lookup = if worker_wants_streaming(worker_config) {
+            let client = ctx
+                .service_provider
+                .get_aws_apigateway_client(aws_cfg)
+                .await?;
+            client
+                .get_domain_name(&domain_name)
+                .await
+                .map(|domain| domain.tags)
+        } else {
+            let client = ctx
+                .service_provider
+                .get_aws_apigatewayv2_client(aws_cfg)
+                .await?;
+            client
+                .get_domain_name(&domain_name)
+                .await
+                .map(|domain| domain.tags)
+        };
+
+        let ours = standard_resource_tags(ctx.resource_prefix, &worker_config.id);
+        match lookup {
+            Ok(tags) if carries_tags(tags.as_ref(), &ours) => {
+                info!(worker=%worker_config.id, domain=%domain_name, "Recorded custom domain exists and is this worker's");
+                self.domain_confirmed = true;
+            }
+            Ok(_) => {
+                warn!(worker=%worker_config.id, domain=%domain_name, "Custom domain exists but is not this worker's; leaving it");
+                self.forget_domain();
+            }
+            Err(error) if is_remote_not_found(&error) || is_remote_access_denied(&error) => {
+                info!(worker=%worker_config.id, domain=%domain_name, "Recorded custom domain was never created");
+                self.forget_domain();
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to look up custom domain '{domain_name}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                }))
+            }
+        }
+        Ok(())
+    }
+
+    /// Drops a domain this worker must not delete, with the mappings recorded under it.
+    fn forget_domain(&mut self) {
+        self.domain_name = None;
+        self.domain_confirmed = false;
+        self.api_mapping_id = None;
+        self.rest_base_path = None;
+    }
+
+    /// The tags a domain create carries: this worker's ownership tags plus the create token.
+    ///
+    /// `None` means no token was saved yet: the caller records the new one and returns, and the
+    /// create runs in the next step. The executor saves state only between steps, so a token
+    /// generated in the step that calls create would be lost if the process stopped after AWS
+    /// accepted the call, and the retry would reject the domain as not this worker's.
+    fn domain_create_tags(
+        &mut self,
+        prefix: &str,
+        resource_id: &str,
+    ) -> Option<HashMap<String, String>> {
+        let Some(token) = self.domain_create_token.clone() else {
+            self.domain_create_token = Some(Uuid::new_v4().to_string());
+            return None;
+        };
+        let mut tags = standard_resource_tags(prefix, resource_id);
+        tags.insert(CREATE_ATTEMPT_TAG.to_string(), token);
+        Some(tags)
+    }
+
+    fn foreign_domain_error(
+        fqdn: &str,
+        resource_id: &str,
+        conflict: AlienError<CloudClientErrorData>,
+    ) -> AlienError<ErrorData> {
+        conflict.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "API Gateway domain '{fqdn}' already exists and was not created by this worker"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
+    }
+
     fn unexpected_update_wrapper_state(
         resource_id: &str,
         handler: &str,
@@ -266,8 +378,22 @@ pub struct AwsWorkerController {
     /// base path is the literal `(none)`, which deletion must address by key)
     #[serde(default)]
     pub(crate) rest_base_path: Option<String>,
-    /// API Gateway domain name
+    /// API Gateway custom domain name. Until `domain_confirmed` is set, this is only the name a
+    /// create will use: the domain may not exist, or may not be this worker's.
     pub(crate) domain_name: Option<String>,
+    /// Whether `domain_name` is known to be this worker's domain: CreateDomainName returned it,
+    /// or a read found it carrying this worker's tags. Older versions recorded the name before
+    /// creating the domain and saved no such flag, so their state reads as unconfirmed.
+    #[serde(default)]
+    pub(crate) domain_confirmed: bool,
+    /// Token tagged on the domain by its create call, recorded before the call, so a retry
+    /// after a lost response adopts that domain and no other.
+    #[serde(default)]
+    pub(crate) domain_create_token: Option<String>,
+    /// Token tagged on the certificate this worker imports into ACM, recorded before the import
+    /// so a retry after a lost response, and the delete, find that certificate and no other.
+    #[serde(default)]
+    pub(crate) certificate_import_token: Option<String>,
     /// Endpoint metadata for DNS controller
     pub(crate) load_balancer: Option<LoadBalancerState>,
     /// Timestamp when certificate was imported (for renewal detection)
@@ -666,6 +792,13 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         self.ensure_domain_info(ctx, &worker_config.id)?;
+        if self.certificate_arn.is_some() {
+            // A recorded certificate is not imported again.
+            return Ok(HandlerAction::Continue {
+                state: Self::gateway_entry_state(&worker_config),
+                suggested_delay: None,
+            });
+        }
         let resource = ctx
             .deployment_config
             .domain_metadata
@@ -694,28 +827,59 @@ impl AwsWorkerController {
 
         let (leaf, chain) = split_certificate_chain(certificate_chain);
 
+        // The token is saved by a step of its own, before the step that imports. The executor
+        // saves state only between steps, so a token made in the importing step would be lost
+        // if the process stopped after ACM accepted the import, and the retry would import a
+        // second certificate.
+        let Some(token) = self.certificate_import_token.clone() else {
+            self.certificate_import_token = Some(Uuid::new_v4().to_string());
+            return Ok(HandlerAction::Continue {
+                state: ImportingCertificate,
+                suggested_delay: None,
+            });
+        };
+
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
-            .into_iter()
-            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
-            .collect();
-        let response = acm_client
-            .import_certificate(
-                alien_aws_clients::acm::ImportCertificateRequest::builder()
-                    .certificate(leaf)
-                    .private_key(private_key.clone())
-                    .maybe_certificate_chain(chain)
-                    .tags(tags)
-                    .build(),
-            )
+        // Every ImportCertificate without an ARN makes a new certificate, so an earlier import
+        // under this token whose response was lost is looked up first.
+        let earlier_import = certificates_imported_with_token(acm_client.as_ref(), &token)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to import certificate to ACM".to_string(),
+                message: "Failed to look up certificates imported by an earlier attempt"
+                    .to_string(),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            })?
+            .and_then(|found| found.into_iter().next());
+        let certificate_arn = match earlier_import {
+            Some(certificate_arn) => {
+                info!(worker=%worker_config.id, certificate_arn=%certificate_arn, "Adopting the certificate an earlier import made");
+                certificate_arn
+            }
+            None => {
+                let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
+                    .into_iter()
+                    .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
+                    .collect();
+                acm_client
+                    .import_certificate(
+                        alien_aws_clients::acm::ImportCertificateRequest::builder()
+                            .certificate(leaf)
+                            .private_key(private_key.clone())
+                            .maybe_certificate_chain(chain)
+                            .tags(with_import_token(tags, &token))
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to import certificate to ACM".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?
+                    .certificate_arn
+            }
+        };
 
-        self.certificate_arn = Some(response.certificate_arn.clone());
+        self.certificate_arn = Some(certificate_arn);
 
         // Store issued_at timestamp for renewal detection
         self.certificate_issued_at = resource.issued_at.clone();
@@ -1044,7 +1208,13 @@ impl AwsWorkerController {
             })
         })?;
 
-        let domain = client
+        let Some(tags) = self.domain_create_tags(ctx.resource_prefix, &worker_config.id) else {
+            return Ok(HandlerAction::Continue {
+                state: CreatingApiDomain,
+                suggested_delay: None,
+            });
+        };
+        let domain = match client
             .create_domain_name(
                 CreateDomainNameRequest::builder()
                     .domain_name(fqdn.clone())
@@ -1053,17 +1223,43 @@ impl AwsWorkerController {
                         .endpoint_type("REGIONAL".to_string())
                         .security_policy("TLS_1_2".to_string())
                         .build()])
-                    .tags(standard_resource_tags(
-                        ctx.resource_prefix,
-                        &worker_config.id,
-                    ))
+                    .tags(tags.clone())
                     .build(),
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create API domain name".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        {
+            Ok(domain) => domain,
+            Err(error) if is_remote_resource_conflict(&error) => {
+                // Our own earlier attempt may have created it before its response was lost.
+                match client.get_domain_name(&fqdn).await {
+                    Ok(existing) if carries_tags(existing.tags.as_ref(), &tags) => existing,
+                    Ok(_) => {
+                        return Err(Self::foreign_domain_error(&fqdn, &worker_config.id, error))
+                    }
+                    Err(lookup)
+                        if is_remote_not_found(&lookup) || is_remote_access_denied(&lookup) =>
+                    {
+                        return Err(Self::foreign_domain_error(&fqdn, &worker_config.id, error))
+                    }
+                    Err(lookup) => {
+                        return Err(lookup.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to look up API domain '{fqdn}' after a create conflict"
+                            ),
+                            resource_id: Some(worker_config.id.clone()),
+                        }))
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to create API domain name".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                }))
+            }
+        };
+        self.domain_name = Some(fqdn);
+        self.domain_confirmed = true;
 
         let endpoint = domain
             .domain_name_configurations
@@ -1496,7 +1692,13 @@ impl AwsWorkerController {
             })
         })?;
 
-        let domain = client
+        let Some(tags) = self.domain_create_tags(ctx.resource_prefix, &worker_config.id) else {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRestDomain,
+                suggested_delay: None,
+            });
+        };
+        let domain = match client
             .create_domain_name(
                 CreateRestDomainNameRequest::builder()
                     .domain_name(fqdn.clone())
@@ -1505,17 +1707,41 @@ impl AwsWorkerController {
                         types: vec!["REGIONAL".to_string()],
                     })
                     .security_policy("TLS_1_2".to_string())
-                    .tags(standard_resource_tags(
-                        ctx.resource_prefix,
-                        &worker_config.id,
-                    ))
+                    .tags(tags.clone())
                     .build(),
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create REST API domain name".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        {
+            Ok(domain) => domain,
+            Err(error) if is_remote_resource_conflict(&error) => {
+                // Our own earlier attempt may have created it before its response was lost.
+                match client.get_domain_name(&fqdn).await {
+                    Ok(existing) if carries_tags(existing.tags.as_ref(), &tags) => existing,
+                    Ok(_) => {
+                        return Err(Self::foreign_domain_error(&fqdn, &worker_config.id, error))
+                    }
+                    Err(lookup)
+                        if is_remote_not_found(&lookup) || is_remote_access_denied(&lookup) =>
+                    {
+                        return Err(Self::foreign_domain_error(&fqdn, &worker_config.id, error))
+                    }
+                    Err(lookup) => {
+                        return Err(lookup.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                            "Failed to look up REST API domain '{fqdn}' after a create conflict"
+                        ),
+                            resource_id: Some(worker_config.id.clone()),
+                        }))
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to create REST API domain name".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                }))
+            }
+        };
 
         let endpoint = domain.regional_domain_name.clone().and_then(|dns_name| {
             let hosted_zone_id = domain.regional_hosted_zone_id.clone()?;
@@ -1526,6 +1752,7 @@ impl AwsWorkerController {
         });
 
         self.domain_name = Some(fqdn);
+        self.domain_confirmed = true;
         self.load_balancer = Some(LoadBalancerState { endpoint });
 
         Ok(HandlerAction::Continue {
@@ -2369,11 +2596,8 @@ impl AwsWorkerController {
         let (leaf, chain) = split_certificate_chain(certificate_chain);
         let aws_cfg = ctx.get_aws_config()?;
         let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-        let tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id)
-            .into_iter()
-            .map(|(key, value)| alien_aws_clients::acm::Tag { key, value })
-            .collect();
 
+        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
         acm_client
             .reimport_certificate(
                 alien_aws_clients::acm::ReimportCertificateRequest::builder()
@@ -2381,7 +2605,6 @@ impl AwsWorkerController {
                     .certificate(leaf)
                     .private_key(private_key.clone())
                     .maybe_certificate_chain(chain)
-                    .tags(tags)
                     .build(),
             )
             .await
@@ -2775,6 +2998,13 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         match self.importing_certificate(ctx).await? {
             HandlerAction::Continue {
+                state: ImportingCertificate,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateImportingInitialCertificate,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
                 state: CreatingApiGateway,
                 suggested_delay,
             } => Ok(HandlerAction::Continue {
@@ -2967,6 +3197,13 @@ impl AwsWorkerController {
                 suggested_delay,
             } => Ok(HandlerAction::Continue {
                 state: UpdateCreatingApiMapping,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingApiDomain,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingApiDomain,
                 suggested_delay,
             }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
@@ -3172,6 +3409,13 @@ impl AwsWorkerController {
                 suggested_delay,
             } => Ok(HandlerAction::Continue {
                 state: UpdateCreatingRestBasePathMapping,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingRestDomain,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestDomain,
                 suggested_delay,
             }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
@@ -3831,11 +4075,18 @@ impl AwsWorkerController {
         let aws_cfg = ctx.get_aws_config()?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
+        // A domain name recorded but never confirmed may not exist, or may not be ours. This role
+        // may delete only domains that carry our tags, so AWS would answer a delete of a missing
+        // one with AccessDenied: check it with a read before deleting anything under its name.
+        if self.domain_name.is_some() && !self.domain_confirmed {
+            self.confirm_recorded_domain(ctx, &worker_config).await?;
+        }
+
         // Ordering matters: delete API mapping before domain name, domain name before API.
         // A worker is V1 xor V2, so at most one branch of each pair runs. The REST V1
         // order is the same — base path mapping, then domain, then the REST API, whose
         // deletion cascades to resources, methods, deployments, and stages.
-        if let (Some(domain_name), true) = (self.domain_name.as_ref(), self.rest_api_id.is_some()) {
+        if let (Some(domain_name), true) = (self.domain_name.clone(), self.rest_api_id.is_some()) {
             // An imported worker never learns its mapping key, so fall back to the
             // literal the API reports for an empty base path. Deleting the domain
             // while a mapping still points at it fails.
@@ -3843,183 +4094,116 @@ impl AwsWorkerController {
                 .rest_base_path
                 .clone()
                 .unwrap_or_else(|| "(none)".to_string());
-            let base_path = &base_path;
             let client = ctx
                 .service_provider
                 .get_aws_apigateway_client(aws_cfg)
                 .await?;
-            match client
-                .delete_base_path_mapping(domain_name, base_path)
-                .await
-            {
-                Ok(()) => {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, "REST base path mapping deleted")
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, "REST base path mapping already gone");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: "Failed to delete REST base path mapping".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    }));
-                }
-            }
+            // The mapping is authorized by its domain's tags, so the domain is the read.
+            let outcome = delete_tag_scoped(
+                client
+                    .delete_base_path_mapping(&domain_name, &base_path)
+                    .await,
+                || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to delete REST base path mapping".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+            self.delete_removed_something = true;
+            info!(worker=%worker_config.id, outcome=?outcome, "REST base path mapping removed");
         }
         self.rest_base_path = None;
 
         if let (Some(domain_name), Some(api_mapping_id)) =
-            (self.domain_name.as_ref(), self.api_mapping_id.as_ref())
+            (self.domain_name.clone(), self.api_mapping_id.clone())
         {
             let client = ctx
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match client.delete_api_mapping(domain_name, api_mapping_id).await {
-                Ok(()) => {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, "API mapping deleted")
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, "API mapping already gone");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: "Failed to delete API mapping".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    }));
-                }
-            }
+            let outcome = delete_tag_scoped(
+                client
+                    .delete_api_mapping(&domain_name, &api_mapping_id)
+                    .await,
+                || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to delete API mapping".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+            self.delete_removed_something = true;
+            info!(worker=%worker_config.id, outcome=?outcome, "API mapping removed");
         }
         self.api_mapping_id = None;
 
-        if let Some(domain_name) = self.domain_name.as_ref() {
-            if self.rest_api_id.is_some() {
+        if let Some(domain_name) = self.domain_name.clone() {
+            let outcome = if self.rest_api_id.is_some() {
                 let client = ctx
                     .service_provider
                     .get_aws_apigateway_client(aws_cfg)
                     .await?;
-                match client.delete_domain_name(domain_name).await {
-                    Ok(()) => {
-                        self.delete_removed_something = true;
-                        info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        self.delete_removed_something = true;
-                        info!(worker=%worker_config.id, "Custom domain already gone or inaccessible");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: "Failed to delete custom domain".to_string(),
-                            resource_id: Some(worker_config.id.clone()),
-                        }));
-                    }
-                }
+                delete_tag_scoped(client.delete_domain_name(&domain_name).await, || async {
+                    client.get_domain_name(&domain_name).await.map(|_| ())
+                })
+                .await
             } else {
                 let client = ctx
                     .service_provider
                     .get_aws_apigatewayv2_client(aws_cfg)
                     .await?;
-                match client.delete_domain_name(domain_name).await {
-                    Ok(()) => {
-                        self.delete_removed_something = true;
-                        info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        self.delete_removed_something = true;
-                        info!(worker=%worker_config.id, "Custom domain already gone");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: "Failed to delete custom domain".to_string(),
-                            resource_id: Some(worker_config.id.clone()),
-                        }));
-                    }
-                }
+                delete_tag_scoped(client.delete_domain_name(&domain_name).await, || async {
+                    client.get_domain_name(&domain_name).await.map(|_| ())
+                })
+                .await
             }
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to delete custom domain".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+            self.delete_removed_something = true;
+            info!(worker=%worker_config.id, domain=%domain_name, outcome=?outcome, "Custom domain removed");
         }
         self.domain_name = None;
+        self.domain_confirmed = false;
 
         // Deleting the API cascades to routes, integrations, and stages.
-        if let Some(api_id) = self.api_id.as_ref() {
+        if let Some(api_id) = self.api_id.clone() {
             let client = ctx
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            match client.delete_api(api_id).await {
-                Ok(()) => {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, api_id=%api_id, "API Gateway deleted")
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, "API Gateway already gone");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: "Failed to delete API Gateway".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    }));
-                }
-            }
+            let outcome = delete_tag_scoped(client.delete_api(&api_id).await, || async {
+                client.get_api(&api_id).await.map(|_| ())
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to delete API Gateway".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+            self.delete_removed_something = true;
+            info!(worker=%worker_config.id, api_id=%api_id, outcome=?outcome, "API Gateway removed");
         }
         self.api_id = None;
         self.integration_id = None;
         self.route_id = None;
 
-        if let Some(rest_api_id) = self.rest_api_id.as_ref() {
+        if let Some(rest_api_id) = self.rest_api_id.clone() {
             let client = ctx
                 .service_provider
                 .get_aws_apigateway_client(aws_cfg)
                 .await?;
-            match client.delete_rest_api(rest_api_id).await {
-                Ok(()) => {
-                    info!(worker=%worker_config.id, rest_api_id=%rest_api_id, "REST API deleted")
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    self.delete_removed_something = true;
-                    info!(worker=%worker_config.id, "REST API already gone");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: "Failed to delete REST API".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    }));
-                }
-            }
+            let outcome = delete_tag_scoped(client.delete_rest_api(&rest_api_id).await, || async {
+                client.get_rest_api(&rest_api_id).await.map(|_| ())
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to delete REST API".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+            self.delete_removed_something = true;
+            info!(worker=%worker_config.id, rest_api_id=%rest_api_id, outcome=?outcome, "REST API removed");
         }
         self.rest_api_id = None;
         self.rest_root_resource_id = None;
@@ -4052,25 +4236,16 @@ impl AwsWorkerController {
 
             // Delete all event source mappings using best-effort approach (ignore NotFound)
             for uuid in &self.event_source_mappings.clone() {
-                match client.delete_event_source_mapping(uuid).await {
-                    Ok(_) => {
-                        info!(worker=%worker_config.id, uuid=%uuid, "Event source mapping deleted successfully");
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(worker=%worker_config.id, uuid=%uuid, "Event source mapping was already deleted (not found)");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to delete event source mapping '{}'", uuid),
-                            resource_id: Some(worker_config.id.clone()),
-                        }));
-                    }
-                }
+                let outcome =
+                    delete_tag_scoped(client.delete_event_source_mapping(uuid).await, || async {
+                        client.get_event_source_mapping(uuid).await.map(|_| ())
+                    })
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete event source mapping '{}'", uuid),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?;
+                info!(worker=%worker_config.id, uuid=%uuid, outcome=?outcome, "Event source mapping removed");
             }
 
             // Clear the mapping list after successful deletion
@@ -4229,33 +4404,38 @@ impl AwsWorkerController {
             )
             .build();
 
-        match client
-            .update_function_configuration(function_identifier, request)
-            .await
-        {
-            Ok(_) => {
+        // The update is granted, like the delete, only on functions carrying the stack's tags.
+        let outcome = delete_tag_scoped(
+            client
+                .update_function_configuration(function_identifier, request)
+                .await,
+            || async {
+                client
+                    .get_function_configuration(function_identifier, None)
+                    .await
+                    .map(|_| ())
+            },
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to detach Lambda worker from VPC".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
+        match outcome {
+            TagScopedDelete::Deleted => {
                 info!(worker=%worker_config.id, "Lambda VPC config detach requested");
                 Ok(HandlerAction::Continue {
                     state: DetachVpcWaitForActive,
                     suggested_delay: Some(Duration::from_secs(5)),
                 })
             }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            TagScopedDelete::Gone => {
                 info!(worker=%worker_config.id, "Lambda already gone while detaching VPC config");
                 Ok(HandlerAction::Continue {
                     state: DeletingWorker,
                     suggested_delay: None,
                 })
             }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: "Failed to detach Lambda worker from VPC".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })),
         }
     }
 
@@ -4303,12 +4483,8 @@ impl AwsWorkerController {
                 ),
                 resource_id: Some(worker_config.id.clone()),
             })),
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
+            // A function that is gone has no tags, so the read is denied rather than not found.
+            Err(e) if is_remote_not_found(&e) || is_remote_access_denied(&e) => {
                 Ok(HandlerAction::Continue {
                     state: DeletingWorker,
                     suggested_delay: None,
@@ -4336,25 +4512,21 @@ impl AwsWorkerController {
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         info!(name=%aws_worker_name, "Deleting worker itself: {}", aws_worker_name);
 
-        match client.delete_function(&aws_worker_name, None).await {
-            Ok(_) => {
-                info!(name=%aws_worker_name, "Worker deleted successfully, proceeding to DeleteWaitForNotFound state");
-            }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                warn!(name=%aws_worker_name, "Worker was already deleted (not found), proceeding to DeleteWaitForNotFound state");
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: "Failed to delete Lambda worker".to_string(),
-                    resource_id: Some(worker_config.id.clone()),
-                }));
-            }
-        }
+        let outcome = delete_tag_scoped(
+            client.delete_function(&aws_worker_name, None).await,
+            || async {
+                client
+                    .get_function_configuration(&aws_worker_name, None)
+                    .await
+                    .map(|_| ())
+            },
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to delete Lambda worker".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
+        info!(name=%aws_worker_name, outcome=?outcome, "Lambda function removed, waiting until it is gone");
 
         Ok(HandlerAction::Continue {
             state: DeleteWaitForNotFound,
@@ -4505,30 +4677,89 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         // Custom-domain certificates belong to the customer and may be shared.
-        if let (Some(certificate_arn), false) =
-            (self.certificate_arn.as_ref(), self.uses_custom_domain)
-        {
-            let aws_cfg = ctx.get_aws_config()?;
-            let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-            match acm_client.delete_certificate(certificate_arn).await {
-                Ok(()) => info!(worker=%worker_config.id, "ACM certificate deleted"),
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(worker=%worker_config.id, "ACM certificate already gone");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: "Failed to delete ACM certificate".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    }));
+        let mut certificate_arns: Vec<String> = self
+            .certificate_arn
+            .iter()
+            .filter(|_| !self.uses_custom_domain)
+            .cloned()
+            .collect();
+        if certificate_arns.is_empty() && self.certificate_import_token.is_none() {
+            self.certificate_arn = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingLogGroup,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+        // An import whose response was lost left a certificate that only its token finds.
+        if let Some(token) = self.certificate_import_token.as_deref() {
+            let found = certificates_imported_with_token(acm_client.as_ref(), token)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to look up the certificates this worker imported".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+            for certificate_arn in found.into_iter().flatten() {
+                if !certificate_arns.contains(&certificate_arn) {
+                    certificate_arns.push(certificate_arn);
                 }
             }
         }
+        for certificate_arn in &certificate_arns {
+            let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete ACM certificate '{certificate_arn}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+            info!(worker=%worker_config.id, certificate_arn=%certificate_arn, outcome=?outcome, "ACM certificate removed");
+        }
         self.certificate_arn = None;
+        self.certificate_import_token = None;
+
+        Ok(HandlerAction::Continue {
+            state: DeletingLogGroup,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeletingLogGroup,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_log_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        // The group `ensure_log_group` creates, or Lambda creates on first invoke, under the
+        // function's own name.
+        let log_group_name = format!("/aws/lambda/{aws_worker_name}");
+        let aws_cfg = ctx.get_aws_config()?;
+        let logs = ctx.service_provider.get_aws_logs_client(aws_cfg).await?;
+        match logs.delete_log_group(&log_group_name).await {
+            Ok(()) => info!(log_group = %log_group_name, "Deleted worker log group"),
+            Err(error) if is_remote_not_found(&error) => {
+                info!(log_group = %log_group_name, "Worker log group already deleted")
+            }
+            // A role installed before logs:DeleteLogGroup was granted. The function and
+            // everything else are gone; returning the denial would only end the delete the
+            // same way, so it is reported and the delete finishes.
+            Err(error) if is_remote_access_denied(&error) => warn!(
+                log_group = %log_group_name,
+                "Not allowed to delete the worker log group; it is left behind. Re-run setup to grant logs:DeleteLogGroup."
+            ),
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete log group '{log_group_name}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                }))
+            }
+        }
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -4988,6 +5219,9 @@ impl AwsWorkerController {
             rest_deployment_id: None,
             rest_base_path: None,
             domain_name: None,
+            domain_confirmed: false,
+            domain_create_token: None,
+            certificate_import_token: None,
             load_balancer: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
@@ -5012,7 +5246,10 @@ mod tests {
         Arc, Mutex,
     };
 
-    use alien_aws_clients::acm::{ImportCertificateResponse, MockAcmApi};
+    use alien_aws_clients::acm::{
+        CertificateSummary, ImportCertificateResponse, ListCertificatesResponse, MockAcmApi, Tag,
+    };
+    use alien_aws_clients::apigateway::MockApiGatewayApi;
     use alien_aws_clients::apigatewayv2::{
         Api, ApiMapping, DomainName, DomainNameConfiguration, Integration, MockApiGatewayV2Api,
         Route, Stage,
@@ -5027,7 +5264,8 @@ mod tests {
         CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus, DomainMetadata,
         EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
         PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
-        ResourceStatus, StackResourceState, StackSettings, StackState, Worker, WorkerOutputs,
+        ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Worker, WorkerCode,
+        WorkerOutputs, WorkerPublicEndpoint,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
@@ -5041,6 +5279,7 @@ mod tests {
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
         AwsWorkerState,
     };
+    use alien_core::standard_resource_tags;
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
         FunctionConfiguration {
@@ -5088,6 +5327,9 @@ mod tests {
 
     fn create_acm_mock_for_creation() -> Arc<MockAcmApi> {
         let mut mock_acm = MockAcmApi::new();
+        mock_acm
+            .expect_list_certificates()
+            .returning(|_| Ok(ListCertificatesResponse::default()));
         mock_acm.expect_import_certificate().returning(|_| {
             Ok(ImportCertificateResponse {
                 certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
@@ -5099,6 +5341,9 @@ mod tests {
 
     fn create_acm_mock_for_creation_and_deletion() -> Arc<MockAcmApi> {
         let mut mock_acm = MockAcmApi::new();
+        mock_acm
+            .expect_list_certificates()
+            .returning(|_| Ok(ListCertificatesResponse::default()));
         mock_acm.expect_import_certificate().returning(|_| {
             Ok(ImportCertificateResponse {
                 certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id"
@@ -5153,6 +5398,7 @@ mod tests {
                     ),
                     hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
                 }]),
+                tags: None,
             })
         });
         mock_apigw.expect_create_api_mapping().returning(|_, _| {
@@ -5209,6 +5455,7 @@ mod tests {
                     ),
                     hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
                 }]),
+                tags: None,
             })
         });
         mock_apigw.expect_create_api_mapping().returning(|_, _| {
@@ -5410,6 +5657,7 @@ mod tests {
         mock_logs
             .expect_put_retention_policy()
             .returning(|_| Ok(()));
+        mock_logs.expect_delete_log_group().returning(|_| Ok(()));
         Arc::new(mock_logs)
     }
 
@@ -5819,6 +6067,7 @@ mod tests {
         mock_lambda: MockLambdaApi,
         mock_ec2: MockEc2Api,
         mock_acm: MockAcmApi,
+        #[builder(default = MockCloudWatchLogsApi::new())] mock_logs: MockCloudWatchLogsApi,
         #[builder(default)] uses_custom_domain: bool,
     ) -> ResourceStatus {
         let worker = function_public_ingress();
@@ -5844,6 +6093,7 @@ mod tests {
         let mock_lambda = Arc::new(mock_lambda);
         let mock_ec2 = Arc::new(mock_ec2);
         let mock_acm = Arc::new(mock_acm);
+        let mock_logs = Arc::new(mock_logs);
         let mut mock_provider = MockPlatformServiceProvider::new();
         mock_provider
             .expect_get_aws_lambda_client()
@@ -5854,6 +6104,9 @@ mod tests {
         mock_provider
             .expect_get_aws_acm_client()
             .returning(move |_| Ok(mock_acm.clone()));
+        mock_provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(mock_logs.clone()));
 
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
@@ -5949,10 +6202,22 @@ mod tests {
                 Ok(())
             });
 
+        let mut mock_logs = MockCloudWatchLogsApi::new();
+        let recorded = calls.clone();
+        mock_logs
+            .expect_delete_log_group()
+            .withf(|name| name == "/aws/lambda/test-public-func")
+            .times(1)
+            .returning(move |_| {
+                recorded.lock().unwrap().push("DeleteLogGroup");
+                Ok(())
+            });
+
         let status = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(mock_ec2)
             .mock_acm(mock_acm)
+            .mock_logs(mock_logs)
             .uses_custom_domain(uses_custom_domain)
             .call()
             .await;
@@ -5961,6 +6226,7 @@ mod tests {
         if !uses_custom_domain {
             expected_calls.push("DeleteCertificate");
         }
+        expected_calls.push("DeleteLogGroup");
         assert_eq!(*calls.lock().unwrap(), expected_calls);
         assert_eq!(status, ResourceStatus::Deleted);
     }
@@ -6068,6 +6334,9 @@ mod tests {
         // Validate ACM certificate import
         let mut mock_acm = MockAcmApi::new();
         mock_acm
+            .expect_list_certificates()
+            .returning(|_| Ok(ListCertificatesResponse::default()));
+        mock_acm
             .expect_import_certificate()
             .times(1)
             .returning(|_| {
@@ -6123,6 +6392,7 @@ mod tests {
                     ),
                     hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
                 }]),
+                tags: None,
             })
         });
         mock_apigw.expect_create_api_mapping().returning(|_, _| {
@@ -6658,6 +6928,11 @@ mod tests {
                     resource_name: domain.to_string(),
                 }))
             });
+        // The domain is still readable, so the denied delete is a real denial.
+        mock_apigw
+            .expect_get_domain_name()
+            .times(1)
+            .returning(|domain| Ok(domain_with_tags(domain, HashMap::new())));
         mock_apigw.expect_delete_api().times(0);
         let provider = setup_mock_service_provider(
             Arc::new(MockLambdaApi::new()),
@@ -6671,6 +6946,7 @@ mod tests {
             api_id: Some("api-1".to_string()),
             api_mapping_id: Some("mapping-1".to_string()),
             domain_name: Some("api.example.com".to_string()),
+            domain_confirmed: true,
             ..Default::default()
         };
         assert!(controller.nothing_deleted_yet());
@@ -6699,5 +6975,1388 @@ mod tests {
         assert_eq!(state.domain_name.as_deref(), Some("api.example.com"));
         assert_eq!(state.api_id.as_deref(), Some("api-1"));
         assert!(!state.nothing_deleted_yet());
+    }
+    // ─────────────── CUSTOM DOMAIN RECORDED BEFORE IT EXISTS ────────────────
+
+    const DOMAIN: &str = "public-func.test.example.com";
+
+    fn domain_with_tags(domain: &str, tags: HashMap<String, String>) -> DomainName {
+        DomainName {
+            domain_name: Some(domain.to_string()),
+            domain_name_configurations: Some(vec![DomainNameConfiguration {
+                certificate_arn: TEST_CERTIFICATE_ARN.to_string(),
+                endpoint_type: "REGIONAL".to_string(),
+                security_policy: "TLS_1_2".to_string(),
+                api_gateway_domain_name: Some(
+                    "d-1.execute-api.us-east-1.amazonaws.com".to_string(),
+                ),
+                hosted_zone_id: Some("Z1D633PJN98FT9".to_string()),
+            }]),
+            tags: Some(tags),
+        }
+    }
+
+    fn not_found(resource_type: &str) -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+            resource_type: resource_type.to_string(),
+            resource_name: "missing".to_string(),
+        })
+    }
+
+    type Calls = Arc<Mutex<Vec<String>>>;
+
+    fn record(calls: &Calls, call: impl Into<String>) {
+        calls.lock().unwrap().push(call.into());
+    }
+
+    /// The worker as a create that failed in `CreatingApiDomain` left it: the function and
+    /// HTTP API exist; the domain name was recorded by `CreateStart` but never created.
+    fn failed_at_creating_api_domain() -> AwsWorkerController {
+        AwsWorkerController {
+            state: AwsWorkerState::CreateFailed,
+            arn: Some(
+                "arn:aws:lambda:us-east-1:123456789012:function:test-public-func".to_string(),
+            ),
+            url: Some(format!("https://{DOMAIN}")),
+            worker_name: Some("test-public-func".to_string()),
+            fqdn: Some(DOMAIN.to_string()),
+            certificate_id: Some("test-cert-id".to_string()),
+            certificate_arn: Some(TEST_CERTIFICATE_ARN.to_string()),
+            api_id: Some("api-1".to_string()),
+            integration_id: Some("integration-1".to_string()),
+            route_id: Some("route-1".to_string()),
+            stage_name: Some("$default".to_string()),
+            domain_name: Some(DOMAIN.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Serialized as the previous version wrote it: it recorded the domain name before the
+    /// create and had neither `domainConfirmed` nor `domainCreateToken`.
+    fn saved_by_previous_version(controller: &AwsWorkerController) -> serde_json::Value {
+        fn strip(value: &mut serde_json::Value) {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("domainConfirmed");
+                object.remove("domainCreateToken");
+                object.values_mut().for_each(strip);
+            }
+        }
+        let mut value = serialize_controller(controller).unwrap();
+        strip(&mut value);
+        let text = value.to_string();
+        assert!(
+            text.contains(DOMAIN) && !text.contains("domainConfirmed"),
+            "{text}"
+        );
+        value
+    }
+
+    /// Lambda and ACM mocks for the delete of `test-public-func` and its imported certificate.
+    fn delete_mocks(calls: &Calls) -> (MockLambdaApi, MockAcmApi) {
+        let mut lambda = MockLambdaApi::new();
+        let recorded = calls.clone();
+        lambda
+            .expect_delete_function()
+            .withf(|name, _| name == "test-public-func")
+            .times(1)
+            .returning(move |_, _| {
+                record(&recorded, "DeleteFunction");
+                Ok(())
+            });
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Err(not_found("Function")));
+        let mut acm = MockAcmApi::new();
+        let recorded = calls.clone();
+        acm.expect_delete_certificate()
+            .withf(|arn| arn == TEST_CERTIFICATE_ARN)
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "DeleteCertificate");
+                Ok(())
+            });
+        (lambda, acm)
+    }
+
+    /// API Gateway mock for a domain that does not exist: AWS answers the tag-conditioned read
+    /// with `lookup_error`, and any domain delete is a test failure.
+    fn apigw_without_domain(
+        calls: &Calls,
+        lookup_error: fn() -> AlienError<CloudClientErrorData>,
+    ) -> MockApiGatewayV2Api {
+        let mut apigw = MockApiGatewayV2Api::new();
+        let recorded = calls.clone();
+        apigw
+            .expect_get_domain_name()
+            .withf(|domain| domain == DOMAIN)
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "GetDomainName");
+                Err(lookup_error())
+            });
+        apigw.expect_delete_domain_name().times(0);
+        apigw.expect_delete_api_mapping().times(0);
+        let recorded = calls.clone();
+        apigw
+            .expect_delete_api()
+            .withf(|api_id| api_id == "api-1")
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "DeleteApi");
+                Ok(())
+            });
+        apigw
+    }
+
+    fn provider(
+        lambda: MockLambdaApi,
+        acm: MockAcmApi,
+        apigw: MockApiGatewayV2Api,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let lambda = Arc::new(lambda);
+        let acm = Arc::new(acm);
+        let apigw = Arc::new(apigw);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        provider
+            .expect_get_aws_acm_client()
+            .returning(move |_| Ok(acm.clone()));
+        provider
+            .expect_get_aws_apigatewayv2_client()
+            .returning(move |_| Ok(apigw.clone()));
+        let logs = create_logs_mock_accepting_log_groups();
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
+        Arc::new(provider)
+    }
+
+    /// Stack state with the public worker failed in `CreatingApiDomain`, saved by the previous
+    /// version, as on the deployment where this was found.
+    fn state_after_failed_domain_create() -> StackState {
+        let failed = failed_at_creating_api_domain();
+        let mut checkpoint = failed.clone();
+        checkpoint.state = AwsWorkerState::CreatingApiDomain;
+
+        let mut state = StackState::new(Platform::Aws);
+        state.resource_prefix = "test".to_string();
+        let mut resource = StackResourceState::builder()
+            .resource_type(Worker::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::ProvisionFailed)
+            .config(Resource::new(function_public_ingress()))
+            .internal_state(saved_by_previous_version(&failed))
+            .lifecycle(ResourceLifecycle::Live)
+            .dependencies(vec![])
+            .build();
+        resource.last_failed_state = Some(saved_by_previous_version(&checkpoint));
+        state.resources.insert("public-func".to_string(), resource);
+        state
+    }
+
+    fn no_network_deployment_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    /// The release that follows drops the public endpoint, so the failed create is replaced.
+    /// Its delete must not send a domain delete (AWS answers 403 for a domain that does not
+    /// exist), and must get through the API and the function so the new config is created.
+    #[tokio::test]
+    async fn replace_after_a_failed_domain_create_deletes_the_rest_and_proceeds() {
+        let calls = Calls::default();
+        let (lambda, acm) = delete_mocks(&calls);
+        let apigw = apigw_without_domain(&calls, access_denied);
+
+        let v2 = Worker::new("public-func".to_string())
+            .code(WorkerCode::Image {
+                image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/public:latest".to_string(),
+            })
+            .permissions("default-profile".to_string())
+            .build();
+        let stack = Stack::new("worker-replace".to_string())
+            .add(v2, ResourceLifecycle::Live)
+            .build();
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+                .deployment_config(&no_network_deployment_config())
+                .service_provider(provider(lambda, acm, apigw))
+                .build()
+                .unwrap();
+
+        let mut state = state_after_failed_domain_create();
+        assert_eq!(executor.plan(&state).unwrap().replaces, ["public-func"]);
+
+        for _ in 0..30 {
+            state = executor.step(state).await.unwrap().next_state;
+            let resource = &state.resources["public-func"];
+            assert!(resource.error.is_none(), "{:?}", resource.error);
+            if resource.status == ResourceStatus::Deleted {
+                break;
+            }
+            assert_eq!(resource.status, ResourceStatus::Deleting);
+        }
+        assert_eq!(
+            state.resources["public-func"].status,
+            ResourceStatus::Deleted
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "GetDomainName",
+                "DeleteApi",
+                "DeleteFunction",
+                "DeleteCertificate"
+            ]
+        );
+
+        // The planner may list the same create twice (deleted, and deleted with a changed
+        // config); the step creates it once.
+        let plan = executor.plan(&state).unwrap();
+        assert!(
+            !plan.creates.is_empty() && plan.creates.iter().all(|id| id == "public-func"),
+            "{plan:?}"
+        );
+        assert!(plan.replaces.is_empty(), "{plan:?}");
+
+        // The next step starts a fresh create with the new config. This stack leaves out the
+        // worker's service account, so the create stops at its first step, before any AWS
+        // call; what matters is that it starts from nothing the failed create recorded.
+        state = executor.step(state).await.unwrap().next_state;
+        let recreated = &state.resources["public-func"];
+        assert!(recreated
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .public_endpoints
+            .is_empty());
+        let started = recreated
+            .last_failed_state
+            .as_ref()
+            .expect("the new create's checkpoint");
+        assert_eq!(started["state"], "createStart", "{started}");
+        assert!(
+            started["apiId"].is_null() && started["domainName"].is_null(),
+            "{started}"
+        );
+        assert_eq!(
+            recreated.error.as_ref().map(|error| error.code.as_str()),
+            Some("DEPENDENCY_NOT_FOUND")
+        );
+        assert_eq!(calls.lock().unwrap().len(), 4, "no further deletes");
+    }
+
+    /// Tearing down the same worker deletes its HTTP API and function. The read of the missing
+    /// domain is denied under the tag-conditioned grant, or not found with broader credentials.
+    #[rstest]
+    #[case::read_denied(access_denied)]
+    #[case::read_not_found(|| not_found("DomainName"))]
+    #[tokio::test]
+    async fn teardown_after_a_failed_domain_create_deletes_the_api_and_function(
+        #[case] lookup_error: fn() -> AlienError<CloudClientErrorData>,
+    ) {
+        let calls = Calls::default();
+        let (lambda, acm) = delete_mocks(&calls);
+        let apigw = apigw_without_domain(&calls, lookup_error);
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &no_network_deployment_config(),
+            provider(lambda, acm, apigw),
+            None,
+        )
+        .unwrap();
+
+        let mut state = state_after_failed_domain_create();
+        for _ in 0..30 {
+            state = executor.step(state).await.unwrap().next_state;
+            if state.resources["public-func"].status == ResourceStatus::Deleted {
+                break;
+            }
+        }
+        assert_eq!(
+            state.resources["public-func"].status,
+            ResourceStatus::Deleted
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "GetDomainName",
+                "DeleteApi",
+                "DeleteFunction",
+                "DeleteCertificate"
+            ]
+        );
+    }
+
+    /// The current version: a failed domain create leaves its token and an unconfirmed name,
+    /// and the delete checks the name instead of deleting it.
+    #[tokio::test]
+    async fn failed_domain_create_is_recorded_unconfirmed_and_delete_checks_it_first() {
+        let calls = Calls::default();
+        let (lambda, acm) = delete_mocks(&calls);
+        let mut apigw = apigw_without_domain(&calls, access_denied);
+        let recorded = calls.clone();
+        apigw
+            .expect_create_domain_name()
+            .times(1)
+            .returning(move |request| {
+                record(&recorded, "CreateDomainName");
+                assert!(request
+                    .tags
+                    .as_ref()
+                    .is_some_and(|tags| tags.contains_key("CreateAttempt")));
+                Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                    message: "Certificate is not issued".to_string(),
+                    field_name: None,
+                }))
+            });
+
+        let mut controller = failed_at_creating_api_domain();
+        controller.state = AwsWorkerState::CreatingApiDomain;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(lambda, acm, apigw))
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect("records the create token");
+        executor.step().await.expect_err("the domain create fails");
+        let failed = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(failed.domain_name.as_deref(), Some(DOMAIN));
+        assert!(!failed.domain_confirmed);
+        assert!(failed.domain_create_token.is_some());
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "CreateDomainName",
+                "GetDomainName",
+                "DeleteApi",
+                "DeleteFunction",
+                "DeleteCertificate"
+            ]
+        );
+    }
+
+    /// Runs the API Gateway delete step for a basic worker whose domain name was recorded but
+    /// never confirmed, with `get_domain_name` answering `domain`.
+    async fn delete_step_with_unconfirmed_domain(
+        domain: DomainName,
+        expected_domain_deletes: usize,
+    ) -> AwsWorkerController {
+        let mut apigw = MockApiGatewayV2Api::new();
+        apigw
+            .expect_get_domain_name()
+            .withf(|name| name == "api.example.com")
+            .times(1)
+            .returning(move |_| Ok(domain.clone()));
+        apigw
+            .expect_delete_domain_name()
+            .withf(|name| name == "api.example.com")
+            .times(expected_domain_deletes)
+            .returning(|_| Ok(()));
+        let provider = setup_mock_service_provider(
+            Arc::new(MockLambdaApi::new()),
+            None,
+            Some(Arc::new(apigw)),
+        );
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::DeletingApiGateway,
+                domain_name: Some("api.example.com".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect("the API Gateway delete step succeeds");
+        let state = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        assert_eq!(state.state, AwsWorkerState::DeletingEventSourceMappings);
+        assert_eq!(state.domain_name, None);
+        state
+    }
+
+    /// A domain a lost create response left behind carries our tags: it is ours and deleted.
+    #[tokio::test]
+    async fn unconfirmed_domain_carrying_our_tags_is_deleted() {
+        let mut tags = standard_resource_tags("test", &basic_function().id);
+        tags.insert("CreateAttempt".to_string(), "any".to_string());
+        let state =
+            delete_step_with_unconfirmed_domain(domain_with_tags("api.example.com", tags), 1).await;
+        assert!(state.delete_removed_something);
+    }
+
+    /// A domain with the same name that is not this worker's is never deleted.
+    #[rstest]
+    #[case::untagged(HashMap::new())]
+    #[case::other_resource(standard_resource_tags("test", "other-worker"))]
+    #[case::other_stack(standard_resource_tags("other", &basic_function().id))]
+    #[tokio::test]
+    async fn unconfirmed_domain_without_our_tags_is_left_alone(
+        #[case] tags: HashMap<String, String>,
+    ) {
+        let state =
+            delete_step_with_unconfirmed_domain(domain_with_tags("api.example.com", tags), 0).await;
+        assert!(!state.delete_removed_something);
+    }
+
+    /// A streaming (REST) worker that failed in `CreatingRestDomain`: the domain is checked
+    /// through the REST API, no base path mapping or domain delete is sent, and the REST API
+    /// is deleted.
+    #[tokio::test]
+    async fn rest_worker_with_a_never_created_domain_deletes_its_rest_api() {
+        let mut rest = MockApiGatewayApi::new();
+        rest.expect_get_domain_name()
+            .withf(|name| name == "stream.example.com")
+            .times(1)
+            .returning(|_| Err(access_denied()));
+        rest.expect_delete_base_path_mapping().times(0);
+        rest.expect_delete_domain_name().times(0);
+        rest.expect_delete_rest_api()
+            .withf(|id| id == "rest-1")
+            .times(1)
+            .returning(|_| Ok(()));
+        let rest = Arc::new(rest);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_apigateway_client()
+            .returning(move |_| Ok(rest.clone()));
+
+        let worker = Worker::new("stream-func".to_string())
+            .code(WorkerCode::Image {
+                image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/stream:latest".to_string(),
+            })
+            .permissions("default-profile".to_string())
+            .environment(HashMap::from([(
+                "WORKER_RESPONSE_STREAMING".to_string(),
+                "true".to_string(),
+            )]))
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::DeletingApiGateway,
+                rest_api_id: Some("rest-1".to_string()),
+                stage_name: Some("prod".to_string()),
+                domain_name: Some("stream.example.com".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect("the API Gateway delete step succeeds");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::DeletingEventSourceMappings);
+        assert_eq!(state.domain_name, None);
+        assert_eq!(state.rest_api_id, None);
+    }
+
+    /// A confirmed object can be gone too (deleted out of band, or by an earlier attempt whose
+    /// response was lost). Its delete and its read are both denied, and the delete goes on to
+    /// the next object instead of ending there.
+    #[tokio::test]
+    async fn denied_delete_of_an_api_that_is_gone_continues_to_the_function() {
+        let calls = Calls::default();
+        let (lambda, acm) = delete_mocks(&calls);
+        let mut apigw = MockApiGatewayV2Api::new();
+        let recorded = calls.clone();
+        apigw.expect_delete_api().times(1).returning(move |_| {
+            record(&recorded, "DeleteApi");
+            Err(access_denied())
+        });
+        let recorded = calls.clone();
+        apigw.expect_get_api().times(1).returning(move |_| {
+            record(&recorded, "GetApi");
+            Err(access_denied())
+        });
+
+        let mut controller = failed_at_creating_api_domain();
+        controller.domain_name = None;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(lambda, acm, apigw))
+            .build()
+            .await
+            .unwrap();
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["DeleteApi", "GetApi", "DeleteFunction", "DeleteCertificate"]
+        );
+    }
+
+    /// When the API is still readable, its denied delete is real and is returned.
+    #[tokio::test]
+    async fn denied_delete_of_an_api_that_still_exists_is_an_error() {
+        let mut apigw = MockApiGatewayV2Api::new();
+        apigw
+            .expect_delete_api()
+            .times(1)
+            .returning(|_| Err(access_denied()));
+        apigw.expect_get_api().times(1).returning(|_| {
+            Ok(Api {
+                api_id: Some("api-1".to_string()),
+                api_endpoint: None,
+                name: None,
+                protocol_type: None,
+            })
+        });
+        let provider = setup_mock_service_provider(
+            Arc::new(MockLambdaApi::new()),
+            None,
+            Some(Arc::new(apigw)),
+        );
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::DeletingApiGateway,
+                api_id: Some("api-1".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.expect_err("the denial is real");
+        assert!(
+            error_chain_codes(&error).contains(&"REMOTE_ACCESS_DENIED".to_string()),
+            "{error:?}"
+        );
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.api_id.as_deref(), Some("api-1"));
+    }
+
+    fn error_chain_codes(error: &AlienError<crate::error::ErrorData>) -> Vec<String> {
+        let mut codes = vec![error.code.clone()];
+        let mut source = error.source.as_deref();
+        while let Some(inner) = source {
+            codes.push(inner.code.clone());
+            source = inner.source.as_deref();
+        }
+        codes
+    }
+
+    /// API Gateway as the tests below see it: at most one domain named `DOMAIN`, with its tags.
+    type DomainWorld = Arc<Mutex<Option<HashMap<String, String>>>>;
+
+    /// A V2 client over `world`: CreateDomainName stores the domain (or answers
+    /// ConflictException when one exists) and GetDomainName reads it. While `lose_responses`
+    /// is above zero, a create that AWS accepted answers 503 instead, as a lost response does.
+    fn domain_world_provider(
+        world: DomainWorld,
+        creates: Arc<Mutex<Vec<HashMap<String, String>>>>,
+        lose_responses: usize,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let mut apigw = MockApiGatewayV2Api::new();
+        let created = world.clone();
+        let mut lose_responses = lose_responses;
+        apigw.expect_create_domain_name().returning(move |request| {
+            let tags = request.tags.clone().unwrap();
+            creates.lock().unwrap().push(tags.clone());
+            let mut domain = created.lock().unwrap();
+            if domain.is_some() {
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "ApiGateway".to_string(),
+                        resource_name: DOMAIN.to_string(),
+                        message: "already exists".to_string(),
+                    },
+                ));
+            }
+            *domain = Some(tags.clone());
+            if lose_responses > 0 {
+                lose_responses -= 1;
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteServiceUnavailable {
+                        message: "connection reset".to_string(),
+                    },
+                ));
+            }
+            Ok(domain_with_tags(DOMAIN, tags))
+        });
+        apigw
+            .expect_get_domain_name()
+            .returning(move |name| match world.lock().unwrap().clone() {
+                Some(tags) => Ok(domain_with_tags(name, tags)),
+                None => Err(not_found("DomainName")),
+            });
+        setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, Some(Arc::new(apigw)))
+    }
+
+    async fn domain_executor(
+        controller: AwsWorkerController,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn at_creating_api_domain() -> AwsWorkerController {
+        let mut controller = failed_at_creating_api_domain();
+        controller.state = AwsWorkerState::CreatingApiDomain;
+        controller
+    }
+
+    /// The token is saved by a step of its own, before the step that calls create.
+    #[tokio::test]
+    async fn domain_create_token_is_saved_before_the_create_step() {
+        let world = DomainWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = domain_executor(
+            at_creating_api_domain(),
+            domain_world_provider(world.clone(), creates.clone(), 0),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(saved.state, AwsWorkerState::CreatingApiDomain);
+        let token = saved.domain_create_token.clone().expect("token saved");
+        assert!(
+            creates.lock().unwrap().is_empty(),
+            "no create in the token step"
+        );
+
+        executor.step().await.expect("creates the domain");
+        assert_eq!(
+            creates.lock().unwrap()[0].get("CreateAttempt"),
+            Some(&token)
+        );
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiMapping);
+        assert!(state.domain_confirmed);
+    }
+
+    /// AWS creates the domain but the process stops before the create step is saved. The
+    /// controller restarts from the checkpoint saved before that step, which already holds the
+    /// token, so the retry recognizes the domain as its own.
+    #[tokio::test]
+    async fn domain_created_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let world = DomainWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let provider = domain_world_provider(world.clone(), creates.clone(), 0);
+        let mut executor = domain_executor(at_creating_api_domain(), provider.clone()).await;
+
+        executor.step().await.expect("records the token");
+        let checkpoint = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        executor.step().await.expect("AWS accepts the create");
+        assert!(world.lock().unwrap().is_some());
+        drop(executor);
+
+        let mut restarted = domain_executor(checkpoint, provider).await;
+        restarted
+            .step()
+            .await
+            .expect("the retry adopts its own domain");
+        let state = restarted.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiMapping);
+        assert_eq!(state.domain_name.as_deref(), Some(DOMAIN));
+        assert!(state.domain_confirmed);
+        assert!(state.load_balancer.is_some());
+        let creates = creates.lock().unwrap();
+        assert_eq!(
+            creates.len(),
+            2,
+            "the retry's create is answered ConflictException"
+        );
+        assert_eq!(creates[0], creates[1], "both carry the saved token");
+    }
+
+    /// The first create reaches AWS but its response is lost; the retry adopts the domain.
+    #[tokio::test]
+    async fn lost_domain_create_response_is_adopted_by_its_create_token() {
+        let world = DomainWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = domain_executor(
+            at_creating_api_domain(),
+            domain_world_provider(world.clone(), creates.clone(), 1),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        executor
+            .step()
+            .await
+            .expect("the retry adopts its own domain");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiMapping);
+        assert!(state.domain_confirmed);
+        let creates = creates.lock().unwrap();
+        assert_eq!(creates.len(), 2);
+        assert_eq!(creates[0], creates[1]);
+    }
+
+    /// Same name and ownership tags, but another create's token: a leftover from an earlier
+    /// instance is not adopted.
+    #[tokio::test]
+    async fn domain_from_another_create_attempt_is_not_adopted() {
+        let mut leftover = standard_resource_tags("test", "public-func");
+        leftover.insert("CreateAttempt".to_string(), "another-attempt".to_string());
+        let world: DomainWorld = Arc::new(Mutex::new(Some(leftover)));
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = domain_executor(
+            at_creating_api_domain(),
+            domain_world_provider(world, creates, 0),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor
+            .step()
+            .await
+            .expect_err("the domain is not this create's");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert!(!state.domain_confirmed);
+        assert!(state.load_balancer.is_none());
+    }
+
+    // ─────────────── CERTIFICATE IMPORT TOKEN ────────────────
+
+    /// ACM as the tests below see it: the imported certificates, by ARN, with their tags.
+    type CertificateWorld = Arc<Mutex<Vec<(String, Vec<Tag>)>>>;
+
+    fn imported_certificate_arn(n: usize) -> String {
+        format!("arn:aws:acm:us-east-1:123456789012:certificate/imported-{n}")
+    }
+
+    /// The ACM calls a test made, in order.
+    #[derive(Clone, Default)]
+    struct AcmCalls {
+        imports: Arc<Mutex<Vec<Vec<Tag>>>>,
+        deletes: Calls,
+    }
+
+    /// An ACM client over `world`. ImportCertificate stores a new certificate; while
+    /// `lose_responses` is above zero, an import ACM accepted answers 503 instead, as a lost
+    /// response does. With `list_denied`, ListCertificates is denied, as for a role installed
+    /// before it was granted.
+    fn certificate_world_acm(
+        world: CertificateWorld,
+        calls: AcmCalls,
+        lose_responses: usize,
+        list_denied: bool,
+    ) -> MockAcmApi {
+        let mut acm = MockAcmApi::new();
+        let stored = world.clone();
+        let imports = calls.imports.clone();
+        let mut lose_responses = lose_responses;
+        acm.expect_import_certificate().returning(move |request| {
+            let tags = request.tags.clone().unwrap_or_default();
+            imports.lock().unwrap().push(tags.clone());
+            let mut certificates = stored.lock().unwrap();
+            let arn = imported_certificate_arn(certificates.len() + 1);
+            certificates.push((arn.clone(), tags));
+            if lose_responses > 0 {
+                lose_responses -= 1;
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteServiceUnavailable {
+                        message: "connection reset".to_string(),
+                    },
+                ));
+            }
+            Ok(ImportCertificateResponse {
+                certificate_arn: arn,
+            })
+        });
+        let listed = world.clone();
+        acm.expect_list_certificates().returning(move |request| {
+            if list_denied {
+                return Err(access_denied());
+            }
+            assert_eq!(
+                request
+                    .includes
+                    .and_then(|includes| includes.key_types)
+                    .map(|types| types.len()),
+                Some(7),
+                "every key type is listed"
+            );
+            Ok(ListCertificatesResponse {
+                certificate_summary_list: listed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(arn, _)| CertificateSummary {
+                        certificate_arn: Some(arn.clone()),
+                        domain_name: Some(DOMAIN.to_string()),
+                        status: Some("ISSUED".to_string()),
+                        certificate_type: Some("IMPORTED".to_string()),
+                        key_algorithm: Some("EC-prime256v1".to_string()),
+                        in_use: Some(false),
+                        imported_at: None,
+                    })
+                    .collect(),
+                next_token: None,
+            })
+        });
+        let tagged = world.clone();
+        acm.expect_list_tags_for_certificate()
+            .returning(move |arn| {
+                tagged
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(stored, _)| stored == arn)
+                    .map(|(_, tags)| tags.clone())
+                    .ok_or_else(|| not_found("Certificate"))
+            });
+        let removed = world.clone();
+        let deletes = calls.deletes.clone();
+        acm.expect_delete_certificate().returning(move |arn| {
+            record(&deletes, arn);
+            let mut certificates = removed.lock().unwrap();
+            let before = certificates.len();
+            certificates.retain(|(stored, _)| stored != arn);
+            if certificates.len() == before {
+                return Err(not_found("Certificate"));
+            }
+            Ok(())
+        });
+        acm.expect_describe_certificate()
+            .returning(|_| Err(not_found("Certificate")));
+        acm
+    }
+
+    /// The worker at `ImportingCertificate`: the function exists and the domain metadata says
+    /// the platform-issued certificate is ready.
+    fn at_importing_certificate() -> AwsWorkerController {
+        AwsWorkerController {
+            state: AwsWorkerState::ImportingCertificate,
+            arn: Some(
+                "arn:aws:lambda:us-east-1:123456789012:function:test-public-func".to_string(),
+            ),
+            url: Some(format!("https://{DOMAIN}")),
+            worker_name: Some("test-public-func".to_string()),
+            fqdn: Some(DOMAIN.to_string()),
+            certificate_id: Some("test-cert-id".to_string()),
+            domain_name: Some(DOMAIN.to_string()),
+            ..Default::default()
+        }
+    }
+
+    async fn certificate_executor(
+        controller: AwsWorkerController,
+        acm: MockAcmApi,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(
+                Arc::new(MockLambdaApi::new()),
+                Some(Arc::new(acm)),
+                None,
+            ))
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn import_token(tags: &[Tag]) -> Option<&str> {
+        tags.iter()
+            .find(|tag| tag.key == "CreateAttempt")
+            .map(|tag| tag.value.as_str())
+    }
+
+    /// The token is saved by a step of its own, before the step that imports, and the import
+    /// carries it next to the worker's ownership tags.
+    #[tokio::test]
+    async fn certificate_import_token_is_saved_before_the_import_step() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(saved.state, AwsWorkerState::ImportingCertificate);
+        let token = saved.certificate_import_token.clone().expect("token saved");
+        assert!(
+            calls.imports.lock().unwrap().is_empty(),
+            "no import in the token step"
+        );
+
+        executor.step().await.expect("imports the certificate");
+        let imports = calls.imports.lock().unwrap();
+        assert_eq!(imports.len(), 1);
+        assert_eq!(import_token(&imports[0]), Some(token.as_str()));
+        for (key, value) in standard_resource_tags("test", "public-func") {
+            assert!(
+                imports[0].contains(&Tag {
+                    key: key.clone(),
+                    value
+                }),
+                "ownership tag {key} is on the import"
+            );
+        }
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiGateway);
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+        assert_eq!(
+            state.certificate_issued_at.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
+    }
+
+    /// ACM imports the certificate but the process stops before the import step is saved. The
+    /// controller restarts from the checkpoint saved before that step, which holds the token,
+    /// and adopts the certificate instead of importing a second one.
+    #[tokio::test]
+    async fn certificate_imported_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+        executor.step().await.expect("records the token");
+        let checkpoint = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        executor.step().await.expect("ACM accepts the import");
+        drop(executor);
+
+        let mut restarted = certificate_executor(
+            checkpoint,
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+        restarted
+            .step()
+            .await
+            .expect("the retry adopts its own certificate");
+        let state = restarted.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiGateway);
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+        assert_eq!(calls.imports.lock().unwrap().len(), 1, "no second import");
+        assert_eq!(world.lock().unwrap().len(), 1);
+    }
+
+    /// The import reaches ACM but its response is lost; the retry adopts the certificate.
+    #[tokio::test]
+    async fn lost_certificate_import_response_is_adopted_by_its_token() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 1, false),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        let failed = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(failed.certificate_arn, None);
+        assert!(failed.certificate_import_token.is_some());
+        executor
+            .step()
+            .await
+            .expect("the retry adopts its own certificate");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreatingApiGateway);
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+        assert_eq!(calls.imports.lock().unwrap().len(), 1);
+    }
+
+    /// A leftover certificate with this worker's ownership tags but another import's token is
+    /// not adopted.
+    #[tokio::test]
+    async fn certificate_from_another_import_is_not_adopted() {
+        let mut leftover: Vec<Tag> = standard_resource_tags("test", "public-func")
+            .into_iter()
+            .map(|(key, value)| Tag { key, value })
+            .collect();
+        leftover.push(Tag {
+            key: "CreateAttempt".to_string(),
+            value: "another-import".to_string(),
+        });
+        let world: CertificateWorld =
+            Arc::new(Mutex::new(vec![(imported_certificate_arn(1), leftover)]));
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect("imports its own certificate");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            state.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(2).as_str())
+        );
+        assert_eq!(calls.imports.lock().unwrap().len(), 1);
+    }
+
+    /// The import response is lost, then the worker is torn down: the delete finds the
+    /// certificate by its token and deletes it, after the function.
+    #[tokio::test]
+    async fn teardown_after_a_lost_certificate_import_deletes_the_certificate() {
+        let world = CertificateWorld::default();
+        let acm_calls = AcmCalls::default();
+        let calls = Calls::default();
+        let mut lambda = MockLambdaApi::new();
+        let recorded = calls.clone();
+        lambda
+            .expect_delete_function()
+            .withf(|name, _| name == "test-public-func")
+            .times(1)
+            .returning(move |_, _| {
+                record(&recorded, "DeleteFunction");
+                Ok(())
+            });
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Err(not_found("Function")));
+        let mut apigw = MockApiGatewayV2Api::new();
+        apigw
+            .expect_get_domain_name()
+            .returning(|_| Err(access_denied()));
+        apigw.expect_delete_domain_name().times(0);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(at_importing_certificate())
+            .platform(Platform::Aws)
+            .service_provider(provider(
+                lambda,
+                certificate_world_acm(world.clone(), acm_calls.clone(), 1, false),
+                apigw,
+            ))
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        assert_eq!(world.lock().unwrap().len(), 1, "ACM holds the certificate");
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(*calls.lock().unwrap(), ["DeleteFunction"]);
+        assert_eq!(
+            *acm_calls.deletes.lock().unwrap(),
+            [imported_certificate_arn(1)]
+        );
+        assert!(world.lock().unwrap().is_empty(), "no certificate is left");
+    }
+
+    /// The delete removes the recorded certificate and any other import under the same token
+    /// (a second import after a lookup that missed the first), once each.
+    #[tokio::test]
+    async fn delete_removes_every_certificate_imported_under_the_token() {
+        let tags = |token: &str| {
+            vec![Tag {
+                key: "CreateAttempt".to_string(),
+                value: token.to_string(),
+            }]
+        };
+        let world: CertificateWorld = Arc::new(Mutex::new(vec![
+            (imported_certificate_arn(1), tags("token-1")),
+            (imported_certificate_arn(2), tags("token-1")),
+            (imported_certificate_arn(3), tags("another-worker")),
+        ]));
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            AwsWorkerController {
+                state: AwsWorkerState::DeletingCertificate,
+                certificate_arn: Some(imported_certificate_arn(2)),
+                certificate_import_token: Some("token-1".to_string()),
+                ..Default::default()
+            },
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+
+        executor.step().await.expect("deletes the certificates");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::DeletingLogGroup);
+        assert_eq!(state.certificate_arn, None);
+        assert_eq!(state.certificate_import_token, None);
+        assert_eq!(
+            *calls.deletes.lock().unwrap(),
+            [imported_certificate_arn(2), imported_certificate_arn(1)]
+        );
+        assert_eq!(
+            world
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(arn, _)| arn.clone())
+                .collect::<Vec<_>>(),
+            [imported_certificate_arn(3)]
+        );
+    }
+
+    /// A role installed before ListCertificates was granted: the import goes ahead (tagged with
+    /// the token, so a later delete can find it once setup grants the list), and the delete
+    /// still removes the recorded certificate.
+    #[tokio::test]
+    async fn denied_certificate_list_still_imports_and_deletes_the_recorded_certificate() {
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            at_importing_certificate(),
+            certificate_world_acm(world.clone(), calls.clone(), 0, true),
+        )
+        .await;
+        executor.step().await.expect("records the token");
+        executor
+            .step()
+            .await
+            .expect("imports although the lookup is denied");
+        let mut controller = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            controller.certificate_arn.as_deref(),
+            Some(imported_certificate_arn(1).as_str())
+        );
+
+        controller.state = AwsWorkerState::DeletingCertificate;
+        let mut deleting = certificate_executor(
+            controller,
+            certificate_world_acm(world.clone(), calls.clone(), 0, true),
+        )
+        .await;
+        deleting
+            .step()
+            .await
+            .expect("deletes the recorded certificate");
+        assert_eq!(
+            deleting
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::DeletingLogGroup
+        );
+        assert!(world.lock().unwrap().is_empty());
+    }
+
+    /// A checkpoint saved by the previous version at `ImportingCertificate` has no token: the
+    /// controller records one before importing.
+    #[tokio::test]
+    async fn import_checkpoint_from_the_previous_version_records_a_token_first() {
+        let mut value = serialize_controller(&at_importing_certificate()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("certificateImportToken")
+            .expect("the field is serialized");
+        let restored = crate::core::deserialize_controller(value).unwrap();
+        let restored = restored
+            .as_any()
+            .downcast_ref::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        assert_eq!(restored.certificate_import_token, None);
+
+        let world = CertificateWorld::default();
+        let calls = AcmCalls::default();
+        let mut executor = certificate_executor(
+            restored,
+            certificate_world_acm(world.clone(), calls.clone(), 0, false),
+        )
+        .await;
+        executor.step().await.expect("records the token");
+        assert!(calls.imports.lock().unwrap().is_empty());
+        executor.step().await.expect("imports the certificate");
+        assert_eq!(calls.imports.lock().unwrap().len(), 1);
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::CreatingApiGateway
+        );
+    }
+
+    /// A renewed certificate is reimported into the same ARN without tags: ACM rejects tags on
+    /// a reimport.
+    #[tokio::test]
+    async fn renewed_certificate_is_reimported_without_tags() {
+        let mut acm = MockAcmApi::new();
+        acm.expect_reimport_certificate()
+            .withf(|request| {
+                request.certificate_arn == imported_certificate_arn(1) && request.tags.is_none()
+            })
+            .times(1)
+            .returning(|request| {
+                Ok(ImportCertificateResponse {
+                    certificate_arn: request.certificate_arn,
+                })
+            });
+        let mut executor = certificate_executor(
+            AwsWorkerController {
+                state: AwsWorkerState::UpdateImportingCertificate,
+                certificate_arn: Some(imported_certificate_arn(1)),
+                certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+                ..Default::default()
+            },
+            acm,
+        )
+        .await;
+        executor
+            .step()
+            .await
+            .expect("reimports the renewed certificate");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::UpdateCodeStart);
+        assert_eq!(
+            state.certificate_issued_at.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
+    }
+
+    // ─────────────── LOG GROUP ────────────────
+
+    /// The delete step for the function's log group, against `logs`.
+    async fn log_group_executor(logs: MockCloudWatchLogsApi) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::DeletingCertificate,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider_with_logs(
+                Arc::new(MockLambdaApi::new()),
+                None,
+                None,
+                Arc::new(logs),
+            ))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// Teardown ends by deleting the log group `ensure_log_group` created, by its exact name.
+    #[tokio::test]
+    async fn teardown_deletes_the_function_log_group() {
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_delete_log_group()
+            .withf(|name| name == "/aws/lambda/test-public-func")
+            .times(1)
+            .returning(|_| Ok(()));
+        let mut executor = log_group_executor(logs).await;
+
+        executor
+            .step()
+            .await
+            .expect("the certificate step continues");
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::DeletingLogGroup
+        );
+        executor.run_until_terminal().await.expect("teardown runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// A log group that is already gone, or that the role may not delete, does not stop the
+    /// delete; any other error is returned and the step is retried.
+    #[rstest]
+    #[case::gone(not_found("LogGroup"), true)]
+    #[case::denied(access_denied(), true)]
+    #[case::unavailable(
+        AlienError::new(CloudClientErrorData::RemoteServiceUnavailable {
+            message: "unavailable".to_string(),
+        }),
+        false
+    )]
+    #[tokio::test]
+    async fn log_group_delete_outcomes(
+        #[case] error: AlienError<CloudClientErrorData>,
+        #[case] finishes: bool,
+    ) {
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_delete_log_group()
+            .times(1)
+            .returning(move |_| Err(error.clone()));
+        let mut executor = log_group_executor(logs).await;
+        executor
+            .step()
+            .await
+            .expect("the certificate step continues");
+
+        let result = executor.step().await;
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        if finishes {
+            result.expect("the delete finishes");
+            assert_eq!(state.state, AwsWorkerState::Deleted);
+        } else {
+            result.expect_err("the error is returned");
+            assert_eq!(state.state, AwsWorkerState::DeletingLogGroup);
+        }
     }
 }

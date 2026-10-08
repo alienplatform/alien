@@ -24,7 +24,6 @@ use tracing::{debug, info, warn};
 
 use crate::auth::Subject;
 use crate::error::{ErrorData, Result};
-use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
 use crate::traits::DeploymentStore;
 
 /// What one grant attempt left behind. `written` marks that a write was attempted, so cleanup
@@ -127,24 +126,15 @@ async fn revoke_registry_access(
             .await?;
         }
 
-        let deployments = deployment_store
-            .list_deployments(
-                &Subject::system(),
-                &DeploymentFilter {
-                    platforms: Some(vec![Platform::Gcp]),
-                    ..Default::default()
-                },
-            )
+        let shared_with_another_deployment = deployment_store
+            .has_other_gcp_project_deployment(&Subject::system(), project_number, deployment_id)
             .await
             .context(ErrorData::RegistryAccessCleanupFailed {
                 deployment_id: deployment_id.to_string(),
                 reason: "active GCP deployments could not be checked before revoking shared access"
                     .to_string(),
             })?;
-
-        if deployments.iter().any(|deployment| {
-            is_other_active_gcp_project_consumer(deployment, deployment_id, project_number)
-        }) {
+        if shared_with_another_deployment {
             debug!(
                 deployment_id = %deployment_id,
                 project_number = %project_number,
@@ -232,22 +222,6 @@ async fn remove_registry_access(
         "Registry access revoked"
     );
     Ok(())
-}
-
-fn is_other_active_gcp_project_consumer(
-    deployment: &DeploymentRecord,
-    deleted_deployment_id: &str,
-    project_number: &str,
-) -> bool {
-    deployment.id != deleted_deployment_id
-        && deployment.status != "deleted"
-        && matches!(
-            &deployment.environment_info,
-            Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-                project_number: other_project_number,
-                ..
-            })) if other_project_number == project_number
-        )
 }
 
 /// Loads the artifact registry from the bindings provider and applies the
@@ -1086,6 +1060,9 @@ mod tests {
     };
     use alien_error::AlienError;
     use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    use crate::traits::deployment_store::MockDeploymentStore;
 
     #[derive(Debug)]
     struct TestArtifactRegistry {
@@ -1397,48 +1374,6 @@ mod tests {
         stack_state
     }
 
-    fn gcp_deployment_record(id: &str, status: &str, project_number: &str) -> DeploymentRecord {
-        DeploymentRecord {
-            supplied_stacks: None,
-            id: id.to_string(),
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            name: id.to_string(),
-            deployment_group_id: "dg_test".to_string(),
-            platform: Platform::Gcp,
-            deployment_protocol_version: 1,
-            base_platform: None,
-            status: status.to_string(),
-            stack_settings: None,
-            stack_state: None,
-            environment_info: Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-                project_number: project_number.to_string(),
-                project_id: "test-project".to_string(),
-                region: "us-central1".to_string(),
-            })),
-            runtime_metadata: None,
-            current_release_id: None,
-            desired_release_id: None,
-            import_source: None,
-            setup_method: None,
-            setup_metadata: None,
-            setup_target: None,
-            setup_fingerprint: None,
-            setup_fingerprint_version: None,
-            user_environment_variables: None,
-            management_config: None,
-            deployment_config: None,
-            deployment_token: None,
-            input_values: Default::default(),
-            retry_requested: false,
-            locked_by: None,
-            locked_at: None,
-            created_at: chrono::Utc::now(),
-            updated_at: None,
-            error: None,
-        }
-    }
-
     #[tokio::test]
     async fn load_artifact_registry_prefers_target_provider() {
         let primary_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
@@ -1535,34 +1470,164 @@ mod tests {
         );
     }
 
-    #[test]
-    fn gcp_shared_registry_access_is_kept_only_for_active_project_consumers() {
-        let running_same_project = gcp_deployment_record("dep_other", "running", "123456789012");
-        assert!(is_other_active_gcp_project_consumer(
-            &running_same_project,
-            "dep_deleted",
-            "123456789012"
-        ));
+    /// What a GCP revoke asked the registry to remove, one entry per call.
+    #[derive(Debug, Default)]
+    struct RecordingGcpRegistry {
+        removals: Mutex<Vec<(Vec<String>, Vec<String>)>>,
+    }
 
-        let deleted_same_project = gcp_deployment_record("dep_other", "deleted", "123456789012");
-        assert!(!is_other_active_gcp_project_consumer(
-            &deleted_same_project,
-            "dep_deleted",
-            "123456789012"
-        ));
+    impl alien_bindings::traits::Binding for RecordingGcpRegistry {}
 
-        let running_other_project = gcp_deployment_record("dep_other", "running", "999999999999");
-        assert!(!is_other_active_gcp_project_consumer(
-            &running_other_project,
-            "dep_deleted",
-            "123456789012"
-        ));
+    #[async_trait]
+    impl ArtifactRegistry for RecordingGcpRegistry {
+        fn registry_endpoint(&self) -> String {
+            "us-central1-docker.pkg.dev".to_string()
+        }
 
-        assert!(!is_other_active_gcp_project_consumer(
-            &gcp_deployment_record("dep_deleted", "running", "123456789012"),
+        fn upstream_repository_prefix(&self) -> String {
+            "vendor-project/alien-artifacts".to_string()
+        }
+
+        async fn create_repository(&self, _repo_name: &str) -> BindingResult<RepositoryResponse> {
+            unimplemented!("not needed for revoke tests")
+        }
+
+        async fn get_repository(&self, _repo_id: &str) -> BindingResult<RepositoryResponse> {
+            unimplemented!("not needed for revoke tests")
+        }
+
+        async fn add_cross_account_access(
+            &self,
+            _repo_id: &str,
+            _access: CrossAccountAccess,
+        ) -> BindingResult<()> {
+            unimplemented!("not needed for revoke tests")
+        }
+
+        async fn remove_cross_account_access(
+            &self,
+            _repo_id: &str,
+            access: CrossAccountAccess,
+        ) -> BindingResult<()> {
+            let CrossAccountAccess::Gcp(access) = access else {
+                panic!("a GCP revoke must name GCP members");
+            };
+            self.removals
+                .lock()
+                .expect("removals lock")
+                .push((access.project_numbers, access.service_account_emails));
+            Ok(())
+        }
+
+        async fn get_cross_account_access(
+            &self,
+            _repo_id: &str,
+        ) -> BindingResult<CrossAccountPermissions> {
+            unimplemented!("not needed for revoke tests")
+        }
+
+        async fn generate_credentials(
+            &self,
+            _repo_id: &str,
+            _permissions: ArtifactRegistryPermissions,
+            _ttl_seconds: Option<u32>,
+        ) -> BindingResult<ArtifactRegistryCredentials> {
+            unimplemented!("not needed for revoke tests")
+        }
+
+        async fn delete_repository(&self, _repo_id: &str) -> BindingResult<()> {
+            unimplemented!("not needed for revoke tests")
+        }
+    }
+
+    const PROJECT_NUMBER: &str = "123456789012";
+
+    fn gcp_environment() -> EnvironmentInfo {
+        EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+            project_number: PROJECT_NUMBER.to_string(),
+            project_id: "customer-project".to_string(),
+            region: "us-central1".to_string(),
+        })
+    }
+
+    /// A store that answers the shared-grant question, and fails the test if the revoke reads
+    /// whole deployment records instead.
+    fn store_answering(answer: std::result::Result<bool, &'static str>) -> MockDeploymentStore {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_has_other_gcp_project_deployment()
+            .withf(|caller, project_number, excluding| {
+                caller.is_system() && project_number == PROJECT_NUMBER && excluding == "dep_deleted"
+            })
+            .times(1)
+            .returning(move |_, _, _| {
+                answer.map_err(|message| {
+                    AlienError::new(alien_error::GenericError {
+                        message: message.to_string(),
+                    })
+                })
+            });
+        store.expect_list_deployments().times(0);
+        store
+    }
+
+    async fn revoke_gcp(
+        registry: &RecordingGcpRegistry,
+        store: &MockDeploymentStore,
+    ) -> Result<()> {
+        revoke_registry_access(
+            registry,
+            "vendor-project/alien-artifacts",
+            &gcp_environment(),
+            None,
+            store,
             "dep_deleted",
-            "123456789012"
-        ));
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_last_deployment_in_a_gcp_project_revokes_its_shared_grant() {
+        let registry = RecordingGcpRegistry::default();
+        let store = store_answering(Ok(false));
+
+        revoke_gcp(&registry, &store)
+            .await
+            .expect("revoke should succeed");
+
+        assert_eq!(
+            *registry.removals.lock().expect("removals lock"),
+            vec![(vec![PROJECT_NUMBER.to_string()], Vec::<String>::new())],
+            "the project's service-agent members must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shared_grant_stays_while_another_deployment_uses_the_project() {
+        let registry = RecordingGcpRegistry::default();
+        let store = store_answering(Ok(true));
+
+        revoke_gcp(&registry, &store)
+            .await
+            .expect("keeping the grant is a successful revoke");
+
+        assert!(
+            registry.removals.lock().expect("removals lock").is_empty(),
+            "another deployment still pulls through the project grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_consumer_check_keeps_the_grant_and_fails_the_revoke() {
+        let registry = RecordingGcpRegistry::default();
+        let store = store_answering(Err("store unavailable"));
+
+        let error = revoke_gcp(&registry, &store)
+            .await
+            .expect_err("an unknown consumer set must not revoke");
+
+        assert_eq!(error.code, "REGISTRY_ACCESS_CLEANUP_FAILED");
+        assert!(registry.removals.lock().expect("removals lock").is_empty());
     }
 
     #[tokio::test]

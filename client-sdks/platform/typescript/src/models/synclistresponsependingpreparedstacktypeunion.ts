@@ -1734,6 +1734,13 @@ export type SyncListResponseLocation = {
    */
   consoleUrl?: string | null | undefined;
   /**
+   * Command that deletes the secret. Deleting a deployment keeps the
+   *
+   * @remarks
+   * secrets the deployer wrote, since Alien never owned their values.
+   */
+  deleteCommand?: string | null | undefined;
+  /**
    * Full name of the secret in that store.
    */
   name: string;
@@ -1802,6 +1809,13 @@ export type SyncListResponseDeployerSecret = {
    * metadata only and never reads the value.
    */
   status: SyncListResponseRuntimeMetadataStatus;
+  /**
+   * The secret store's version of the present value (never the value or a
+   *
+   * @remarks
+   * hash of it). A new version reaches workloads with the next update.
+   */
+  version?: string | null | undefined;
 };
 
 /**
@@ -4320,6 +4334,7 @@ export const SyncListResponseLocation$inboundSchema: z.ZodType<
 > = z.object({
   cliCommand: z.string(),
   consoleUrl: z.nullable(z.string()).optional(),
+  deleteCommand: z.nullable(z.string()).optional(),
   name: z.string(),
   store: SyncListResponseStore$inboundSchema,
   vaultName: z.nullable(z.string()).optional(),
@@ -4351,6 +4366,7 @@ export const SyncListResponseDeployerSecret$inboundSchema: z.ZodType<
   message: z.nullable(z.string()).optional(),
   required: z.boolean(),
   status: SyncListResponseRuntimeMetadataStatus$inboundSchema,
+  version: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseDeployerSecretFromJSON(

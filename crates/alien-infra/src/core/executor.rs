@@ -1301,16 +1301,19 @@ impl StackExecutor {
                                 // Do not interrupt a create that is already in flight. Desired
                                 // config can legitimately drift while a controller is still
                                 // provisioning, for example when deployment-level env injection
-                                // gains concrete runtime values. Let the create finish or fail;
-                                // once stable, the normal update/failure recovery path reconciles
-                                // the latest desired config.
+                                // gains concrete runtime values. The create finishes with the
+                                // config it started with, which stays recorded, so once it is
+                                // Running this diff plans the update (or, if it failed, the
+                                // failure recovery above reconciles the new config).
                                 info!(
                                     "Config changed for '{}' during Provisioning, deferring until resource is stable",
                                     resource_id
                                 );
                             }
                             _ => {
-                                // Updating, Deleting -- wait for stable before acting
+                                // Updating, Deleting -- wait for stable before acting. An update
+                                // also finishes with the config it started with, so the change
+                                // is planned once it is Running.
                                 warn!(
                                     "Config changed for '{}' while in status {:?}, ignoring change until stable",
                                     resource_id, current_resource_state.status
@@ -1636,7 +1639,7 @@ impl StackExecutor {
                 let Some(desired) = self.resources.get(resource_id) else {
                     continue;
                 };
-                if resource_state.config != desired.resource
+                if !crate::core::retry_config_unchanged(&resource_state.config, &desired.resource)
                     || resource_state.dependencies != desired.dependencies
                     || self.external_binding_drifted(resource_id, resource_state)?
                 {
@@ -2249,22 +2252,6 @@ impl StackExecutor {
                     })
                 })?;
 
-            let context_resource: Resource;
-
-            // Use current desired config from the stack if it exists, otherwise use stored config.
-            // A delete always runs against the stored config: it describes what was created,
-            // even when the resource is deleted to be replaced with a new config.
-            context_resource = if apply_plan
-                && current_resource_state.status != ResourceStatus::Deleting
-            {
-                self.resources
-                    .get(&resource_id)
-                    .map(|resource_config| resource_config.resource.clone())
-                    .unwrap_or_else(|| current_resource_state.config.clone())
-            } else {
-                current_resource_state.config.clone()
-            };
-
             // Handle initialization for Pending resources without controller
             if current_resource_state.status == ResourceStatus::Pending
                 && !current_resource_state.has_internal_state()
@@ -2274,8 +2261,17 @@ impl StackExecutor {
                     resource_id
                 );
 
+                // Nothing ran yet, so the create starts from the latest desired config, and
+                // waited for (see `dependencies_met`) the latest desired dependencies.
+                if apply_plan {
+                    if let Some(desired) = self.resources.get(&resource_id) {
+                        current_resource_state.config = desired.resource.clone();
+                        current_resource_state.dependencies = desired.dependencies.clone();
+                    }
+                }
+
                 // Get the controller for this resource type
-                let resource_type = context_resource.resource_type();
+                let resource_type = current_resource_state.config.resource_type();
                 let controller_platform =
                     controller_platform_for_state(step_state.platform, &current_resource_state);
                 let controller = self
@@ -2320,6 +2316,15 @@ impl StackExecutor {
                 );
                 return Ok(None);
             }
+
+            // A flow runs against the config recorded for the resource: the config its create
+            // or update started with, never a desired config that changed under it. The record
+            // then says what the cloud holds, a delete runs against what was created, and a
+            // change that arrived mid-flow differs from the record, so the planner updates the
+            // resource once the flow finishes. `desired_stack` stays the latest stack, so a
+            // helper that reads this resource's own entry there can see the newer config until
+            // that update runs.
+            let context_resource = current_resource_state.config.clone();
 
             let controller_platform =
                 controller_platform_for_state(step_state.platform, &current_resource_state);
@@ -2420,9 +2425,9 @@ impl StackExecutor {
                         let next = if failed_create_checkpoint.is_some()
                             && updated_controller.nothing_deleted_yet()
                         {
-                            "Nothing was deleted and the failed create is kept: grant the permission and retry, or revert the configuration to resume the failed create"
+                            "Nothing was deleted and the failed create is kept. If the role lacks this permission, grant it and retry, or revert the configuration to resume the failed create"
                         } else {
-                            "Part of it may already be deleted, so the failed create cannot be resumed: grant the permission and retry to finish the replace, or remove the resource from the stack to delete what is left"
+                            "Part of it may already be deleted, so the failed create cannot be resumed. If the role lacks this permission, grant it and retry to finish the replace; removing the resource from the stack deletes what is left"
                         };
                         let denial = err.clone().context(ErrorData::ReplaceDeleteDenied {
                             resource_id: resource_id.clone(),
@@ -2529,20 +2534,6 @@ impl StackExecutor {
                     )
                 };
 
-            // Automatically update config to match desired state (except during deletion)
-            let next_config = if !apply_plan
-                || current_resource_state.status == ResourceStatus::Deleting
-            {
-                // Refresh and deletion preserve the deployed config.
-                current_resource_state.config.clone()
-            } else {
-                // For create/update operations, ensure config matches desired state
-                self.resources
-                    .get(&resource_id)
-                    .map(|rc| rc.resource.clone())
-                    .unwrap_or_else(|| current_resource_state.config.clone())
-            };
-
             // Set the internal controller outside the closure to handle errors properly
             let mut next_state = current_resource_state.clone();
             next_state
@@ -2582,7 +2573,6 @@ impl StackExecutor {
                 } else {
                     None
                 };
-                state.config = next_config;
                 state.retry_attempt = next_retry_attempt;
                 state.error = next_error;
             });

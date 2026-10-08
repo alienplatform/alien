@@ -583,6 +583,14 @@ async fn reconcile(
     )
     .await
     {
+        // The state is already persisted, and for a deletion the record may be gone, so the
+        // caller cannot repeat this cleanup. Leave the unrevoked grant in the manager's log.
+        tracing::error!(
+            deployment_id = %req.deployment_id,
+            status = ?final_state.status,
+            error = %error,
+            "Registry access cleanup failed after the deployment state was persisted"
+        );
         return error.into_response();
     }
 

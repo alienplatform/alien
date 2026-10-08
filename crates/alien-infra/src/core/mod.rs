@@ -15,6 +15,9 @@ pub use service_provider::*;
 mod certificates;
 pub use certificates::*;
 
+#[cfg(feature = "aws")]
+pub(crate) mod aws_tag_scoped;
+
 pub mod state_utils;
 pub use state_utils::*;
 
