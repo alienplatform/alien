@@ -656,6 +656,117 @@ mod permission_update_tests {
         serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap()
     }
 
+    /// Exercises the existing-vault update through the real executor and IAM
+    /// client. The cloud runner owns the isolated role and parameter fixtures
+    /// and verifies GetParameter using freshly assumed consumer credentials.
+    #[tokio::test]
+    #[ignore = "requires isolated AWS role fixtures from the live test runner"]
+    async fn live_permission_only_update_reconciles_existing_vault() {
+        let prefix = std::env::var("ALIEN_TEST_VAULT_PREFIX").unwrap();
+        assert!(prefix.starts_with("e2e-"), "use a task-owned test prefix");
+        let account_id = std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap();
+        let region = std::env::var("AWS_TARGET_REGION").unwrap();
+        let role_name = format!("{prefix}-consumer-sa");
+        let role_arn = format!("arn:aws:iam::{account_id}:role/{role_name}");
+        let vault = Vault::new("secrets".to_string()).build();
+        let account = ServiceAccount::new("consumer-sa".to_string()).build();
+        let dependencies = vec![ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            "consumer-sa",
+        )];
+        let stack = Stack::new("permission-update".to_string())
+            .add_with_dependencies(
+                vault.clone(),
+                ResourceLifecycle::Frozen,
+                dependencies.clone(),
+            )
+            .add(account.clone(), ResourceLifecycle::Frozen)
+            .permission(
+                "consumer",
+                PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .build();
+        let aws = AwsClientConfig {
+            account_id: account_id.clone(),
+            region: region.clone(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let executor = StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(aws)))
+            .deployment_config(&config)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .step_running_resources(false)
+            .build()
+            .unwrap();
+        let mut state = StackState::with_resource_prefix(Platform::Aws, prefix.clone());
+        let controller = AwsVaultController {
+            state: AwsVaultState::Ready,
+            account_id: Some(account_id),
+            region: Some(region),
+            vault_prefix: Some(format!("{prefix}-secrets")),
+            ..Default::default()
+        };
+        let mut resource = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(vault),
+            Some(ResourceLifecycle::Frozen),
+            dependencies,
+        );
+        resource.status = ResourceStatus::Running;
+        resource.outputs = controller.get_outputs();
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("secrets".to_string(), resource);
+        let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
+            "state": "ready", "roleName": role_name, "roleArn": role_arn,
+            "stackPermissionsApplied": true, "internalStayCount": null,
+        }))
+        .unwrap();
+        let mut resource = StackResourceState::new_pending(
+            ServiceAccount::RESOURCE_TYPE.to_string(),
+            Resource::new(account),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        resource.status = ResourceStatus::Running;
+        resource.outputs = controller.get_outputs();
+        resource
+            .set_internal_controller(Some(Box::new(controller)))
+            .unwrap();
+        state.resources.insert("consumer-sa".to_string(), resource);
+        assert!(
+            executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        assert!(
+            !executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("secrets")
+        );
+    }
+
     #[tokio::test]
     async fn setup_update_grants_existing_vault_access_to_consumer() {
         let (executor, state, iam) = fixture(
