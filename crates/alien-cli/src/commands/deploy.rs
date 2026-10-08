@@ -2968,19 +2968,30 @@ mod tests {
 
     #[tokio::test]
     async fn acquisition_miss_confirms_completion_through_acquisition_helpers() {
-        for setup in [false, true] {
+        for (setup, structured_response) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let server = MockServer::start_async().await;
             let acquisition = server
                 .mock_async(|when, then| {
                     when.method(POST).path("/v1/sync/acquire");
-                    then.status(409).json_body(
-                        serde_json::to_value(acquisition_miss(if setup {
-                            "acquireModeMismatch"
-                        } else {
-                            "statusMismatch"
-                        }))
-                        .unwrap(),
-                    );
+                    let reason = if setup {
+                        "acquireModeMismatch"
+                    } else {
+                        "statusMismatch"
+                    };
+                    if structured_response {
+                        then.status(200).json_body(serde_json::json!({
+                            "deployments": [],
+                            "notAcquired": [{
+                                "deploymentId": "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "reason": reason,
+                            }],
+                        }));
+                    } else {
+                        then.status(409)
+                            .json_body(serde_json::to_value(acquisition_miss(reason)).unwrap());
+                    }
                 })
                 .await;
             let completion = server
@@ -3010,7 +3021,10 @@ mod tests {
                 .await
             }
             .expect_err("manager rejects acquisition after completion");
-            assert_ne!(error.code, "DEPLOYMENT_ACQUIRE_UNAVAILABLE");
+            assert_eq!(
+                error.code == "DEPLOYMENT_ACQUIRE_UNAVAILABLE",
+                structured_response
+            );
             assert!(
                 completed_after_acquisition_miss(&error, &server.base_url(), "test-token", id)
                     .await
