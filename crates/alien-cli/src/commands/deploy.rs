@@ -3723,7 +3723,7 @@ mod tests {
             (
                 200,
                 serde_json::json!({
-                    "platform":"aws", "stack":{"id":"test", "resources":[]},
+                    "platform":"aws", "stack":{"id":"test", "resources":{}},
                     "setup":{"target":"aws/us-east-2", "fingerprint":"test", "version":1}
                 }),
                 true,
