@@ -25,19 +25,18 @@ use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
         acquire_runtime_delete_deployment, acquire_setup_delete_deployment,
-        acquire_setup_run_deployment, combine_operation_and_finalization, final_reconcile,
-        release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
+        acquire_setup_run_deployment, finalize_step_loop, release_deployment, ManagerApiTransport,
+        SetupDeleteAcquireOutcome,
     },
-    runner::{
-        preserve_semantic_failure, run_step_loop as shared_run_step_loop, RunnerPolicy,
-        RunnerResult,
-    },
+    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
     setup_run_has_pending_update,
+    transport::{DeploymentLoopTransport, StepReconcileResult},
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
+use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -315,7 +314,10 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 mod tests {
     use super::*;
     use clap::Parser;
-    use httpmock::{Method::PATCH, MockServer};
+    use httpmock::{
+        Method::{PATCH, POST},
+        MockServer,
+    };
     use std::io::Write;
 
     #[test]
@@ -1089,6 +1091,238 @@ mod tests {
             &LoopOutcome::Failure,
             &LoopStopReason::Failed
         ));
+    }
+
+    fn revision_checkpoint_state(status: DeploymentStatus) -> DeploymentState {
+        DeploymentState {
+            status,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::new(Platform::Test)),
+            error: status.is_failed().then(|| {
+                AlienError::new(alien_error::GenericError {
+                    message: "setup controller failed".to_string(),
+                })
+            }),
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                direct_setup_revision: Some("old-revision".to_string()),
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn revision_checkpoint_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                hash: "test".to_string(),
+                variables: vec![],
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn setup_revision_is_durable_before_terminal_release_and_never_marks_failure() {
+        for status in [
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::Running,
+            DeploymentStatus::InitialSetupFailed,
+        ] {
+            let server = MockServer::start_async().await;
+            let original = revision_checkpoint_state(status);
+            let mut expected = original.clone();
+            if !status.is_failed() {
+                expected
+                    .runtime_metadata
+                    .as_mut()
+                    .unwrap()
+                    .direct_setup_revision = Some("new-revision".to_string());
+            }
+            let reconcile = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/reconcile")
+                        .json_body_partial(serde_json::json!({"state":expected}).to_string());
+                    then.status(200)
+                        .json_body(serde_json::json!({"success":true,"current":expected}));
+                })
+                .await;
+            let release = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/release");
+                    then.status(200);
+                })
+                .await;
+            let client = ServerClient::new(&server.base_url());
+            let transport = SetupRevisionTransport {
+                inner: ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+                setup_revision: Some("new-revision".to_string()),
+            };
+            let checkpoint = transport
+                .reconcile_step(
+                    "deployment-1",
+                    &original,
+                    &revision_checkpoint_config(),
+                    false,
+                    None,
+                    vec![],
+                    vec![],
+                )
+                .await
+                .expect("setup checkpoint should persist");
+            let checkpointed = checkpoint.state.unwrap_or(original);
+            assert_eq!(
+                checkpointed
+                    .runtime_metadata
+                    .as_ref()
+                    .unwrap()
+                    .direct_setup_revision,
+                expected
+                    .runtime_metadata
+                    .as_ref()
+                    .unwrap()
+                    .direct_setup_revision
+            );
+            let result = Ok(RunnerResult {
+                loop_result: alien_deployment::loop_contract::classify_status(
+                    &status,
+                    LoopOperation::InitialSetup,
+                )
+                .unwrap(),
+                steps_executed: 1,
+                state_persisted: true,
+            });
+            let result = finalize_step_loop(
+                &client,
+                "deployment-1",
+                "session-1",
+                None,
+                &checkpointed,
+                result,
+            )
+            .await;
+            if status.is_failed() {
+                assert_eq!(
+                    result
+                        .expect_err("setup failure must remain primary")
+                        .message,
+                    "setup controller failed"
+                );
+            } else {
+                result.expect("successful checkpoint should release");
+            }
+            reconcile.assert_hits_async(1).await;
+            release.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_revision_checkpoint_honors_authoritative_server_state() {
+        let server = MockServer::start_async().await;
+        let original = revision_checkpoint_state(DeploymentStatus::Provisioning);
+        let mut authoritative = original.clone();
+        authoritative.retry_requested = true;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(
+                        r#"{"state":{"runtimeMetadata":{"directSetupRevision":"new-revision"}}}"#,
+                    );
+                then.status(200)
+                    .json_body(serde_json::json!({"success":true,"current":authoritative}));
+            })
+            .await;
+        let transport = SetupRevisionTransport {
+            inner: ManagerApiTransport::new(
+                ServerClient::new(&server.base_url()),
+                "session-1".to_string(),
+            ),
+            setup_revision: Some("new-revision".to_string()),
+        };
+        let reconciled = transport
+            .reconcile_step(
+                "deployment-1",
+                &original,
+                &revision_checkpoint_config(),
+                false,
+                None,
+                vec![],
+                vec![],
+            )
+            .await
+            .expect("server state must be preserved")
+            .state
+            .unwrap();
+        assert!(reconciled.retry_requested);
+        assert_eq!(
+            reconciled
+                .runtime_metadata
+                .unwrap()
+                .direct_setup_revision
+                .as_deref(),
+            Some("old-revision")
+        );
+        reconcile.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn setup_revision_is_not_marked_applied_on_an_acquired_handoff_without_steps() {
+        let server = MockServer::start_async().await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(409);
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ServerClient::new(&server.base_url());
+        let transport = SetupRevisionTransport {
+            inner: ManagerApiTransport::new(client.clone(), "session-1".to_string()),
+            setup_revision: Some("new-revision".to_string()),
+        };
+        let mut state = revision_checkpoint_state(DeploymentStatus::Provisioning);
+        let result = shared_run_step_loop(
+            &mut state,
+            &mut revision_checkpoint_config(),
+            &ClientConfig::Test,
+            "deployment-1",
+            &RunnerPolicy {
+                max_steps: 2,
+                operation: LoopOperation::InitialSetup,
+                delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
+            },
+            &transport,
+            None,
+            None,
+        )
+        .await;
+        let result = finalize_step_loop(&client, "deployment-1", "session-1", None, &state, result)
+            .await
+            .expect("existing handoff should release");
+        assert_eq!(result.steps_executed, 0);
+        assert_eq!(
+            state
+                .runtime_metadata
+                .unwrap()
+                .direct_setup_revision
+                .as_deref(),
+            Some("old-revision")
+        );
+        reconcile.assert_hits_async(0).await;
+        release.assert_hits_async(1).await;
     }
 
     #[test]
@@ -4223,6 +4457,68 @@ async fn load_setup_releases(
     Ok((current_release, target_release))
 }
 
+/// Record the applied package revision in the successful setup checkpoint,
+/// before a terminal execution claim can be closed by the manager.
+struct SetupRevisionTransport {
+    inner: ManagerApiTransport,
+    setup_revision: Option<String>,
+}
+
+#[async_trait]
+impl DeploymentLoopTransport for SetupRevisionTransport {
+    async fn renew_lease(&self, deployment_id: &str) -> std::result::Result<(), AlienError> {
+        self.inner.renew_lease(deployment_id).await
+    }
+
+    async fn reconcile_step(
+        &self,
+        deployment_id: &str,
+        state: &DeploymentState,
+        config: &DeploymentConfig,
+        update_heartbeat: bool,
+        suggested_delay_ms: Option<u64>,
+        heartbeats: Vec<alien_core::ResourceHeartbeat>,
+        observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+    ) -> std::result::Result<StepReconcileResult, AlienError> {
+        let mut checkpoint = state.clone();
+        let mut stamped = false;
+        if alien_deployment::loop_contract::classify_status(
+            &state.status,
+            LoopOperation::InitialSetup,
+        )
+        .is_some_and(|result| setup_revision_was_applied(&result.outcome, &result.stop_reason))
+        {
+            if let (Some(revision), Some(metadata)) = (
+                self.setup_revision.as_ref(),
+                checkpoint.runtime_metadata.as_mut(),
+            ) {
+                if metadata.direct_setup_revision.as_ref() != Some(revision) {
+                    metadata.direct_setup_revision = Some(revision.clone());
+                    stamped = true;
+                }
+            }
+        }
+        let mut reconciled = self
+            .inner
+            .reconcile_step(
+                deployment_id,
+                &checkpoint,
+                config,
+                update_heartbeat,
+                suggested_delay_ms,
+                heartbeats,
+                observed_inventory_batches,
+            )
+            .await?;
+        // An authoritative server update wins. Otherwise return the state we
+        // just persisted so the caller cannot overwrite its revision later.
+        if stamped && reconciled.state.is_none() {
+            reconciled.state = Some(checkpoint);
+        }
+        Ok(reconciled)
+    }
+}
+
 fn setup_revision_was_applied(outcome: &LoopOutcome, stop_reason: &LoopStopReason) -> bool {
     matches!(outcome, LoopOutcome::Success)
         || matches!(
@@ -5660,11 +5956,12 @@ async fn push_initial_setup_targeted(
         );
 
         // Run the shared step loop with per-step reconciliation via the manager API
-        let transport = ManagerApiTransport::with_execution_claim(
-            client.clone(),
-            session.clone(),
-            acquired_deployment.execution_claim.clone(),
-        );
+        let transport = SetupRevisionTransport {
+            inner: ManagerApiTransport::with_execution_claim(
+                client.clone(), session.clone(), acquired_deployment.execution_claim.clone(),
+            ),
+            setup_revision: setup_revision.map(str::to_owned),
+        };
         let policy = RunnerPolicy {
             max_steps: 400,
             // Push model: run initial setup only, then hand off to the manager.
@@ -5726,29 +6023,15 @@ async fn push_initial_setup_targeted(
         }
     };
 
-    if let Ok(result) = &runner_result {
-        if setup_revision_was_applied(&result.loop_result.outcome, &result.loop_result.stop_reason)
-        {
-            if let (Some(revision), Some(metadata)) =
-                (setup_revision, state.runtime_metadata.as_mut())
-            {
-                metadata.direct_setup_revision = Some(revision.to_string());
-            }
-        }
-    }
-
-    // Always reconcile + release, even on error.
-    let runner_result = combine_operation_and_finalization(
-        preserve_semantic_failure(runner_result, &state),
-        final_reconcile(
-            client,
-            deployment_id,
-            &session,
-            acquired_deployment.execution_claim.as_ref(),
-            &state,
-        )
-        .await,
-    );
+    let runner_result = finalize_step_loop(
+        client,
+        deployment_id,
+        &session,
+        acquired_deployment.execution_claim.as_ref(),
+        &state,
+        runner_result,
+    )
+    .await;
 
     // Handle runner result after lock release
     let result = runner_result.context(ErrorData::DeploymentFailed {
@@ -6066,18 +6349,15 @@ async fn run_runtime_deletion(
     )
     .await;
 
-    // Always reconcile + release, even on error
-    let runner_result = combine_operation_and_finalization(
-        preserve_semantic_failure(runner_result, state),
-        final_reconcile(
-            client,
-            deployment_id,
-            &session,
-            acquired_deployment.execution_claim.as_ref(),
-            state,
-        )
-        .await,
-    );
+    let runner_result = finalize_step_loop(
+        client,
+        deployment_id,
+        &session,
+        acquired_deployment.execution_claim.as_ref(),
+        state,
+        runner_result,
+    )
+    .await;
 
     // Handle runner result after lock release
     let result = runner_result.context(ErrorData::DeploymentFailed {
@@ -6186,21 +6466,19 @@ async fn run_setup_deletion(
                 final_status: state.status,
             },
             steps_executed: 0,
+            state_persisted: true,
         })
     });
 
-    // Always reconcile + release, even on error
-    let runner_result = combine_operation_and_finalization(
-        preserve_semantic_failure(runner_result, state),
-        final_reconcile(
-            client,
-            deployment_id,
-            &session,
-            execution_claim.as_ref(),
-            state,
-        )
-        .await,
-    );
+    let runner_result = finalize_step_loop(
+        client,
+        deployment_id,
+        &session,
+        execution_claim.as_ref(),
+        state,
+        runner_result,
+    )
+    .await;
 
     let result = runner_result.context(ErrorData::DeploymentFailed {
         operation: "setup teardown".to_string(),
