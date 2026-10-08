@@ -1019,7 +1019,13 @@ fn build_capacity_group_for_id(
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         // No source declaration bounds a generated pool; its counts are only the
         // recommendation, and the installer may choose others.
-        let scale = generated_pool_scale_policy(group.min_size, group.max_size);
+        let selected_max = config
+            .stack_settings
+            .compute
+            .as_ref()
+            .and_then(|settings| settings.pools.get(group_id))
+            .map(ComputePoolSelection::max_size);
+        let scale = generated_pool_scale_policy(group.min_size, group.max_size, selected_max);
         let selection = materialize_group(&mut group, platform, config, &scale)?;
         if !containers.is_empty() {
             check_pool_capacity(platform, group_id, selection, &effective).map_err(|message| {
@@ -2547,6 +2553,9 @@ mod tests {
             (autoscale(1, 2), (1, 2)),
             (autoscale(2, 10), (2, 10)),
             (autoscale(1, 100), (1, 100)),
+            // No upper bound: only the workload minimum and capacity are checked.
+            (autoscale(1, 150), (1, 150)),
+            (fixed(150), (150, 150)),
         ] {
             let group = prepare_generated_pool(selection.clone())
                 .await
@@ -2561,17 +2570,13 @@ mod tests {
                 "autoscale minimum 0 is outside the allowed range 1-100",
             ),
             (
-                autoscale(1, 101),
-                "autoscale maximum 101 is outside the allowed range 1-100",
-            ),
-            (
-                fixed(101),
-                "fixed machine count 101 is outside the allowed range 1-100",
+                fixed(0),
+                "fixed compute pools must select at least one machine",
             ),
         ] {
             let error = prepare_generated_pool(selection.clone())
                 .await
-                .expect_err("a count outside the pool limits must be rejected");
+                .expect_err("a count below the workload minimum must be rejected");
             assert!(
                 error.message.contains(message),
                 "{selection:?}: {}",
@@ -2677,28 +2682,32 @@ mod tests {
         }
     }
 
-    /// A saved choice above the old 10-machine sizing cap stays valid when a later release
-    /// lowers the replica count, and so does one above an earlier, larger recommendation.
+    /// A saved choice above the planner's sizing cap stays valid when a later release changes
+    /// the replica count, at any size.
     #[tokio::test]
     async fn large_saved_pool_survives_releases_that_change_replicas() {
-        let autoscale_one_twelve = ComputePoolSelection::Autoscale {
-            min: 1,
-            max: 12,
-            machine: Some("m7g.large".to_string()),
-            failure_domains: None,
-        };
-        for replicas in [12, 11, 3, 40] {
-            let group = prepare_release(
-                gw_release(ContainerReplicas::Autoscale(1, replicas)),
-                &autoscale_one_twelve,
-            )
-            .await
-            .unwrap_or_else(|error| panic!("{replicas} replicas: {error}"));
-            assert_eq!(
-                (group.min_size, group.max_size),
-                (1, 12),
-                "{replicas} replicas"
-            );
+        for saved_max in [12, 150] {
+            let saved = ComputePoolSelection::Autoscale {
+                min: 1,
+                max: saved_max,
+                machine: Some("m7g.large".to_string()),
+                failure_domains: None,
+            };
+            for replicas in [saved_max, saved_max - 1, 3, 400] {
+                let group = prepare_release(
+                    gw_release(ContainerReplicas::Autoscale(1, replicas)),
+                    &saved,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("saved 1-{saved_max}, {replicas} replicas: {error}")
+                });
+                assert_eq!(
+                    (group.min_size, group.max_size),
+                    (1, saved_max),
+                    "saved 1-{saved_max}, {replicas} replicas"
+                );
+            }
         }
 
         // A recommendation above the ceiling is clamped, so it stays a valid choice.

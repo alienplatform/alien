@@ -84,9 +84,16 @@ pub fn plan_compute(
 
     let mut pools = Vec::new();
     for pool_id in pool_ids {
-        let group = groups.remove(&pool_id).expect("pool id came from map keys");
+        let mut group = groups.remove(&pool_id).expect("pool id came from map keys");
         let requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
+        if group.generated {
+            group.scale = generated_pool_scale_policy(
+                group.scale.default_min_size(),
+                group.scale.default_max_size(),
+                selected.map(ComputePoolSelection::max_size),
+            );
+        }
         let recommended = recommended_selection(
             platform,
             &requirements,
@@ -151,10 +158,10 @@ struct PlannedGroup {
     generated: bool,
 }
 
-/// Highest machine count an installer may choose for a pool the source does not declare.
+/// Machine count up to which a setup offers choices for a pool the source does not declare.
 ///
-/// It does not depend on the release, so a saved choice never falls outside the allowed range
-/// when a later release changes replica counts. Recommendations above it are clamped to it.
+/// It is not a limit: such a pool has no upper bound, and a saved choice above it widens the
+/// offered range. Recommendations above it are clamped to it.
 pub const GENERATED_POOL_MAX_MACHINES: u32 = 100;
 
 /// Allowed scale for a pool that no capacity group declares.
@@ -163,13 +170,19 @@ pub const GENERATED_POOL_MAX_MACHINES: u32 = 100;
 /// container per machine. They are a recommendation, not a bound: the developer did not bound
 /// the pool, a larger machine fits more containers, and replica counts change between releases
 /// while the installer's saved choice stays. The installer may choose any count from the
-/// workload minimum (one machine when any workload runs) up to
-/// [`GENERATED_POOL_MAX_MACHINES`], fixed or autoscaling (a fixed N is accepted as the
-/// autoscale range N..N). Whether the choice can hold the workloads is
+/// workload minimum (one machine when any workload runs) upwards, fixed or autoscaling (a fixed
+/// N is accepted as the autoscale range N..N). The range reaches
+/// [`GENERATED_POOL_MAX_MACHINES`], or `selected_max` when the saved choice is larger, so the
+/// saved choice is always inside it. Whether the choice can hold the workloads is
 /// [`check_pool_capacity`]'s question.
-pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> CapacityGroupScalePolicy {
-    let ceiling = GENERATED_POOL_MAX_MACHINES;
-    let default_min = default_min.min(ceiling);
+pub fn generated_pool_scale_policy(
+    default_min: u32,
+    default_max: u32,
+    selected_max: Option<u32>,
+) -> CapacityGroupScalePolicy {
+    let offered = GENERATED_POOL_MAX_MACHINES;
+    let ceiling = offered.max(selected_max.unwrap_or(0));
+    let default_min = default_min.min(offered);
     CapacityGroupScalePolicy::Autoscale {
         min: ComputeChoiceRange {
             min: default_min,
@@ -179,7 +192,7 @@ pub fn generated_pool_scale_policy(default_min: u32, default_max: u32) -> Capaci
         max: ComputeChoiceRange {
             min: default_min.max(1),
             max: ceiling,
-            default: default_max.clamp(default_min.max(1), ceiling),
+            default: default_max.clamp(default_min.max(1), offered),
         },
     }
 }
@@ -255,7 +268,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             pool_id,
             PlannedGroup {
                 workloads: workloads.into_iter().map(|w| w.id).collect(),
-                // Merged with any declared group below, then widened if none declares it.
+                // Merged with any declared group below; widened in `plan_compute` if none declares it.
                 scale: CapacityGroupScalePolicy::from_selected_bounds(min_size, max_size),
                 requirements,
                 requires_failure_domain,
@@ -311,12 +324,6 @@ fn merge_explicit_compute_groups(
                     generated: false,
                 });
         }
-    }
-    for planned in groups.values_mut().filter(|planned| planned.generated) {
-        planned.scale = generated_pool_scale_policy(
-            planned.scale.default_min_size(),
-            planned.scale.default_max_size(),
-        );
     }
     Ok(())
 }
