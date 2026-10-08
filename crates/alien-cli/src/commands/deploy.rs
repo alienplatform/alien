@@ -1189,6 +1189,56 @@ fn api_url(base_url: &str, path: &str, workspace: Option<&str>) -> Result<reqwes
     Ok(url)
 }
 
+async fn create_standalone_deployment(
+    token: &str,
+    base_url: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    stack_settings: alien_platform_api::types::NewDeploymentRequestStackSettings,
+) -> Result<serde_json::Value> {
+    let settings = serde_json::to_value(stack_settings)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize deployment settings".to_string(),
+        })?;
+    let settings = serde_json::from_value(settings)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to convert deployment settings for the manager".to_string(),
+        })?;
+    let platform = serde_json::from_value(serde_json::json!(resolved_args.platform.as_str()))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to convert deployment platform for the manager".to_string(),
+        })?;
+    let client =
+        alien_manager_api::Client::new_with_client(base_url, create_platform_http_client(token)?);
+    let response = client
+        .create_deployment()
+        .body_map(|body| {
+            let mut body = body
+                .name(resolved_args.name.clone())
+                .platform(platform)
+                .stack_settings(settings);
+            if let Some(prefix) = &args.resource_prefix {
+                body = body.resource_prefix(prefix.clone());
+            }
+            body
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create deployment with deployment group token".to_string(),
+        })?
+        .into_inner();
+    serde_json::to_value(response)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize deployment response".to_string(),
+        })
+}
+
 fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -1483,7 +1533,8 @@ async fn deploy_task_with_environment(
                             .await?;
                         }
 
-                        let create_response = sdk_client
+                        let response_json = if ctx.is_platform() {
+                            let create_response = sdk_client
                             .create_deployment()
                             .workspace(&workspace_name)
                             .body(alien_platform_api::types::NewDeploymentRequest {
@@ -1554,11 +1605,21 @@ async fn deploy_task_with_environment(
                             })?
                             .into_inner();
 
-                        let response_json = serde_json::to_value(&create_response)
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to serialize response".to_string(),
-                            })?;
+                            serde_json::to_value(&create_response)
+                                .into_alien_error()
+                                .context(ErrorData::ConfigurationError {
+                                    message: "Failed to serialize response".to_string(),
+                                })?
+                        } else {
+                            create_standalone_deployment(
+                                token,
+                                &base_url,
+                                &resolved_args,
+                                &args,
+                                stack_settings,
+                            )
+                            .await?
+                        };
 
                         let deployment_id = response_json
                             .get("deployment")
