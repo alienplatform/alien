@@ -27,6 +27,8 @@ impl ResourceImporter for GcpStorageImporter {
         let controller = GcpStorageController {
             state: GcpStorageState::Ready,
             bucket_name: Some(data.bucket_name),
+            // Setup owns an imported bucket's lifecycle, and `needs_update` skips Frozen storage.
+            lifecycle_revision: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

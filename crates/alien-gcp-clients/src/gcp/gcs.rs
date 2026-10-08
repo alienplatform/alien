@@ -685,6 +685,10 @@ pub struct LifecycleCondition {
     pub num_newer_versions: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matches_storage_class: Option<Vec<String>>,
+    /// Object name prefixes the rule applies to. An object matches when its name starts with
+    /// any of them. Without it the rule applies to every object in the bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matches_prefix: Option<Vec<String>>,
     // ... other conditions
 }
 
