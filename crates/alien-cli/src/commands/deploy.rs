@@ -3028,7 +3028,8 @@ mod tests {
             assert!(
                 completed_after_acquisition_miss(&error, &server.base_url(), "test-token", id)
                     .await
-                    .unwrap()
+                    .unwrap(),
+                "setup={setup}, structured_response={structured_response}: {error:?}"
             );
             acquisition.assert_hits_async(1).await;
             completion.assert_hits_async(1).await;
