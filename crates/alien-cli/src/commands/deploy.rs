@@ -5,6 +5,9 @@
 //! 2. Discover manager URL (resolve_manager for OAuth, DG endpoint for DG tokens)
 //! 3. Run step loop via manager (acquire → step → reconcile → release)
 
+#[path = "deploy_setup_validation.rs"]
+mod setup_validation;
+
 use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 
 use crate::commands::{
@@ -696,16 +699,15 @@ async fn create_self_deployment(
     )
     .await?;
 
-    if !resolved_args.input_values.is_empty() {
-        set_first_party_deployment_inputs(
-            &base_url,
-            &session.token,
-            &resolved_args.platform,
-            &resolved_args.input_values,
-            &args.channel,
-        )
-        .await?;
-    }
+    // Bind the preparation request to this exact channel even without inputs.
+    set_first_party_deployment_inputs(
+        &base_url,
+        &session.token,
+        &resolved_args.platform,
+        &resolved_args.input_values,
+        &args.channel,
+    )
+    .await?;
 
     let create_response = create_deployment_with_group_session(
         &base_url,
@@ -907,6 +909,8 @@ async fn create_deployment_with_group_session(
     args: &DeployArgs,
     project_id: &str,
 ) -> Result<CreateDeploymentApiResponse> {
+    setup_validation::validate_before_creation(base_url, session_token, resolved_args, args)
+        .await?;
     let http_client = create_platform_http_client(session_token)?;
     let body = deployment_create_request_body(resolved_args, args, project_id)?;
 
@@ -1465,6 +1469,14 @@ async fn deploy_task_with_environment(
                             ),
                             None => None,
                         };
+
+                        setup_validation::validate_before_creation(
+                            &base_url,
+                            token,
+                            &resolved_args,
+                            &args,
+                        )
+                        .await?;
 
                         let create_response = sdk_client
                             .create_deployment()
