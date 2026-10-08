@@ -543,6 +543,240 @@ export type ResourceHeartbeat = {
   resourceType: string;
 };
 
+/**
+ * Whether matching operations run without approval.
+ */
+export const SyncReconcileRequestCustomDecision = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type SyncReconcileRequestCustomDecision = ClosedEnum<
+  typeof SyncReconcileRequestCustomDecision
+>;
+
+export type SyncReconcileRequestApprovalCustom = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: SyncReconcileRequestCustomDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const SyncReconcileRequestApprovalCustomEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type SyncReconcileRequestApprovalCustomEnum = ClosedEnum<
+  typeof SyncReconcileRequestApprovalCustomEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type SyncReconcileRequestCustomApprovalUnion =
+  | SyncReconcileRequestApprovalCustom
+  | SyncReconcileRequestApprovalCustomEnum;
+
+export type SyncReconcileRequestSettingsCustom3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type SyncReconcileRequestSettingsCustom2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type SyncReconcileRequestSettingsCustom1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type SyncReconcileRequestCustomSettingsUnion =
+  | SyncReconcileRequestSettingsCustom1
+  | SyncReconcileRequestSettingsCustom2
+  | SyncReconcileRequestSettingsCustom3
+  | string;
+
+/**
+ * A published custom plugin at an exact version.
+ */
+export type SyncReconcileRequestCustom = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | SyncReconcileRequestApprovalCustom
+      | SyncReconcileRequestApprovalCustomEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | SyncReconcileRequestSettingsCustom1
+      | SyncReconcileRequestSettingsCustom2
+      | SyncReconcileRequestSettingsCustom3
+      | string;
+  } | undefined;
+  /**
+   * Plugin name as published.
+   */
+  name: string;
+  /**
+   * Exact published version.
+   */
+  version: string;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const SyncReconcileRequestPluginsDecision = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type SyncReconcileRequestPluginsDecision = ClosedEnum<
+  typeof SyncReconcileRequestPluginsDecision
+>;
+
+export type SyncReconcileRequestApprovalPlugins = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: SyncReconcileRequestPluginsDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const SyncReconcileRequestApprovalPluginsEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type SyncReconcileRequestApprovalPluginsEnum = ClosedEnum<
+  typeof SyncReconcileRequestApprovalPluginsEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type SyncReconcileRequestPluginsApprovalUnion =
+  | SyncReconcileRequestApprovalPlugins
+  | SyncReconcileRequestApprovalPluginsEnum;
+
+export type SyncReconcileRequestSettingsPlugins3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type SyncReconcileRequestSettingsPlugins2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type SyncReconcileRequestSettingsPlugins1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type SyncReconcileRequestPluginsSettingsUnion =
+  | SyncReconcileRequestSettingsPlugins1
+  | SyncReconcileRequestSettingsPlugins2
+  | SyncReconcileRequestSettingsPlugins3
+  | string;
+
+/**
+ * Settings and approval rules for one plugin.
+ */
+export type SyncReconcileRequestPlugins = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | SyncReconcileRequestApprovalPlugins
+      | SyncReconcileRequestApprovalPluginsEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | SyncReconcileRequestSettingsPlugins1
+      | SyncReconcileRequestSettingsPlugins2
+      | SyncReconcileRequestSettingsPlugins3
+      | string;
+  } | undefined;
+};
+
+/**
+ * Operations an Operator installed without a release declares in its environment. Setting values are never sent.
+ */
+export type OperationsConfig = {
+  /**
+   * Published custom plugins, pinned to exact versions.
+   */
+  custom?: Array<SyncReconcileRequestCustom> | undefined;
+  /**
+   * Built-in plugins, by plugin name.
+   */
+  plugins?: { [k: string]: SyncReconcileRequestPlugins } | undefined;
+};
+
 export const DynamicContainerStatus = {
   Pending: "pending",
   Running: "running",
@@ -611,6 +845,10 @@ export type SyncReconcileRequest = {
    * Operations bundle set the Operator currently has loaded, for plugin-sync status tracking.
    */
   operationsReport?: OperationsReport | undefined;
+  /**
+   * Operations an Operator installed without a release declares in its environment. Setting values are never sent.
+   */
+  operationsConfig?: OperationsConfig | undefined;
   /**
    * Observed dynamic container generations from a Kubernetes Operator.
    */
@@ -1413,6 +1651,445 @@ export function resourceHeartbeatToJSON(
 }
 
 /** @internal */
+export const SyncReconcileRequestCustomDecision$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestCustomDecision
+> = z.enum(SyncReconcileRequestCustomDecision);
+
+/** @internal */
+export type SyncReconcileRequestApprovalCustom$Outbound = {
+  decision: string;
+  maxRisk?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestApprovalCustom$outboundSchema: z.ZodType<
+  SyncReconcileRequestApprovalCustom$Outbound,
+  SyncReconcileRequestApprovalCustom
+> = z.object({
+  decision: SyncReconcileRequestCustomDecision$outboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileRequestApprovalCustomToJSON(
+  syncReconcileRequestApprovalCustom: SyncReconcileRequestApprovalCustom,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestApprovalCustom$outboundSchema.parse(
+      syncReconcileRequestApprovalCustom,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestApprovalCustomEnum$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestApprovalCustomEnum
+> = z.enum(SyncReconcileRequestApprovalCustomEnum);
+
+/** @internal */
+export type SyncReconcileRequestCustomApprovalUnion$Outbound =
+  | SyncReconcileRequestApprovalCustom$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestCustomApprovalUnion$outboundSchema: z.ZodType<
+  SyncReconcileRequestCustomApprovalUnion$Outbound,
+  SyncReconcileRequestCustomApprovalUnion
+> = z.union([
+  z.lazy(() => SyncReconcileRequestApprovalCustom$outboundSchema),
+  SyncReconcileRequestApprovalCustomEnum$outboundSchema,
+]);
+
+export function syncReconcileRequestCustomApprovalUnionToJSON(
+  syncReconcileRequestCustomApprovalUnion:
+    SyncReconcileRequestCustomApprovalUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCustomApprovalUnion$outboundSchema.parse(
+      syncReconcileRequestCustomApprovalUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSettingsCustom3$Outbound = {
+  env: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestSettingsCustom3$outboundSchema: z.ZodType<
+  SyncReconcileRequestSettingsCustom3$Outbound,
+  SyncReconcileRequestSettingsCustom3
+> = z.object({
+  env: z.string(),
+});
+
+export function syncReconcileRequestSettingsCustom3ToJSON(
+  syncReconcileRequestSettingsCustom3: SyncReconcileRequestSettingsCustom3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSettingsCustom3$outboundSchema.parse(
+      syncReconcileRequestSettingsCustom3,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSettingsCustom2$Outbound = {
+  resources: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestSettingsCustom2$outboundSchema: z.ZodType<
+  SyncReconcileRequestSettingsCustom2$Outbound,
+  SyncReconcileRequestSettingsCustom2
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function syncReconcileRequestSettingsCustom2ToJSON(
+  syncReconcileRequestSettingsCustom2: SyncReconcileRequestSettingsCustom2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSettingsCustom2$outboundSchema.parse(
+      syncReconcileRequestSettingsCustom2,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSettingsCustom1$Outbound = {
+  input: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestSettingsCustom1$outboundSchema: z.ZodType<
+  SyncReconcileRequestSettingsCustom1$Outbound,
+  SyncReconcileRequestSettingsCustom1
+> = z.object({
+  input: z.string(),
+});
+
+export function syncReconcileRequestSettingsCustom1ToJSON(
+  syncReconcileRequestSettingsCustom1: SyncReconcileRequestSettingsCustom1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSettingsCustom1$outboundSchema.parse(
+      syncReconcileRequestSettingsCustom1,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestCustomSettingsUnion$Outbound =
+  | SyncReconcileRequestSettingsCustom1$Outbound
+  | SyncReconcileRequestSettingsCustom2$Outbound
+  | SyncReconcileRequestSettingsCustom3$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestCustomSettingsUnion$outboundSchema: z.ZodType<
+  SyncReconcileRequestCustomSettingsUnion$Outbound,
+  SyncReconcileRequestCustomSettingsUnion
+> = z.union([
+  z.lazy(() => SyncReconcileRequestSettingsCustom1$outboundSchema),
+  z.lazy(() => SyncReconcileRequestSettingsCustom2$outboundSchema),
+  z.lazy(() => SyncReconcileRequestSettingsCustom3$outboundSchema),
+  z.string(),
+]);
+
+export function syncReconcileRequestCustomSettingsUnionToJSON(
+  syncReconcileRequestCustomSettingsUnion:
+    SyncReconcileRequestCustomSettingsUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCustomSettingsUnion$outboundSchema.parse(
+      syncReconcileRequestCustomSettingsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestCustom$Outbound = {
+  approval?: {
+    [k: string]: SyncReconcileRequestApprovalCustom$Outbound | string;
+  } | undefined;
+  settings?: {
+    [k: string]:
+      | SyncReconcileRequestSettingsCustom1$Outbound
+      | SyncReconcileRequestSettingsCustom2$Outbound
+      | SyncReconcileRequestSettingsCustom3$Outbound
+      | string;
+  } | undefined;
+  name: string;
+  version: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestCustom$outboundSchema: z.ZodType<
+  SyncReconcileRequestCustom$Outbound,
+  SyncReconcileRequestCustom
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncReconcileRequestApprovalCustom$outboundSchema),
+      SyncReconcileRequestApprovalCustomEnum$outboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncReconcileRequestSettingsCustom1$outboundSchema),
+      z.lazy(() => SyncReconcileRequestSettingsCustom2$outboundSchema),
+      z.lazy(() => SyncReconcileRequestSettingsCustom3$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  name: z.string(),
+  version: z.string(),
+});
+
+export function syncReconcileRequestCustomToJSON(
+  syncReconcileRequestCustom: SyncReconcileRequestCustom,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCustom$outboundSchema.parse(syncReconcileRequestCustom),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPluginsDecision$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestPluginsDecision
+> = z.enum(SyncReconcileRequestPluginsDecision);
+
+/** @internal */
+export type SyncReconcileRequestApprovalPlugins$Outbound = {
+  decision: string;
+  maxRisk?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestApprovalPlugins$outboundSchema: z.ZodType<
+  SyncReconcileRequestApprovalPlugins$Outbound,
+  SyncReconcileRequestApprovalPlugins
+> = z.object({
+  decision: SyncReconcileRequestPluginsDecision$outboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileRequestApprovalPluginsToJSON(
+  syncReconcileRequestApprovalPlugins: SyncReconcileRequestApprovalPlugins,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestApprovalPlugins$outboundSchema.parse(
+      syncReconcileRequestApprovalPlugins,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestApprovalPluginsEnum$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestApprovalPluginsEnum
+> = z.enum(SyncReconcileRequestApprovalPluginsEnum);
+
+/** @internal */
+export type SyncReconcileRequestPluginsApprovalUnion$Outbound =
+  | SyncReconcileRequestApprovalPlugins$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestPluginsApprovalUnion$outboundSchema: z.ZodType<
+  SyncReconcileRequestPluginsApprovalUnion$Outbound,
+  SyncReconcileRequestPluginsApprovalUnion
+> = z.union([
+  z.lazy(() => SyncReconcileRequestApprovalPlugins$outboundSchema),
+  SyncReconcileRequestApprovalPluginsEnum$outboundSchema,
+]);
+
+export function syncReconcileRequestPluginsApprovalUnionToJSON(
+  syncReconcileRequestPluginsApprovalUnion:
+    SyncReconcileRequestPluginsApprovalUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPluginsApprovalUnion$outboundSchema.parse(
+      syncReconcileRequestPluginsApprovalUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSettingsPlugins3$Outbound = {
+  env: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestSettingsPlugins3$outboundSchema: z.ZodType<
+  SyncReconcileRequestSettingsPlugins3$Outbound,
+  SyncReconcileRequestSettingsPlugins3
+> = z.object({
+  env: z.string(),
+});
+
+export function syncReconcileRequestSettingsPlugins3ToJSON(
+  syncReconcileRequestSettingsPlugins3: SyncReconcileRequestSettingsPlugins3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSettingsPlugins3$outboundSchema.parse(
+      syncReconcileRequestSettingsPlugins3,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSettingsPlugins2$Outbound = {
+  resources: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestSettingsPlugins2$outboundSchema: z.ZodType<
+  SyncReconcileRequestSettingsPlugins2$Outbound,
+  SyncReconcileRequestSettingsPlugins2
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function syncReconcileRequestSettingsPlugins2ToJSON(
+  syncReconcileRequestSettingsPlugins2: SyncReconcileRequestSettingsPlugins2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSettingsPlugins2$outboundSchema.parse(
+      syncReconcileRequestSettingsPlugins2,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSettingsPlugins1$Outbound = {
+  input: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestSettingsPlugins1$outboundSchema: z.ZodType<
+  SyncReconcileRequestSettingsPlugins1$Outbound,
+  SyncReconcileRequestSettingsPlugins1
+> = z.object({
+  input: z.string(),
+});
+
+export function syncReconcileRequestSettingsPlugins1ToJSON(
+  syncReconcileRequestSettingsPlugins1: SyncReconcileRequestSettingsPlugins1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSettingsPlugins1$outboundSchema.parse(
+      syncReconcileRequestSettingsPlugins1,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPluginsSettingsUnion$Outbound =
+  | SyncReconcileRequestSettingsPlugins1$Outbound
+  | SyncReconcileRequestSettingsPlugins2$Outbound
+  | SyncReconcileRequestSettingsPlugins3$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestPluginsSettingsUnion$outboundSchema: z.ZodType<
+  SyncReconcileRequestPluginsSettingsUnion$Outbound,
+  SyncReconcileRequestPluginsSettingsUnion
+> = z.union([
+  z.lazy(() => SyncReconcileRequestSettingsPlugins1$outboundSchema),
+  z.lazy(() => SyncReconcileRequestSettingsPlugins2$outboundSchema),
+  z.lazy(() => SyncReconcileRequestSettingsPlugins3$outboundSchema),
+  z.string(),
+]);
+
+export function syncReconcileRequestPluginsSettingsUnionToJSON(
+  syncReconcileRequestPluginsSettingsUnion:
+    SyncReconcileRequestPluginsSettingsUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPluginsSettingsUnion$outboundSchema.parse(
+      syncReconcileRequestPluginsSettingsUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPlugins$Outbound = {
+  approval?: {
+    [k: string]: SyncReconcileRequestApprovalPlugins$Outbound | string;
+  } | undefined;
+  settings?: {
+    [k: string]:
+      | SyncReconcileRequestSettingsPlugins1$Outbound
+      | SyncReconcileRequestSettingsPlugins2$Outbound
+      | SyncReconcileRequestSettingsPlugins3$Outbound
+      | string;
+  } | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPlugins$outboundSchema: z.ZodType<
+  SyncReconcileRequestPlugins$Outbound,
+  SyncReconcileRequestPlugins
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncReconcileRequestApprovalPlugins$outboundSchema),
+      SyncReconcileRequestApprovalPluginsEnum$outboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncReconcileRequestSettingsPlugins1$outboundSchema),
+      z.lazy(() => SyncReconcileRequestSettingsPlugins2$outboundSchema),
+      z.lazy(() => SyncReconcileRequestSettingsPlugins3$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function syncReconcileRequestPluginsToJSON(
+  syncReconcileRequestPlugins: SyncReconcileRequestPlugins,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPlugins$outboundSchema.parse(
+      syncReconcileRequestPlugins,
+    ),
+  );
+}
+
+/** @internal */
+export type OperationsConfig$Outbound = {
+  custom?: Array<SyncReconcileRequestCustom$Outbound> | undefined;
+  plugins?: { [k: string]: SyncReconcileRequestPlugins$Outbound } | undefined;
+};
+
+/** @internal */
+export const OperationsConfig$outboundSchema: z.ZodType<
+  OperationsConfig$Outbound,
+  OperationsConfig
+> = z.object({
+  custom: z.array(z.lazy(() => SyncReconcileRequestCustom$outboundSchema))
+    .optional(),
+  plugins: z.record(
+    z.string(),
+    z.lazy(() => SyncReconcileRequestPlugins$outboundSchema),
+  ).optional(),
+});
+
+export function operationsConfigToJSON(
+  operationsConfig: OperationsConfig,
+): string {
+  return JSON.stringify(
+    OperationsConfig$outboundSchema.parse(operationsConfig),
+  );
+}
+
+/** @internal */
 export const DynamicContainerStatus$outboundSchema: z.ZodEnum<
   typeof DynamicContainerStatus
 > = z.enum(DynamicContainerStatus);
@@ -1459,6 +2136,7 @@ export type SyncReconcileRequest$Outbound = {
   operatorVersion?: string | undefined;
   operatorImage?: RemoteOperatorImageIdentity$Outbound | undefined;
   operationsReport?: OperationsReport$Outbound | undefined;
+  operationsConfig?: OperationsConfig$Outbound | undefined;
   dynamicContainers?: Array<DynamicContainer$Outbound> | undefined;
 };
 
@@ -1482,6 +2160,7 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   operatorVersion: z.string().optional(),
   operatorImage: RemoteOperatorImageIdentity$outboundSchema.optional(),
   operationsReport: OperationsReport$outboundSchema.optional(),
+  operationsConfig: z.lazy(() => OperationsConfig$outboundSchema).optional(),
   dynamicContainers: z.array(z.lazy(() => DynamicContainer$outboundSchema))
     .optional(),
 });

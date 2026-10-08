@@ -24,6 +24,7 @@ export type GetAccessRequestCoordinatesRequest = {
  */
 export type GetAccessRequestCoordinatesResponse = {
   status: models.AccessRequestStatus;
+  approvalChannels: Array<models.AccessRequestApprovalChannel>;
   kubectlApprove: string | null;
 };
 
@@ -56,6 +57,7 @@ export const GetAccessRequestCoordinatesResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   status: models.AccessRequestStatus$inboundSchema,
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema),
   kubectlApprove: z.nullable(z.string()),
 });
 

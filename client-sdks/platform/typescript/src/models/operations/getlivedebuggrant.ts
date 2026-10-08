@@ -125,6 +125,7 @@ export type GetLiveDebugGrantRevokedBy = {
  * A live access request with a matching debug grant.
  */
 export type GetLiveDebugGrantResponse = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: GetLiveDebugGrantRequesterKind | null;
   requesterId: string | null;
@@ -316,6 +317,8 @@ export const GetLiveDebugGrantResponse$inboundSchema: z.ZodType<
   GetLiveDebugGrantResponse,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(GetLiveDebugGrantRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),

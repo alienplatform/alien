@@ -3,7 +3,12 @@
  */
 
 import * as z from "zod/v4";
-import { safeParse } from "../lib/schemas.js";
+import { remap as remap$ } from "../lib/primitives.js";
+import {
+  collectExtraKeys as collectExtraKeys$,
+  safeParse,
+} from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
   CurrentReleaseUnion,
@@ -21,7 +26,7 @@ import {
   DeploymentStatePlatform,
   DeploymentStatePlatform$inboundSchema,
   DeploymentStatePlatform$outboundSchema,
-} from "./deploymentstatependingpreparedstackoverrideazurestack.js";
+} from "./deploymentstatependingpreparedstackdefaultunion.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   DeploymentStateStatus,
@@ -39,18 +44,1234 @@ import {
   TargetReleaseInput$inboundSchema,
   TargetReleaseInput$Outbound,
   TargetReleaseInput$outboundSchema,
-  TargetReleasePermissions,
-  TargetReleasePermissions$inboundSchema,
-  TargetReleasePermissions$Outbound,
-  TargetReleasePermissions$outboundSchema,
-  TargetReleaseResources,
-  TargetReleaseResources$inboundSchema,
-  TargetReleaseResources$Outbound,
-  TargetReleaseResources$outboundSchema,
-  TargetReleaseSupportedPlatform,
-  TargetReleaseSupportedPlatform$inboundSchema,
-  TargetReleaseSupportedPlatform$outboundSchema,
-} from "./targetreleasesupportedplatform.js";
+  TargetReleaseOperations,
+  TargetReleaseOperations$inboundSchema,
+  TargetReleaseOperations$Outbound,
+  TargetReleaseOperations$outboundSchema,
+} from "./targetreleaseoperations.js";
+
+export type TargetReleaseOperationsUnion = TargetReleaseOperations | string;
+
+export const TargetReleaseManagementEnum = {
+  Auto: "auto",
+} as const;
+export type TargetReleaseManagementEnum = ClosedEnum<
+  typeof TargetReleaseManagementEnum
+>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetReleaseOverrideAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetReleaseOverrideAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseOverrideAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: TargetReleaseOverrideAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: TargetReleaseOverrideAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const TargetReleaseOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type TargetReleaseOverrideEffect = ClosedEnum<
+  typeof TargetReleaseOverrideEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseOverrideAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type TargetReleaseOverrideAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseOverrideAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: TargetReleaseOverrideEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetReleaseOverrideAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetReleaseOverrideAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseOverrideAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: TargetReleaseOverrideAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: TargetReleaseOverrideAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseOverrideAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type TargetReleaseOverrideAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseOverrideAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetReleaseOverrideConditionResource = {
+  expression: string;
+  title: string;
+};
+
+export type TargetReleaseOverrideResourceConditionUnion =
+  | TargetReleaseOverrideConditionResource
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type TargetReleaseOverrideGcpResource = {
+  condition?:
+    | TargetReleaseOverrideConditionResource
+    | string
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetReleaseOverrideCondition = {
+  expression: string;
+  title: string;
+};
+
+export type TargetReleaseOverrideConditionUnion =
+  | TargetReleaseOverrideCondition
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type TargetReleaseOverrideGcpStack = {
+  condition?: TargetReleaseOverrideCondition | string | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseOverrideGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: TargetReleaseOverrideGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: TargetReleaseOverrideGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseOverrideGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type TargetReleaseOverrideGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseOverrideGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type TargetReleaseOverridePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<TargetReleaseOverrideAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<TargetReleaseOverrideAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<TargetReleaseOverrideGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type TargetReleaseOverride = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: TargetReleaseOverridePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type TargetReleaseOverrideUnion = TargetReleaseOverride | string;
+
+export type TargetReleaseManagement2 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  override: { [k: string]: Array<TargetReleaseOverride | string> };
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetReleaseExtendAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetReleaseExtendAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseExtendAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: TargetReleaseExtendAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: TargetReleaseExtendAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const TargetReleaseExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type TargetReleaseExtendEffect = ClosedEnum<
+  typeof TargetReleaseExtendEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseExtendAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type TargetReleaseExtendAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseExtendAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: TargetReleaseExtendEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetReleaseExtendAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetReleaseExtendAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseExtendAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: TargetReleaseExtendAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: TargetReleaseExtendAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseExtendAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type TargetReleaseExtendAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseExtendAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetReleaseExtendConditionResource = {
+  expression: string;
+  title: string;
+};
+
+export type TargetReleaseExtendResourceConditionUnion =
+  | TargetReleaseExtendConditionResource
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type TargetReleaseExtendGcpResource = {
+  condition?: TargetReleaseExtendConditionResource | string | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetReleaseExtendCondition = {
+  expression: string;
+  title: string;
+};
+
+export type TargetReleaseExtendConditionUnion =
+  | TargetReleaseExtendCondition
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type TargetReleaseExtendGcpStack = {
+  condition?: TargetReleaseExtendCondition | string | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseExtendGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: TargetReleaseExtendGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: TargetReleaseExtendGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseExtendGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type TargetReleaseExtendGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseExtendGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type TargetReleaseExtendPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<TargetReleaseExtendAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<TargetReleaseExtendAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<TargetReleaseExtendGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type TargetReleaseExtend = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: TargetReleaseExtendPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type TargetReleaseExtendUnion = TargetReleaseExtend | string;
+
+export type TargetReleaseManagement1 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  extend: { [k: string]: Array<TargetReleaseExtend | string> };
+};
+
+/**
+ * Management permissions configuration for stack management access
+ */
+export type TargetReleaseManagementUnion =
+  | TargetReleaseManagement1
+  | TargetReleaseManagement2
+  | TargetReleaseManagementEnum;
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetReleaseProfileAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type TargetReleaseProfileAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a
+   *
+   * @remarks
+   * tag-on-create grant whose implied check AWS authorizes against no resource; the build
+   * refuses it anywhere else.
+   */
+  notResources?: Array<string> | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseProfileAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: TargetReleaseProfileAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: TargetReleaseProfileAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const TargetReleaseProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type TargetReleaseProfileEffect = ClosedEnum<
+  typeof TargetReleaseProfileEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseProfileAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type TargetReleaseProfileAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseProfileAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: TargetReleaseProfileEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetReleaseProfileAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type TargetReleaseProfileAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseProfileAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: TargetReleaseProfileAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: TargetReleaseProfileAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseProfileAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type TargetReleaseProfileAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseProfileAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetReleaseProfileConditionResource = {
+  expression: string;
+  title: string;
+};
+
+export type TargetReleaseProfileResourceConditionUnion =
+  | TargetReleaseProfileConditionResource
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type TargetReleaseProfileGcpResource = {
+  condition?: TargetReleaseProfileConditionResource | string | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type TargetReleaseProfileCondition = {
+  expression: string;
+  title: string;
+};
+
+export type TargetReleaseProfileConditionUnion =
+  | TargetReleaseProfileCondition
+  | string;
+
+/**
+ * GCP-specific binding specification
+ */
+export type TargetReleaseProfileGcpStack = {
+  condition?: TargetReleaseProfileCondition | string | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type TargetReleaseProfileGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: TargetReleaseProfileGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: TargetReleaseProfileGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type TargetReleaseProfileGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type TargetReleaseProfileGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: TargetReleaseProfileGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: TargetReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type TargetReleaseProfilePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<TargetReleaseProfileAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<TargetReleaseProfileAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<TargetReleaseProfileGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type TargetReleaseProfile = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: TargetReleaseProfilePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type TargetReleaseProfileUnion = TargetReleaseProfile | string;
+
+/**
+ * Combined permissions configuration that contains both profiles and management
+ */
+export type TargetReleasePermissions = {
+  /**
+   * Management permissions configuration for stack management access
+   */
+  management?:
+    | TargetReleaseManagement1
+    | TargetReleaseManagement2
+    | TargetReleaseManagementEnum
+    | undefined;
+  /**
+   * Permission profiles that define access control for compute services
+   *
+   * @remarks
+   * Key is the profile name, value is the permission configuration
+   */
+  profiles: {
+    [k: string]: { [k: string]: Array<TargetReleaseProfile | string> };
+  };
+};
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type TargetReleaseConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+/**
+ * Reference to a resource by its stable id and resource type.
+ */
+export type TargetReleaseDependency = {
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+};
+
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export const TargetReleaseLifecycle = {
+  Frozen: "frozen",
+  Live: "live",
+} as const;
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export type TargetReleaseLifecycle = ClosedEnum<typeof TargetReleaseLifecycle>;
+
+export type TargetReleaseResources = {
+  /**
+   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+   */
+  config: TargetReleaseConfig;
+  /**
+   * Additional dependencies for this resource beyond those defined in the resource itself.
+   *
+   * @remarks
+   * The total dependencies are: resource.get_dependencies() + this list
+   */
+  dependencies: Array<TargetReleaseDependency>;
+  /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
+   * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+   */
+  lifecycle: TargetReleaseLifecycle;
+  /**
+   * Enable remote bindings for this resource (BYOB use case).
+   *
+   * @remarks
+   * When true, binding params are synced to StackState's `remote_binding_params`.
+   * Default: false (prevents sensitive data in synced state).
+   */
+  remoteAccess?: boolean | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const TargetReleaseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type TargetReleaseSupportedPlatform = ClosedEnum<
+  typeof TargetReleaseSupportedPlatform
+>;
 
 /**
  * A bag of resources, unaware of any cloud.
@@ -78,6 +1299,7 @@ export type TargetReleaseStack = {
    * Input definitions required before setup or deployment can proceed.
    */
   inputs?: Array<TargetReleaseInput> | undefined;
+  operations?: TargetReleaseOperations | string | null | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -168,6 +1390,3484 @@ export type DeploymentState = {
 };
 
 /** @internal */
+export const TargetReleaseOperationsUnion$inboundSchema: z.ZodType<
+  TargetReleaseOperationsUnion,
+  unknown
+> = z.union([TargetReleaseOperations$inboundSchema, z.string()]);
+/** @internal */
+export type TargetReleaseOperationsUnion$Outbound =
+  | TargetReleaseOperations$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseOperationsUnion$outboundSchema: z.ZodType<
+  TargetReleaseOperationsUnion$Outbound,
+  TargetReleaseOperationsUnion
+> = z.union([TargetReleaseOperations$outboundSchema, z.string()]);
+
+export function targetReleaseOperationsUnionToJSON(
+  targetReleaseOperationsUnion: TargetReleaseOperationsUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseOperationsUnion$outboundSchema.parse(
+      targetReleaseOperationsUnion,
+    ),
+  );
+}
+export function targetReleaseOperationsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOperationsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOperationsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOperationsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseManagementEnum$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseManagementEnum
+> = z.enum(TargetReleaseManagementEnum);
+/** @internal */
+export const TargetReleaseManagementEnum$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseManagementEnum
+> = TargetReleaseManagementEnum$inboundSchema;
+
+/** @internal */
+export const TargetReleaseOverrideAwResource$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseOverrideAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAwResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAwResource$Outbound,
+  TargetReleaseOverrideAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseOverrideAwResourceToJSON(
+  targetReleaseOverrideAwResource: TargetReleaseOverrideAwResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAwResource$outboundSchema.parse(
+      targetReleaseOverrideAwResource,
+    ),
+  );
+}
+export function targetReleaseOverrideAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAwStack$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseOverrideAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAwStack$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAwStack$Outbound,
+  TargetReleaseOverrideAwStack
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseOverrideAwStackToJSON(
+  targetReleaseOverrideAwStack: TargetReleaseOverrideAwStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAwStack$outboundSchema.parse(
+      targetReleaseOverrideAwStack,
+    ),
+  );
+}
+export function targetReleaseOverrideAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAwBinding$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseOverrideAwResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseOverrideAwStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideAwBinding$Outbound = {
+  resource?: TargetReleaseOverrideAwResource$Outbound | undefined;
+  stack?: TargetReleaseOverrideAwStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAwBinding$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAwBinding$Outbound,
+  TargetReleaseOverrideAwBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseOverrideAwResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseOverrideAwStack$outboundSchema).optional(),
+});
+
+export function targetReleaseOverrideAwBindingToJSON(
+  targetReleaseOverrideAwBinding: TargetReleaseOverrideAwBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAwBinding$outboundSchema.parse(
+      targetReleaseOverrideAwBinding,
+    ),
+  );
+}
+export function targetReleaseOverrideAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideEffect$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseOverrideEffect
+> = z.enum(TargetReleaseOverrideEffect);
+/** @internal */
+export const TargetReleaseOverrideEffect$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseOverrideEffect
+> = TargetReleaseOverrideEffect$inboundSchema;
+
+/** @internal */
+export const TargetReleaseOverrideAwGrant$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAwGrant$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAwGrant$Outbound,
+  TargetReleaseOverrideAwGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseOverrideAwGrantToJSON(
+  targetReleaseOverrideAwGrant: TargetReleaseOverrideAwGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAwGrant$outboundSchema.parse(
+      targetReleaseOverrideAwGrant,
+    ),
+  );
+}
+export function targetReleaseOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAw$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseOverrideAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetReleaseOverrideEffect$inboundSchema.optional(),
+  grant: z.lazy(() => TargetReleaseOverrideAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideAw$Outbound = {
+  binding: TargetReleaseOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: TargetReleaseOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAw$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAw$Outbound,
+  TargetReleaseOverrideAw
+> = z.object({
+  binding: z.lazy(() => TargetReleaseOverrideAwBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetReleaseOverrideEffect$outboundSchema.optional(),
+  grant: z.lazy(() => TargetReleaseOverrideAwGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseOverrideAwToJSON(
+  targetReleaseOverrideAw: TargetReleaseOverrideAw,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAw$outboundSchema.parse(targetReleaseOverrideAw),
+  );
+}
+export function targetReleaseOverrideAwFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAzureResource$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseOverrideAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAzureResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureResource$Outbound,
+  TargetReleaseOverrideAzureResource
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetReleaseOverrideAzureResourceToJSON(
+  targetReleaseOverrideAzureResource: TargetReleaseOverrideAzureResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAzureResource$outboundSchema.parse(
+      targetReleaseOverrideAzureResource,
+    ),
+  );
+}
+export function targetReleaseOverrideAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseOverrideAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAzureStack$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseOverrideAzureStack$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAzureStack$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureStack$Outbound,
+  TargetReleaseOverrideAzureStack
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetReleaseOverrideAzureStackToJSON(
+  targetReleaseOverrideAzureStack: TargetReleaseOverrideAzureStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAzureStack$outboundSchema.parse(
+      targetReleaseOverrideAzureStack,
+    ),
+  );
+}
+export function targetReleaseOverrideAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAzureBinding$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseOverrideAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseOverrideAzureStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideAzureBinding$Outbound = {
+  resource?: TargetReleaseOverrideAzureResource$Outbound | undefined;
+  stack?: TargetReleaseOverrideAzureStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAzureBinding$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureBinding$Outbound,
+  TargetReleaseOverrideAzureBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseOverrideAzureResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseOverrideAzureStack$outboundSchema)
+    .optional(),
+});
+
+export function targetReleaseOverrideAzureBindingToJSON(
+  targetReleaseOverrideAzureBinding: TargetReleaseOverrideAzureBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAzureBinding$outboundSchema.parse(
+      targetReleaseOverrideAzureBinding,
+    ),
+  );
+}
+export function targetReleaseOverrideAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAzureGrant$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAzureGrant$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAzureGrant$Outbound,
+  TargetReleaseOverrideAzureGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseOverrideAzureGrantToJSON(
+  targetReleaseOverrideAzureGrant: TargetReleaseOverrideAzureGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAzureGrant$outboundSchema.parse(
+      targetReleaseOverrideAzureGrant,
+    ),
+  );
+}
+export function targetReleaseOverrideAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideAzure$inboundSchema: z.ZodType<
+  TargetReleaseOverrideAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseOverrideAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseOverrideAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideAzure$Outbound = {
+  binding: TargetReleaseOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: TargetReleaseOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideAzure$outboundSchema: z.ZodType<
+  TargetReleaseOverrideAzure$Outbound,
+  TargetReleaseOverrideAzure
+> = z.object({
+  binding: z.lazy(() => TargetReleaseOverrideAzureBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseOverrideAzureGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseOverrideAzureToJSON(
+  targetReleaseOverrideAzure: TargetReleaseOverrideAzure,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideAzure$outboundSchema.parse(targetReleaseOverrideAzure),
+  );
+}
+export function targetReleaseOverrideAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideConditionResource$inboundSchema: z.ZodType<
+  TargetReleaseOverrideConditionResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+/** @internal */
+export type TargetReleaseOverrideConditionResource$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const TargetReleaseOverrideConditionResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideConditionResource$Outbound,
+  TargetReleaseOverrideConditionResource
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetReleaseOverrideConditionResourceToJSON(
+  targetReleaseOverrideConditionResource:
+    TargetReleaseOverrideConditionResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideConditionResource$outboundSchema.parse(
+      targetReleaseOverrideConditionResource,
+    ),
+  );
+}
+export function targetReleaseOverrideConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideConditionResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseOverrideConditionResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideResourceConditionUnion$inboundSchema:
+  z.ZodType<TargetReleaseOverrideResourceConditionUnion, unknown> = z.union([
+    z.lazy(() => TargetReleaseOverrideConditionResource$inboundSchema),
+    z.string(),
+  ]);
+/** @internal */
+export type TargetReleaseOverrideResourceConditionUnion$Outbound =
+  | TargetReleaseOverrideConditionResource$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseOverrideResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    TargetReleaseOverrideResourceConditionUnion$Outbound,
+    TargetReleaseOverrideResourceConditionUnion
+  > = z.union([
+    z.lazy(() => TargetReleaseOverrideConditionResource$outboundSchema),
+    z.string(),
+  ]);
+
+export function targetReleaseOverrideResourceConditionUnionToJSON(
+  targetReleaseOverrideResourceConditionUnion:
+    TargetReleaseOverrideResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideResourceConditionUnion$outboundSchema.parse(
+      targetReleaseOverrideResourceConditionUnion,
+    ),
+  );
+}
+export function targetReleaseOverrideResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetReleaseOverrideResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseOverrideResourceConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetReleaseOverrideResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideGcpResource$inboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpResource,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseOverrideConditionResource$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseOverrideGcpResource$Outbound = {
+  condition?:
+    | TargetReleaseOverrideConditionResource$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseOverrideGcpResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpResource$Outbound,
+  TargetReleaseOverrideGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseOverrideConditionResource$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function targetReleaseOverrideGcpResourceToJSON(
+  targetReleaseOverrideGcpResource: TargetReleaseOverrideGcpResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideGcpResource$outboundSchema.parse(
+      targetReleaseOverrideGcpResource,
+    ),
+  );
+}
+export function targetReleaseOverrideGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideGcpResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideGcpResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideCondition$inboundSchema: z.ZodType<
+  TargetReleaseOverrideCondition,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+/** @internal */
+export type TargetReleaseOverrideCondition$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const TargetReleaseOverrideCondition$outboundSchema: z.ZodType<
+  TargetReleaseOverrideCondition$Outbound,
+  TargetReleaseOverrideCondition
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetReleaseOverrideConditionToJSON(
+  targetReleaseOverrideCondition: TargetReleaseOverrideCondition,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideCondition$outboundSchema.parse(
+      targetReleaseOverrideCondition,
+    ),
+  );
+}
+export function targetReleaseOverrideConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideCondition, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideCondition$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideCondition' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideConditionUnion$inboundSchema: z.ZodType<
+  TargetReleaseOverrideConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetReleaseOverrideCondition$inboundSchema),
+  z.string(),
+]);
+/** @internal */
+export type TargetReleaseOverrideConditionUnion$Outbound =
+  | TargetReleaseOverrideCondition$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseOverrideConditionUnion$outboundSchema: z.ZodType<
+  TargetReleaseOverrideConditionUnion$Outbound,
+  TargetReleaseOverrideConditionUnion
+> = z.union([
+  z.lazy(() => TargetReleaseOverrideCondition$outboundSchema),
+  z.string(),
+]);
+
+export function targetReleaseOverrideConditionUnionToJSON(
+  targetReleaseOverrideConditionUnion: TargetReleaseOverrideConditionUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideConditionUnion$outboundSchema.parse(
+      targetReleaseOverrideConditionUnion,
+    ),
+  );
+}
+export function targetReleaseOverrideConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideConditionUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseOverrideConditionUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideGcpStack$inboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseOverrideCondition$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseOverrideGcpStack$Outbound = {
+  condition?:
+    | TargetReleaseOverrideCondition$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseOverrideGcpStack$outboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpStack$Outbound,
+  TargetReleaseOverrideGcpStack
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseOverrideCondition$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function targetReleaseOverrideGcpStackToJSON(
+  targetReleaseOverrideGcpStack: TargetReleaseOverrideGcpStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideGcpStack$outboundSchema.parse(
+      targetReleaseOverrideGcpStack,
+    ),
+  );
+}
+export function targetReleaseOverrideGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideGcpBinding$inboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseOverrideGcpResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseOverrideGcpStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideGcpBinding$Outbound = {
+  resource?: TargetReleaseOverrideGcpResource$Outbound | undefined;
+  stack?: TargetReleaseOverrideGcpStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideGcpBinding$outboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpBinding$Outbound,
+  TargetReleaseOverrideGcpBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseOverrideGcpResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseOverrideGcpStack$outboundSchema).optional(),
+});
+
+export function targetReleaseOverrideGcpBindingToJSON(
+  targetReleaseOverrideGcpBinding: TargetReleaseOverrideGcpBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideGcpBinding$outboundSchema.parse(
+      targetReleaseOverrideGcpBinding,
+    ),
+  );
+}
+export function targetReleaseOverrideGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideGcpBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideGcpBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideGcpGrant$inboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideGcpGrant$outboundSchema: z.ZodType<
+  TargetReleaseOverrideGcpGrant$Outbound,
+  TargetReleaseOverrideGcpGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseOverrideGcpGrantToJSON(
+  targetReleaseOverrideGcpGrant: TargetReleaseOverrideGcpGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideGcpGrant$outboundSchema.parse(
+      targetReleaseOverrideGcpGrant,
+    ),
+  );
+}
+export function targetReleaseOverrideGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideGcp$inboundSchema: z.ZodType<
+  TargetReleaseOverrideGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseOverrideGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseOverrideGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseOverrideGcp$Outbound = {
+  binding: TargetReleaseOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: TargetReleaseOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverrideGcp$outboundSchema: z.ZodType<
+  TargetReleaseOverrideGcp$Outbound,
+  TargetReleaseOverrideGcp
+> = z.object({
+  binding: z.lazy(() => TargetReleaseOverrideGcpBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseOverrideGcpGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseOverrideGcpToJSON(
+  targetReleaseOverrideGcp: TargetReleaseOverrideGcp,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideGcp$outboundSchema.parse(targetReleaseOverrideGcp),
+  );
+}
+export function targetReleaseOverrideGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverridePlatforms$inboundSchema: z.ZodType<
+  TargetReleaseOverridePlatforms,
+  unknown
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => TargetReleaseOverrideAw$inboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => TargetReleaseOverrideAzure$inboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => TargetReleaseOverrideGcp$inboundSchema)))
+    .optional(),
+});
+/** @internal */
+export type TargetReleaseOverridePlatforms$Outbound = {
+  aws?: Array<TargetReleaseOverrideAw$Outbound> | null | undefined;
+  azure?: Array<TargetReleaseOverrideAzure$Outbound> | null | undefined;
+  gcp?: Array<TargetReleaseOverrideGcp$Outbound> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOverridePlatforms$outboundSchema: z.ZodType<
+  TargetReleaseOverridePlatforms$Outbound,
+  TargetReleaseOverridePlatforms
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => TargetReleaseOverrideAw$outboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => TargetReleaseOverrideAzure$outboundSchema)),
+  ).optional(),
+  gcp: z.nullable(
+    z.array(z.lazy(() => TargetReleaseOverrideGcp$outboundSchema)),
+  ).optional(),
+});
+
+export function targetReleaseOverridePlatformsToJSON(
+  targetReleaseOverridePlatforms: TargetReleaseOverridePlatforms,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverridePlatforms$outboundSchema.parse(
+      targetReleaseOverridePlatforms,
+    ),
+  );
+}
+export function targetReleaseOverridePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverridePlatforms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverridePlatforms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverridePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverride$inboundSchema: z.ZodType<
+  TargetReleaseOverride,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => TargetReleaseOverridePlatforms$inboundSchema),
+});
+/** @internal */
+export type TargetReleaseOverride$Outbound = {
+  description: string;
+  id: string;
+  platforms: TargetReleaseOverridePlatforms$Outbound;
+};
+
+/** @internal */
+export const TargetReleaseOverride$outboundSchema: z.ZodType<
+  TargetReleaseOverride$Outbound,
+  TargetReleaseOverride
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => TargetReleaseOverridePlatforms$outboundSchema),
+});
+
+export function targetReleaseOverrideToJSON(
+  targetReleaseOverride: TargetReleaseOverride,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverride$outboundSchema.parse(targetReleaseOverride),
+  );
+}
+export function targetReleaseOverrideFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverride, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverride$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverride' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOverrideUnion$inboundSchema: z.ZodType<
+  TargetReleaseOverrideUnion,
+  unknown
+> = z.union([z.lazy(() => TargetReleaseOverride$inboundSchema), z.string()]);
+/** @internal */
+export type TargetReleaseOverrideUnion$Outbound =
+  | TargetReleaseOverride$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseOverrideUnion$outboundSchema: z.ZodType<
+  TargetReleaseOverrideUnion$Outbound,
+  TargetReleaseOverrideUnion
+> = z.union([z.lazy(() => TargetReleaseOverride$outboundSchema), z.string()]);
+
+export function targetReleaseOverrideUnionToJSON(
+  targetReleaseOverrideUnion: TargetReleaseOverrideUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseOverrideUnion$outboundSchema.parse(targetReleaseOverrideUnion),
+  );
+}
+export function targetReleaseOverrideUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOverrideUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOverrideUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOverrideUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseManagement2$inboundSchema: z.ZodType<
+  TargetReleaseManagement2,
+  unknown
+> = z.object({
+  override: z.record(
+    z.string(),
+    z.array(
+      z.union([z.lazy(() => TargetReleaseOverride$inboundSchema), z.string()]),
+    ),
+  ),
+});
+/** @internal */
+export type TargetReleaseManagement2$Outbound = {
+  override: { [k: string]: Array<TargetReleaseOverride$Outbound | string> };
+};
+
+/** @internal */
+export const TargetReleaseManagement2$outboundSchema: z.ZodType<
+  TargetReleaseManagement2$Outbound,
+  TargetReleaseManagement2
+> = z.object({
+  override: z.record(
+    z.string(),
+    z.array(
+      z.union([z.lazy(() => TargetReleaseOverride$outboundSchema), z.string()]),
+    ),
+  ),
+});
+
+export function targetReleaseManagement2ToJSON(
+  targetReleaseManagement2: TargetReleaseManagement2,
+): string {
+  return JSON.stringify(
+    TargetReleaseManagement2$outboundSchema.parse(targetReleaseManagement2),
+  );
+}
+export function targetReleaseManagement2FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseManagement2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseManagement2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseManagement2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAwResource$inboundSchema: z.ZodType<
+  TargetReleaseExtendAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseExtendAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseExtendAwResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendAwResource$Outbound,
+  TargetReleaseExtendAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseExtendAwResourceToJSON(
+  targetReleaseExtendAwResource: TargetReleaseExtendAwResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAwResource$outboundSchema.parse(
+      targetReleaseExtendAwResource,
+    ),
+  );
+}
+export function targetReleaseExtendAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAwStack$inboundSchema: z.ZodType<
+  TargetReleaseExtendAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseExtendAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseExtendAwStack$outboundSchema: z.ZodType<
+  TargetReleaseExtendAwStack$Outbound,
+  TargetReleaseExtendAwStack
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseExtendAwStackToJSON(
+  targetReleaseExtendAwStack: TargetReleaseExtendAwStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAwStack$outboundSchema.parse(targetReleaseExtendAwStack),
+  );
+}
+export function targetReleaseExtendAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAwBinding$inboundSchema: z.ZodType<
+  TargetReleaseExtendAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseExtendAwResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseExtendAwStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendAwBinding$Outbound = {
+  resource?: TargetReleaseExtendAwResource$Outbound | undefined;
+  stack?: TargetReleaseExtendAwStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendAwBinding$outboundSchema: z.ZodType<
+  TargetReleaseExtendAwBinding$Outbound,
+  TargetReleaseExtendAwBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseExtendAwResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseExtendAwStack$outboundSchema).optional(),
+});
+
+export function targetReleaseExtendAwBindingToJSON(
+  targetReleaseExtendAwBinding: TargetReleaseExtendAwBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAwBinding$outboundSchema.parse(
+      targetReleaseExtendAwBinding,
+    ),
+  );
+}
+export function targetReleaseExtendAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendEffect$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseExtendEffect
+> = z.enum(TargetReleaseExtendEffect);
+/** @internal */
+export const TargetReleaseExtendEffect$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseExtendEffect
+> = TargetReleaseExtendEffect$inboundSchema;
+
+/** @internal */
+export const TargetReleaseExtendAwGrant$inboundSchema: z.ZodType<
+  TargetReleaseExtendAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendAwGrant$outboundSchema: z.ZodType<
+  TargetReleaseExtendAwGrant$Outbound,
+  TargetReleaseExtendAwGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseExtendAwGrantToJSON(
+  targetReleaseExtendAwGrant: TargetReleaseExtendAwGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAwGrant$outboundSchema.parse(targetReleaseExtendAwGrant),
+  );
+}
+export function targetReleaseExtendAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAw$inboundSchema: z.ZodType<
+  TargetReleaseExtendAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseExtendAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetReleaseExtendEffect$inboundSchema.optional(),
+  grant: z.lazy(() => TargetReleaseExtendAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendAw$Outbound = {
+  binding: TargetReleaseExtendAwBinding$Outbound;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: TargetReleaseExtendAwGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendAw$outboundSchema: z.ZodType<
+  TargetReleaseExtendAw$Outbound,
+  TargetReleaseExtendAw
+> = z.object({
+  binding: z.lazy(() => TargetReleaseExtendAwBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetReleaseExtendEffect$outboundSchema.optional(),
+  grant: z.lazy(() => TargetReleaseExtendAwGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseExtendAwToJSON(
+  targetReleaseExtendAw: TargetReleaseExtendAw,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAw$outboundSchema.parse(targetReleaseExtendAw),
+  );
+}
+export function targetReleaseExtendAwFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAzureResource$inboundSchema: z.ZodType<
+  TargetReleaseExtendAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseExtendAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseExtendAzureResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendAzureResource$Outbound,
+  TargetReleaseExtendAzureResource
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetReleaseExtendAzureResourceToJSON(
+  targetReleaseExtendAzureResource: TargetReleaseExtendAzureResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAzureResource$outboundSchema.parse(
+      targetReleaseExtendAzureResource,
+    ),
+  );
+}
+export function targetReleaseExtendAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAzureStack$inboundSchema: z.ZodType<
+  TargetReleaseExtendAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseExtendAzureStack$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseExtendAzureStack$outboundSchema: z.ZodType<
+  TargetReleaseExtendAzureStack$Outbound,
+  TargetReleaseExtendAzureStack
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetReleaseExtendAzureStackToJSON(
+  targetReleaseExtendAzureStack: TargetReleaseExtendAzureStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAzureStack$outboundSchema.parse(
+      targetReleaseExtendAzureStack,
+    ),
+  );
+}
+export function targetReleaseExtendAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAzureBinding$inboundSchema: z.ZodType<
+  TargetReleaseExtendAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseExtendAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseExtendAzureStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendAzureBinding$Outbound = {
+  resource?: TargetReleaseExtendAzureResource$Outbound | undefined;
+  stack?: TargetReleaseExtendAzureStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendAzureBinding$outboundSchema: z.ZodType<
+  TargetReleaseExtendAzureBinding$Outbound,
+  TargetReleaseExtendAzureBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseExtendAzureResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseExtendAzureStack$outboundSchema).optional(),
+});
+
+export function targetReleaseExtendAzureBindingToJSON(
+  targetReleaseExtendAzureBinding: TargetReleaseExtendAzureBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAzureBinding$outboundSchema.parse(
+      targetReleaseExtendAzureBinding,
+    ),
+  );
+}
+export function targetReleaseExtendAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAzureGrant$inboundSchema: z.ZodType<
+  TargetReleaseExtendAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendAzureGrant$outboundSchema: z.ZodType<
+  TargetReleaseExtendAzureGrant$Outbound,
+  TargetReleaseExtendAzureGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseExtendAzureGrantToJSON(
+  targetReleaseExtendAzureGrant: TargetReleaseExtendAzureGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAzureGrant$outboundSchema.parse(
+      targetReleaseExtendAzureGrant,
+    ),
+  );
+}
+export function targetReleaseExtendAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendAzure$inboundSchema: z.ZodType<
+  TargetReleaseExtendAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseExtendAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseExtendAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendAzure$Outbound = {
+  binding: TargetReleaseExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: TargetReleaseExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendAzure$outboundSchema: z.ZodType<
+  TargetReleaseExtendAzure$Outbound,
+  TargetReleaseExtendAzure
+> = z.object({
+  binding: z.lazy(() => TargetReleaseExtendAzureBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseExtendAzureGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseExtendAzureToJSON(
+  targetReleaseExtendAzure: TargetReleaseExtendAzure,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendAzure$outboundSchema.parse(targetReleaseExtendAzure),
+  );
+}
+export function targetReleaseExtendAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendConditionResource$inboundSchema: z.ZodType<
+  TargetReleaseExtendConditionResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+/** @internal */
+export type TargetReleaseExtendConditionResource$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const TargetReleaseExtendConditionResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendConditionResource$Outbound,
+  TargetReleaseExtendConditionResource
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetReleaseExtendConditionResourceToJSON(
+  targetReleaseExtendConditionResource: TargetReleaseExtendConditionResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendConditionResource$outboundSchema.parse(
+      targetReleaseExtendConditionResource,
+    ),
+  );
+}
+export function targetReleaseExtendConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendConditionResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseExtendConditionResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendResourceConditionUnion$inboundSchema: z.ZodType<
+  TargetReleaseExtendResourceConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetReleaseExtendConditionResource$inboundSchema),
+  z.string(),
+]);
+/** @internal */
+export type TargetReleaseExtendResourceConditionUnion$Outbound =
+  | TargetReleaseExtendConditionResource$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseExtendResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    TargetReleaseExtendResourceConditionUnion$Outbound,
+    TargetReleaseExtendResourceConditionUnion
+  > = z.union([
+    z.lazy(() => TargetReleaseExtendConditionResource$outboundSchema),
+    z.string(),
+  ]);
+
+export function targetReleaseExtendResourceConditionUnionToJSON(
+  targetReleaseExtendResourceConditionUnion:
+    TargetReleaseExtendResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendResourceConditionUnion$outboundSchema.parse(
+      targetReleaseExtendResourceConditionUnion,
+    ),
+  );
+}
+export function targetReleaseExtendResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetReleaseExtendResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseExtendResourceConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetReleaseExtendResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendGcpResource$inboundSchema: z.ZodType<
+  TargetReleaseExtendGcpResource,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseExtendConditionResource$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseExtendGcpResource$Outbound = {
+  condition?:
+    | TargetReleaseExtendConditionResource$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseExtendGcpResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendGcpResource$Outbound,
+  TargetReleaseExtendGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseExtendConditionResource$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function targetReleaseExtendGcpResourceToJSON(
+  targetReleaseExtendGcpResource: TargetReleaseExtendGcpResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendGcpResource$outboundSchema.parse(
+      targetReleaseExtendGcpResource,
+    ),
+  );
+}
+export function targetReleaseExtendGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendGcpResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendGcpResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendCondition$inboundSchema: z.ZodType<
+  TargetReleaseExtendCondition,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+/** @internal */
+export type TargetReleaseExtendCondition$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const TargetReleaseExtendCondition$outboundSchema: z.ZodType<
+  TargetReleaseExtendCondition$Outbound,
+  TargetReleaseExtendCondition
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetReleaseExtendConditionToJSON(
+  targetReleaseExtendCondition: TargetReleaseExtendCondition,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendCondition$outboundSchema.parse(
+      targetReleaseExtendCondition,
+    ),
+  );
+}
+export function targetReleaseExtendConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendCondition, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendCondition$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendCondition' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendConditionUnion$inboundSchema: z.ZodType<
+  TargetReleaseExtendConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetReleaseExtendCondition$inboundSchema),
+  z.string(),
+]);
+/** @internal */
+export type TargetReleaseExtendConditionUnion$Outbound =
+  | TargetReleaseExtendCondition$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseExtendConditionUnion$outboundSchema: z.ZodType<
+  TargetReleaseExtendConditionUnion$Outbound,
+  TargetReleaseExtendConditionUnion
+> = z.union([
+  z.lazy(() => TargetReleaseExtendCondition$outboundSchema),
+  z.string(),
+]);
+
+export function targetReleaseExtendConditionUnionToJSON(
+  targetReleaseExtendConditionUnion: TargetReleaseExtendConditionUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendConditionUnion$outboundSchema.parse(
+      targetReleaseExtendConditionUnion,
+    ),
+  );
+}
+export function targetReleaseExtendConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendConditionUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendConditionUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendGcpStack$inboundSchema: z.ZodType<
+  TargetReleaseExtendGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseExtendCondition$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseExtendGcpStack$Outbound = {
+  condition?: TargetReleaseExtendCondition$Outbound | string | null | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseExtendGcpStack$outboundSchema: z.ZodType<
+  TargetReleaseExtendGcpStack$Outbound,
+  TargetReleaseExtendGcpStack
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseExtendCondition$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function targetReleaseExtendGcpStackToJSON(
+  targetReleaseExtendGcpStack: TargetReleaseExtendGcpStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendGcpStack$outboundSchema.parse(
+      targetReleaseExtendGcpStack,
+    ),
+  );
+}
+export function targetReleaseExtendGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendGcpBinding$inboundSchema: z.ZodType<
+  TargetReleaseExtendGcpBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseExtendGcpResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseExtendGcpStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendGcpBinding$Outbound = {
+  resource?: TargetReleaseExtendGcpResource$Outbound | undefined;
+  stack?: TargetReleaseExtendGcpStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendGcpBinding$outboundSchema: z.ZodType<
+  TargetReleaseExtendGcpBinding$Outbound,
+  TargetReleaseExtendGcpBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseExtendGcpResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseExtendGcpStack$outboundSchema).optional(),
+});
+
+export function targetReleaseExtendGcpBindingToJSON(
+  targetReleaseExtendGcpBinding: TargetReleaseExtendGcpBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendGcpBinding$outboundSchema.parse(
+      targetReleaseExtendGcpBinding,
+    ),
+  );
+}
+export function targetReleaseExtendGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendGcpBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendGcpBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendGcpGrant$inboundSchema: z.ZodType<
+  TargetReleaseExtendGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendGcpGrant$outboundSchema: z.ZodType<
+  TargetReleaseExtendGcpGrant$Outbound,
+  TargetReleaseExtendGcpGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseExtendGcpGrantToJSON(
+  targetReleaseExtendGcpGrant: TargetReleaseExtendGcpGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendGcpGrant$outboundSchema.parse(
+      targetReleaseExtendGcpGrant,
+    ),
+  );
+}
+export function targetReleaseExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendGcp$inboundSchema: z.ZodType<
+  TargetReleaseExtendGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseExtendGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseExtendGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseExtendGcp$Outbound = {
+  binding: TargetReleaseExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: TargetReleaseExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendGcp$outboundSchema: z.ZodType<
+  TargetReleaseExtendGcp$Outbound,
+  TargetReleaseExtendGcp
+> = z.object({
+  binding: z.lazy(() => TargetReleaseExtendGcpBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseExtendGcpGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseExtendGcpToJSON(
+  targetReleaseExtendGcp: TargetReleaseExtendGcp,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendGcp$outboundSchema.parse(targetReleaseExtendGcp),
+  );
+}
+export function targetReleaseExtendGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendPlatforms$inboundSchema: z.ZodType<
+  TargetReleaseExtendPlatforms,
+  unknown
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => TargetReleaseExtendAw$inboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => TargetReleaseExtendAzure$inboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => TargetReleaseExtendGcp$inboundSchema)))
+    .optional(),
+});
+/** @internal */
+export type TargetReleaseExtendPlatforms$Outbound = {
+  aws?: Array<TargetReleaseExtendAw$Outbound> | null | undefined;
+  azure?: Array<TargetReleaseExtendAzure$Outbound> | null | undefined;
+  gcp?: Array<TargetReleaseExtendGcp$Outbound> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseExtendPlatforms$outboundSchema: z.ZodType<
+  TargetReleaseExtendPlatforms$Outbound,
+  TargetReleaseExtendPlatforms
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => TargetReleaseExtendAw$outboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => TargetReleaseExtendAzure$outboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => TargetReleaseExtendGcp$outboundSchema)))
+    .optional(),
+});
+
+export function targetReleaseExtendPlatformsToJSON(
+  targetReleaseExtendPlatforms: TargetReleaseExtendPlatforms,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendPlatforms$outboundSchema.parse(
+      targetReleaseExtendPlatforms,
+    ),
+  );
+}
+export function targetReleaseExtendPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendPlatforms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendPlatforms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtend$inboundSchema: z.ZodType<
+  TargetReleaseExtend,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => TargetReleaseExtendPlatforms$inboundSchema),
+});
+/** @internal */
+export type TargetReleaseExtend$Outbound = {
+  description: string;
+  id: string;
+  platforms: TargetReleaseExtendPlatforms$Outbound;
+};
+
+/** @internal */
+export const TargetReleaseExtend$outboundSchema: z.ZodType<
+  TargetReleaseExtend$Outbound,
+  TargetReleaseExtend
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => TargetReleaseExtendPlatforms$outboundSchema),
+});
+
+export function targetReleaseExtendToJSON(
+  targetReleaseExtend: TargetReleaseExtend,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtend$outboundSchema.parse(targetReleaseExtend),
+  );
+}
+export function targetReleaseExtendFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtend, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtend$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtend' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseExtendUnion$inboundSchema: z.ZodType<
+  TargetReleaseExtendUnion,
+  unknown
+> = z.union([z.lazy(() => TargetReleaseExtend$inboundSchema), z.string()]);
+/** @internal */
+export type TargetReleaseExtendUnion$Outbound =
+  | TargetReleaseExtend$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseExtendUnion$outboundSchema: z.ZodType<
+  TargetReleaseExtendUnion$Outbound,
+  TargetReleaseExtendUnion
+> = z.union([z.lazy(() => TargetReleaseExtend$outboundSchema), z.string()]);
+
+export function targetReleaseExtendUnionToJSON(
+  targetReleaseExtendUnion: TargetReleaseExtendUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseExtendUnion$outboundSchema.parse(targetReleaseExtendUnion),
+  );
+}
+export function targetReleaseExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseExtendUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseExtendUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseManagement1$inboundSchema: z.ZodType<
+  TargetReleaseManagement1,
+  unknown
+> = z.object({
+  extend: z.record(
+    z.string(),
+    z.array(
+      z.union([z.lazy(() => TargetReleaseExtend$inboundSchema), z.string()]),
+    ),
+  ),
+});
+/** @internal */
+export type TargetReleaseManagement1$Outbound = {
+  extend: { [k: string]: Array<TargetReleaseExtend$Outbound | string> };
+};
+
+/** @internal */
+export const TargetReleaseManagement1$outboundSchema: z.ZodType<
+  TargetReleaseManagement1$Outbound,
+  TargetReleaseManagement1
+> = z.object({
+  extend: z.record(
+    z.string(),
+    z.array(
+      z.union([z.lazy(() => TargetReleaseExtend$outboundSchema), z.string()]),
+    ),
+  ),
+});
+
+export function targetReleaseManagement1ToJSON(
+  targetReleaseManagement1: TargetReleaseManagement1,
+): string {
+  return JSON.stringify(
+    TargetReleaseManagement1$outboundSchema.parse(targetReleaseManagement1),
+  );
+}
+export function targetReleaseManagement1FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseManagement1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseManagement1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseManagement1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseManagementUnion$inboundSchema: z.ZodType<
+  TargetReleaseManagementUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetReleaseManagement1$inboundSchema),
+  z.lazy(() => TargetReleaseManagement2$inboundSchema),
+  TargetReleaseManagementEnum$inboundSchema,
+]);
+/** @internal */
+export type TargetReleaseManagementUnion$Outbound =
+  | TargetReleaseManagement1$Outbound
+  | TargetReleaseManagement2$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseManagementUnion$outboundSchema: z.ZodType<
+  TargetReleaseManagementUnion$Outbound,
+  TargetReleaseManagementUnion
+> = z.union([
+  z.lazy(() => TargetReleaseManagement1$outboundSchema),
+  z.lazy(() => TargetReleaseManagement2$outboundSchema),
+  TargetReleaseManagementEnum$outboundSchema,
+]);
+
+export function targetReleaseManagementUnionToJSON(
+  targetReleaseManagementUnion: TargetReleaseManagementUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseManagementUnion$outboundSchema.parse(
+      targetReleaseManagementUnion,
+    ),
+  );
+}
+export function targetReleaseManagementUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseManagementUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseManagementUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseManagementUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAwResource$inboundSchema: z.ZodType<
+  TargetReleaseProfileAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseProfileAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseProfileAwResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileAwResource$Outbound,
+  TargetReleaseProfileAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseProfileAwResourceToJSON(
+  targetReleaseProfileAwResource: TargetReleaseProfileAwResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAwResource$outboundSchema.parse(
+      targetReleaseProfileAwResource,
+    ),
+  );
+}
+export function targetReleaseProfileAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAwStack$inboundSchema: z.ZodType<
+  TargetReleaseProfileAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseProfileAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  notResources?: Array<string> | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseProfileAwStack$outboundSchema: z.ZodType<
+  TargetReleaseProfileAwStack$Outbound,
+  TargetReleaseProfileAwStack
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  notResources: z.array(z.string()).optional(),
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseProfileAwStackToJSON(
+  targetReleaseProfileAwStack: TargetReleaseProfileAwStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAwStack$outboundSchema.parse(
+      targetReleaseProfileAwStack,
+    ),
+  );
+}
+export function targetReleaseProfileAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAwBinding$inboundSchema: z.ZodType<
+  TargetReleaseProfileAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseProfileAwResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseProfileAwStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileAwBinding$Outbound = {
+  resource?: TargetReleaseProfileAwResource$Outbound | undefined;
+  stack?: TargetReleaseProfileAwStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileAwBinding$outboundSchema: z.ZodType<
+  TargetReleaseProfileAwBinding$Outbound,
+  TargetReleaseProfileAwBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseProfileAwResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseProfileAwStack$outboundSchema).optional(),
+});
+
+export function targetReleaseProfileAwBindingToJSON(
+  targetReleaseProfileAwBinding: TargetReleaseProfileAwBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAwBinding$outboundSchema.parse(
+      targetReleaseProfileAwBinding,
+    ),
+  );
+}
+export function targetReleaseProfileAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileEffect$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseProfileEffect
+> = z.enum(TargetReleaseProfileEffect);
+/** @internal */
+export const TargetReleaseProfileEffect$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseProfileEffect
+> = TargetReleaseProfileEffect$inboundSchema;
+
+/** @internal */
+export const TargetReleaseProfileAwGrant$inboundSchema: z.ZodType<
+  TargetReleaseProfileAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileAwGrant$outboundSchema: z.ZodType<
+  TargetReleaseProfileAwGrant$Outbound,
+  TargetReleaseProfileAwGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseProfileAwGrantToJSON(
+  targetReleaseProfileAwGrant: TargetReleaseProfileAwGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAwGrant$outboundSchema.parse(
+      targetReleaseProfileAwGrant,
+    ),
+  );
+}
+export function targetReleaseProfileAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAw$inboundSchema: z.ZodType<
+  TargetReleaseProfileAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseProfileAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetReleaseProfileEffect$inboundSchema.optional(),
+  grant: z.lazy(() => TargetReleaseProfileAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileAw$Outbound = {
+  binding: TargetReleaseProfileAwBinding$Outbound;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: TargetReleaseProfileAwGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileAw$outboundSchema: z.ZodType<
+  TargetReleaseProfileAw$Outbound,
+  TargetReleaseProfileAw
+> = z.object({
+  binding: z.lazy(() => TargetReleaseProfileAwBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: TargetReleaseProfileEffect$outboundSchema.optional(),
+  grant: z.lazy(() => TargetReleaseProfileAwGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseProfileAwToJSON(
+  targetReleaseProfileAw: TargetReleaseProfileAw,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAw$outboundSchema.parse(targetReleaseProfileAw),
+  );
+}
+export function targetReleaseProfileAwFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAzureResource$inboundSchema: z.ZodType<
+  TargetReleaseProfileAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseProfileAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseProfileAzureResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileAzureResource$Outbound,
+  TargetReleaseProfileAzureResource
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetReleaseProfileAzureResourceToJSON(
+  targetReleaseProfileAzureResource: TargetReleaseProfileAzureResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAzureResource$outboundSchema.parse(
+      targetReleaseProfileAzureResource,
+    ),
+  );
+}
+export function targetReleaseProfileAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAzureStack$inboundSchema: z.ZodType<
+  TargetReleaseProfileAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseProfileAzureStack$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseProfileAzureStack$outboundSchema: z.ZodType<
+  TargetReleaseProfileAzureStack$Outbound,
+  TargetReleaseProfileAzureStack
+> = z.object({
+  scope: z.string(),
+});
+
+export function targetReleaseProfileAzureStackToJSON(
+  targetReleaseProfileAzureStack: TargetReleaseProfileAzureStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAzureStack$outboundSchema.parse(
+      targetReleaseProfileAzureStack,
+    ),
+  );
+}
+export function targetReleaseProfileAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAzureBinding$inboundSchema: z.ZodType<
+  TargetReleaseProfileAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseProfileAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseProfileAzureStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileAzureBinding$Outbound = {
+  resource?: TargetReleaseProfileAzureResource$Outbound | undefined;
+  stack?: TargetReleaseProfileAzureStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileAzureBinding$outboundSchema: z.ZodType<
+  TargetReleaseProfileAzureBinding$Outbound,
+  TargetReleaseProfileAzureBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseProfileAzureResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseProfileAzureStack$outboundSchema).optional(),
+});
+
+export function targetReleaseProfileAzureBindingToJSON(
+  targetReleaseProfileAzureBinding: TargetReleaseProfileAzureBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAzureBinding$outboundSchema.parse(
+      targetReleaseProfileAzureBinding,
+    ),
+  );
+}
+export function targetReleaseProfileAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAzureGrant$inboundSchema: z.ZodType<
+  TargetReleaseProfileAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileAzureGrant$outboundSchema: z.ZodType<
+  TargetReleaseProfileAzureGrant$Outbound,
+  TargetReleaseProfileAzureGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseProfileAzureGrantToJSON(
+  targetReleaseProfileAzureGrant: TargetReleaseProfileAzureGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAzureGrant$outboundSchema.parse(
+      targetReleaseProfileAzureGrant,
+    ),
+  );
+}
+export function targetReleaseProfileAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileAzure$inboundSchema: z.ZodType<
+  TargetReleaseProfileAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseProfileAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseProfileAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileAzure$Outbound = {
+  binding: TargetReleaseProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: TargetReleaseProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileAzure$outboundSchema: z.ZodType<
+  TargetReleaseProfileAzure$Outbound,
+  TargetReleaseProfileAzure
+> = z.object({
+  binding: z.lazy(() => TargetReleaseProfileAzureBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseProfileAzureGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseProfileAzureToJSON(
+  targetReleaseProfileAzure: TargetReleaseProfileAzure,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileAzure$outboundSchema.parse(targetReleaseProfileAzure),
+  );
+}
+export function targetReleaseProfileAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileConditionResource$inboundSchema: z.ZodType<
+  TargetReleaseProfileConditionResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+/** @internal */
+export type TargetReleaseProfileConditionResource$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const TargetReleaseProfileConditionResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileConditionResource$Outbound,
+  TargetReleaseProfileConditionResource
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetReleaseProfileConditionResourceToJSON(
+  targetReleaseProfileConditionResource: TargetReleaseProfileConditionResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileConditionResource$outboundSchema.parse(
+      targetReleaseProfileConditionResource,
+    ),
+  );
+}
+export function targetReleaseProfileConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileConditionResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseProfileConditionResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileResourceConditionUnion$inboundSchema:
+  z.ZodType<TargetReleaseProfileResourceConditionUnion, unknown> = z.union([
+    z.lazy(() => TargetReleaseProfileConditionResource$inboundSchema),
+    z.string(),
+  ]);
+/** @internal */
+export type TargetReleaseProfileResourceConditionUnion$Outbound =
+  | TargetReleaseProfileConditionResource$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseProfileResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    TargetReleaseProfileResourceConditionUnion$Outbound,
+    TargetReleaseProfileResourceConditionUnion
+  > = z.union([
+    z.lazy(() => TargetReleaseProfileConditionResource$outboundSchema),
+    z.string(),
+  ]);
+
+export function targetReleaseProfileResourceConditionUnionToJSON(
+  targetReleaseProfileResourceConditionUnion:
+    TargetReleaseProfileResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileResourceConditionUnion$outboundSchema.parse(
+      targetReleaseProfileResourceConditionUnion,
+    ),
+  );
+}
+export function targetReleaseProfileResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  TargetReleaseProfileResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseProfileResourceConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'TargetReleaseProfileResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileGcpResource$inboundSchema: z.ZodType<
+  TargetReleaseProfileGcpResource,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseProfileConditionResource$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseProfileGcpResource$Outbound = {
+  condition?:
+    | TargetReleaseProfileConditionResource$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseProfileGcpResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileGcpResource$Outbound,
+  TargetReleaseProfileGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseProfileConditionResource$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function targetReleaseProfileGcpResourceToJSON(
+  targetReleaseProfileGcpResource: TargetReleaseProfileGcpResource,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileGcpResource$outboundSchema.parse(
+      targetReleaseProfileGcpResource,
+    ),
+  );
+}
+export function targetReleaseProfileGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileGcpResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileGcpResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileCondition$inboundSchema: z.ZodType<
+  TargetReleaseProfileCondition,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+/** @internal */
+export type TargetReleaseProfileCondition$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const TargetReleaseProfileCondition$outboundSchema: z.ZodType<
+  TargetReleaseProfileCondition$Outbound,
+  TargetReleaseProfileCondition
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function targetReleaseProfileConditionToJSON(
+  targetReleaseProfileCondition: TargetReleaseProfileCondition,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileCondition$outboundSchema.parse(
+      targetReleaseProfileCondition,
+    ),
+  );
+}
+export function targetReleaseProfileConditionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileCondition, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileCondition$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileCondition' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileConditionUnion$inboundSchema: z.ZodType<
+  TargetReleaseProfileConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetReleaseProfileCondition$inboundSchema),
+  z.string(),
+]);
+/** @internal */
+export type TargetReleaseProfileConditionUnion$Outbound =
+  | TargetReleaseProfileCondition$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseProfileConditionUnion$outboundSchema: z.ZodType<
+  TargetReleaseProfileConditionUnion$Outbound,
+  TargetReleaseProfileConditionUnion
+> = z.union([
+  z.lazy(() => TargetReleaseProfileCondition$outboundSchema),
+  z.string(),
+]);
+
+export function targetReleaseProfileConditionUnionToJSON(
+  targetReleaseProfileConditionUnion: TargetReleaseProfileConditionUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileConditionUnion$outboundSchema.parse(
+      targetReleaseProfileConditionUnion,
+    ),
+  );
+}
+export function targetReleaseProfileConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileConditionUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      TargetReleaseProfileConditionUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileGcpStack$inboundSchema: z.ZodType<
+  TargetReleaseProfileGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseProfileCondition$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+/** @internal */
+export type TargetReleaseProfileGcpStack$Outbound = {
+  condition?:
+    | TargetReleaseProfileCondition$Outbound
+    | string
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const TargetReleaseProfileGcpStack$outboundSchema: z.ZodType<
+  TargetReleaseProfileGcpStack$Outbound,
+  TargetReleaseProfileGcpStack
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseProfileCondition$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function targetReleaseProfileGcpStackToJSON(
+  targetReleaseProfileGcpStack: TargetReleaseProfileGcpStack,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileGcpStack$outboundSchema.parse(
+      targetReleaseProfileGcpStack,
+    ),
+  );
+}
+export function targetReleaseProfileGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileGcpBinding$inboundSchema: z.ZodType<
+  TargetReleaseProfileGcpBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => TargetReleaseProfileGcpResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseProfileGcpStack$inboundSchema).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileGcpBinding$Outbound = {
+  resource?: TargetReleaseProfileGcpResource$Outbound | undefined;
+  stack?: TargetReleaseProfileGcpStack$Outbound | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileGcpBinding$outboundSchema: z.ZodType<
+  TargetReleaseProfileGcpBinding$Outbound,
+  TargetReleaseProfileGcpBinding
+> = z.object({
+  resource: z.lazy(() => TargetReleaseProfileGcpResource$outboundSchema)
+    .optional(),
+  stack: z.lazy(() => TargetReleaseProfileGcpStack$outboundSchema).optional(),
+});
+
+export function targetReleaseProfileGcpBindingToJSON(
+  targetReleaseProfileGcpBinding: TargetReleaseProfileGcpBinding,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileGcpBinding$outboundSchema.parse(
+      targetReleaseProfileGcpBinding,
+    ),
+  );
+}
+export function targetReleaseProfileGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileGcpBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileGcpBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileGcpGrant$inboundSchema: z.ZodType<
+  TargetReleaseProfileGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileGcpGrant$outboundSchema: z.ZodType<
+  TargetReleaseProfileGcpGrant$Outbound,
+  TargetReleaseProfileGcpGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function targetReleaseProfileGcpGrantToJSON(
+  targetReleaseProfileGcpGrant: TargetReleaseProfileGcpGrant,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileGcpGrant$outboundSchema.parse(
+      targetReleaseProfileGcpGrant,
+    ),
+  );
+}
+export function targetReleaseProfileGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileGcp$inboundSchema: z.ZodType<
+  TargetReleaseProfileGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => TargetReleaseProfileGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseProfileGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+/** @internal */
+export type TargetReleaseProfileGcp$Outbound = {
+  binding: TargetReleaseProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: TargetReleaseProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfileGcp$outboundSchema: z.ZodType<
+  TargetReleaseProfileGcp$Outbound,
+  TargetReleaseProfileGcp
+> = z.object({
+  binding: z.lazy(() => TargetReleaseProfileGcpBinding$outboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => TargetReleaseProfileGcpGrant$outboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function targetReleaseProfileGcpToJSON(
+  targetReleaseProfileGcp: TargetReleaseProfileGcp,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileGcp$outboundSchema.parse(targetReleaseProfileGcp),
+  );
+}
+export function targetReleaseProfileGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfilePlatforms$inboundSchema: z.ZodType<
+  TargetReleaseProfilePlatforms,
+  unknown
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => TargetReleaseProfileAw$inboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => TargetReleaseProfileAzure$inboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => TargetReleaseProfileGcp$inboundSchema)))
+    .optional(),
+});
+/** @internal */
+export type TargetReleaseProfilePlatforms$Outbound = {
+  aws?: Array<TargetReleaseProfileAw$Outbound> | null | undefined;
+  azure?: Array<TargetReleaseProfileAzure$Outbound> | null | undefined;
+  gcp?: Array<TargetReleaseProfileGcp$Outbound> | null | undefined;
+};
+
+/** @internal */
+export const TargetReleaseProfilePlatforms$outboundSchema: z.ZodType<
+  TargetReleaseProfilePlatforms$Outbound,
+  TargetReleaseProfilePlatforms
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => TargetReleaseProfileAw$outboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => TargetReleaseProfileAzure$outboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => TargetReleaseProfileGcp$outboundSchema)))
+    .optional(),
+});
+
+export function targetReleaseProfilePlatformsToJSON(
+  targetReleaseProfilePlatforms: TargetReleaseProfilePlatforms,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfilePlatforms$outboundSchema.parse(
+      targetReleaseProfilePlatforms,
+    ),
+  );
+}
+export function targetReleaseProfilePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfilePlatforms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfilePlatforms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfilePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfile$inboundSchema: z.ZodType<
+  TargetReleaseProfile,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => TargetReleaseProfilePlatforms$inboundSchema),
+});
+/** @internal */
+export type TargetReleaseProfile$Outbound = {
+  description: string;
+  id: string;
+  platforms: TargetReleaseProfilePlatforms$Outbound;
+};
+
+/** @internal */
+export const TargetReleaseProfile$outboundSchema: z.ZodType<
+  TargetReleaseProfile$Outbound,
+  TargetReleaseProfile
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => TargetReleaseProfilePlatforms$outboundSchema),
+});
+
+export function targetReleaseProfileToJSON(
+  targetReleaseProfile: TargetReleaseProfile,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfile$outboundSchema.parse(targetReleaseProfile),
+  );
+}
+export function targetReleaseProfileFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfile, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfile$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfile' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseProfileUnion$inboundSchema: z.ZodType<
+  TargetReleaseProfileUnion,
+  unknown
+> = z.union([z.lazy(() => TargetReleaseProfile$inboundSchema), z.string()]);
+/** @internal */
+export type TargetReleaseProfileUnion$Outbound =
+  | TargetReleaseProfile$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleaseProfileUnion$outboundSchema: z.ZodType<
+  TargetReleaseProfileUnion$Outbound,
+  TargetReleaseProfileUnion
+> = z.union([z.lazy(() => TargetReleaseProfile$outboundSchema), z.string()]);
+
+export function targetReleaseProfileUnionToJSON(
+  targetReleaseProfileUnion: TargetReleaseProfileUnion,
+): string {
+  return JSON.stringify(
+    TargetReleaseProfileUnion$outboundSchema.parse(targetReleaseProfileUnion),
+  );
+}
+export function targetReleaseProfileUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseProfileUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseProfileUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseProfileUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleasePermissions$inboundSchema: z.ZodType<
+  TargetReleasePermissions,
+  unknown
+> = z.object({
+  management: z.union([
+    z.lazy(() => TargetReleaseManagement1$inboundSchema),
+    z.lazy(() => TargetReleaseManagement2$inboundSchema),
+    TargetReleaseManagementEnum$inboundSchema,
+  ]).optional(),
+  profiles: z.record(
+    z.string(),
+    z.record(
+      z.string(),
+      z.array(
+        z.union([z.lazy(() => TargetReleaseProfile$inboundSchema), z.string()]),
+      ),
+    ),
+  ),
+});
+/** @internal */
+export type TargetReleasePermissions$Outbound = {
+  management?:
+    | TargetReleaseManagement1$Outbound
+    | TargetReleaseManagement2$Outbound
+    | string
+    | undefined;
+  profiles: {
+    [k: string]: { [k: string]: Array<TargetReleaseProfile$Outbound | string> };
+  };
+};
+
+/** @internal */
+export const TargetReleasePermissions$outboundSchema: z.ZodType<
+  TargetReleasePermissions$Outbound,
+  TargetReleasePermissions
+> = z.object({
+  management: z.union([
+    z.lazy(() => TargetReleaseManagement1$outboundSchema),
+    z.lazy(() => TargetReleaseManagement2$outboundSchema),
+    TargetReleaseManagementEnum$outboundSchema,
+  ]).optional(),
+  profiles: z.record(
+    z.string(),
+    z.record(
+      z.string(),
+      z.array(
+        z.union([
+          z.lazy(() => TargetReleaseProfile$outboundSchema),
+          z.string(),
+        ]),
+      ),
+    ),
+  ),
+});
+
+export function targetReleasePermissionsToJSON(
+  targetReleasePermissions: TargetReleasePermissions,
+): string {
+  return JSON.stringify(
+    TargetReleasePermissions$outboundSchema.parse(targetReleasePermissions),
+  );
+}
+export function targetReleasePermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleasePermissions, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleasePermissions$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleasePermissions' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseConfig$inboundSchema: z.ZodType<
+  TargetReleaseConfig,
+  unknown
+> = collectExtraKeys$(
+  z.object({
+    id: z.string(),
+    type: z.string(),
+  }).catchall(z.any()),
+  "additionalProperties",
+  true,
+);
+/** @internal */
+export type TargetReleaseConfig$Outbound = {
+  id: string;
+  type: string;
+  [additionalProperties: string]: unknown;
+};
+
+/** @internal */
+export const TargetReleaseConfig$outboundSchema: z.ZodType<
+  TargetReleaseConfig$Outbound,
+  TargetReleaseConfig
+> = z.object({
+  id: z.string(),
+  type: z.string(),
+  additionalProperties: z.record(z.string(), z.nullable(z.any())).optional(),
+}).transform((v) => {
+  return {
+    ...v.additionalProperties,
+    ...remap$(v, {
+      additionalProperties: null,
+    }),
+  };
+});
+
+export function targetReleaseConfigToJSON(
+  targetReleaseConfig: TargetReleaseConfig,
+): string {
+  return JSON.stringify(
+    TargetReleaseConfig$outboundSchema.parse(targetReleaseConfig),
+  );
+}
+export function targetReleaseConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseDependency$inboundSchema: z.ZodType<
+  TargetReleaseDependency,
+  unknown
+> = z.object({
+  id: z.string(),
+  type: z.string(),
+});
+/** @internal */
+export type TargetReleaseDependency$Outbound = {
+  id: string;
+  type: string;
+};
+
+/** @internal */
+export const TargetReleaseDependency$outboundSchema: z.ZodType<
+  TargetReleaseDependency$Outbound,
+  TargetReleaseDependency
+> = z.object({
+  id: z.string(),
+  type: z.string(),
+});
+
+export function targetReleaseDependencyToJSON(
+  targetReleaseDependency: TargetReleaseDependency,
+): string {
+  return JSON.stringify(
+    TargetReleaseDependency$outboundSchema.parse(targetReleaseDependency),
+  );
+}
+export function targetReleaseDependencyFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseDependency, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseDependency$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseDependency' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseLifecycle$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseLifecycle
+> = z.enum(TargetReleaseLifecycle);
+/** @internal */
+export const TargetReleaseLifecycle$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseLifecycle
+> = TargetReleaseLifecycle$inboundSchema;
+
+/** @internal */
+export const TargetReleaseResources$inboundSchema: z.ZodType<
+  TargetReleaseResources,
+  unknown
+> = z.object({
+  config: z.lazy(() => TargetReleaseConfig$inboundSchema),
+  dependencies: z.array(z.lazy(() => TargetReleaseDependency$inboundSchema)),
+  enabledWhen: z.nullable(z.string()).optional(),
+  lifecycle: TargetReleaseLifecycle$inboundSchema,
+  remoteAccess: z.boolean().optional(),
+});
+/** @internal */
+export type TargetReleaseResources$Outbound = {
+  config: TargetReleaseConfig$Outbound;
+  dependencies: Array<TargetReleaseDependency$Outbound>;
+  enabledWhen?: string | null | undefined;
+  lifecycle: string;
+  remoteAccess?: boolean | undefined;
+};
+
+/** @internal */
+export const TargetReleaseResources$outboundSchema: z.ZodType<
+  TargetReleaseResources$Outbound,
+  TargetReleaseResources
+> = z.object({
+  config: z.lazy(() => TargetReleaseConfig$outboundSchema),
+  dependencies: z.array(z.lazy(() => TargetReleaseDependency$outboundSchema)),
+  enabledWhen: z.nullable(z.string()).optional(),
+  lifecycle: TargetReleaseLifecycle$outboundSchema,
+  remoteAccess: z.boolean().optional(),
+});
+
+export function targetReleaseResourcesToJSON(
+  targetReleaseResources: TargetReleaseResources,
+): string {
+  return JSON.stringify(
+    TargetReleaseResources$outboundSchema.parse(targetReleaseResources),
+  );
+}
+export function targetReleaseResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseSupportedPlatform$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseSupportedPlatform
+> = z.enum(TargetReleaseSupportedPlatform);
+/** @internal */
+export const TargetReleaseSupportedPlatform$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseSupportedPlatform
+> = TargetReleaseSupportedPlatform$inboundSchema;
+
+/** @internal */
 export const TargetReleaseStack$inboundSchema: z.ZodType<
   TargetReleaseStack,
   unknown
@@ -176,8 +4876,14 @@ export const TargetReleaseStack$inboundSchema: z.ZodType<
   dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(TargetReleaseInput$inboundSchema).optional(),
-  permissions: TargetReleasePermissions$inboundSchema.optional(),
-  resources: z.record(z.string(), TargetReleaseResources$inboundSchema),
+  operations: z.nullable(
+    z.union([TargetReleaseOperations$inboundSchema, z.string()]),
+  ).optional(),
+  permissions: z.lazy(() => TargetReleasePermissions$inboundSchema).optional(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() => TargetReleaseResources$inboundSchema),
+  ),
   supportedPlatforms: z.nullable(
     z.array(TargetReleaseSupportedPlatform$inboundSchema),
   ).optional(),
@@ -188,6 +4894,7 @@ export type TargetReleaseStack$Outbound = {
   dynamicContainerRepositories?: Array<string> | undefined;
   id: string;
   inputs?: Array<TargetReleaseInput$Outbound> | undefined;
+  operations?: TargetReleaseOperations$Outbound | string | null | undefined;
   permissions?: TargetReleasePermissions$Outbound | undefined;
   resources: { [k: string]: TargetReleaseResources$Outbound };
   supportedPlatforms?: Array<string> | null | undefined;
@@ -202,8 +4909,14 @@ export const TargetReleaseStack$outboundSchema: z.ZodType<
   dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(TargetReleaseInput$outboundSchema).optional(),
-  permissions: TargetReleasePermissions$outboundSchema.optional(),
-  resources: z.record(z.string(), TargetReleaseResources$outboundSchema),
+  operations: z.nullable(
+    z.union([TargetReleaseOperations$outboundSchema, z.string()]),
+  ).optional(),
+  permissions: z.lazy(() => TargetReleasePermissions$outboundSchema).optional(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() => TargetReleaseResources$outboundSchema),
+  ),
   supportedPlatforms: z.nullable(
     z.array(TargetReleaseSupportedPlatform$outboundSchema),
   ).optional(),
