@@ -139,6 +139,11 @@ fn service_account_trust_policy(
                     format!("{logical_id}InstanceRole"),
                     "Arn",
                 ));
+                // An exact ARN condition can retain both node generations without
+                // resolving a not-yet-created role or adding a dependency cycle.
+                compute_role_arns.push(CfExpression::sub(format!(
+                    "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{id}-isolation-v1"
+                )));
             }
         }
     }

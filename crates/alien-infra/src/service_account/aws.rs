@@ -37,6 +37,9 @@ pub struct AwsServiceAccountController {
     pub(crate) role_name: Option<String>,
     /// Whether stack-level permissions have been applied
     pub(crate) stack_permissions_applied: bool,
+    /// Last trust policy installed by privileged setup; absent in older checkpoints.
+    #[serde(default)]
+    pub(crate) assume_role_policy: Option<String>,
 }
 
 #[controller]
@@ -69,7 +72,7 @@ impl AwsServiceAccountController {
 
         let role_request = CreateRoleRequest::builder()
             .role_name(role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
+            .assume_role_policy_document(assume_role_policy.clone())
             .description(match ctx.deployment_name_for_metadata() {
                 Some(deployment_name) => format!(
                     "Runtime IAM role for {deployment_name}. Resource prefix: {}. Resource: {}.",
@@ -105,6 +108,7 @@ impl AwsServiceAccountController {
             "IAM role created successfully"
         );
 
+        self.assume_role_policy = Some(assume_role_policy);
         self.role_name = Some(role_name);
         self.role_arn = Some(role_arn);
 
@@ -123,45 +127,7 @@ impl AwsServiceAccountController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<ServiceAccount>()?;
-        let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-        let role_name = self.role_name.as_ref().unwrap();
-
-        info!(
-            role_name = %role_name,
-            stack_permission_sets_count = config.stack_permission_sets.len(),
-            "Applying stack-level permission sets to IAM role"
-        );
-
-        // Generate combined policy document for all stack-level permission sets
-        let policy_document = self.generate_stack_policy_document(config, ctx)?;
-
-        if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to apply stack permissions to IAM role '{}'",
-                        role_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(
-                role_name = %role_name,
-                "Stack-level permissions applied successfully"
-            );
-        } else {
-            info!(
-                role_name = %role_name,
-                "No stack-level permissions to apply"
-            );
-        }
-
-        self.stack_permissions_applied = true;
-
+        self.apply_stack_permissions(ctx).await?;
         Ok(HandlerAction::Continue {
             state: ApplyingResourcePermissions,
             suggested_delay: None,
@@ -177,32 +143,7 @@ impl AwsServiceAccountController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<ServiceAccount>()?;
-
-        info!(
-            service_account_id = %config.id,
-            "Applying resource-scoped permissions for service account"
-        );
-
-        // Apply resource-scoped permissions using the centralized helper.
-        // This attaches management SA permissions (e.g., service-account/heartbeat)
-        // as inline policies on the management role.
-        {
-            use crate::core::ResourcePermissionsHelper;
-            ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
-                ctx,
-                &config.id,
-                &config.id,
-                "service-account",
-            )
-            .await?;
-        }
-
-        info!(
-            service_account_id = %config.id,
-            "Successfully applied resource-scoped permissions for service account"
-        );
-
+        Self::apply_resource_permissions(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -306,52 +247,58 @@ impl AwsServiceAccountController {
                 suggested_delay: None,
             });
         }
-        let aws_config = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-        let role_name = self.role_name.as_ref().unwrap();
-
-        info!(
-            role_name = %role_name,
-            "Updating IAM role policies"
-        );
-
-        // Re-generate and apply stack-level permissions
-        let policy_document = self.generate_stack_policy_document(config, ctx)?;
-
-        if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update stack permissions for IAM role '{}'",
-                        role_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(
-                role_name = %role_name,
-                "IAM role policies updated successfully"
-            );
-        } else {
-            // Remove policy if no permissions are needed
-            match client
-                .delete_role_policy(role_name, MANAGED_POLICY_NAME)
-                .await
-            {
-                Ok(_) => {
-                    info!(role_name = %role_name, "Removed empty policy from IAM role");
-                }
-                Err(e) => {
-                    // Policy might not exist, which is fine
-                    warn!(role_name = %role_name, error = %e, "Failed to delete policy during update (policy might not exist)");
-                }
-            }
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: "service-account trust changes require privileged setup; regenerate and rerun setup".to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
         }
-
+        let policy = Self::generate_assume_role_policy_for_service_account(config, ctx)?;
+        let client = ctx.service_provider.get_aws_iam_client(ctx.get_aws_config()?).await?;
+        let role_name = self.role_name.as_ref().unwrap();
+        client.update_assume_role_policy(role_name, &policy).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to update trust policy for IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            },
+        )?;
+        self.assume_role_policy = Some(policy);
         Ok(HandlerAction::Continue {
-            state: ApplyingResourcePermissions,
+            state: UpdatingStackPermissions,
+            suggested_delay: None,
+        })
+    }
+
+    // Update-specific permission phases: a failure here is an UpdateFailed of a
+    // live role, never a failed create that could be replaced.
+    #[handler(
+        state = UpdatingStackPermissions,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn updating_stack_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.apply_stack_permissions(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdatingResourcePermissions,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn updating_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        Self::apply_resource_permissions(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: Ready,
             suggested_delay: None,
         })
     }
@@ -606,6 +553,15 @@ impl AwsServiceAccountController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Ok(false);
+        }
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        Ok(self.assume_role_policy.as_deref()
+            != Some(Self::generate_assume_role_policy_for_service_account(config, ctx)?.as_str()))
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(role_arn), Some(role_name)) = (&self.role_arn, &self.role_name) {
             Some(ResourceOutputs::new(ServiceAccountOutputs {
@@ -641,6 +597,95 @@ impl AwsServiceAccountController {
 
 // Separate impl block for helper methods
 impl AwsServiceAccountController {
+    /// Write the stack-level inline policy, or remove it when an update leaves
+    /// no stack permissions. Requires privileged setup.
+    async fn apply_stack_permissions(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: "service-account policy changes require privileged setup; regenerate and rerun setup".to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        let aws_config = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+        let role_name = self.role_name.as_ref().unwrap();
+
+        info!(
+            role_name = %role_name,
+            stack_permission_sets_count = config.stack_permission_sets.len(),
+            "Applying stack-level permission sets to IAM role"
+        );
+
+        // Generate combined policy document for all stack-level permission sets
+        let policy_document = self.generate_stack_policy_document(config, ctx)?;
+
+        if !policy_document.is_empty() {
+            client
+                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to apply stack permissions to IAM role '{}'",
+                        role_name
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            info!(
+                role_name = %role_name,
+                "Stack-level permissions applied successfully"
+            );
+        } else if ctx.state.resources.get(&config.id).is_some_and(|state| state.previous_config.is_some()) {
+            match client.delete_role_policy(role_name, MANAGED_POLICY_NAME).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })) => {},
+                Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to remove empty stack permissions from IAM role '{role_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })),
+            }
+        } else {
+            info!(
+                role_name = %role_name,
+                "No stack-level permissions to apply"
+            );
+        }
+
+        self.stack_permissions_applied = true;
+        Ok(())
+    }
+
+    /// Attach the resource-scoped permissions this service account grants.
+    async fn apply_resource_permissions(ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+
+        info!(
+            service_account_id = %config.id,
+            "Applying resource-scoped permissions for service account"
+        );
+
+        // Apply resource-scoped permissions using the centralized helper.
+        // This attaches management SA permissions (e.g., service-account/heartbeat)
+        // as inline policies on the management role.
+        {
+            use crate::core::ResourcePermissionsHelper;
+            ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+                ctx,
+                &config.id,
+                &config.id,
+                "service-account",
+            )
+            .await?;
+        }
+
+        info!(
+            service_account_id = %config.id,
+            "Successfully applied resource-scoped permissions for service account"
+        );
+        Ok(())
+    }
+
     /// Generate assume role policy for the service account based on stack analysis.
     ///
     /// This function determines which AWS services and IAM roles should be allowed to assume
@@ -696,7 +741,8 @@ impl AwsServiceAccountController {
 
         // Check if any Container in the stack uses this profile — if so, the ComputeCluster VM
         // role needs to assume this SA role to vend per-container credentials via the IMDS proxy.
-        // The VM role ARN is deterministic: {prefix}-{clusterId}-role (set in compute_cluster/aws.rs).
+        // Keep both exact node identities trusted while existing nodes drain during
+        // an isolation rollout. A node still needs its own sts:AssumeRole grant.
         let has_container_using_profile = ctx.desired_stack.resources().any(|(_, entry)| {
             entry
                 .config
@@ -714,18 +760,20 @@ impl AwsServiceAccountController {
 
             for (cluster_id, entry) in ctx.desired_stack.resources() {
                 if entry.config.downcast_ref::<ComputeCluster>().is_some() {
-                    let vm_role_arn = format!(
-                        "arn:aws:iam::{}:role/{}-{}-role",
-                        account_id, ctx.resource_prefix, cluster_id,
-                    );
-                    if !role_arns.contains(&vm_role_arn) {
-                        info!(
-                            service_account = %service_account.id,
-                            cluster_id = %cluster_id,
-                            vm_role_arn = %vm_role_arn,
-                            "Adding ComputeCluster VM role to SA trust policy for IMDS credential vending"
+                    for suffix in ["role", "isolation-v1-role"] {
+                        let vm_role_arn = format!(
+                            "arn:aws:iam::{}:role/{}-{}-{}",
+                            account_id, ctx.resource_prefix, cluster_id, suffix,
                         );
-                        role_arns.push(vm_role_arn);
+                        if !role_arns.contains(&vm_role_arn) {
+                            info!(
+                                service_account = %service_account.id,
+                                cluster_id = %cluster_id,
+                                vm_role_arn = %vm_role_arn,
+                                "Adding ComputeCluster VM role to SA trust policy for IMDS credential vending"
+                            );
+                            role_arns.push(vm_role_arn);
+                        }
                     }
                 }
             }
@@ -808,6 +856,9 @@ impl AwsServiceAccountController {
                 }
             }
         }
+
+        services.sort();
+        role_arns.sort();
 
         // Build trust policy statements
         let mut statements = Vec::new();
@@ -999,6 +1050,7 @@ impl AwsServiceAccountController {
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
             stack_permissions_applied: true,
+            assume_role_policy: None,
             _internal_stay_count: None,
         }
     }
@@ -1130,9 +1182,92 @@ mod trust_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{MockPlatformServiceProvider, controller_test::SingleControllerExecutor};
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
+    };
     use alien_core::permissions::PermissionProfile;
     use std::sync::Arc;
+
+    /// Creates the workload role through the real controller. The companion
+    /// cloud runner verifies role chaining from legacy, isolated and unrelated
+    /// task-owned node identities, and deletes all test resources.
+    #[tokio::test]
+    #[ignore = "requires isolated AWS node-role fixtures"]
+    async fn live_create_service_account_for_compute_nodes() {
+        let prefix = std::env::var("ALIEN_TEST_TRUST_PREFIX").unwrap();
+        assert!(prefix.starts_with("e2e-"));
+        let workload = Container::new("api".to_string())
+            .code(alien_core::ContainerCode::Image { image: "example.invalid/probe:1".to_string() })
+            .cpu(alien_core::ResourceSpec { min: "0.25".to_string(), desired: "0.25".to_string() })
+            .memory(alien_core::ResourceSpec { min: "256Mi".to_string(), desired: "256Mi".to_string() })
+            .port(8080)
+            .permissions("execution".to_string())
+            .build();
+        let config = alien_core::AwsClientConfig {
+            account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+            region: std::env::var("AWS_TARGET_REGION").unwrap(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+            },
+            service_overrides: None,
+        };
+        let existing = std::env::var("ALIEN_TEST_TRUST_EXISTING").as_deref() == Ok("1");
+        let resource = ServiceAccount::new("execution-sa".to_string()).build();
+        let controller = if existing {
+            serde_json::from_value(serde_json::json!({
+                "state": "ready",
+                "roleName": format!("{prefix}-execution-sa"),
+                "roleArn": format!("arn:aws:iam::{}:role/{prefix}-execution-sa", config.account_id),
+                "stackPermissionsApplied": true
+            })).unwrap()
+        } else { AwsServiceAccountController::default() };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(resource.clone())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .client_config(alien_core::ClientConfig::Aws(Box::new(config)))
+            .resource_prefix(prefix)
+            .with_stack_resource(workload, alien_core::ResourceLifecycle::Live)
+            .with_stack_resource(ComputeCluster::new("compute".to_string()).build(), alien_core::ResourceLifecycle::Frozen)
+            .real_delays()
+            .build().await.unwrap();
+        if existing {
+            assert!(executor.needs_update().unwrap(), "legacy checkpoint must request setup reconciliation");
+            executor.update(resource).unwrap();
+        }
+        executor.run_until_status(ResourceStatus::Running).await.unwrap();
+        assert!(!executor.needs_update().unwrap(), "trust must converge after setup");
+    }
+
+    #[tokio::test]
+    async fn resumed_trust_and_policy_updates_reject_runtime_authority_before_iam() {
+        for state in [
+            AwsServiceAccountState::UpdateStart,
+            AwsServiceAccountState::ApplyingStackPermissions,
+            AwsServiceAccountState::UpdatingStackPermissions,
+        ] {
+            let controller = AwsServiceAccountController {
+                state,
+                role_name: Some("test-reader-sa".to_string()),
+                role_arn: Some("arn:aws:iam::123456789012:role/test-reader-sa".to_string()),
+                ..Default::default()
+            };
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(ServiceAccount::new("reader-sa".to_string()).build())
+                .previous_resource(ServiceAccount::new("reader-sa".to_string()).build())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .with_test_dependencies()
+                .build().await.unwrap();
+            assert!(!executor.needs_update().unwrap());
+            let error = executor.step().await.unwrap_err();
+            assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+        }
+    }
 
     #[tokio::test]
     async fn legacy_grant_capture_avoids_iam_only_for_imported_handoffs() {
@@ -1157,6 +1292,9 @@ mod tests {
                 ..Default::default()
             };
             let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_update_assume_role_policy()
+                .times(usize::from(direct_setup))
+                .returning(|_, _| Ok(()));
             iam.expect_delete_role_policy()
                 .times(usize::from(direct_setup))
                 .returning(|_, _| Ok(()));
@@ -1164,7 +1302,7 @@ mod tests {
             let mut provider = MockPlatformServiceProvider::new();
             provider
                 .expect_get_aws_iam_client()
-                .times(usize::from(direct_setup))
+                .times(2 * usize::from(direct_setup))
                 .returning(move |_| Ok(iam.clone()));
             let mut executor = SingleControllerExecutor::builder()
                 .resource(legacy)
@@ -1178,14 +1316,34 @@ mod tests {
                 .unwrap();
             executor.update(captured.clone()).unwrap();
             executor.step().await.unwrap();
+            if direct_setup { executor.step().await.unwrap(); }
             assert_eq!(
                 executor.status(),
                 if direct_setup {
-                    ResourceStatus::Provisioning
+                    ResourceStatus::Updating
                 } else {
                     ResourceStatus::Running
                 }
             );
+        }
+    }
+
+    /// The executor replaces a ProvisionFailed resource whose config changed.
+    /// A failed update of a live role must stay UpdateFailed instead.
+    #[test]
+    fn update_permission_failures_never_look_like_failed_creates() {
+        for state in [
+            AwsServiceAccountState::UpdateStart,
+            AwsServiceAccountState::UpdatingStackPermissions,
+            AwsServiceAccountState::UpdatingResourcePermissions,
+        ] {
+            let mut controller = AwsServiceAccountController {
+                state,
+                ..AwsServiceAccountController::mock_ready("test-reader-sa")
+            };
+            assert_eq!(controller.get_status(), ResourceStatus::Updating);
+            controller.transition_to_failure();
+            assert_eq!(controller.get_status(), ResourceStatus::UpdateFailed);
         }
     }
 }

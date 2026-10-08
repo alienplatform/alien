@@ -530,8 +530,14 @@ mod permission_update_tests {
         mock
     }
 
+    /// Trust generated for a service account with no workload principals.
+    const DEFAULT_TRUST_POLICY: &str = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#;
+
     fn ready_service_account(state: &mut StackState, account: ServiceAccount, role: &str) {
-        let controller = AwsServiceAccountController::mock_ready(role);
+        let mut controller = AwsServiceAccountController::mock_ready(role);
+        // Model a role whose trust is already applied. A missing trust
+        // checkpoint would instead schedule legacy trust repair.
+        controller.assume_role_policy = Some(DEFAULT_TRUST_POLICY.to_string());
         let id = account.id.clone();
         let mut account_state = StackResourceState::new_pending(
             ServiceAccount::RESOURCE_TYPE.to_string(),
@@ -555,6 +561,23 @@ mod permission_update_tests {
         fault: Fault,
         existing: &[(&str, &str)],
     ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
+        fixture_with_removed_profile()
+            .lifecycle(lifecycle)
+            .authority(authority)
+            .fault(fault)
+            .existing(existing)
+            .remove_consumer(false)
+            .call()
+    }
+
+    #[bon::builder]
+    fn fixture_with_removed_profile(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+        fault: Fault,
+        existing: &[(&str, &str)],
+        remove_consumer: bool,
+    ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
         let iam = Arc::new(Mutex::new(Iam::default()));
         for (role, name) in existing {
             iam.lock()
@@ -572,7 +595,7 @@ mod permission_update_tests {
         let vault = Vault::new("secrets".to_string()).build();
         let consumer = ServiceAccount::new("consumer-sa".to_string()).build();
         let former = ServiceAccount::new("former-sa".to_string()).build();
-        let stack = Stack::new("test".to_string())
+        let mut stack = Stack::new("test".to_string())
             .add_with_dependencies(
                 vault.clone(),
                 lifecycle,
@@ -589,6 +612,9 @@ mod permission_update_tests {
             )
             .permission("former", PermissionProfile::new())
             .build();
+        if remove_consumer {
+            stack.permissions.profiles.remove("consumer");
+        }
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(EnvironmentVariablesSnapshot {
@@ -735,6 +761,9 @@ mod permission_update_tests {
         let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
             "state": "ready", "roleName": role_name, "roleArn": role_arn,
             "stackPermissionsApplied": true, "internalStayCount": null,
+            // The runner owns this role's trust; record it as applied so the
+            // update exercises only the vault grant.
+            "assumeRolePolicy": DEFAULT_TRUST_POLICY,
         }))
         .unwrap();
         let mut resource = StackResourceState::new_pending(
@@ -749,22 +778,18 @@ mod permission_update_tests {
             .set_internal_controller(Some(Box::new(controller)))
             .unwrap();
         state.resources.insert("consumer-sa".to_string(), resource);
-        assert!(
-            executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
-        assert!(
-            !executor
-                .plan(&state)
-                .unwrap()
-                .updates
-                .contains_key("secrets")
-        );
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
     }
 
     #[tokio::test]
@@ -864,6 +889,34 @@ mod permission_update_tests {
         }
         assert_ne!(revision(&state).as_deref(), Some("previous-grants"));
         // The recorded revision is the converged one: nothing is rescheduled.
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    #[tokio::test]
+    async fn removed_profile_revokes_vault_grant_on_retained_service_account() {
+        let (executor, mut state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[
+                (CONSUMER_ROLE, READ_POLICY),
+                (CONSUMER_ROLE, "alien-other-vault-data-read"),
+            ])
+            .remove_consumer(true)
+            .call();
+        set_revision(&mut state, "previous-grants");
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(
+            iam.policies(CONSUMER_ROLE),
+            vec!["alien-other-vault-data-read"]
+        );
+        assert_eq!(iam.count("delete "), 1);
         assert!(!executor
             .plan(&state)
             .unwrap()

@@ -24,8 +24,10 @@ use crate::{
 /// managers and agents stop at `TeardownRequired`, while setup-authority
 /// callers such as the CLI can continue with their own credentials.
 ///
-/// Callers must finish with a final reconcile of `state`; that reconcile
-/// records a completed teardown when the `Deleted` checkpoint did not.
+/// When the `Deleted` checkpoint fails, the result reports
+/// `state_persisted: false` and callers must finish with a final reconcile of
+/// `state`; that reconcile records the completed teardown or finds the record
+/// already gone.
 pub async fn run_setup_teardown_after_handoff(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
@@ -131,6 +133,7 @@ async fn run_setup_teardown_after_handoff_inner(
                     final_status: state.status,
                 },
                 steps_executed: scaffolding_steps,
+                state_persisted: true,
             }));
         }
         checkpoint_setup_teardown_state(
@@ -150,6 +153,7 @@ async fn run_setup_teardown_after_handoff_inner(
                     final_status: state.status,
                 },
                 steps_executed: scaffolding_steps,
+                state_persisted: true,
             }));
         }
         sleep(Duration::from_millis(SCAFFOLDING_TEARDOWN_DELAY_MS)).await;
@@ -210,7 +214,7 @@ async fn run_setup_teardown_after_handoff_inner(
                 // manager persists it and treats a record that is already gone as deleted. A
                 // failure here must not decide the outcome on its own, because a manager can
                 // remove the record and then fail work it does after that commit.
-                if let Err(error) = checkpoint_setup_teardown_state(
+                let checkpoint = checkpoint_setup_teardown_state(
                     deployment_id,
                     state,
                     config,
@@ -218,8 +222,8 @@ async fn run_setup_teardown_after_handoff_inner(
                     None,
                     Vec::new(),
                 )
-                .await
-                {
+                .await;
+                if let Err(error) = &checkpoint {
                     warn!(
                         deployment_id = %deployment_id,
                         error = %error,
@@ -233,6 +237,7 @@ async fn run_setup_teardown_after_handoff_inner(
                         final_status: state.status,
                     },
                     steps_executed: step_count - 1,
+                    state_persisted: checkpoint.is_ok(),
                 }));
             }
             StackStatus::Failure => {
@@ -292,6 +297,7 @@ async fn run_setup_teardown_after_handoff_inner(
                         final_status: state.status,
                     },
                     steps_executed: step_count,
+                    state_persisted: true,
                 }));
             }
             sleep(Duration::from_millis(delay_ms)).await;
@@ -313,6 +319,7 @@ async fn run_setup_teardown_after_handoff_inner(
             final_status: state.status,
         },
         steps_executed: policy.max_steps,
+        state_persisted: true,
     }))
 }
 
@@ -634,6 +641,10 @@ mod tests {
         assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
         assert_eq!(result.loop_result.stop_reason, LoopStopReason::Deleted);
         assert_eq!(result.loop_result.final_status, DeploymentStatus::Deleted);
+        assert!(
+            !result.state_persisted,
+            "an unconfirmed deletion must be left to the final reconcile"
+        );
         assert_eq!(state.status, DeploymentStatus::Deleted);
         assert!(state.error.is_none());
         assert_eq!(

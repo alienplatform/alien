@@ -97,6 +97,11 @@ pub struct RunnerResult {
     pub loop_result: LoopResult,
     /// Number of steps executed.
     pub steps_executed: usize,
+    /// Whether the manager has recorded the state the loop stopped at, either
+    /// by accepting its checkpoint or because the loop read it from the
+    /// manager. When false, finalization must persist the state rather than
+    /// only release the execution claim.
+    pub state_persisted: bool,
 }
 
 /// Convert a terminal semantic failure carried in deployment state into the
@@ -109,16 +114,16 @@ pub fn preserve_semantic_failure(
     state: &DeploymentState,
 ) -> std::result::Result<RunnerResult, AlienError> {
     match result {
-        Ok(result) if result.loop_result.outcome == LoopOutcome::Failure => {
-            Err(state.error.clone().unwrap_or_else(|| {
+        Ok(result) if result.loop_result.outcome == LoopOutcome::Failure => Err(
+            crate::deployment_headline_error_from_state(state).unwrap_or_else(|| {
                 AlienError::new(alien_error::GenericError {
                     message: format!(
                         "deployment failed at status {:?}",
                         result.loop_result.final_status
                     ),
                 })
-            }))
-        }
+            }),
+        ),
         Ok(result) => Ok(result),
         Err(error) => Err(error.into_generic()),
     }
@@ -359,6 +364,7 @@ async fn run_step_loop_body(
                 final_status: state.status,
             },
             steps_executed: 0,
+            state_persisted: true,
         });
     }
 
@@ -376,6 +382,7 @@ async fn run_step_loop_body(
                     return Ok(RunnerResult {
                         loop_result: result,
                         steps_executed: step_count - 1,
+                        state_persisted: true,
                     });
                 }
             }
@@ -461,6 +468,7 @@ async fn run_step_loop_body(
                 return Ok(RunnerResult {
                     loop_result,
                     steps_executed: step_count,
+                    state_persisted: true,
                 });
             }
         };
@@ -536,6 +544,7 @@ async fn run_step_loop_body(
             return Ok(RunnerResult {
                 loop_result: result,
                 steps_executed: step_count,
+                state_persisted: true,
             });
         }
 
@@ -555,6 +564,7 @@ async fn run_step_loop_body(
                         final_status: state.status,
                     },
                     steps_executed: step_count,
+                    state_persisted: true,
                 });
             }
             tokio::time::sleep(delay).await;
@@ -568,6 +578,7 @@ async fn run_step_loop_body(
             final_status: state.status,
         },
         steps_executed: policy.max_steps,
+        state_persisted: true,
     })
 }
 
@@ -672,6 +683,7 @@ mod tests {
                 final_status: DeploymentStatus::PreflightsFailed,
             },
             steps_executed: 1,
+            state_persisted: true,
         };
 
         let error = preserve_semantic_failure(Ok(result), &state)
