@@ -36,10 +36,10 @@ use alien_aws_clients::ec2::{
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::aws::AwsFailureDomainSubnets;
 use alien_core::{
-    standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
-    NetworkHeartbeatData, NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
+    NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, standard_resource_tags,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
@@ -493,6 +493,7 @@ fn quota_consuming_eip_usage(response: DescribeAddressesResponse) -> Option<usiz
             .into_iter()
             .filter(|address| {
                 address.domain.as_deref() == Some("vpc")
+                    && address.service_managed.as_deref().is_none_or(str::is_empty)
                     && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
             })
             .count(),
@@ -540,7 +541,12 @@ async fn preflight_aws_eip_quota(
 
     match assess_eip_quota(used, limit) {
         EipQuotaPreflight::Available { used, limit } => {
-            info!(used, limit, required = 1, "AWS Elastic IP quota preflight passed");
+            info!(
+                used,
+                limit,
+                required = 1,
+                "AWS Elastic IP quota preflight passed"
+            );
             Ok(())
         }
         EipQuotaPreflight::Exhausted { used, limit } => {
@@ -553,7 +559,11 @@ async fn preflight_aws_eip_quota(
             }))
         }
         EipQuotaPreflight::Unknown(reason) => {
-            warn!(reason, required = 1, "AWS managed network requires one Elastic IP, but quota preflight is uncertain");
+            warn!(
+                reason,
+                required = 1,
+                "AWS managed network requires one Elastic IP, but quota preflight is uncertain"
+            );
             Ok(())
         }
     }
@@ -563,16 +573,18 @@ async fn preflight_aws_eip_quota(
 mod tests {
     use std::sync::Arc;
 
+    use alien_aws_clients::AwsCredentialProvider;
     use alien_aws_clients::ec2::{
-        Address, AddressSet, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
+        Address, AddressSet, Ec2Api, Ec2Client, IpPermissionSet, IpRangeResponse, IpRangeSet,
+        MockEc2Api,
     };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
-    use alien_core::{Network, Platform};
+    use alien_core::{AwsClientConfig, AwsCredentials, Network, Platform};
 
     use super::*;
-    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::core::{MockPlatformServiceProvider, controller_test::SingleControllerExecutor};
 
     #[test]
     fn detects_existing_all_protocol_ipv4_rule() {
@@ -773,10 +785,6 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires AWS test credentials and service-managed addresses"]
     async fn live_eip_usage_matches_customer_owned_addresses() {
-        use alien_aws_clients::ec2::{Ec2Api, Ec2Client};
-        use alien_aws_clients::AwsCredentialProvider;
-        use alien_core::{AwsClientConfig, AwsCredentials};
-
         let expected: usize = std::env::var("ALIEN_TEST_EXPECTED_EIP_USAGE")
             .expect("set independently measured customer-owned EIP usage")
             .parse()
@@ -795,8 +803,34 @@ mod tests {
         let client = Ec2Client::new(reqwest::Client::new(), credentials);
         let response = client.describe_addresses().await.unwrap();
         let reported = response.addresses_set.as_ref().unwrap().items.len();
-        assert!(reported > expected, "test account must include excluded addresses");
+        assert!(
+            reported > expected,
+            "test account must include excluded addresses"
+        );
         assert_eq!(quota_consuming_eip_usage(response), Some(expected));
+    }
+
+    #[test]
+    fn eip_usage_ignores_managed_addresses_but_counts_customer_nat_addresses() {
+        let response: DescribeAddressesResponse = serde_json::from_value(serde_json::json!({
+            "addressesSet": { "item": [
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "alb" },
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "future-service" },
+                { "domain": "vpc", "associationId": "eipassoc-nat", "networkInterfaceId": "eni-nat" },
+                { "domain": "vpc", "publicIpv4Pool": "amazon", "serviceManaged": "" },
+                { "domain": "standard" },
+                { "domain": "vpc", "publicIpv4Pool": "ipv4pool-ec2-customer" }
+            ] }
+        })).unwrap();
+        let used = quota_consuming_eip_usage(response);
+        assert_eq!(used, Some(2));
+        assert_eq!(
+            assess_eip_quota(used, Some(5.0)),
+            EipQuotaPreflight::Available {
+                used: 2,
+                limit: 5.0
+            }
+        );
     }
 
     #[test]
@@ -811,6 +845,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: Some("amazon".to_string()),
+                        service_managed: None,
                         tag_set: None,
                     },
                     Address {
@@ -820,6 +855,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: None,
+                        service_managed: None,
                         tag_set: None,
                     },
                     Address {
@@ -829,6 +865,7 @@ mod tests {
                         association_id: None,
                         network_interface_id: None,
                         public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                        service_managed: None,
                         tag_set: None,
                     },
                 ],
@@ -849,6 +886,7 @@ mod tests {
                     association_id: None,
                     network_interface_id: None,
                     public_ipv4_pool: None,
+                    service_managed: None,
                     tag_set: None,
                 }],
             }),
@@ -871,6 +909,7 @@ mod tests {
                             association_id: None,
                             network_interface_id: None,
                             public_ipv4_pool: Some("amazon".to_string()),
+                            service_managed: None,
                             tag_set: None,
                         },
                         Address {
@@ -880,6 +919,7 @@ mod tests {
                             association_id: None,
                             network_interface_id: None,
                             public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                            service_managed: None,
                             tag_set: None,
                         },
                     ],
@@ -1453,7 +1493,7 @@ impl AwsNetworkController {
                     message: "Failed to list the network interfaces holding a network object"
                         .to_string(),
                     resource_id: Some(resource_id.to_string()),
-                }))
+                }));
             }
         };
 
@@ -1487,7 +1527,7 @@ impl AwsNetworkController {
                             "Failed to delete detached network interface '{interface_id}'"
                         ),
                         resource_id: Some(resource_id.to_string()),
-                    }))
+                    }));
                 }
             }
         }
@@ -1523,7 +1563,7 @@ impl AwsNetworkController {
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to list the security groups of VPC '{vpc_id}'"),
                     resource_id: Some(resource_id.to_string()),
-                }))
+                }));
             }
         };
         Ok(groups
@@ -1608,7 +1648,7 @@ impl AwsNetworkController {
                             "Failed to release duplicate Elastic IP '{allocation_id}'"
                         ),
                         resource_id: Some(resource_id.to_string()),
-                    }))
+                    }));
                 }
             }
             self.extra_eip_allocation_ids
@@ -1672,7 +1712,7 @@ impl AwsNetworkController {
                                 "Failed to detach duplicate Internet Gateway '{igw_id}'"
                             ),
                             resource_id: Some(resource_id.to_string()),
-                        }))
+                        }));
                     }
                 }
             }
@@ -1702,7 +1742,7 @@ impl AwsNetworkController {
                     return Err(error.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete duplicate Internet Gateway '{igw_id}'"),
                         resource_id: Some(resource_id.to_string()),
-                    }))
+                    }));
                 }
             }
             self.extra_internet_gateway_ids.retain(|id| id != &igw_id);
@@ -1750,7 +1790,7 @@ impl AwsNetworkController {
                     return Err(error.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete duplicate VPC '{vpc_id}'"),
                         resource_id: Some(resource_id.to_string()),
-                    }))
+                    }));
                 }
             }
             self.extra_vpc_ids.retain(|id| id != &vpc_id);
@@ -2687,10 +2727,12 @@ impl AwsNetworkController {
                 let vpcs_response = ec2_client
                     .describe_vpcs(
                         DescribeVpcsRequest::builder()
-                            .filters(vec![Filter::builder()
-                                .name("is-default".to_string())
-                                .values(vec!["true".to_string()])
-                                .build()])
+                            .filters(vec![
+                                Filter::builder()
+                                    .name("is-default".to_string())
+                                    .values(vec!["true".to_string()])
+                                    .build(),
+                            ])
                             .build(),
                     )
                     .await
@@ -2726,10 +2768,12 @@ impl AwsNetworkController {
                 let subnets_response = ec2_client
                     .describe_subnets(
                         DescribeSubnetsRequest::builder()
-                            .filters(vec![Filter::builder()
-                                .name("vpc-id".to_string())
-                                .values(vec![vpc_id.clone()])
-                                .build()])
+                            .filters(vec![
+                                Filter::builder()
+                                    .name("vpc-id".to_string())
+                                    .values(vec![vpc_id.clone()])
+                                    .build(),
+                            ])
                             .build(),
                     )
                     .await
@@ -2904,7 +2948,7 @@ impl AwsNetworkController {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "Expected Create settings in CreatingVpc state".to_string(),
                     resource_id: Some(config.id.clone()),
-                }))
+                }));
             }
         };
 
@@ -5330,20 +5374,21 @@ mod controller_state_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use alien_aws_clients::AwsCredentialProvider;
     use alien_aws_clients::ec2::{
         CreateNatGatewayRequest, DescribeNetworkInterfacesResponse, MockEc2Api,
     };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
-    use alien_core::{Network, Platform};
+    use alien_core::{AwsClientConfig, AwsCredentials, Network, Platform};
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
     use super::*;
     use crate::core::{
-        controller_test::{assert_polling_delays, SingleControllerExecutor},
         MockPlatformServiceProvider, ResourceController,
+        controller_test::{SingleControllerExecutor, assert_polling_delays},
     };
 
     const PREFIX: &str = "test";
@@ -6051,12 +6096,16 @@ mod controller_state_tests {
             .returning(|_| Ok(parse(json!({}))));
         ec2.expect_describe_subnets().times(1).returning(|request| {
             let filters = request.filters.expect("lookup by VPC, CIDR and token");
-            assert!(filters
-                .iter()
-                .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
-            assert!(filters
-                .iter()
-                .any(|f| f.name == "cidr-block" && f.values == ["10.0.0.0/20"]));
+            assert!(
+                filters
+                    .iter()
+                    .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"])
+            );
+            assert!(
+                filters
+                    .iter()
+                    .any(|f| f.name == "cidr-block" && f.values == ["10.0.0.0/20"])
+            );
             assert_eq!(filters_token(Some(&filters)).as_deref(), Some("attempt-1"));
             Ok(parse(json!({ "subnetSet": { "item": [{
                 "subnetId": "subnet-lost",
@@ -6458,9 +6507,11 @@ mod controller_state_tests {
         expect_no_named_leftovers(&mut ec2);
         ec2.expect_describe_subnets().times(1).returning(|request| {
             let filters = request.filters.expect("lookup by VPC, CIDR and token");
-            assert!(filters
-                .iter()
-                .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
+            assert!(
+                filters
+                    .iter()
+                    .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"])
+            );
             assert_eq!(filters_token(Some(&filters)).as_deref(), Some("attempt-1"));
             Ok(parse(json!({ "subnetSet": { "item": [{
                 "subnetId": "subnet-lost",
@@ -6786,9 +6837,11 @@ mod controller_state_tests {
             .times(2)
             .returning(|request| {
                 let filters = request.filters.expect("lookup by VPC and name");
-                assert!(filters
-                    .iter()
-                    .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"]));
+                assert!(
+                    filters
+                        .iter()
+                        .any(|f| f.name == "vpc-id" && f.values == ["vpc-1"])
+                );
                 let name = filters
                     .iter()
                     .find(|f| f.name == "tag:Name")
@@ -6808,9 +6861,11 @@ mod controller_state_tests {
             .times(1)
             .returning(|request| {
                 let filters = request.filters.expect("lookup by VPC and name");
-                assert!(filters
-                    .iter()
-                    .any(|f| f.name == "group-name" && f.values == [format!("{PREFIX}-sg")]));
+                assert!(
+                    filters
+                        .iter()
+                        .any(|f| f.name == "group-name" && f.values == [format!("{PREFIX}-sg")])
+                );
                 Ok(parse(
                     json!({ "securityGroupInfo": { "item": [{ "groupId": "sg-lost" }] } }),
                 ))
@@ -8048,9 +8103,11 @@ mod controller_state_tests {
         let mut value =
             serde_json::to_value(AwsNetworkController::default()).expect("serialize default");
         let fields = value.as_object_mut().expect("object");
-        assert!(fields
-            .remove("waitForDeleteDependenciesIterations")
-            .is_some());
+        assert!(
+            fields
+                .remove("waitForDeleteDependenciesIterations")
+                .is_some()
+        );
         fields.insert("state".to_string(), json!("deletingVpc"));
         fields.insert("vpcId".to_string(), json!("vpc-1"));
         let mut controller_state: AwsNetworkController =

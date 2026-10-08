@@ -21,7 +21,7 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use alien_error::ContextError;
 use async_trait::async_trait;
@@ -2888,6 +2888,9 @@ pub struct Address {
     /// Present for addresses allocated from a customer-owned public IPv4 pool
     /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
     pub public_ipv4_pool: Option<String>,
+    /// AWS service managing this address. Service-managed addresses do not
+    /// consume the customer's EC2-VPC Elastic IP allocation quota.
+    pub service_managed: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
 }
@@ -4397,7 +4400,10 @@ mod volume_operation_tests {
             .max_results(1000)
             .build();
         let describe_form = Ec2Client::describe_snapshots_form_data(&describe);
-        assert_eq!(describe_form.get("Owner.1").map(String::as_str), Some("self"));
+        assert_eq!(
+            describe_form.get("Owner.1").map(String::as_str),
+            Some("self")
+        );
         assert_eq!(
             describe_form.get("Filter.1.Name").map(String::as_str),
             Some("tag:Container")
@@ -4425,7 +4431,10 @@ mod volume_operation_tests {
                 .build(),
         );
         assert_eq!(create.get("Action").map(String::as_str), Some("CreateTags"));
-        assert_eq!(create.get("ResourceId.1").map(String::as_str), Some("vol-1"));
+        assert_eq!(
+            create.get("ResourceId.1").map(String::as_str),
+            Some("vol-1")
+        );
         assert_eq!(create.get("Tag.1.Key").map(String::as_str), Some("Ordinal"));
         assert_eq!(create.get("Tag.1.Value").map(String::as_str), Some("2"));
 
@@ -4470,7 +4479,10 @@ mod volume_operation_tests {
         )
         .expect("DescribeSnapshots response should deserialize");
         let snapshot = &response.snapshot_set.expect("snapshot set").items[0];
-        assert_eq!(snapshot.snapshot_id.as_deref(), Some("snap-0abcdef1234567890"));
+        assert_eq!(
+            snapshot.snapshot_id.as_deref(),
+            Some("snap-0abcdef1234567890")
+        );
         assert_eq!(snapshot.state.as_deref(), Some("completed"));
         assert_eq!(
             snapshot.start_time.as_deref(),
@@ -4479,7 +4491,10 @@ mod volume_operation_tests {
         assert_eq!(snapshot.volume_size, Some(8));
         assert_eq!(snapshot.owner_id.as_deref(), Some("123456789012"));
         let tags = &snapshot.tag_set.as_ref().expect("tags").items;
-        assert_eq!((tags[0].key.as_str(), tags[0].value.as_str()), ("Ordinal", "1"));
+        assert_eq!(
+            (tags[0].key.as_str(), tags[0].value.as_str()),
+            ("Ordinal", "1")
+        );
 
         let created: Snapshot = quick_xml::de::from_str(
             r#"<CreateSnapshotResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
@@ -4495,7 +4510,10 @@ mod volume_operation_tests {
             </CreateSnapshotResponse>"#,
         )
         .expect("CreateSnapshot response should deserialize");
-        assert_eq!(created.snapshot_id.as_deref(), Some("snap-1234567890abcdef0"));
+        assert_eq!(
+            created.snapshot_id.as_deref(),
+            Some("snap-1234567890abcdef0")
+        );
         assert_eq!(created.state.as_deref(), Some("pending"));
     }
 
@@ -4666,7 +4684,7 @@ mod volume_operation_tests {
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
                     <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><associationId>eipassoc-1</associationId><networkInterfaceId>eni-1</networkInterfaceId><publicIpv4Pool>amazon</publicIpv4Pool></item>
-                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
+                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain><serviceManaged>alb</serviceManaged></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
             </DescribeAddressesResponse>"#,
@@ -4683,10 +4701,12 @@ mod volume_operation_tests {
             addresses.items[0].public_ipv4_pool.as_deref(),
             Some("amazon")
         );
-        assert!(addresses
-            .items
-            .iter()
-            .all(|address| address.domain.as_deref() == Some("vpc")));
+        assert!(
+            addresses
+                .items
+                .iter()
+                .all(|address| address.domain.as_deref() == Some("vpc"))
+        );
         assert_eq!(
             addresses.items[2].public_ipv4_pool.as_deref(),
             Some("ipv4pool-ec2-1234567890abcdef0")
@@ -4700,6 +4720,8 @@ mod volume_operation_tests {
             addresses.items[0].network_interface_id.as_deref(),
             Some("eni-1")
         );
+        assert_eq!(addresses.items[1].service_managed.as_deref(), Some("alb"));
+        assert_eq!(addresses.items[0].service_managed, None);
         assert_eq!(addresses.items[1].association_id, None);
         assert_eq!(addresses.items[1].network_interface_id, None);
     }
@@ -4854,9 +4876,11 @@ mod tests {
             r#"<DescribeInstanceTypeOfferingsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>r</requestId><instanceTypeOfferingSet/></DescribeInstanceTypeOfferingsResponse>"#,
         )
         .expect("empty set parses");
-        assert!(empty
-            .instance_type_offering_set
-            .is_none_or(|set| set.items.is_empty()));
+        assert!(
+            empty
+                .instance_type_offering_set
+                .is_none_or(|set| set.items.is_empty())
+        );
     }
 
     /// A rule that names a prefix list carries no CIDR, so a reader that dropped the list would
@@ -4946,7 +4970,10 @@ mod tests {
         let attachment = &volume.attachment_set.as_ref().expect("attachments").items[0];
         assert_eq!(volume.state.as_deref(), Some("in-use"));
         assert_eq!(attachment.state.as_deref(), Some("attached"));
-        assert_eq!(attachment.instance_id.as_deref(), Some("i-1234567890abcdef0"));
+        assert_eq!(
+            attachment.instance_id.as_deref(),
+            Some("i-1234567890abcdef0")
+        );
     }
 
     #[test]
