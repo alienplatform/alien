@@ -16,7 +16,7 @@ use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::resource_manager::GetPolicyOptions;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
-    PermissionContext,
+    BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 
@@ -356,6 +356,97 @@ pub(crate) fn gcp_stack_vault_namespace_conditions(
         .collect()
 }
 
+/// Fully-qualified names of the custom roles every registered `vault/`
+/// permission set binds in this project.
+fn vault_custom_role_names(
+    generator: &GcpRuntimePermissionsGenerator,
+    permission_context: &PermissionContext,
+) -> Result<std::collections::HashSet<String>> {
+    let mut roles = std::collections::HashSet::new();
+    for id in alien_permissions::list_permission_set_ids()
+        .into_iter()
+        .filter(|id| id.starts_with("vault/"))
+    {
+        let Some(set) = alien_permissions::get_permission_set(id) else {
+            continue;
+        };
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let plan = generator
+                .generate_grant_plan(set, target, permission_context)
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: format!("Failed to resolve grants of vault permission set '{id}'"),
+                    resource_id: None,
+                })?;
+            roles.extend(plan.custom_roles.into_iter().map(|role| role.name));
+        }
+    }
+    Ok(roles)
+}
+
+/// Roles of the unconditional project bindings that some vault grant in the
+/// desired stack still produces for the management identity: resource grants
+/// on any vault, and `*` grants both stack-wide and per vault.
+fn unconditional_vault_roles_granted(
+    ctx: &ResourceControllerContext<'_>,
+    generator: &GcpRuntimePermissionsGenerator,
+    permission_context: &PermissionContext,
+) -> Result<std::collections::HashSet<String>> {
+    let mut roles = std::collections::HashSet::new();
+    let Some(profile) = ctx.desired_stack.management().profile() else {
+        return Ok(roles);
+    };
+    for (scope, references) in &profile.0 {
+        let (targets, context): (&[BindingTarget], PermissionContext) = if scope == "*" {
+            (
+                &[BindingTarget::Stack, BindingTarget::Resource],
+                permission_context.clone(),
+            )
+        } else if ctx
+            .desired_stack
+            .resources
+            .get(scope)
+            .is_some_and(|entry| entry.config.resource_type() == Vault::RESOURCE_TYPE)
+        {
+            (
+                &[BindingTarget::Resource],
+                permission_context
+                    .clone()
+                    .with_resource_name(format!("{}-{scope}", ctx.resource_prefix)),
+            )
+        } else {
+            continue;
+        };
+        for reference in references.iter().filter(|r| r.id().starts_with("vault/")) {
+            let set = reference
+                .resolve(|id| alien_permissions::get_permission_set(id).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!("Vault permission set '{}' not found", reference.id()),
+                        resource_id: Some(scope.clone()),
+                    })
+                })?;
+            for target in targets {
+                let plan = generator
+                    .generate_grant_plan(&set, *target, &context)
+                    .context(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Failed to resolve grants of vault permission set '{}'",
+                            set.id
+                        ),
+                        resource_id: Some(scope.clone()),
+                    })?;
+                roles.extend(
+                    plan.bindings_for_target(GcpBindingTargetScope::Project)
+                        .into_iter()
+                        .filter(|binding| binding.condition.is_none())
+                        .map(|binding| binding.role),
+                );
+            }
+        }
+    }
+    Ok(roles)
+}
+
 pub(crate) fn binding_targets_vault_namespace(binding: &Binding, namespaces: &[String]) -> bool {
     binding.condition.as_ref().is_some_and(|condition| {
         namespaces
@@ -539,17 +630,28 @@ impl GcpVaultController {
         }
         // Different vaults share predefined roles and the management identity.
         // Reconcile only bindings whose condition targets this vault namespace.
-        let namespace = [gcp_vault_namespace_condition(
-            gcp_config.project_number.as_deref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message:
-                        "GCP project number is required to reconcile vault management permissions"
-                            .to_string(),
-                    resource_id: Some(vault_id.to_string()),
-                })
-            })?,
-            vault_prefix,
-        )];
+        let project_number = gcp_config.project_number.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "GCP project number is required to reconcile vault management permissions"
+                    .to_string(),
+                resource_id: Some(vault_id.to_string()),
+            })
+        })?;
+        let namespace = [gcp_vault_namespace_condition(project_number, vault_prefix)];
+        let role_context = permission_context
+            .clone()
+            .with_project_number(project_number.to_string())
+            .with_service_account_name(
+                management_sa_email
+                    .split('@')
+                    .next()
+                    .unwrap_or(&management_sa_email)
+                    .to_string(),
+            );
+        // Vault custom role IDs come from grant labels, not the permission set
+        // ID, so the prefixes above do not match them. Name them exactly.
+        let vault_custom_roles = vault_custom_role_names(&generator, &role_context)?;
+        owned_exact_roles.extend(vault_custom_roles.iter().cloned());
         let current_bindings = normalized_bindings(&current_policy.bindings).context(
             ErrorData::InfrastructureError {
                 message: "Failed to serialize current vault IAM bindings".to_string(),
@@ -577,6 +679,22 @@ impl GcpVaultController {
             &[],
             &[],
         );
+        // Some vault grants cannot be scoped to a namespace (e.g. the
+        // `secretmanager.secrets.create` role from `vault/data-write`), and
+        // their custom roles are per stack, so every vault and the stack-wide
+        // grant share one unconditional binding. Drop the member from it only
+        // when no vault grant in the desired stack still produces it.
+        let still_granted = unconditional_vault_roles_granted(ctx, &generator, &role_context)?;
+        for binding in all_bindings.iter_mut().filter(|binding| {
+            binding.condition.is_none()
+                && vault_custom_roles.contains(&binding.role)
+                && !still_granted.contains(&binding.role)
+        }) {
+            binding
+                .members
+                .retain(|binding_member| binding_member != &member);
+        }
+        all_bindings.retain(|binding| !binding.members.is_empty());
         let proposed_bindings =
             normalized_bindings(&all_bindings).context(ErrorData::InfrastructureError {
                 message: "Failed to serialize desired vault IAM bindings".to_string(),
@@ -1168,6 +1286,20 @@ mod project_policy_writer_tests {
             })
         }
 
+        /// Custom roles bound to `member` without a condition. Here these are
+        /// the stack's `vault/data-write` create role.
+        fn unconditional_custom_roles(&self, member: &str) -> Vec<String> {
+            self.bindings
+                .iter()
+                .filter(|binding| {
+                    binding.condition.is_none()
+                        && binding.role.starts_with("projects/")
+                        && binding.members.iter().any(|m| m == member)
+                })
+                .map(|binding| binding.role.clone())
+                .collect()
+        }
+
         /// The management member's bindings scoped to `vault_prefix`'s secrets.
         fn vault_grants(&self, vault_prefix: &str) -> Vec<String> {
             let namespace = gcp_vault_namespace_condition(PROJECT_NUMBER, vault_prefix);
@@ -1247,8 +1379,37 @@ mod project_policy_writer_tests {
     }
 
     fn fixture(project: Arc<Mutex<Project>>) -> (StackExecutor, StackState) {
+        // `vault/heartbeat` on `*` makes the management identity hold
+        // `roles/secretmanager.viewer` both project-wide (its own grant) and
+        // on this vault's namespace (the vault's grant).
+        fixture_with(
+            project,
+            PermissionProfile::new()
+                .global(["vault/heartbeat"])
+                .resource("app-secrets", ["vault/data-read"]),
+            &[],
+        )
+    }
+
+    /// `vaults` lists extra Frozen vaults, saved as Ready like `app-secrets`.
+    fn fixture_with(
+        project: Arc<Mutex<Project>>,
+        management: PermissionProfile,
+        vaults: &[&str],
+    ) -> (StackExecutor, StackState) {
         let manager = Arc::new(resource_manager(project));
         let mut iam = MockIamApi::new();
+        // Setup repairs the stack's vault custom roles before binding them.
+        iam.expect_get_role().returning(|name| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM role".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        iam.expect_create_role()
+            .returning(|_, request| Ok(request.role));
         iam.expect_get_service_account_iam_policy()
             .returning(|_| Ok(IamPolicy::builder().etag("sa-etag".to_string()).build()));
         iam.expect_set_service_account_iam_policy()
@@ -1264,26 +1425,24 @@ mod project_policy_writer_tests {
         // Ids sort the vault before the management identity, so in a step
         // that runs both, the identity's policy write lands last, as in the
         // setup run where this was found.
-        let vault = Vault::new("app-secrets".to_string()).build();
+        let ids: Vec<&str> = std::iter::once("app-secrets")
+            .chain(vaults.iter().copied())
+            .collect();
         let account = RemoteStackManagement::new("manager".to_string()).build();
-        // `vault/heartbeat` on `*` makes the management identity hold
-        // `roles/secretmanager.viewer` both project-wide (its own grant) and
-        // on this vault's namespace (the vault's grant).
-        let stack = Stack::new("test".to_string())
-            .add_with_dependencies(
-                vault.clone(),
+        let mut stack = Stack::new("test".to_string());
+        for id in &ids {
+            stack = stack.add_with_dependencies(
+                Vault::new(id.to_string()).build(),
                 ResourceLifecycle::Frozen,
                 vec![ResourceRef::new(
                     RemoteStackManagement::RESOURCE_TYPE,
                     "manager",
                 )],
-            )
+            );
+        }
+        let stack = stack
             .add(account.clone(), ResourceLifecycle::Frozen)
-            .management(alien_core::ManagementPermissions::Extend(
-                PermissionProfile::new()
-                    .global(["vault/heartbeat"])
-                    .resource("app-secrets", ["vault/data-read"]),
-            ))
+            .management(alien_core::ManagementPermissions::Extend(management))
             .build();
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
@@ -1309,30 +1468,30 @@ mod project_policy_writer_tests {
             .build()
             .unwrap();
         let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
-        let controller = GcpVaultController {
-            state: GcpVaultState::Ready,
-            project_id: Some("mock-project".to_string()),
-            location: Some("us-central1".to_string()),
-            vault_prefix: Some("test-app-secrets".to_string()),
-            ..Default::default()
-        };
-        let mut vault_state = StackResourceState::new_pending(
-            Vault::RESOURCE_TYPE.to_string(),
-            Resource::new(vault),
-            Some(ResourceLifecycle::Frozen),
-            vec![ResourceRef::new(
-                RemoteStackManagement::RESOURCE_TYPE,
-                "manager",
-            )],
-        );
-        vault_state.status = ResourceStatus::Running;
-        vault_state.outputs = controller.get_outputs();
-        vault_state
-            .set_internal_controller(Some(Box::new(controller)))
-            .unwrap();
-        state
-            .resources
-            .insert("app-secrets".to_string(), vault_state);
+        for id in &ids {
+            let controller = GcpVaultController {
+                state: GcpVaultState::Ready,
+                project_id: Some("mock-project".to_string()),
+                location: Some("us-central1".to_string()),
+                vault_prefix: Some(format!("test-{id}")),
+                ..Default::default()
+            };
+            let mut vault_state = StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new(id.to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                vec![ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    "manager",
+                )],
+            );
+            vault_state.status = ResourceStatus::Running;
+            vault_state.outputs = controller.get_outputs();
+            vault_state
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+            state.resources.insert(id.to_string(), vault_state);
+        }
         // The management identity starts converged with the desired stack.
         let mut controller = GcpRemoteStackManagementController::mock_ready("manager");
         // The identity's own grants name it by the mock client's project.
@@ -1538,6 +1697,102 @@ mod project_policy_writer_tests {
         assert!(project.has("roles/secretmanager.viewer", MANAGER, None));
         assert_eq!(project.vault_grants("test-app-secrets"), vault_grants);
         // Both writers' revisions are truthful: nothing is rescheduled.
+        let plan = executor.plan(&state).unwrap();
+        assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    }
+
+    fn management(app_secrets: &[&'static str], accounts: &[&'static str]) -> PermissionProfile {
+        let mut profile = PermissionProfile::new()
+            .global(["vault/heartbeat"])
+            .resource("app-secrets", app_secrets.to_vec());
+        if !accounts.is_empty() {
+            profile = profile.resource("accounts", accounts.to_vec());
+        }
+        profile
+    }
+
+    #[tokio::test]
+    async fn removed_write_grant_drops_the_shared_unconditional_binding() {
+        let project = Arc::new(Mutex::new(Project::default()));
+        let granted = management(&["vault/data-read", "vault/data-write"], &[]);
+        let (executor, state) = fixture_with(project.clone(), granted, &[]);
+        let state = step_until_settled(&executor, state).await;
+        let write_role = {
+            let mut project = project.lock().unwrap();
+            let roles = project.unconditional_custom_roles(MANAGER);
+            assert_eq!(roles.len(), 1, "{:#?}", project.bindings);
+            // Another principal on the same role is not this vault's to remove.
+            let binding = project
+                .bindings
+                .iter_mut()
+                .find(|binding| binding.role == roles[0] && binding.condition.is_none())
+                .unwrap();
+            binding.members.push(OTHER_WRITER.to_string());
+            roles[0].clone()
+        };
+
+        // The next release drops the write grant.
+        let (executor, _) =
+            fixture_with(project.clone(), management(&["vault/data-read"], &[]), &[]);
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("app-secrets"));
+        let state = step_until_settled(&executor, state).await;
+        assert_eq!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Running
+        );
+
+        let project = project.lock().unwrap();
+        assert!(project.unconditional_custom_roles(MANAGER).is_empty());
+        assert!(project.has(&write_role, OTHER_WRITER, None));
+        let grants = project.vault_grants("test-app-secrets");
+        // The namespace-scoped half of the write grant (a predefined role and a
+        // label-named custom role) goes too; the read grant stays.
+        assert!(
+            !grants
+                .iter()
+                .any(|grant| grant.contains("secretVersionAdder")
+                    || grant.contains("write_secret_manager_values")),
+            "{grants:?}"
+        );
+        assert!(grants
+            .iter()
+            .any(|grant| grant.starts_with("roles/secretmanager.secretAccessor ")));
+        let plan = executor.plan(&state).unwrap();
+        assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    }
+
+    #[tokio::test]
+    async fn write_grant_another_vault_still_needs_keeps_the_shared_binding() {
+        let project = Arc::new(Mutex::new(Project::default()));
+        let granted = management(
+            &["vault/data-read", "vault/data-write"],
+            &["vault/data-write"],
+        );
+        let (executor, state) = fixture_with(project.clone(), granted, &["accounts"]);
+        let state = step_until_settled(&executor, state).await;
+        let roles = project.lock().unwrap().unconditional_custom_roles(MANAGER);
+        assert_eq!(roles.len(), 1);
+
+        // `app-secrets` drops its write grant and, sorted after `accounts`,
+        // writes last; `accounts` still needs the shared create role.
+        let (executor, _) = fixture_with(
+            project.clone(),
+            management(&["vault/data-read"], &["vault/data-write"]),
+            &["accounts"],
+        );
+        let state = step_until_settled(&executor, state).await;
+        assert_eq!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Running
+        );
+        assert_eq!(
+            project.lock().unwrap().unconditional_custom_roles(MANAGER),
+            roles
+        );
         let plan = executor.plan(&state).unwrap();
         assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
     }
