@@ -788,6 +788,7 @@ mod tests {
     };
     use chrono::TimeZone;
     use httpmock::prelude::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn setup_delete_acquire_confirms_a_concurrently_removed_record() {

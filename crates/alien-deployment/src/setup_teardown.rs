@@ -4,7 +4,7 @@ use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, InitialSetupAuthority,
     ResourceLifecycle, ResourceStatus, RuntimeMetadata, SetupScaffolding, StackState, StackStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
 use alien_infra::{state_utils::StackStateExt, StackExecutor};
 use tokio::time::sleep;
