@@ -2996,7 +2996,8 @@ mod tests {
                 let server = MockServer::start_async().await;
                 let response = server
                     .mock_async(|when, then| {
-                        when.method(GET).path("/v1/deployments/dep_test");
+                        when.method(GET)
+                            .path("/v1/deployments/dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
                         then.status(200).json_body(body.clone());
                     })
                     .await;
@@ -3004,7 +3005,7 @@ mod tests {
                     &acquisition_miss(reason),
                     &server.base_url(),
                     "test-token",
-                    "dep_test",
+                    "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 )
                 .await
                 .expect("authoritative completion read");
@@ -3028,7 +3029,7 @@ mod tests {
                 &acquisition_miss(reason),
                 &server.base_url(),
                 "test-token",
-                "dep_test",
+                "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
             .await
             .unwrap());
@@ -3039,7 +3040,7 @@ mod tests {
             &transport,
             &server.base_url(),
             "test-token",
-            "dep_test",
+            "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         .await
         .unwrap());
@@ -3059,7 +3060,7 @@ mod tests {
             &acquisition_miss("statusMismatch"),
             &server.base_url(),
             "test-token",
-            "dep_test",
+            "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         .await
         .expect_err("failed read cannot establish successful deployment");
