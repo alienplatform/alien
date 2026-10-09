@@ -1172,7 +1172,9 @@ fn parse_platform(s: &str) -> std::result::Result<Platform, String> {
 /// Parse `OPERATOR_OPERATIONS`. An Operator installed on its own has no stack,
 /// so setting values must be literals or local environment variables.
 fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::OperationsConfig>> {
-    let Some(config) = parse_json_opt::<alien_core::OperationsConfig>(json, "operations")? else {
+    let Some(config) =
+        parse_json_opt::<alien_core::OperationsConfig>(json.map(with_plugins_key), "operations")?
+    else {
         return Ok(None);
     };
     let plugins = config
@@ -1201,6 +1203,24 @@ fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::
         }
     }
     Ok((!config.is_empty()).then_some(config))
+}
+
+/// Earlier Operators read `OPERATOR_OPERATIONS` as the plugin map itself, as in
+/// `{"kubernetes":{"approval":{"get-pods":"auto"}}}`. Helm values written for them
+/// have no `plugins` key, and would otherwise parse as an empty declaration.
+/// Preserve the JSON text so typed deserialization still rejects duplicate fields.
+fn with_plugins_key(json: String) -> String {
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(serde_json::Value::Object(map))
+            if !map.is_empty() && !map.contains_key("plugins") && !map.contains_key("custom") =>
+        {
+            warn!(
+                "OPERATOR_OPERATIONS has no `plugins` key; reading its entries as built-in plugins"
+            );
+            format!(r#"{{"plugins":{json}}}"#)
+        }
+        _ => json,
+    }
 }
 
 fn parse_json_opt<T: serde::de::DeserializeOwned>(
@@ -1621,6 +1641,43 @@ mod tests {
         assert!(parse_operator_operations(Some("{}".to_string()))
             .expect("an empty declaration parses")
             .is_none());
+    }
+
+    #[test]
+    fn operator_operations_read_a_plugin_map_without_the_plugins_key() {
+        let parsed = parse_operator_operations(Some(
+            r#"{"kubernetes":{"approval":{"get-pods":"auto"}}}"#.to_string(),
+        ))
+        .expect("the earlier plugin-map shape parses")
+        .expect("a declared plugin yields a config");
+        assert_eq!(parsed.plugins.keys().collect::<Vec<_>>(), ["kubernetes"]);
+        assert_eq!(
+            parsed,
+            parse_operator_operations(Some(
+                r#"{"plugins":{"kubernetes":{"approval":{"get-pods":"auto"}}}}"#.to_string(),
+            ))
+            .expect("the current shape parses")
+            .expect("a declared plugin yields a config"),
+        );
+    }
+
+    #[test]
+    fn operator_operations_reject_duplicate_fields() {
+        for json in [
+            r#"{"plugins":{},"plugins":{"kubernetes":{}}}"#,
+            r#"{"custom":[],"custom":[]}"#,
+            r#"{"plugins":{"kubernetes":{"approval":{"*":"manual"},"approval":{"*":"auto"}}}}"#,
+            r#"{"plugins":{"db":{"settings":{"url":"first"},"settings":{"url":"second"}}}}"#,
+            r#"{"kubernetes":{"approval":{"*":"manual"},"approval":{"*":"auto"}}}"#,
+            r#"{"db":{"settings":{"url":"first"},"settings":{"url":"second"}}}"#,
+            r#"{"custom":[{"name":"first","name":"second","version":"1.0.0"}]}"#,
+            r#"{"custom":[{"name":"db","version":"1.0.0","version":"2.0.0"}]}"#,
+        ] {
+            let error = parse_operator_operations(Some(json.to_string()))
+                .expect_err("duplicate configuration fields must be rejected");
+            assert_eq!(error.code, "CONFIGURATION_ERROR", "input: {json}");
+            assert!(error.to_string().contains("duplicate field"), "{error}");
+        }
     }
 
     #[test]
