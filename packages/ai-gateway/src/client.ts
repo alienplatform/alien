@@ -46,7 +46,7 @@ export interface ResponseCreateParams {
   [key: string]: unknown
 }
 
-/** One model the gateway exposes for this binding's cloud. */
+/** Whether a behavior was qualified through one public API. `unverified` is not `unsupported`. */
 export type ModelCapabilitySupport = "supported" | "unsupported" | "unverified"
 
 export interface ModelApiCapabilities {
@@ -59,6 +59,7 @@ export interface ModelApiCapabilities {
   qualifiedOn?: string
 }
 
+/** One model the gateway exposes for this binding's cloud. */
 export interface AiModel {
   /** The id passed to `chat.completions.create` / `responses.create`. */
   id: string
@@ -366,21 +367,32 @@ export class Ai {
     // The gateway subprocess is a separate trust boundary (it can be a stale or
     // mismatched binary), so verify each element actually carries the AiModel
     // shape instead of letting a type assertion hide missing fields.
-    for (const model of body.data) {
+    return body.data.map(model => {
       if (
         typeof model?.id !== "string" ||
         typeof model?.provider !== "string" ||
-        typeof model?.displayName !== "string" ||
-        !isModelCapabilities(model.capabilities)
+        typeof model?.displayName !== "string"
       ) {
         throw createUpstreamError(
           url,
           response.status,
-          `models response entry has an invalid model or capabilities shape: ${JSON.stringify(model)}`,
+          `models response entry is missing id/provider/displayName: ${JSON.stringify(model)}`,
         )
       }
-    }
-    return body.data
+      // A gateway binary older than the capability matrix omits the field. That means no
+      // qualification evidence, which is exactly "unverified" for every API.
+      if (model.capabilities === undefined) {
+        return { ...model, capabilities: unverifiedModelCapabilities() }
+      }
+      if (!isModelCapabilities(model.capabilities)) {
+        throw createUpstreamError(
+          url,
+          response.status,
+          `models response entry has an invalid capabilities matrix: ${JSON.stringify(model)}`,
+        )
+      }
+      return model
+    })
   }
 
   private _chatCompletionsCreate(params: ChatCompletionCreateParams): Promise<unknown> {

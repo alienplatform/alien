@@ -299,8 +299,15 @@ describe("Ai.getAvailableModels", () => {
     vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
     stubFetch({ data: [{ ...gatewayModel, capabilities: unverifiedCapabilities.slice(1) }] })
     await expect(ai("llm").getAvailableModels()).rejects.toThrow(
-      "models response entry has an invalid model or capabilities shape",
+      "models response entry has an invalid capabilities matrix",
     )
+  })
+
+  it("reports every API as unverified when an older gateway omits the matrix", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
+    const { capabilities: _omitted, ...legacyModel } = gatewayModel
+    stubFetch({ data: [legacyModel] })
+    expect(await ai("llm").getAvailableModels()).toEqual([gatewayModel])
   })
 
   it("retries a transient gateway-start failure on a retained instance", async () => {
