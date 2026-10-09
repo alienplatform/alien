@@ -181,8 +181,9 @@ impl AwsWorkerController {
     fn ensure_domain_info(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
+        config: &Worker,
     ) -> Result<bool> {
+        let resource_id = config.id.as_str();
         if self.fqdn.is_some()
             && self.domain_name.is_some()
             && (self.certificate_id.is_some()
@@ -200,12 +201,10 @@ impl AwsWorkerController {
                 self.certificate_arn = domain_info.certificate_arn;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                    self.url = config
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -599,12 +598,10 @@ impl AwsWorkerController {
                     self.domain_name = Some(domain_info.fqdn.clone());
 
                     // Check for URL override in deployment config, otherwise use domain FQDN
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(&cfg.id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                    self.url = cfg
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 None => {
@@ -701,7 +698,7 @@ impl AwsWorkerController {
 
         if is_active {
             if !worker_config.public_endpoints.is_empty() {
-                let has_domain_info = self.ensure_domain_info(ctx, &worker_config.id)?;
+                let has_domain_info = self.ensure_domain_info(ctx, &worker_config)?;
                 let next_state = if has_domain_info {
                     // Platform mode: wait for certificate then create API Gateway + custom domain
                     WaitingForCertificate
@@ -750,7 +747,7 @@ impl AwsWorkerController {
             .and_then(|meta| meta.resources.get(&worker_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
-        if !self.ensure_domain_info(ctx, &worker_config.id)? {
+        if !self.ensure_domain_info(ctx, &worker_config)? {
             return Ok(HandlerAction::Continue {
                 state: Self::gateway_entry_state(&worker_config),
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -791,7 +788,7 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        self.ensure_domain_info(ctx, &worker_config.id)?;
+        self.ensure_domain_info(ctx, &worker_config)?;
         if self.certificate_arn.is_some() {
             // A recorded certificate is not imported again.
             return Ok(HandlerAction::Continue {
@@ -2917,7 +2914,7 @@ impl AwsWorkerController {
             self.url = None;
         }
 
-        let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
+        let has_domain_info = self.ensure_domain_info(ctx, &current_config)?;
         if self.api_id.is_some() || self.rest_api_id.is_some() {
             return Ok(HandlerAction::Continue {
                 state: UpdateRunningReadinessProbe,
@@ -5776,6 +5773,57 @@ mod tests {
             domain_metadata,
             public_endpoints,
         )
+    }
+
+    /// A worker with two public endpoints reports its first declared endpoint's URL in
+    /// every run, whatever order the deployment config's endpoint URL map iterates in.
+    #[tokio::test]
+    async fn worker_reports_first_declared_endpoint_url_in_every_run() {
+        for _ in 0..16 {
+            let mut worker = function_public_ingress();
+            worker.public_endpoints.push(WorkerPublicEndpoint {
+                name: "admin".to_string(),
+                host_label: Some("admin".to_string()),
+                wildcard_subdomains: false,
+            });
+            let worker_name = format!("test-{}", worker.id);
+            let (mock_provider, _mock_server, domain_metadata, _) =
+                setup_mocks_for_function(&worker, &worker_name, false);
+            // A fresh map per run gets its own hash seed, as a newly loaded deployment
+            // config does, so its iteration order varies between runs.
+            let urls = HashMap::from([(
+                worker.id.clone(),
+                HashMap::from([
+                    ("api".to_string(), "https://api.example.test".to_string()),
+                    ("admin".to_string(), "https://admin.example.test".to_string()),
+                ]),
+            )]);
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker)
+                .controller(AwsWorkerController::default())
+                .platform(Platform::Aws)
+                .service_provider(mock_provider)
+                .domain_metadata(domain_metadata.expect("public worker has domain metadata"))
+                .public_endpoints(urls)
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor builds");
+
+            executor
+                .run_until_terminal()
+                .await
+                .expect("create flow completes");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let outputs = executor.outputs().expect("worker has outputs");
+            let outputs = outputs
+                .downcast_ref::<WorkerOutputs>()
+                .expect("worker outputs");
+            assert_eq!(
+                outputs.public_endpoints["default"].url,
+                "https://api.example.test"
+            );
+        }
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────

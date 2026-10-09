@@ -1121,7 +1121,7 @@ impl AzureWorkerController {
             .and_then(|meta| meta.resources.get(&worker_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
-        if !self.ensure_domain_info(ctx, &worker_config.id)? {
+        if !self.ensure_domain_info(ctx, &worker_config)? {
             return Ok(HandlerAction::Continue {
                 state: ConfiguringDaprComponents,
                 suggested_delay: None,
@@ -1162,7 +1162,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        self.ensure_domain_info(ctx, &worker_config.id)?;
+        self.ensure_domain_info(ctx, &worker_config)?;
         let azure_cfg = ctx.get_azure_config()?;
         let resource = ctx
             .deployment_config
@@ -2567,12 +2567,10 @@ impl AzureWorkerController {
                     self.container_app_url = container_app_url.clone();
 
                     // Check for URL override in deployment config, otherwise use Container App URL
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(&func_cfg.id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                    self.url = func_cfg
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or(container_app_url);
 
                     Ok(HandlerAction::Continue {
@@ -3949,8 +3947,9 @@ impl AzureWorkerController {
     fn ensure_domain_info(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
+        config: &Worker,
     ) -> Result<bool> {
+        let resource_id = config.id.as_str();
         if self.fqdn.is_some()
             && (self.certificate_id.is_some()
                 || self.keyvault_cert_id.is_some()
@@ -3967,12 +3966,10 @@ impl AzureWorkerController {
                 self.container_apps_certificate_id = domain_info.container_apps_certificate_id;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                    self.url = config
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -4007,12 +4004,8 @@ impl AzureWorkerController {
 
         // Check for URL override in deployment config, otherwise use Container App URL
         if let Ok(config) = ctx.desired_resource_config::<Worker>() {
-            self.url = ctx
-                .deployment_config
-                .public_endpoints
-                .as_ref()
-                .and_then(|resources| resources.get(&config.id))
-                .and_then(|endpoints| endpoints.values().next().cloned())
+            self.url = config
+                .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
                 .or(container_app_url);
         } else {
             self.url = container_app_url;

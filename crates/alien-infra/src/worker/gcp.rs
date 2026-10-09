@@ -719,12 +719,8 @@ impl GcpWorkerController {
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
         let config = ctx.desired_resource_config::<Worker>()?;
-        self.url = ctx
-            .deployment_config
-            .public_endpoints
-            .as_ref()
-            .and_then(|resources| resources.get(&config.id))
-            .and_then(|endpoints| endpoints.values().next().cloned())
+        self.url = config
+            .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
             .or(cloud_run_url);
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
@@ -785,7 +781,7 @@ impl GcpWorkerController {
             .and_then(|meta| meta.resources.get(&worker_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
-        if !self.ensure_domain_info(ctx, &worker_config.id)? {
+        if !self.ensure_domain_info(ctx, &worker_config)? {
             return Ok(HandlerAction::Continue {
                 state: CreatingPushSubscriptions,
                 suggested_delay: None,
@@ -826,7 +822,7 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        self.ensure_domain_info(ctx, &worker_config.id)?;
+        self.ensure_domain_info(ctx, &worker_config)?;
         let resource = ctx
             .deployment_config
             .domain_metadata
@@ -2540,7 +2536,7 @@ impl GcpWorkerController {
             });
         }
 
-        let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
+        let has_domain_info = self.ensure_domain_info(ctx, &current_config)?;
         if !has_domain_info {
             return Ok(HandlerAction::Continue {
                 state: UpdatePushSubscriptions,
@@ -4393,8 +4389,9 @@ impl GcpWorkerController {
     fn ensure_domain_info(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
+        config: &Worker,
     ) -> Result<bool> {
+        let resource_id = config.id.as_str();
         if self.fqdn.is_some()
             && (self.certificate_id.is_some()
                 || self.ssl_certificate_name.is_some()
@@ -4410,12 +4407,10 @@ impl GcpWorkerController {
                 self.ssl_certificate_name = domain_info.ssl_certificate_name;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                    self.url = config
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
