@@ -11,12 +11,14 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy, iam_role_name_template,
-        jsonencode, required_label, service_assume_role_policy, tags,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy,
+        emit_iam_role_policy_for_target_with_label, iam_role_name_template, jsonencode,
+        required_label, service_assume_role_policy, tags,
     },
     expr,
 };
 use alien_core::{import::EmitContext, Build, ComputeCluster, Result, ServiceAccount, Worker};
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
 
@@ -30,7 +32,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
 
         let TrustPrincipals {
             services,
-            compute_role_arns,
+            role_arns,
         } = trust_principals(ctx, service_account);
         let services_ref: Vec<&str> = services.iter().copied().collect();
 
@@ -42,7 +44,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
                 attr("name", iam_role_name_template(&service_account.id)),
                 attr(
                     "assume_role_policy",
-                    trust_assume_role_policy(&services_ref, compute_role_arns),
+                    trust_assume_role_policy(&services_ref, role_arns),
                 ),
                 attr("tags", tags(ctx, "service-account")),
             ],
@@ -52,6 +54,28 @@ impl TfEmitter for AwsServiceAccountEmitter {
             aws_terraform_permission_context().with_resource_name(service_account.id.clone());
         for (index, permission_set) in service_account.stack_permission_sets.iter().enumerate() {
             emit_iam_role_policy(&mut fragment, label, permission_set, index, &context)?;
+        }
+
+        for (target, sets) in &service_account.resource_permission_sets {
+            let Some(target_id) = ServiceAccount::impersonation_target(ctx.stack, target) else {
+                continue;
+            };
+            let context = aws_terraform_permission_context().with_resource_name(target_id.clone());
+            for (index, set) in sets
+                .iter()
+                .enumerate()
+                .filter(|(_, set)| set.id == "service-account/impersonate")
+            {
+                emit_iam_role_policy_for_target_with_label(
+                    &mut fragment,
+                    label,
+                    set,
+                    &format!("{label}_{target_id}_impersonate_{index}"),
+                    &format!("impersonate-{target_id}-{index}"),
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
         }
 
         Ok(fragment)
@@ -78,13 +102,13 @@ impl TfEmitter for AwsServiceAccountEmitter {
 
 struct TrustPrincipals {
     services: BTreeSet<&'static str>,
-    compute_role_arns: Vec<Expression>,
+    role_arns: Vec<Expression>,
 }
 
 fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> TrustPrincipals {
     let profile_name = service_account.id.strip_suffix("-sa");
     let mut services: BTreeSet<&'static str> = BTreeSet::new();
-    let mut compute_role_arns = Vec::new();
+    let mut role_arns = Vec::new();
 
     for (_id, entry) in ctx.stack.resources() {
         if let Some(function) = entry.config.downcast_ref::<Worker>() {
@@ -104,7 +128,7 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
             // traversal here would therefore create a Terraform dependency
             // cycle between the two roles.
             for suffix in ["instances", "isolation-v1"] {
-                compute_role_arns.push(expr::template(format!(
+                role_arns.push(expr::template(format!(
                     "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{}-{suffix}",
                     cluster.id
                 )));
@@ -112,7 +136,15 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
         }
     }
 
-    if services.is_empty() && compute_role_arns.is_empty() {
+    // Explicit impersonation grants require trust as well as an IAM action.
+    // Use exact role ARN conditions to avoid role creation dependency cycles.
+    for impersonator_id in service_account.impersonators(ctx.stack) {
+        role_arns.push(expr::template(format!(
+            "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{impersonator_id}"
+        )));
+    }
+
+    if services.is_empty() && role_arns.is_empty() {
         services.insert("lambda.amazonaws.com");
         services.insert("codebuild.amazonaws.com");
         services.insert("ec2.amazonaws.com");
@@ -120,12 +152,12 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
 
     TrustPrincipals {
         services,
-        compute_role_arns,
+        role_arns,
     }
 }
 
-fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression>) -> Expression {
-    if compute_role_arns.is_empty() {
+fn trust_assume_role_policy(services: &[&str], role_arns: Vec<Expression>) -> Expression {
+    if role_arns.is_empty() {
         return service_assume_role_policy(services);
     }
 
@@ -163,7 +195,7 @@ fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression
             "Condition",
             expr::object([(
                 "ArnEquals",
-                expr::object([("aws:PrincipalArn", Expression::Array(compute_role_arns))]),
+                expr::object([("aws:PrincipalArn", Expression::Array(role_arns))]),
             )]),
         ),
     ]));

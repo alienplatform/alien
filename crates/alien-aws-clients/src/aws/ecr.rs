@@ -227,7 +227,8 @@ impl EcrClient {
             // Not found
             "RepositoryNotFoundException"
             | "ImageNotFoundException"
-            | "RegistryPolicyNotFoundException" => ErrorData::RemoteResourceNotFound {
+            | "RegistryPolicyNotFoundException"
+            | "RepositoryPolicyNotFoundException" => ErrorData::RemoteResourceNotFound {
                 resource_type: "ECR Repository".into(),
                 resource_name: resource_name.into(),
             },
@@ -249,11 +250,9 @@ impl EcrClient {
             }
 
             // Quota / limit exceeded
-            "LimitExceededException" | "RepositoryPolicyNotFoundException" => {
-                ErrorData::QuotaExceeded {
-                    message: error_message,
-                }
-            }
+            "LimitExceededException" => ErrorData::QuotaExceeded {
+                message: error_message,
+            },
 
             // Invalid parameter / validation errors
             "InvalidParameterException" | "ValidationException" => ErrorData::InvalidInput {
@@ -874,5 +873,23 @@ mod tests {
         assert_eq!(create.hits_async().await, 1);
         assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
         assert!(error.to_string().contains("acme"), "{error}");
+    }
+    #[tokio::test]
+    async fn a_missing_repository_policy_is_not_a_quota_failure() {
+        let server = MockServer::start_async().await;
+        server.mock_async(|when, then| {
+            when.method(POST).path("/").header("x-amz-target", "AmazonEC2ContainerRegistry_V20150921.GetRepositoryPolicy");
+            then.status(400).header("content-type", "application/x-amz-json-1.1")
+                .json_body(serde_json::json!({"__type":"RepositoryPolicyNotFoundException", "message":"Repository policy does not exist"}));
+        }).await;
+        let error = client(&server)
+            .get_repository_policy(
+                GetRepositoryPolicyRequest::builder()
+                    .repository_name("test-repository".to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the repository has no policy");
+        assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
     }
 }

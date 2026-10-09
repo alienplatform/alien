@@ -2,7 +2,7 @@ use crate::aws::AwsClientConfigExt;
 use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::{AwsClientConfig, AwsCredentials};
+use crate::aws::AwsClientConfig;
 use alien_client_core::{ErrorData, Result};
 use alien_error::ContextError;
 use bon::Builder;
@@ -42,10 +42,8 @@ impl StsClient {
     async fn sign_config(&self, operation_name: &str) -> Result<AwsSignConfig> {
         let config = if operation_name == "AssumeRoleWithWebIdentity" {
             self.config.clone()
-        } else if matches!(self.config.credentials, AwsCredentials::WebIdentity { .. }) {
-            self.config.get_web_identity_credentials().await?
         } else {
-            self.config.clone()
+            self.config.get_web_identity_credentials().await?
         };
 
         Ok(AwsSignConfig {
@@ -487,11 +485,79 @@ pub struct GetCallerIdentityResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aws::AwsCredentials;
     use alien_core::{AwsServiceOverrides, AwsWebIdentityConfig};
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn get_caller_identity_resolves_imds_before_signing() {
+        let imds = httpmock::MockServer::start();
+        let token = imds.mock(|when, then| {
+            when.method(httpmock::Method::PUT).path("/latest/api/token");
+            then.status(200).body("imds-token");
+        });
+        let role = imds.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/latest/meta-data/iam/security-credentials/")
+                .header("x-aws-ec2-metadata-token", "imds-token");
+            then.status(200).body("test-role");
+        });
+        let credentials = imds.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/latest/meta-data/iam/security-credentials/test-role")
+                .header("x-aws-ec2-metadata-token", "imds-token");
+            then.status(200).json_body(serde_json::json!({
+                "AccessKeyId": "ASIAIMDSACCESS",
+                "SecretAccessKey": "imds-secret",
+                "Token": "imds-session-token",
+                "Expiration": "2099-01-01T00:00:00Z"
+            }));
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind STS server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("STS address"));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept STS request");
+            let (headers, body) = read_http_request(&mut stream);
+            assert!(body.contains("Action=GetCallerIdentity"));
+            write_xml_response(&mut stream, get_caller_identity_response());
+            headers
+        });
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::Imds {
+                endpoint: Some(imds.base_url()),
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), endpoint)]),
+            }),
+        };
+        let response = StsClient::new(Client::new(), config)
+            .get_caller_identity()
+            .await;
+        let headers = server.join().expect("STS server completed");
+        assert!(
+            headers.contains("Credential=ASIAIMDSACCESS/"),
+            "STS must resolve IMDS before signing"
+        );
+        assert!(headers
+            .to_ascii_lowercase()
+            .contains("x-amz-security-token: imds-session-token"));
+        assert_eq!(
+            response
+                .expect("STS must sign with resolved IMDS credentials")
+                .get_caller_identity_result
+                .account
+                .as_deref(),
+            Some("123456789012")
+        );
+        token.assert();
+        role.assert();
+        credentials.assert();
+    }
 
     #[tokio::test]
     async fn get_caller_identity_exchanges_web_identity_before_signing() {

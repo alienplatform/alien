@@ -8,8 +8,7 @@ use alien_core::{permissions::PermissionSetReference, Platform, ServiceAccount, 
 /// 1. `service-account/impersonate` must NEVER be used at stack level ("*" scope)
 /// 2. `service-account/impersonate` must only be scoped to resources that are ServiceAccounts
 ///    or will become ServiceAccounts via permission profile conversion
-/// 3. Warns if a manually-defined ServiceAccount has impersonate permissions targeting it
-///    (impersonation only works for profile-generated ServiceAccounts)
+/// 3. Warns when a non-AWS backend cannot grant impersonation of a manually-defined ServiceAccount.
 pub struct ServiceAccountImpersonateValidationCheck;
 
 #[async_trait::async_trait]
@@ -23,7 +22,7 @@ impl CompileTimeCheck for ServiceAccountImpersonateValidationCheck {
         !stack.permissions.profiles.is_empty()
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
 
@@ -111,7 +110,9 @@ impl CompileTimeCheck for ServiceAccountImpersonateValidationCheck {
                             ));
                         }
                         // Warn if targeting a manually-defined ServiceAccount
-                        else if manually_defined_sa.contains(resource_scope) {
+                        else if platform != Platform::Aws
+                            && manually_defined_sa.contains(resource_scope)
+                        {
                             warnings.push(format!(
                                 "Permission profile '{}' uses 'service-account/impersonate' on manually-defined ServiceAccount '{}'. \
                                 Impersonation only works for ServiceAccounts created from permission profiles. \
@@ -238,7 +239,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manually_defined_service_account_warns() {
+    async fn manually_defined_service_account_checks_backend_support() {
         // Manually create a ServiceAccount without a corresponding profile
         let manual_sa = ServiceAccount::new("manual-sa".to_string()).build();
         let mut resources = IndexMap::new();
@@ -273,8 +274,11 @@ mod tests {
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        let aws = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(aws.success);
+        assert!(aws.warnings.is_empty());
 
+        let result = check.check(&stack, Platform::Gcp).await.unwrap();
         assert!(result.success); // Success but with warnings
         assert!(!result.warnings.is_empty());
         assert!(result

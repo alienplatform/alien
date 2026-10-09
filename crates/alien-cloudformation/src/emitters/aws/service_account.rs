@@ -120,7 +120,7 @@ fn service_account_trust_policy(
         );
     }
     let mut services = BTreeSet::new();
-    let mut compute_role_arns = Vec::new();
+    let mut role_arns = Vec::new();
 
     for (id, entry) in ctx.stack.resources() {
         if let Some(function) = entry.config.downcast_ref::<Worker>() {
@@ -135,26 +135,34 @@ fn service_account_trust_policy(
         }
         if entry.config.downcast_ref::<ComputeCluster>().is_some() {
             if let Some(logical_id) = ctx.name_for(id) {
-                compute_role_arns.push(CfExpression::get_att(
+                role_arns.push(CfExpression::get_att(
                     format!("{logical_id}InstanceRole"),
                     "Arn",
                 ));
                 // An exact ARN condition can retain both node generations without
                 // resolving a not-yet-created role or adding a dependency cycle.
-                compute_role_arns.push(CfExpression::sub(format!(
+                role_arns.push(CfExpression::sub(format!(
                     "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{id}-isolation-v1"
                 )));
             }
         }
     }
 
-    if services.is_empty() && compute_role_arns.is_empty() {
+    // Explicit impersonation grants require trust as well as an IAM action.
+    // Use exact role ARN conditions to avoid role creation dependency cycles.
+    for impersonator_id in service_account.impersonators(ctx.stack) {
+        role_arns.push(CfExpression::sub(format!(
+            "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{impersonator_id}"
+        )));
+    }
+
+    if services.is_empty() && role_arns.is_empty() {
         services.insert("lambda.amazonaws.com");
         services.insert("codebuild.amazonaws.com");
         services.insert("ec2.amazonaws.com");
     }
 
-    if compute_role_arns.is_empty() {
+    if role_arns.is_empty() {
         return service_trust_policy(services);
     }
 
@@ -188,7 +196,7 @@ fn service_account_trust_policy(
             "Condition",
             CfExpression::object([(
                 "ArnEquals",
-                CfExpression::object([("aws:PrincipalArn", CfExpression::list(compute_role_arns))]),
+                CfExpression::object([("aws:PrincipalArn", CfExpression::list(role_arns))]),
             )]),
         ),
     ]));
@@ -200,16 +208,36 @@ fn service_account_trust_policy(
 }
 
 fn service_account_policy_document(
-    _ctx: &EmitContext<'_>,
+    ctx: &EmitContext<'_>,
     service_account: &ServiceAccount,
 ) -> Result<Option<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = permission_context().with_resource_name(service_account.id.clone());
 
-    for permission_set in &service_account.stack_permission_sets {
+    let mut grants: Vec<_> = service_account
+        .stack_permission_sets
+        .iter()
+        .map(|set| (set, BindingTarget::Stack, context.clone()))
+        .collect();
+    for (target, sets) in &service_account.resource_permission_sets {
+        let Some(target_id) = ServiceAccount::impersonation_target(ctx.stack, target) else {
+            continue;
+        };
+        for set in sets
+            .iter()
+            .filter(|set| set.id == "service-account/impersonate")
+        {
+            grants.push((
+                set,
+                BindingTarget::Resource,
+                context.clone().with_resource_name(target_id.clone()),
+            ));
+        }
+    }
+    for (permission_set, target, context) in grants {
         let policy = generator
-            .generate_policy(permission_set, BindingTarget::Stack, &context)
+            .generate_policy(permission_set, target, &context)
             .context(ErrorData::GenericError {
                 message: format!(
                     "failed to generate AWS CloudFormation policy for service account '{}'",

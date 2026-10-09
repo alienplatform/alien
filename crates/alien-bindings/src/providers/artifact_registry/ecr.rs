@@ -8,11 +8,12 @@ use crate::{
 };
 use alien_aws_clients::{
     ecr::{
-        CreateRepositoryRequest, DescribeRepositoriesRequest, EcrApi, EcrClient,
-        GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
+        CreateRepositoryRequest, DeleteRepositoryPolicyRequest, DescribeRepositoriesRequest,
+        EcrApi, EcrClient, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
     },
     AwsClientConfigExt as _, AwsCredentialProvider,
 };
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::bindings::ArtifactRegistryBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -312,6 +313,32 @@ impl EcrArtifactRegistry {
         aws_access: &AwsCrossAccountAccess,
     ) -> Result<()> {
         let policy = cross_account_repository_policy(aws_access);
+        // ECR rejects an empty Statement array. Removing the final grant deletes the policy.
+        if policy["Statement"].as_array().is_some_and(Vec::is_empty) {
+            return match ecr_client
+                .delete_repository_policy(
+                    DeleteRepositoryPolicyRequest::builder()
+                        .repository_name(repo_name.to_string())
+                        .build(),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(map_cloud_client_error(
+                    error,
+                    format!("Failed to delete ECR repository policy for '{repo_name}'"),
+                    Some(repo_name.to_string()),
+                )),
+            };
+        }
 
         let request = SetRepositoryPolicyRequest::builder()
             .repository_name(repo_name.to_string())
@@ -771,24 +798,38 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             }
         };
 
-        let mut filtered_account_ids = current_aws_access.account_ids;
-        let mut filtered_regions = current_aws_access.regions;
-        let mut filtered_service_types = current_aws_access.allowed_service_types;
-        let mut filtered_role_arns = current_aws_access.role_arns;
+        let mut policy_regions = current_aws_access.regions.clone();
+        policy_regions.extend(aws_access.regions.iter().cloned());
+        policy_regions.sort();
+        policy_regions.dedup();
+        let filtered_access = remaining_cross_account_access(current_aws_access, &aws_access);
 
-        filtered_account_ids.retain(|id| !aws_access.account_ids.contains(id));
-        filtered_regions.retain(|r| !aws_access.regions.contains(r));
-        filtered_service_types
-            .retain(|service_type| !aws_access.allowed_service_types.contains(service_type));
-        filtered_role_arns.retain(|arn| !aws_access.role_arns.contains(arn));
-
-        let filtered_access = AwsCrossAccountAccess {
-            account_ids: filtered_account_ids,
-            regions: filtered_regions,
-            allowed_service_types: filtered_service_types,
-            role_arns: filtered_role_arns,
-        };
-
+        // Replicas first: the source policy is what a retry reads to find their regions, so it
+        // changes only once every replica has.
+        for region in policy_regions {
+            if region == self.credentials.region() {
+                continue;
+            }
+            let client = self
+                .policy_management_client(&region, &full_repo_name)
+                .await?;
+            match self
+                .set_full_policy_with_client(&client, &full_repo_name, &filtered_access)
+                .await
+            {
+                Ok(()) => {}
+                // A replica that never arrived holds no grant. Stopping here would also leave
+                // the source grant, and the caller reads this 404 as a repository already gone.
+                Err(error) if error.http_status_code == Some(404) => {
+                    info!(
+                        full_repo_name = %full_repo_name,
+                        region = %region,
+                        "Replica repository is missing, so it holds no grant to revoke"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
         self.set_full_policy(&full_repo_name, &filtered_access)
             .await
     }
@@ -830,7 +871,12 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
         let response = match response {
             Ok(response) => response,
-            Err(_) => {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
                 return Ok(CrossAccountPermissions {
                     access: CrossAccountAccess::Aws(AwsCrossAccountAccess {
                         account_ids: Vec::new(),
@@ -840,6 +886,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                     }),
                     last_updated: None,
                 });
+            }
+            Err(error) => {
+                return Err(map_cloud_client_error(
+                    error,
+                    format!("Failed to read ECR repository policy for '{repo_id}'"),
+                    Some(repo_id.to_string()),
+                ))
             }
         };
 
@@ -853,67 +906,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 response_json: response.policy_text.clone(),
             })?;
 
-        let mut account_ids = Vec::new();
-        let mut role_arns = Vec::new();
-        let mut allowed_service_types = Vec::new();
-
-        if let Some(statements) = policy["Statement"].as_array() {
-            for statement in statements {
-                // Check for cross-account role permissions
-                if statement["Sid"] == "CrossAccountRolePermission" {
-                    if let Some(principals) = statement["Principal"]["AWS"].as_array() {
-                        for principal in principals {
-                            if let Some(principal_str) = principal.as_str() {
-                                // AWS replaces deleted role ARNs with role unique IDs (e.g. "AROA...")
-                                // in existing policies. Filter these out to avoid "Principal not found"
-                                // errors when rewriting the policy.
-                                if !principal_str.starts_with("arn:") {
-                                    warn!(
-                                        principal = %principal_str,
-                                        "Skipping stale principal in ECR policy (deleted role replaced by unique ID)"
-                                    );
-                                    continue;
-                                }
-                                role_arns.push(principal_str.to_string());
-                                // Extract account ID from role ARN: arn:aws:iam::ACCOUNT_ID:role/RoleName
-                                if let Some(account_id) = principal_str.split(':').nth(4) {
-                                    account_ids.push(account_id.to_string());
-                                }
-                            }
-                        }
-                    } else if let Some(principal) = statement["Principal"]["AWS"].as_str() {
-                        if !principal.starts_with("arn:") {
-                            warn!(
-                                principal = %principal,
-                                "Skipping stale principal in ECR policy (deleted role replaced by unique ID)"
-                            );
-                        } else {
-                            role_arns.push(principal.to_string());
-                            if let Some(account_id) = principal.split(':').nth(4) {
-                                account_ids.push(account_id.to_string());
-                            }
-                        }
-                    }
-                }
-
-                // Check for Lambda service access (both old and new Sid names)
-                if statement["Sid"] == "LambdaECRImageCrossAccountRetrievalPolicy"
-                    || statement["Sid"] == "LambdaServiceAccess"
-                {
-                    if statement["Principal"]["Service"] == "lambda.amazonaws.com" {
-                        allowed_service_types.push(ComputeServiceType::Worker);
-                    }
-                }
-            }
-        }
-
-        // Remove duplicates
-        account_ids.sort();
-        account_ids.dedup();
-        role_arns.sort();
-        role_arns.dedup();
-        allowed_service_types.sort_by_key(|rt| format!("{:?}", rt));
-        allowed_service_types.dedup();
+        let access = parse_cross_account_repository_policy(&policy);
+        let AwsCrossAccountAccess {
+            account_ids,
+            regions,
+            allowed_service_types,
+            role_arns,
+        } = access;
 
         info!(
             repo_id = %repo_id,
@@ -927,7 +926,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         Ok(CrossAccountPermissions {
             access: CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids,
-                regions: Vec::new(),
+                regions,
                 allowed_service_types,
                 role_arns,
             }),
@@ -1138,9 +1137,177 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 }
 
+/// A surviving deployment role still needs its account's Lambda image grant. Keep that
+/// shared service grant until the final role/account consumer is removed.
+fn remaining_cross_account_access(
+    mut current: AwsCrossAccountAccess,
+    removed: &AwsCrossAccountAccess,
+) -> AwsCrossAccountAccess {
+    current
+        .role_arns
+        .retain(|arn| !removed.role_arns.contains(arn));
+    current
+        .account_ids
+        .retain(|id| !removed.account_ids.contains(id));
+    for arn in &current.role_arns {
+        if let Some(account_id) = arn.split(':').nth(4) {
+            current.account_ids.push(account_id.to_string());
+        }
+    }
+    current.account_ids.sort();
+    current.account_ids.dedup();
+    if current.account_ids.is_empty() {
+        current.regions.clear();
+        current.allowed_service_types.clear();
+    }
+    current
+}
+
+fn parse_cross_account_repository_policy(policy: &Value) -> AwsCrossAccountAccess {
+    let mut account_ids = Vec::new();
+    let mut role_arns = Vec::new();
+    let mut allowed_service_types = Vec::new();
+    let mut regions = Vec::new();
+
+    if let Some(statements) = policy["Statement"].as_array() {
+        for statement in statements {
+            // Check for cross-account role permissions
+            if statement["Sid"] == "CrossAccountRolePermission" {
+                if let Some(principals) = statement["Principal"]["AWS"].as_array() {
+                    for principal in principals {
+                        if let Some(principal_str) = principal.as_str() {
+                            // AWS replaces deleted role ARNs with role unique IDs (e.g. "AROA...")
+                            // in existing policies. Filter these out to avoid "Principal not found"
+                            // errors when rewriting the policy.
+                            if !principal_str.starts_with("arn:") {
+                                warn!(
+                                    principal = %principal_str,
+                                    "Skipping stale principal in ECR policy (deleted role replaced by unique ID)"
+                                );
+                                continue;
+                            }
+                            if !principal_str.ends_with(":root") {
+                                role_arns.push(principal_str.to_string());
+                            }
+                            // Extract account ID from role ARN: arn:aws:iam::ACCOUNT_ID:role/RoleName
+                            if let Some(account_id) = principal_str.split(':').nth(4) {
+                                account_ids.push(account_id.to_string());
+                            }
+                        }
+                    }
+                } else if let Some(principal) = statement["Principal"]["AWS"].as_str() {
+                    if !principal.starts_with("arn:") {
+                        warn!(
+                            principal = %principal,
+                            "Skipping stale principal in ECR policy (deleted role replaced by unique ID)"
+                        );
+                    } else {
+                        if !principal.ends_with(":root") {
+                            role_arns.push(principal.to_string());
+                        }
+                        if let Some(account_id) = principal.split(':').nth(4) {
+                            account_ids.push(account_id.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Check for Lambda service access (both old and new Sid names)
+            if statement["Sid"] == "LambdaECRImageCrossAccountRetrievalPolicy"
+                || statement["Sid"] == "LambdaServiceAccess"
+            {
+                if statement["Principal"]["Service"] == "lambda.amazonaws.com" {
+                    allowed_service_types.push(ComputeServiceType::Worker);
+                    let source_arns = &statement["Condition"]["StringLike"]["aws:sourceArn"];
+                    let arns: Vec<&str> = match source_arns {
+                        Value::String(arn) => vec![arn.as_str()],
+                        Value::Array(arns) => arns.iter().filter_map(Value::as_str).collect(),
+                        _ => Vec::new(),
+                    };
+                    for arn in arns {
+                        if let Some(region) = arn
+                            .split(':')
+                            .nth(3)
+                            .filter(|region| !region.is_empty() && *region != "*")
+                        {
+                            regions.push(region.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove duplicates
+    account_ids.sort();
+    account_ids.dedup();
+    role_arns.sort();
+    role_arns.dedup();
+    allowed_service_types.sort_by_key(|rt| format!("{:?}", rt));
+    allowed_service_types.dedup();
+    regions.sort();
+    regions.dedup();
+    AwsCrossAccountAccess {
+        account_ids,
+        regions,
+        allowed_service_types,
+        role_arns,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_one_deployment_preserves_its_siblings_lambda_pull_access() {
+        let role_a = "arn:aws:iam::123456789012:role/deployment-a-management".to_string();
+        let role_b = "arn:aws:iam::123456789012:role/deployment-b-management".to_string();
+        let current = AwsCrossAccountAccess {
+            account_ids: vec!["123456789012".to_string()],
+            regions: vec!["us-east-2".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            role_arns: vec![role_a.clone(), role_b.clone()],
+        };
+        let removed = AwsCrossAccountAccess {
+            role_arns: vec![role_a],
+            ..current.clone()
+        };
+        let remaining = remaining_cross_account_access(current, &removed);
+        assert_eq!(remaining.role_arns, vec![role_b.clone()]);
+        assert_eq!(remaining.account_ids, vec!["123456789012"]);
+        assert_eq!(
+            remaining.allowed_service_types,
+            vec![ComputeServiceType::Worker]
+        );
+        assert_eq!(remaining.regions, vec!["us-east-2"]);
+        let removed = AwsCrossAccountAccess {
+            role_arns: vec![role_b],
+            ..removed
+        };
+        let final_access = remaining_cross_account_access(remaining, &removed);
+        assert!(cross_account_repository_policy(&final_access)["Statement"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn account_roots_are_not_retained_as_roles_after_account_revocation() {
+        let policy = cross_account_repository_policy(&AwsCrossAccountAccess {
+            account_ids: vec!["123456789012".to_string()],
+            regions: vec!["us-east-2".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            role_arns: vec!["arn:aws:iam::123456789012:role/management".to_string()],
+        });
+        let access = parse_cross_account_repository_policy(&policy);
+        assert_eq!(access.account_ids, vec!["123456789012"]);
+        assert_eq!(
+            access.role_arns,
+            vec!["arn:aws:iam::123456789012:role/management"]
+        );
+        assert_eq!(access.regions, vec!["us-east-2"]);
+    }
 
     #[test]
     fn lookup_tries_the_routable_name_before_the_logical_one() {

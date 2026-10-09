@@ -200,6 +200,16 @@ Resources:
               - RegistryRepository
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+          - Sid: RegionalRepositoryPolicies
+            Effect: Allow
+            Action:
+            - ecr:GetRepositoryPolicy
+            - ecr:DeleteRepositoryPolicy
+            - ecr:SetRepositoryPolicy
+            - ecr:DescribeRepositories
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${AWS::StackName}-registry
+            - Fn::Sub: arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
         Value: setup
