@@ -162,9 +162,78 @@ pub mod wait_until_extension {
                         );
                     }
 
+                    // Returning lets Lambda freeze the environment, and a batch still pending
+                    // then waits for the next invocation, or is lost if none comes. Export it
+                    // now, after the drain, so wait_until output is included.
+                    if let Err(e) = crate::otlp::flush_otlp_logs().await {
+                        error!(
+                            request_id = %request_id,
+                            error = %e,
+                            "Failed to export application logs after the invocation"
+                        );
+                    }
+
                     Ok(())
                 }
             }
+        }
+    }
+
+    #[cfg(all(test, feature = "otlp"))]
+    mod tests {
+        use super::*;
+        use lambda_extension::{InvokeEvent, Tracing};
+        use opentelemetry::logs::AnyValue;
+        use opentelemetry_sdk::logs::{
+            BatchConfigBuilder, BatchLogProcessor, InMemoryLogExporter, SdkLoggerProvider,
+        };
+        use std::time::Duration;
+
+        #[tokio::test]
+        async fn an_invocation_exports_its_logs_before_lambda_freezes_the_environment() {
+            let exporter = InMemoryLogExporter::default();
+            // A batch that would wait an hour, so only an explicit flush exports it.
+            let processor = BatchLogProcessor::builder(exporter.clone())
+                .with_batch_config(
+                    BatchConfigBuilder::default()
+                        .with_scheduled_delay(Duration::from_secs(3600))
+                        .build(),
+                )
+                .build();
+            crate::otlp::store_otlp_provider(
+                SdkLoggerProvider::builder()
+                    .with_log_processor(processor)
+                    .build(),
+            );
+            crate::otlp::emit_log("stdout", "[e2e-endpoint] release=v2", 0);
+
+            let (request_done, request_done_receiver) = tokio::sync::mpsc::unbounded_channel();
+            let extension = WaitUntilExtension::new(request_done_receiver);
+            request_done.send(()).expect("the extension is listening");
+            extension
+                .invoke(LambdaEvent {
+                    next: NextEvent::Invoke(InvokeEvent {
+                        deadline_ms: 0,
+                        request_id: "request-1".to_string(),
+                        invoked_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:f"
+                            .to_string(),
+                        tracing: Tracing::default(),
+                    }),
+                })
+                .await
+                .expect("the invocation completes");
+
+            let exported = exporter.get_emitted_logs().expect("exporter is readable");
+            let bodies: Vec<_> = exported
+                .iter()
+                .map(|log| log.record.body().cloned())
+                .collect();
+            assert_eq!(
+                bodies,
+                vec![Some(AnyValue::String(
+                    "[e2e-endpoint] release=v2".to_string().into()
+                ))]
+            );
         }
     }
 }
