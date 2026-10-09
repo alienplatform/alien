@@ -17,10 +17,10 @@ use alien_azure_clients::models::container_apps::{
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    primary_public_endpoint_url, AzureContainerAppsWorkerHeartbeatData, CertificateStatus,
-    DnsRecordStatus, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
-    RemoteStackManagement, RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
+    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
     WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -2567,21 +2567,10 @@ impl AzureWorkerController {
                     self.container_app_url = container_app_url.clone();
 
                     // Check for URL override in deployment config, otherwise use Container App URL
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(&func_cfg.id))
-                        .and_then(|endpoints| {
-                            primary_public_endpoint_url(
-                                endpoints,
-                                func_cfg
-                                    .public_endpoints
-                                    .first()
-                                    .map(|endpoint| endpoint.name.as_str()),
-                            )
-                            .cloned()
-                        })
+                    self.url = func_cfg
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or(container_app_url);
 
                     Ok(HandlerAction::Continue {
@@ -3977,21 +3966,10 @@ impl AzureWorkerController {
                 self.container_apps_certificate_id = domain_info.container_apps_certificate_id;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| {
-                            primary_public_endpoint_url(
-                                endpoints,
-                                config
-                                    .public_endpoints
-                                    .first()
-                                    .map(|endpoint| endpoint.name.as_str()),
-                            )
-                            .cloned()
-                        })
+                    self.url = config
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -4026,21 +4004,8 @@ impl AzureWorkerController {
 
         // Check for URL override in deployment config, otherwise use Container App URL
         if let Ok(config) = ctx.desired_resource_config::<Worker>() {
-            self.url = ctx
-                .deployment_config
-                .public_endpoints
-                .as_ref()
-                .and_then(|resources| resources.get(&config.id))
-                .and_then(|endpoints| {
-                    primary_public_endpoint_url(
-                        endpoints,
-                        config
-                            .public_endpoints
-                            .first()
-                            .map(|endpoint| endpoint.name.as_str()),
-                    )
-                    .cloned()
-                })
+            self.url = config
+                .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
                 .or(container_app_url);
         } else {
             self.url = container_app_url;

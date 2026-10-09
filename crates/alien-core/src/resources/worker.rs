@@ -231,6 +231,19 @@ impl Worker {
         &self.permissions
     }
 
+    /// The URL `urls` assigns to this worker's primary public endpoint, the first one
+    /// it declares. See [`crate::primary_public_endpoint_url`].
+    pub fn configured_primary_public_url(
+        &self,
+        urls: Option<&crate::PublicEndpointUrls>,
+    ) -> Option<String> {
+        let first_declared_endpoint = self
+            .public_endpoints
+            .first()
+            .map(|endpoint| endpoint.name.as_str());
+        crate::primary_public_endpoint_url(urls?.get(&self.id)?, first_declared_endpoint).cloned()
+    }
+
     fn validate_public_endpoints(&self) -> Result<()> {
         let mut endpoint_names = std::collections::HashSet::new();
         let mut apex_endpoint_name: Option<&str> = None;

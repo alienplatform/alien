@@ -40,11 +40,10 @@ use alien_aws_clients::lambda::{
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    primary_public_endpoint_url, standard_resource_tags, AwsLambdaWorkerHeartbeatData,
-    CertificateStatus, DnsRecordStatus, HeartbeatBackend, Network, NetworkSettings, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
-    WorkloadHeartbeatStatus,
+    standard_resource_tags, AwsLambdaWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
+    HeartbeatBackend, Network, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
+    ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -202,21 +201,10 @@ impl AwsWorkerController {
                 self.certificate_arn = domain_info.certificate_arn;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| {
-                            primary_public_endpoint_url(
-                                endpoints,
-                                config
-                                    .public_endpoints
-                                    .first()
-                                    .map(|endpoint| endpoint.name.as_str()),
-                            )
-                            .cloned()
-                        })
+                    self.url = config
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -610,20 +598,10 @@ impl AwsWorkerController {
                     self.domain_name = Some(domain_info.fqdn.clone());
 
                     // Check for URL override in deployment config, otherwise use domain FQDN
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(&cfg.id))
-                        .and_then(|endpoints| {
-                            primary_public_endpoint_url(
-                                endpoints,
-                                cfg.public_endpoints
-                                    .first()
-                                    .map(|endpoint| endpoint.name.as_str()),
-                            )
-                            .cloned()
-                        })
+                    self.url = cfg
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 None => {
@@ -5795,6 +5773,57 @@ mod tests {
             domain_metadata,
             public_endpoints,
         )
+    }
+
+    /// A worker with two public endpoints reports its first declared endpoint's URL in
+    /// every run, whatever order the deployment config's endpoint URL map iterates in.
+    #[tokio::test]
+    async fn worker_reports_first_declared_endpoint_url_in_every_run() {
+        for _ in 0..16 {
+            let mut worker = function_public_ingress();
+            worker.public_endpoints.push(WorkerPublicEndpoint {
+                name: "admin".to_string(),
+                host_label: Some("admin".to_string()),
+                wildcard_subdomains: false,
+            });
+            let worker_name = format!("test-{}", worker.id);
+            let (mock_provider, _mock_server, domain_metadata, _) =
+                setup_mocks_for_function(&worker, &worker_name, false);
+            // A fresh map per run gets its own hash seed, as a newly loaded deployment
+            // config does, so its iteration order varies between runs.
+            let urls = HashMap::from([(
+                worker.id.clone(),
+                HashMap::from([
+                    ("api".to_string(), "https://api.example.test".to_string()),
+                    ("admin".to_string(), "https://admin.example.test".to_string()),
+                ]),
+            )]);
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker)
+                .controller(AwsWorkerController::default())
+                .platform(Platform::Aws)
+                .service_provider(mock_provider)
+                .domain_metadata(domain_metadata.expect("public worker has domain metadata"))
+                .public_endpoints(urls)
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor builds");
+
+            executor
+                .run_until_terminal()
+                .await
+                .expect("create flow completes");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let outputs = executor.outputs().expect("worker has outputs");
+            let outputs = outputs
+                .downcast_ref::<WorkerOutputs>()
+                .expect("worker outputs");
+            assert_eq!(
+                outputs.public_endpoints["default"].url,
+                "https://api.example.test"
+            );
+        }
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────

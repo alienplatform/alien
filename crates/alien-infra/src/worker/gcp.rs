@@ -26,11 +26,10 @@ use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
-    primary_public_endpoint_url, CertificateStatus, DnsRecordStatus,
-    GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
-    WorkloadHeartbeatStatus,
+    CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
+    WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use alien_macros::controller;
@@ -720,21 +719,8 @@ impl GcpWorkerController {
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
         let config = ctx.desired_resource_config::<Worker>()?;
-        self.url = ctx
-            .deployment_config
-            .public_endpoints
-            .as_ref()
-            .and_then(|resources| resources.get(&config.id))
-            .and_then(|endpoints| {
-                primary_public_endpoint_url(
-                    endpoints,
-                    config
-                        .public_endpoints
-                        .first()
-                        .map(|endpoint| endpoint.name.as_str()),
-                )
-                .cloned()
-            })
+        self.url = config
+            .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
             .or(cloud_run_url);
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
@@ -4421,21 +4407,10 @@ impl GcpWorkerController {
                 self.ssl_certificate_name = domain_info.ssl_certificate_name;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
-                    self.url = ctx
-                        .deployment_config
-                        .public_endpoints
-                        .as_ref()
-                        .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| {
-                            primary_public_endpoint_url(
-                                endpoints,
-                                config
-                                    .public_endpoints
-                                    .first()
-                                    .map(|endpoint| endpoint.name.as_str()),
-                            )
-                            .cloned()
-                        })
+                    self.url = config
+                        .configured_primary_public_url(
+                            ctx.deployment_config.public_endpoints.as_ref(),
+                        )
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
