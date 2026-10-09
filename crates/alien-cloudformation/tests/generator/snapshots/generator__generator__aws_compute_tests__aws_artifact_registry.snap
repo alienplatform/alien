@@ -204,6 +204,7 @@ Resources:
             Effect: Allow
             Action:
             - ecr:GetRepositoryPolicy
+            - ecr:DeleteRepositoryPolicy
             - ecr:SetRepositoryPolicy
             - ecr:DescribeRepositories
             Resource:
