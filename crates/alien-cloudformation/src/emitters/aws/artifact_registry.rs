@@ -178,37 +178,49 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
         ]);
     }
 
+    let mut statements = vec![
+        CfExpression::object([
+            ("Sid", CfExpression::from("GetAuthorizationToken")),
+            ("Effect", CfExpression::from("Allow")),
+            ("Action", CfExpression::from("ecr:GetAuthorizationToken")),
+            ("Resource", CfExpression::from("*")),
+        ]),
+        CfExpression::object([
+            ("Sid", CfExpression::from("RepositoryAccess")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list(repository_actions.into_iter().map(CfExpression::from)),
+            ),
+            (
+                "Resource",
+                CfExpression::list([
+                    CfExpression::get_att(repository_id, "Arn"),
+                    CfExpression::sub(format!(
+                        "arn:${{AWS::Partition}}:ecr:${{AWS::Region}}:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*",
+                        registry.id()
+                    )),
+                ]),
+            ),
+        ]),
+    ];
+    if push {
+        // Replication copies images, but each regional repository needs its own pull policy.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("RegionalRepositoryPolicies")),
+            ("Effect", CfExpression::from("Allow")),
+            ("Action", CfExpression::list([
+                "ecr:GetRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories",
+            ].into_iter().map(CfExpression::from))),
+            ("Resource", CfExpression::list([
+                CfExpression::sub(format!("arn:${{AWS::Partition}}:ecr:*:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}", registry.id())),
+                CfExpression::sub(format!("arn:${{AWS::Partition}}:ecr:*:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*", registry.id())),
+            ])),
+        ]));
+    }
     Ok(CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
-        (
-            "Statement",
-            CfExpression::list([
-                CfExpression::object([
-                    ("Sid", CfExpression::from("GetAuthorizationToken")),
-                    ("Effect", CfExpression::from("Allow")),
-                    ("Action", CfExpression::from("ecr:GetAuthorizationToken")),
-                    ("Resource", CfExpression::from("*")),
-                ]),
-                CfExpression::object([
-                    ("Sid", CfExpression::from("RepositoryAccess")),
-                    ("Effect", CfExpression::from("Allow")),
-                    (
-                        "Action",
-                        CfExpression::list(repository_actions.into_iter().map(CfExpression::from)),
-                    ),
-                    (
-                        "Resource",
-                        CfExpression::list([
-                            CfExpression::get_att(repository_id, "Arn"),
-                            CfExpression::sub(format!(
-                                "arn:${{AWS::Partition}}:ecr:${{AWS::Region}}:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*",
-                                registry.id()
-                            )),
-                        ]),
-                    ),
-                ]),
-            ]),
-        ),
+        ("Statement", CfExpression::list(statements)),
     ]))
 }
 

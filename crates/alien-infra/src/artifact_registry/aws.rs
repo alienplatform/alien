@@ -1264,6 +1264,12 @@ impl AwsArtifactRegistryController {
                         "ecr:DeleteRepository"
                     ],
                     "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id)
+                },
+                {
+                    "Sid": "RegionalRepositoryPolicies",
+                    "Effect": "Allow",
+                    "Action": ["ecr:GetRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"],
+                    "Resource": format!("arn:aws:ecr:*:{}:repository/{}-{}-*", aws_cfg.account_id, ctx.resource_prefix, registry_id)
                 }
             ]
         });

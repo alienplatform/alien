@@ -180,39 +180,70 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
         }
     }
 
+    let mut statements = vec![
+        expr::object([
+            (
+                "Sid",
+                Expression::String("GetAuthorizationToken".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::String("ecr:GetAuthorizationToken".to_string()),
+            ),
+            ("Resource", Expression::String("*".to_string())),
+        ]),
+        expr::object([
+            ("Sid", Expression::String("RepositoryAccess".to_string())),
+            ("Effect", Expression::String("Allow".to_string())),
+            ("Action", Expression::Array(actions)),
+            (
+                "Resource",
+                Expression::Array(vec![
+                    expr::traversal(["aws_ecr_repository", repo_label, "arn"]),
+                    expr::raw(format!(
+                        "format(\"%s-*\", aws_ecr_repository.{repo_label}.arn)"
+                    )),
+                ]),
+            ),
+        ]),
+    ];
+    if push {
+        // Keep image access in the source region; policy management also covers replicas.
+        let regional_arn = format!(
+            "replace(aws_ecr_repository.{repo_label}.arn, format(\":%s:\", data.aws_region.current.region), \":*:\")"
+        );
+        statements.push(expr::object([
+            (
+                "Sid",
+                Expression::String("RegionalRepositoryPolicies".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::Array(
+                    [
+                        "ecr:GetRepositoryPolicy",
+                        "ecr:SetRepositoryPolicy",
+                        "ecr:DescribeRepositories",
+                    ]
+                    .into_iter()
+                    .map(|action| Expression::String(action.to_string()))
+                    .collect(),
+                ),
+            ),
+            (
+                "Resource",
+                Expression::Array(vec![
+                    expr::raw(regional_arn.clone()),
+                    expr::raw(format!("format(\"%s-*\", {regional_arn})")),
+                ]),
+            ),
+        ]));
+    }
     let policy = jsonencode(expr::object([
         ("Version", Expression::String("2012-10-17".to_string())),
-        (
-            "Statement",
-            Expression::Array(vec![
-                expr::object([
-                    (
-                        "Sid",
-                        Expression::String("GetAuthorizationToken".to_string()),
-                    ),
-                    ("Effect", Expression::String("Allow".to_string())),
-                    (
-                        "Action",
-                        Expression::String("ecr:GetAuthorizationToken".to_string()),
-                    ),
-                    ("Resource", Expression::String("*".to_string())),
-                ]),
-                expr::object([
-                    ("Sid", Expression::String("RepositoryAccess".to_string())),
-                    ("Effect", Expression::String("Allow".to_string())),
-                    ("Action", Expression::Array(actions)),
-                    (
-                        "Resource",
-                        Expression::Array(vec![
-                            expr::traversal(["aws_ecr_repository", repo_label, "arn"]),
-                            expr::raw(format!(
-                                "format(\"%s-*\", aws_ecr_repository.{repo_label}.arn)"
-                            )),
-                        ]),
-                    ),
-                ]),
-            ]),
-        ),
+        ("Statement", Expression::Array(statements)),
     ]));
 
     resource_block(
