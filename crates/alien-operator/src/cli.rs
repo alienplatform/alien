@@ -1172,9 +1172,14 @@ fn parse_platform(s: &str) -> std::result::Result<Platform, String> {
 /// Parse `OPERATOR_OPERATIONS`. An Operator installed on its own has no stack,
 /// so setting values must be literals or local environment variables.
 fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::OperationsConfig>> {
-    let Some(config) = parse_json_opt::<alien_core::OperationsConfig>(json, "operations")? else {
+    let Some(value) = parse_json_opt::<serde_json::Value>(json, "operations")? else {
         return Ok(None);
     };
+    let config: alien_core::OperationsConfig = serde_json::from_value(with_plugins_key(value))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Invalid operations JSON".to_string(),
+        })?;
     let plugins = config
         .plugins
         .iter()
@@ -1201,6 +1206,23 @@ fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::
         }
     }
     Ok((!config.is_empty()).then_some(config))
+}
+
+/// Earlier Operators read `OPERATOR_OPERATIONS` as the plugin map itself, as in
+/// `{"kubernetes":{"approval":{"get-pods":"auto"}}}`. Helm values written for them
+/// have no `plugins` key, and would otherwise parse as an empty declaration.
+fn with_plugins_key(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map)
+            if !map.is_empty() && !map.contains_key("plugins") && !map.contains_key("custom") =>
+        {
+            warn!(
+                "OPERATOR_OPERATIONS has no `plugins` key; reading its entries as built-in plugins"
+            );
+            serde_json::json!({ "plugins": map })
+        }
+        other => other,
+    }
 }
 
 fn parse_json_opt<T: serde::de::DeserializeOwned>(
@@ -1621,6 +1643,24 @@ mod tests {
         assert!(parse_operator_operations(Some("{}".to_string()))
             .expect("an empty declaration parses")
             .is_none());
+    }
+
+    #[test]
+    fn operator_operations_read_a_plugin_map_without_the_plugins_key() {
+        let parsed = parse_operator_operations(Some(
+            r#"{"kubernetes":{"approval":{"get-pods":"auto"}}}"#.to_string(),
+        ))
+        .expect("the earlier plugin-map shape parses")
+        .expect("a declared plugin yields a config");
+        assert_eq!(parsed.plugins.keys().collect::<Vec<_>>(), ["kubernetes"]);
+        assert_eq!(
+            parsed,
+            parse_operator_operations(Some(
+                r#"{"plugins":{"kubernetes":{"approval":{"get-pods":"auto"}}}}"#.to_string(),
+            ))
+            .expect("the current shape parses")
+            .expect("a declared plugin yields a config"),
+        );
     }
 
     #[test]
