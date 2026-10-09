@@ -260,7 +260,6 @@ fn service_account_policy_document(
                 BindingTarget::Resource,
                 context
                     .clone()
-                    .with_stack_prefix("${AWS::StackName}")
                     .with_resource_name(target_id.clone()),
             ));
         }
