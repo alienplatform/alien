@@ -27,7 +27,8 @@ import { Result } from "../types/fp.js";
 
 export function deploymentsSetDeploymentChannel(
   client: AlienManagerCore,
-  request: operations.SetDeploymentChannelRequest,
+  id: string,
+  setDeploymentChannelRequest: models.SetDeploymentChannelRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -44,14 +45,16 @@ export function deploymentsSetDeploymentChannel(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    setDeploymentChannelRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.SetDeploymentChannelRequest,
+  id: string,
+  setDeploymentChannelRequest: models.SetDeploymentChannelRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -69,8 +72,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.SetDeploymentChannelRequest = {
+    id: id,
+    setDeploymentChannelRequest: setDeploymentChannelRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.SetDeploymentChannelRequest$outboundSchema.parse(value),
     "Input validation failed",

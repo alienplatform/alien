@@ -5,6 +5,7 @@ sources:
         inputs:
             - location: ../openapi.json
         overlays:
+            - location: ../../speakeasy-overlay.yaml
             - location: ../speakeasy-overlay.yaml
         registry:
             location: registry.speakeasyapi.dev/alien-ehq/alien/platform-api

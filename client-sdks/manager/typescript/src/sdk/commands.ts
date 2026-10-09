@@ -68,12 +68,14 @@ export class Commands extends ClientSDK {
    * migrating payload data. Does not validate command existence or state.
    */
   async storeCommandPayload(
-    request: operations.StoreCommandPayloadRequest,
+    commandId: string,
+    storePayloadRequest: models.StorePayloadRequest,
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(commandsStoreCommandPayload(
       this,
-      request,
+      commandId,
+      storePayloadRequest,
       options,
     ));
   }
@@ -82,12 +84,14 @@ export class Commands extends ClientSDK {
    * Submit response from deployment
    */
   async submitResponse(
-    request: operations.SubmitResponseRequest,
+    commandId: string,
+    commandResponse: models.CommandResponse,
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(commandsSubmitResponse(
       this,
-      request,
+      commandId,
+      commandResponse,
       options,
     ));
   }
@@ -96,12 +100,14 @@ export class Commands extends ClientSDK {
    * Mark upload as complete
    */
   async uploadComplete(
-    request: operations.UploadCompleteRequest,
+    commandId: string,
+    uploadCompleteRequest: models.UploadCompleteRequest,
     options?: RequestOptions,
   ): Promise<models.UploadCompleteResponse> {
     return unwrapAsync(commandsUploadComplete(
       this,
-      request,
+      commandId,
+      uploadCompleteRequest,
       options,
     ));
   }

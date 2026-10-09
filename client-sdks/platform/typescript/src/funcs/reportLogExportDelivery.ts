@@ -28,7 +28,8 @@ import { Result } from "../types/fp.js";
 
 export function reportLogExportDelivery(
   client: AlienCore,
-  request: operations.ReportLogExportDeliveryRequest,
+  id: string,
+  requestBody?: operations.ReportLogExportDeliveryRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -46,14 +47,16 @@ export function reportLogExportDelivery(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ReportLogExportDeliveryRequest,
+  id: string,
+  requestBody?: operations.ReportLogExportDeliveryRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -72,8 +75,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ReportLogExportDeliveryRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ReportLogExportDeliveryRequest$outboundSchema.parse(value),
     "Input validation failed",

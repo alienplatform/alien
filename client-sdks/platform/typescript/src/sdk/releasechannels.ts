@@ -35,12 +35,14 @@ export class ReleaseChannels extends ClientSDK {
    * Create a release channel for a project.
    */
   async create(
-    request: operations.CreateReleaseChannelRequest,
+    project: string,
+    requestBody?: operations.CreateReleaseChannelRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.ReleaseChannel> {
     return unwrapAsync(releaseChannelsCreate(
       this,
-      request,
+      project,
+      requestBody,
       options,
     ));
   }

@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function workspacesUpdate(
   client: AlienCore,
-  request: operations.UpdateWorkspaceRequest,
+  id: string,
+  requestBody?: operations.UpdateWorkspaceRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function workspacesUpdate(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateWorkspaceRequest,
+  id: string,
+  requestBody?: operations.UpdateWorkspaceRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateWorkspaceRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.UpdateWorkspaceRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

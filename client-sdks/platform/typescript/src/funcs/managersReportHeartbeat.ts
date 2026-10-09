@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function managersReportHeartbeat(
   client: AlienCore,
-  request: operations.ReportManagerHeartbeatRequest,
+  id: string,
+  managerHeartbeatRequest?: models.ManagerHeartbeatRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function managersReportHeartbeat(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    managerHeartbeatRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ReportManagerHeartbeatRequest,
+  id: string,
+  managerHeartbeatRequest?: models.ManagerHeartbeatRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ReportManagerHeartbeatRequest = {
+    id: id,
+    managerHeartbeatRequest: managerHeartbeatRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ReportManagerHeartbeatRequest$outboundSchema.parse(value),
     "Input validation failed",

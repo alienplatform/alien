@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type OperationsDenyAccessRequestMutationVariables = {
-  request: operations.DenyAccessRequestRequest;
+  id: string;
+  requestBody?: operations.DenyAccessRequestRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +84,8 @@ export function buildOperationsDenyAccessRequestMutation(
   return {
     mutationKey: mutationKeyOperationsDenyAccessRequest(),
     mutationFn: function operationsDenyAccessRequestMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<OperationsDenyAccessRequestMutationData> {
       const mergedOptions = {
@@ -100,7 +102,8 @@ export function buildOperationsDenyAccessRequestMutation(
       };
       return unwrapAsync(operationsDenyAccessRequest(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

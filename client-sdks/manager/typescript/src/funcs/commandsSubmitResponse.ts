@@ -22,6 +22,7 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
@@ -31,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function commandsSubmitResponse(
   client: AlienManagerCore,
-  request: operations.SubmitResponseRequest,
+  commandId: string,
+  commandResponse: models.CommandResponse,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -49,14 +51,16 @@ export function commandsSubmitResponse(
 > {
   return new APIPromise($do(
     client,
-    request,
+    commandId,
+    commandResponse,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.SubmitResponseRequest,
+  commandId: string,
+  commandResponse: models.CommandResponse,
   options?: RequestOptions,
 ): Promise<
   [
@@ -75,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.SubmitResponseRequest = {
+    commandId: commandId,
+    commandResponse: commandResponse,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.SubmitResponseRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

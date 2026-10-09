@@ -28,7 +28,8 @@ import { Result } from "../types/fp.js";
 
 export function decommissionAwsVirtualKey(
   client: AlienCore,
-  request: operations.DecommissionAwsVirtualKeyRequest,
+  id: string,
+  requestBody?: operations.DecommissionAwsVirtualKeyRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -46,14 +47,16 @@ export function decommissionAwsVirtualKey(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.DecommissionAwsVirtualKeyRequest,
+  id: string,
+  requestBody?: operations.DecommissionAwsVirtualKeyRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -72,8 +75,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.DecommissionAwsVirtualKeyRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.DecommissionAwsVirtualKeyRequest$outboundSchema.parse(value),
     "Input validation failed",

@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type OperationsVerifyCheckMutationVariables = {
-  request: operations.VerifyOperationCheckRequest;
+  project: string;
+  verifyOperationCheckRequest?: models.VerifyOperationCheckRequest | undefined;
   options?: RequestOptions;
 };
 
@@ -84,7 +84,8 @@ export function buildOperationsVerifyCheckMutation(
   return {
     mutationKey: mutationKeyOperationsVerifyCheck(),
     mutationFn: function operationsVerifyCheckMutationFn({
-      request,
+      project,
+      verifyOperationCheckRequest,
       options,
     }): Promise<OperationsVerifyCheckMutationData> {
       const mergedOptions = {
@@ -101,7 +102,8 @@ export function buildOperationsVerifyCheckMutation(
       };
       return unwrapAsync(operationsVerifyCheck(
         client$,
-        request,
+        project,
+        verifyOperationCheckRequest,
         mergedOptions,
       ));
     },

@@ -28,7 +28,8 @@ import { Result } from "../types/fp.js";
 
 export function rotateAwsVirtualKeyCredential(
   client: AlienCore,
-  request: operations.RotateAwsVirtualKeyCredentialRequest,
+  id: string,
+  requestBody?: operations.RotateAwsVirtualKeyCredentialRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -46,14 +47,16 @@ export function rotateAwsVirtualKeyCredential(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.RotateAwsVirtualKeyCredentialRequest,
+  id: string,
+  requestBody?: operations.RotateAwsVirtualKeyCredentialRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -72,8 +75,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.RotateAwsVirtualKeyCredentialRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.RotateAwsVirtualKeyCredentialRequest$outboundSchema.parse(
         value,

@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type CommandsUpdateMutationVariables = {
-  request: operations.UpdateCommandRequest;
+  id: string;
+  updateCommandRequest?: models.UpdateCommandRequest | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +83,8 @@ export function buildCommandsUpdateMutation(
   return {
     mutationKey: mutationKeyCommandsUpdate(),
     mutationFn: function commandsUpdateMutationFn({
-      request,
+      id,
+      updateCommandRequest,
       options,
     }): Promise<CommandsUpdateMutationData> {
       const mergedOptions = {
@@ -100,7 +101,8 @@ export function buildCommandsUpdateMutation(
       };
       return unwrapAsync(commandsUpdate(
         client$,
-        request,
+        id,
+        updateCommandRequest,
         mergedOptions,
       ));
     },

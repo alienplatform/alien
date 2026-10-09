@@ -18,6 +18,11 @@ if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- "$sd
   exit 1
 fi
 
+"$speakeasy_bin" overlay apply --strict \
+  --schema "$repo_root/client-sdks/manager/openapi.json" \
+  --overlay "$repo_root/client-sdks/speakeasy-overlay.yaml" \
+  --out /dev/null
+
 # `--skip-versioning` exists only on `speakeasy run`, which reads the target from
 # .speakeasy/workflow.yaml (source: ../openapi.json).
 (

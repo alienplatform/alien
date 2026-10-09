@@ -47,6 +47,22 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
+   * Update a workspace.
+   */
+  async update(
+    id: string,
+    requestBody?: operations.UpdateWorkspaceRequestBody | undefined,
+    options?: RequestOptions,
+  ): Promise<models.Workspace> {
+    return unwrapAsync(workspacesUpdate(
+      this,
+      id,
+      requestBody,
+      options,
+    ));
+  }
+
+  /**
    * Delete a workspace. The workspace must have no projects.
    */
   async delete(
@@ -54,20 +70,6 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(workspacesDelete(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Update a workspace.
-   */
-  async update(
-    request: operations.UpdateWorkspaceRequest,
-    options?: RequestOptions,
-  ): Promise<models.Workspace> {
-    return unwrapAsync(workspacesUpdate(
       this,
       request,
       options,
@@ -92,10 +94,26 @@ export class Workspaces extends ClientSDK {
    * Add a member to a workspace by email. The user must already have an account.
    */
   async addMember(
-    request: operations.AddWorkspaceMemberRequest,
+    id: string,
+    requestBody?: operations.AddWorkspaceMemberRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.WorkspaceMember> {
     return unwrapAsync(workspacesAddMember(
+      this,
+      id,
+      requestBody,
+      options,
+    ));
+  }
+
+  /**
+   * Update a workspace member's role.
+   */
+  async updateMember(
+    request: operations.UpdateWorkspaceMemberRequest,
+    options?: RequestOptions,
+  ): Promise<models.WorkspaceMember> {
+    return unwrapAsync(workspacesUpdateMember(
       this,
       request,
       options,
@@ -110,20 +128,6 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(workspacesRemoveMember(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Update a workspace member's role.
-   */
-  async updateMember(
-    request: operations.UpdateWorkspaceMemberRequest,
-    options?: RequestOptions,
-  ): Promise<models.WorkspaceMember> {
-    return unwrapAsync(workspacesUpdateMember(
       this,
       request,
       options,
@@ -148,12 +152,16 @@ export class Workspaces extends ClientSDK {
    * Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
    */
   async updateSettings(
-    request: operations.UpdateWorkspaceSettingsRequest,
+    id: string,
+    updateWorkspaceSettingsRequest?:
+      | models.UpdateWorkspaceSettingsRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.AgentSettings> {
     return unwrapAsync(workspacesUpdateSettings(
       this,
-      request,
+      id,
+      updateWorkspaceSettingsRequest,
       options,
     ));
   }

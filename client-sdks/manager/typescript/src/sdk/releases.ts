@@ -93,12 +93,14 @@ export class Releases extends ClientSDK {
   }
 
   async promoteManagerRelease(
-    request: operations.PromoteManagerReleaseRequest,
+    id: string,
+    promoteReleaseRequest: models.PromoteReleaseRequest,
     options?: RequestOptions,
   ): Promise<models.ReleaseChannelResponse> {
     return unwrapAsync(releasesPromoteManagerRelease(
       this,
-      request,
+      id,
+      promoteReleaseRequest,
       options,
     ));
   }

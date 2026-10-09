@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ReportLogExportDeliveryMutationVariables = {
-  request: operations.ReportLogExportDeliveryRequest;
+  id: string;
+  requestBody?: operations.ReportLogExportDeliveryRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildReportLogExportDeliveryMutation(
   return {
     mutationKey: mutationKeyReportLogExportDelivery(),
     mutationFn: function reportLogExportDeliveryMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<ReportLogExportDeliveryMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildReportLogExportDeliveryMutation(
       };
       return unwrapAsync(reportLogExportDelivery(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

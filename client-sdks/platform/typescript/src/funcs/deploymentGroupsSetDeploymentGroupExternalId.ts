@@ -32,7 +32,9 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentGroupsSetDeploymentGroupExternalId(
   client: AlienCore,
-  request: operations.SetDeploymentGroupExternalIdRequest,
+  id: string,
+  setDeploymentGroupExternalIdRequest:
+    models.SetDeploymentGroupExternalIdRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +52,17 @@ export function deploymentGroupsSetDeploymentGroupExternalId(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    setDeploymentGroupExternalIdRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.SetDeploymentGroupExternalIdRequest,
+  id: string,
+  setDeploymentGroupExternalIdRequest:
+    models.SetDeploymentGroupExternalIdRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +81,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.SetDeploymentGroupExternalIdRequest = {
+    id: id,
+    setDeploymentGroupExternalIdRequest: setDeploymentGroupExternalIdRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.SetDeploymentGroupExternalIdRequest$outboundSchema.parse(
         value,

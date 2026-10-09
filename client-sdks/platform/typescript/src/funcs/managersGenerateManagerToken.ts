@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function managersGenerateManagerToken(
   client: AlienCore,
-  request: operations.GenerateManagerTokenRequest,
+  id: string,
+  generateManagerTokenRequest?: models.GenerateManagerTokenRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function managersGenerateManagerToken(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    generateManagerTokenRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.GenerateManagerTokenRequest,
+  id: string,
+  generateManagerTokenRequest?: models.GenerateManagerTokenRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.GenerateManagerTokenRequest = {
+    id: id,
+    generateManagerTokenRequest: generateManagerTokenRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.GenerateManagerTokenRequest$outboundSchema.parse(value),
     "Input validation failed",

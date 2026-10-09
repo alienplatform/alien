@@ -27,7 +27,8 @@ import { Result } from "../types/fp.js";
 
 export function deploymentsDeleteDeployment(
   client: AlienManagerCore,
-  request: operations.DeleteDeploymentRequest,
+  id: string,
+  deleteDeploymentRequest: models.DeleteDeploymentRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -44,14 +45,16 @@ export function deploymentsDeleteDeployment(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    deleteDeploymentRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.DeleteDeploymentRequest,
+  id: string,
+  deleteDeploymentRequest: models.DeleteDeploymentRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -69,8 +72,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.DeleteDeploymentRequest = {
+    id: id,
+    deleteDeploymentRequest: deleteDeploymentRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.DeleteDeploymentRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

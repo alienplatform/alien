@@ -23,13 +23,15 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ProjectsUpdateGcpOAuthProviderMutationVariables = {
-  request: operations.UpdateProjectGcpOAuthProviderRequest;
+  idOrName: string;
+  updateProjectGcpOAuthProvider?:
+    | models.UpdateProjectGcpOAuthProvider
+    | undefined;
   options?: RequestOptions;
 };
 
@@ -84,7 +86,8 @@ export function buildProjectsUpdateGcpOAuthProviderMutation(
   return {
     mutationKey: mutationKeyProjectsUpdateGcpOAuthProvider(),
     mutationFn: function projectsUpdateGcpOAuthProviderMutationFn({
-      request,
+      idOrName,
+      updateProjectGcpOAuthProvider,
       options,
     }): Promise<ProjectsUpdateGcpOAuthProviderMutationData> {
       const mergedOptions = {
@@ -101,7 +104,8 @@ export function buildProjectsUpdateGcpOAuthProviderMutation(
       };
       return unwrapAsync(projectsUpdateGcpOAuthProvider(
         client$,
-        request,
+        idOrName,
+        updateProjectGcpOAuthProvider,
         mergedOptions,
       ));
     },

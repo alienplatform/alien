@@ -23,13 +23,15 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type OperationsSetBuiltinPluginsMutationVariables = {
-  request: operations.SetBuiltinOperationsPluginsRequest;
+  project: string;
+  setBuiltinOperationsPluginsRequest?:
+    | models.SetBuiltinOperationsPluginsRequest
+    | undefined;
   options?: RequestOptions;
 };
 
@@ -84,7 +86,8 @@ export function buildOperationsSetBuiltinPluginsMutation(
   return {
     mutationKey: mutationKeyOperationsSetBuiltinPlugins(),
     mutationFn: function operationsSetBuiltinPluginsMutationFn({
-      request,
+      project,
+      setBuiltinOperationsPluginsRequest,
       options,
     }): Promise<OperationsSetBuiltinPluginsMutationData> {
       const mergedOptions = {
@@ -101,7 +104,8 @@ export function buildOperationsSetBuiltinPluginsMutation(
       };
       return unwrapAsync(operationsSetBuiltinPlugins(
         client$,
-        request,
+        project,
+        setBuiltinOperationsPluginsRequest,
         mergedOptions,
       ));
     },

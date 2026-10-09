@@ -22,6 +22,7 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
@@ -31,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentsUpdateEnvironmentVariables(
   client: AlienCore,
-  request: operations.UpdateDeploymentEnvironmentVariablesRequest,
+  id: string,
+  updateDeploymentEnvironmentVariablesRequest?:
+    | models.UpdateDeploymentEnvironmentVariablesRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -49,14 +53,18 @@ export function deploymentsUpdateEnvironmentVariables(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    updateDeploymentEnvironmentVariablesRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateDeploymentEnvironmentVariablesRequest,
+  id: string,
+  updateDeploymentEnvironmentVariablesRequest?:
+    | models.UpdateDeploymentEnvironmentVariablesRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -75,8 +83,14 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateDeploymentEnvironmentVariablesRequest = {
+    id: id,
+    updateDeploymentEnvironmentVariablesRequest:
+      updateDeploymentEnvironmentVariablesRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.UpdateDeploymentEnvironmentVariablesRequest$outboundSchema
         .parse(value),

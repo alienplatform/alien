@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DecommissionAwsVirtualKeyMutationVariables = {
-  request: operations.DecommissionAwsVirtualKeyRequest;
+  id: string;
+  requestBody?: operations.DecommissionAwsVirtualKeyRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildDecommissionAwsVirtualKeyMutation(
   return {
     mutationKey: mutationKeyDecommissionAwsVirtualKey(),
     mutationFn: function decommissionAwsVirtualKeyMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<DecommissionAwsVirtualKeyMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildDecommissionAwsVirtualKeyMutation(
       };
       return unwrapAsync(decommissionAwsVirtualKey(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

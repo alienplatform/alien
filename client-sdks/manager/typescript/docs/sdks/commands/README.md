@@ -270,10 +270,7 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  await alienManager.commands.storeCommandPayload({
-    commandId: "<id>",
-    storePayloadRequest: {},
-  });
+  await alienManager.commands.storeCommandPayload("<id>", {});
 
 
 }
@@ -297,10 +294,7 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await commandsStoreCommandPayload(alienManager, {
-    commandId: "<id>",
-    storePayloadRequest: {},
-  });
+  const res = await commandsStoreCommandPayload(alienManager, "<id>", {});
   if (res.ok) {
     const { value: result } = res;
 
@@ -316,7 +310,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.StoreCommandPayloadRequest](../../models/operations/storecommandpayloadrequest.md)                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `commandId`                                                                                                                                                                    | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Command identifier                                                                                                                                                             |
+| `storePayloadRequest`                                                                                                                                                          | [models.StorePayloadRequest](../../models/storepayloadrequest.md)                                                                                                              | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -349,13 +344,10 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  await alienManager.commands.submitResponse({
-    commandId: "<id>",
-    commandResponse: {
-      code: "<value>",
-      message: "<value>",
-      status: "error",
-    },
+  await alienManager.commands.submitResponse("<id>", {
+    code: "<value>",
+    message: "<value>",
+    status: "error",
   });
 
 
@@ -380,13 +372,10 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await commandsSubmitResponse(alienManager, {
-    commandId: "<id>",
-    commandResponse: {
-      code: "<value>",
-      message: "<value>",
-      status: "error",
-    },
+  const res = await commandsSubmitResponse(alienManager, "<id>", {
+    code: "<value>",
+    message: "<value>",
+    status: "error",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -403,7 +392,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SubmitResponseRequest](../../models/operations/submitresponserequest.md)                                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `commandId`                                                                                                                                                                    | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Command identifier                                                                                                                                                             |
+| `commandResponse`                                                                                                                                                              | *models.CommandResponse*                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -436,11 +426,8 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.commands.uploadComplete({
-    commandId: "<id>",
-    uploadCompleteRequest: {
-      size: 540119,
-    },
+  const result = await alienManager.commands.uploadComplete("<id>", {
+    size: 540119,
   });
 
   console.log(result);
@@ -465,11 +452,8 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await commandsUploadComplete(alienManager, {
-    commandId: "<id>",
-    uploadCompleteRequest: {
-      size: 540119,
-    },
+  const res = await commandsUploadComplete(alienManager, "<id>", {
+    size: 540119,
   });
   if (res.ok) {
     const { value: result } = res;
@@ -486,7 +470,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.UploadCompleteRequest](../../models/operations/uploadcompleterequest.md)                                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `commandId`                                                                                                                                                                    | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Command identifier                                                                                                                                                             |
+| `uploadCompleteRequest`                                                                                                                                                        | [models.UploadCompleteRequest](../../models/uploadcompleterequest.md)                                                                                                          | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

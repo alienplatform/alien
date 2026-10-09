@@ -27,20 +27,6 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Managers extends ClientSDK {
   /**
-   * Retrieve all managers.
-   */
-  async list(
-    request?: operations.ListManagersRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<Array<models.Manager>> {
-    return unwrapAsync(managersList(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Create a new manager.
    */
   async create(
@@ -48,6 +34,20 @@ export class Managers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CreateManagerResponse> {
     return unwrapAsync(managersCreate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Retrieve all managers.
+   */
+  async list(
+    request?: operations.ListManagersRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<Array<models.Manager>> {
+    return unwrapAsync(managersList(
       this,
       request,
       options,
@@ -142,12 +142,14 @@ export class Managers extends ClientSDK {
    * Create, update, or remove the custom domain binding for a private manager.
    */
   async updateDomainBinding(
-    request: operations.UpdateManagerDomainBindingRequest,
+    id: string,
+    updateManagerDomainBinding?: models.UpdateManagerDomainBinding | undefined,
     options?: RequestOptions,
   ): Promise<models.ManagerDomainBindingResponse> {
     return unwrapAsync(managersUpdateDomainBinding(
       this,
-      request,
+      id,
+      updateManagerDomainBinding,
       options,
     ));
   }
@@ -184,12 +186,14 @@ export class Managers extends ClientSDK {
    * Update a manager to a specific release ID or active release.
    */
   async update(
-    request: operations.UpdateManagerRequest,
+    id: string,
+    updateManagerRequest?: models.UpdateManagerRequest | undefined,
     options?: RequestOptions,
   ): Promise<operations.UpdateManagerResponse> {
     return unwrapAsync(managersUpdate(
       this,
-      request,
+      id,
+      updateManagerRequest,
       options,
     ));
   }
@@ -212,12 +216,16 @@ export class Managers extends ClientSDK {
    * Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
    */
   async generateManagerToken(
-    request: operations.GenerateManagerTokenRequest,
+    id: string,
+    generateManagerTokenRequest?:
+      | models.GenerateManagerTokenRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.GenerateManagerTokenResponse> {
     return unwrapAsync(managersGenerateManagerToken(
       this,
-      request,
+      id,
+      generateManagerTokenRequest,
       options,
     ));
   }
@@ -226,12 +234,15 @@ export class Managers extends ClientSDK {
    * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
    */
   async generateManagerBindingToken(
-    request: operations.GenerateManagerBindingTokenRequest,
+    id: string,
+    generateManagerBindingTokenRequest:
+      models.GenerateManagerBindingTokenRequest,
     options?: RequestOptions,
   ): Promise<models.GenerateManagerBindingTokenResponse> {
     return unwrapAsync(managersGenerateManagerBindingToken(
       this,
-      request,
+      id,
+      generateManagerBindingTokenRequest,
       options,
     ));
   }
@@ -240,12 +251,16 @@ export class Managers extends ClientSDK {
    * Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
    */
   async resolveGcpOAuthProvider(
-    request: operations.ResolveManagerGcpOAuthProviderRequest,
+    id: string,
+    resolveManagerGcpOAuthProviderRequest?:
+      | models.ResolveManagerGcpOAuthProviderRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.ResolveManagerGcpOAuthProviderResponse> {
     return unwrapAsync(managersResolveGcpOAuthProvider(
       this,
-      request,
+      id,
+      resolveManagerGcpOAuthProviderRequest,
       options,
     ));
   }
@@ -254,12 +269,14 @@ export class Managers extends ClientSDK {
    * Report Manager health status and metrics.
    */
   async reportHeartbeat(
-    request: operations.ReportManagerHeartbeatRequest,
+    id: string,
+    managerHeartbeatRequest?: models.ManagerHeartbeatRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.ManagerHeartbeatResponse> {
     return unwrapAsync(managersReportHeartbeat(
       this,
-      request,
+      id,
+      managerHeartbeatRequest,
       options,
     ));
   }

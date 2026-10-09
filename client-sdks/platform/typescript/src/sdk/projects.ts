@@ -82,6 +82,22 @@ export class Projects extends ClientSDK {
   }
 
   /**
+   * Update a project.
+   */
+  async update(
+    idOrName: string,
+    updateProject?: models.UpdateProject | undefined,
+    options?: RequestOptions,
+  ): Promise<models.Project> {
+    return unwrapAsync(projectsUpdate(
+      this,
+      idOrName,
+      updateProject,
+      options,
+    ));
+  }
+
+  /**
    * Delete a project. The project must have no deployments.
    */
   async delete(
@@ -89,20 +105,6 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(projectsDelete(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Update a project.
-   */
-  async update(
-    request: operations.UpdateProjectRequest,
-    options?: RequestOptions,
-  ): Promise<models.Project> {
-    return unwrapAsync(projectsUpdate(
       this,
       request,
       options,
@@ -127,12 +129,16 @@ export class Projects extends ClientSDK {
    * Update project-level Google Cloud OAuth provider settings.
    */
   async updateGcpOAuthProvider(
-    request: operations.UpdateProjectGcpOAuthProviderRequest,
+    idOrName: string,
+    updateProjectGcpOAuthProvider?:
+      | models.UpdateProjectGcpOAuthProvider
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.ProjectGcpOAuthProvider> {
     return unwrapAsync(projectsUpdateGcpOAuthProvider(
       this,
-      request,
+      idOrName,
+      updateProjectGcpOAuthProvider,
       options,
     ));
   }
@@ -141,12 +147,14 @@ export class Projects extends ClientSDK {
    * Connect a GitHub repository or Alien template to an existing project.
    */
   async configureSource(
-    request: operations.ConfigureProjectSourceRequest,
+    idOrName: string,
+    requestBody?: operations.ConfigureProjectSourceRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.ConfigureProjectSourceResponse> {
     return unwrapAsync(projectsConfigureSource(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -225,12 +233,14 @@ export class Projects extends ClientSDK {
    * Preview which customer model connections a configuration change may affect.
    */
   async previewModelsImpact(
-    request: operations.PreviewProjectModelsImpactRequest,
+    idOrName: string,
+    configureModelsRequest?: models.ConfigureModelsRequest | undefined,
     options?: RequestOptions,
   ): Promise<operations.PreviewProjectModelsImpactResponse> {
     return unwrapAsync(projectsPreviewModelsImpact(
       this,
-      request,
+      idOrName,
+      configureModelsRequest,
       options,
     ));
   }
@@ -239,12 +249,14 @@ export class Projects extends ClientSDK {
    * Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
    */
   async setCapabilities(
-    request: operations.SetProjectCapabilitiesRequest,
+    idOrName: string,
+    requestBody?: operations.SetProjectCapabilitiesRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.ProjectCapabilities> {
     return unwrapAsync(projectsSetCapabilities(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -253,12 +265,14 @@ export class Projects extends ClientSDK {
    * Enable deployments for a Project.
    */
   async configureDeployments(
-    request: operations.ConfigureProjectDeploymentsRequest,
+    idOrName: string,
+    requestBody?: operations.ConfigureProjectDeploymentsRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.ProjectCapabilities> {
     return unwrapAsync(projectsConfigureDeployments(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -281,12 +295,14 @@ export class Projects extends ClientSDK {
    * Replace the static headers added to AI requests for each provider.
    */
   async configureAiProviderHeaders(
-    request: operations.ConfigureProjectAiProviderHeadersRequest,
+    idOrName: string,
+    aiProviderHeaders?: models.AIProviderHeaders | undefined,
     options?: RequestOptions,
   ): Promise<models.AIProviderHeaders> {
     return unwrapAsync(projectsConfigureAiProviderHeaders(
       this,
-      request,
+      idOrName,
+      aiProviderHeaders,
       options,
     ));
   }
@@ -295,12 +311,14 @@ export class Projects extends ClientSDK {
    * Configure customer-owned model providers without requiring an application Release.
    */
   async configureModels(
-    request: operations.ConfigureProjectModelsRequest,
+    idOrName: string,
+    configureModelsRequest?: models.ConfigureModelsRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.CapabilityMaterialization> {
     return unwrapAsync(projectsConfigureModels(
       this,
-      request,
+      idOrName,
+      configureModelsRequest,
       options,
     ));
   }
@@ -309,12 +327,14 @@ export class Projects extends ClientSDK {
    * Enable customer-owned application encryption without requiring an application Release.
    */
   async configureKeys(
-    request: operations.ConfigureProjectKeysRequest,
+    idOrName: string,
+    requestBody?: operations.ConfigureProjectKeysRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.CapabilityMaterialization> {
     return unwrapAsync(projectsConfigureKeys(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -323,12 +343,14 @@ export class Projects extends ClientSDK {
    * Enable buckets without requiring a project Release.
    */
   async configureBuckets(
-    request: operations.ConfigureProjectBucketsRequest,
+    idOrName: string,
+    requestBody?: operations.ConfigureProjectBucketsRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.CapabilityMaterialization> {
     return unwrapAsync(projectsConfigureBuckets(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -337,12 +359,14 @@ export class Projects extends ClientSDK {
    * Enable customer-owned container registries without requiring an application Release.
    */
   async configureRegistry(
-    request: operations.ConfigureProjectRegistryRequest,
+    idOrName: string,
+    requestBody?: operations.ConfigureProjectRegistryRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.CapabilityMaterialization> {
     return unwrapAsync(projectsConfigureRegistry(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -351,12 +375,16 @@ export class Projects extends ClientSDK {
    * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
    */
   async configureRemoteSandbox(
-    request: operations.ConfigureProjectRemoteSandboxRequest,
+    idOrName: string,
+    configureRemoteSandboxRequest?:
+      | models.ConfigureRemoteSandboxRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.CapabilityMaterialization> {
     return unwrapAsync(projectsConfigureRemoteSandbox(
       this,
-      request,
+      idOrName,
+      configureRemoteSandboxRequest,
       options,
     ));
   }

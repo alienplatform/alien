@@ -35,7 +35,9 @@ import { Result } from "../types/fp.js";
  */
 export function remoteBindingsCreateExternalAccess(
   client: AlienCore,
-  request: operations.CreateRemoteBindingsExternalAccessRequest,
+  idOrName: string,
+  remoteBindingsExternalAccessRequest:
+    models.RemoteBindingsExternalAccessRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -53,14 +55,17 @@ export function remoteBindingsCreateExternalAccess(
 > {
   return new APIPromise($do(
     client,
-    request,
+    idOrName,
+    remoteBindingsExternalAccessRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateRemoteBindingsExternalAccessRequest,
+  idOrName: string,
+  remoteBindingsExternalAccessRequest:
+    models.RemoteBindingsExternalAccessRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -79,8 +84,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateRemoteBindingsExternalAccessRequest = {
+    idOrName: idOrName,
+    remoteBindingsExternalAccessRequest: remoteBindingsExternalAccessRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateRemoteBindingsExternalAccessRequest$outboundSchema.parse(
         value,

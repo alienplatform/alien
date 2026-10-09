@@ -4,8 +4,8 @@
 
 ### Available Operations
 
-* [list](#list) - Retrieve all managers.
 * [create](#create) - Create a new manager.
+* [list](#list) - Retrieve all managers.
 * [retrySetup](#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 * [retry](#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -22,6 +22,96 @@
 * [resolveGcpOAuthProvider](#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 * [reportHeartbeat](#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
+
+## create
+
+Create a new manager.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createManager" method="post" path="/v1/managers" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.managers.create();
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { managersCreate } from "@alienplatform/platform-api/funcs/managersCreate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await managersCreate(alien);
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("managersCreate failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useManagersCreateMutation
+} from "@alienplatform/platform-api/react-query/managersCreate.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.NewManagerRequest](../../models/newmanagerrequest.md)                                                                                                                  | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.CreateManagerResponse](../../models/createmanagerresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## list
 
@@ -120,96 +210,6 @@ import {
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## create
-
-Create a new manager.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="createManager" method="post" path="/v1/managers" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.managers.create();
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { managersCreate } from "@alienplatform/platform-api/funcs/managersCreate.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await managersCreate(alien);
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("managersCreate failed:", res.error);
-  }
-}
-
-run();
-```
-
-### React hooks and utilities
-
-This method can be used in React components through the following hooks and
-associated utilities.
-
-> Check out [this guide][hook-guide] for information about each of the utilities
-> below and how to get started using React hooks.
-
-[hook-guide]: ../../../REACT_QUERY.md
-
-```tsx
-import {
-  // Mutation hook for triggering the API call.
-  useManagersCreateMutation
-} from "@alienplatform/platform-api/react-query/managersCreate.js";
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.NewManagerRequest](../../models/newmanagerrequest.md)                                                                                                                  | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.CreateManagerResponse](../../models/createmanagerresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 409                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -815,11 +815,8 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.updateDomainBinding({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    updateManagerDomainBinding: {
-      domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    },
+  const result = await alien.managers.updateDomainBinding("mgr_enxscjrqiiu2lrc672hwwuc5", {
+    domainId: "dom_469m0agk8luj4s16sakmmpdd",
   });
 
   console.log(result);
@@ -844,11 +841,8 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersUpdateDomainBinding(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    updateManagerDomainBinding: {
-      domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    },
+  const res = await managersUpdateDomainBinding(alien, "mgr_enxscjrqiiu2lrc672hwwuc5", {
+    domainId: "dom_469m0agk8luj4s16sakmmpdd",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -880,12 +874,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.UpdateManagerDomainBindingRequest](../../models/operations/updatemanagerdomainbindingrequest.md)                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                   |
+| `updateManagerDomainBinding`                                                                                                                                                   | [models.UpdateManagerDomainBinding](../../models/updatemanagerdomainbinding.md)                                                                                                | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1116,11 +1111,8 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.update({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    updateManagerRequest: {
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
+  const result = await alien.managers.update("mgr_enxscjrqiiu2lrc672hwwuc5", {
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
 
   console.log(result);
@@ -1145,11 +1137,8 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersUpdate(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    updateManagerRequest: {
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
+  const res = await managersUpdate(alien, "mgr_enxscjrqiiu2lrc672hwwuc5", {
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1181,12 +1170,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.UpdateManagerRequest](../../models/operations/updatemanagerrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                   |
+| `updateManagerRequest`                                                                                                                                                         | [models.UpdateManagerRequest](../../models/updatemanagerrequest.md)                                                                                                            | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1321,9 +1311,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.generateManagerToken({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  });
+  const result = await alien.managers.generateManagerToken("mgr_enxscjrqiiu2lrc672hwwuc5");
 
   console.log(result);
 }
@@ -1347,9 +1335,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersGenerateManagerToken(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  });
+  const res = await managersGenerateManagerToken(alien, "mgr_enxscjrqiiu2lrc672hwwuc5");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1380,12 +1366,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GenerateManagerTokenRequest](../../models/operations/generatemanagertokenrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                   |
+| `generateManagerTokenRequest`                                                                                                                                                  | [models.GenerateManagerTokenRequest](../../models/generatemanagertokenrequest.md)                                                                                              | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1415,11 +1402,8 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.generateManagerBindingToken({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    generateManagerBindingTokenRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    },
+  const result = await alien.managers.generateManagerBindingToken("mgr_enxscjrqiiu2lrc672hwwuc5", {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
   console.log(result);
@@ -1444,11 +1428,8 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersGenerateManagerBindingToken(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    generateManagerBindingTokenRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    },
+  const res = await managersGenerateManagerBindingToken(alien, "mgr_enxscjrqiiu2lrc672hwwuc5", {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1480,12 +1461,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GenerateManagerBindingTokenRequest](../../models/operations/generatemanagerbindingtokenrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                   |
+| `generateManagerBindingTokenRequest`                                                                                                                                           | [models.GenerateManagerBindingTokenRequest](../../models/generatemanagerbindingtokenrequest.md)                                                                                | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1515,9 +1497,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.resolveGcpOAuthProvider({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  });
+  const result = await alien.managers.resolveGcpOAuthProvider("mgr_enxscjrqiiu2lrc672hwwuc5");
 
   console.log(result);
 }
@@ -1541,9 +1521,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersResolveGcpOAuthProvider(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  });
+  const res = await managersResolveGcpOAuthProvider(alien, "mgr_enxscjrqiiu2lrc672hwwuc5");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1574,12 +1552,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ResolveManagerGcpOAuthProviderRequest](../../models/operations/resolvemanagergcpoauthproviderrequest.md)                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                   |
+| `resolveManagerGcpOAuthProviderRequest`                                                                                                                                        | [models.ResolveManagerGcpOAuthProviderRequest](../../models/resolvemanagergcpoauthproviderrequest.md)                                                                          | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1609,9 +1588,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.managers.reportHeartbeat({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  });
+  const result = await alien.managers.reportHeartbeat("mgr_enxscjrqiiu2lrc672hwwuc5");
 
   console.log(result);
 }
@@ -1635,9 +1612,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await managersReportHeartbeat(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-  });
+  const res = await managersReportHeartbeat(alien, "mgr_enxscjrqiiu2lrc672hwwuc5");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1668,12 +1643,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ReportManagerHeartbeatRequest](../../models/operations/reportmanagerheartbeatrequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for a manager.                                                                                                                                               | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                   |
+| `managerHeartbeatRequest`                                                                                                                                                      | [models.ManagerHeartbeatRequest](../../models/managerheartbeatrequest.md)                                                                                                      | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 

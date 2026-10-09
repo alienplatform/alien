@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type WorkspacesAddMemberMutationVariables = {
-  request: operations.AddWorkspaceMemberRequest;
+  id: string;
+  requestBody?: operations.AddWorkspaceMemberRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +84,8 @@ export function buildWorkspacesAddMemberMutation(
   return {
     mutationKey: mutationKeyWorkspacesAddMember(),
     mutationFn: function workspacesAddMemberMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<WorkspacesAddMemberMutationData> {
       const mergedOptions = {
@@ -100,7 +102,8 @@ export function buildWorkspacesAddMemberMutation(
       };
       return unwrapAsync(workspacesAddMember(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

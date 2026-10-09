@@ -4,22 +4,120 @@
 
 ### Available Operations
 
-* [listDeploymentGroups](#listdeploymentgroups) - List deployment groups
 * [createDeploymentGroup](#createdeploymentgroup) - Create a new deployment group
+* [listDeploymentGroups](#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
-* [getDeploymentGroupByExternalId](#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [ensureDeploymentGroupByExternalId](#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
+* [getDeploymentGroupByExternalId](#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [getDeploymentGroup](#getdeploymentgroup) - Get deployment group details
-* [deleteDeploymentGroup](#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](#updatedeploymentgroup) - Update deployment group
+* [deleteDeploymentGroup](#deletedeploymentgroup) - Delete deployment group
 * [setDeploymentGroupExternalId](#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
-* [createDeploymentGroupToken](#createdeploymentgrouptoken) - Create deployment group token
+* [createToken](#createtoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](#createfirstpartydeploymentsession) - Create first-party deployment session
 * [getExternalAIBinding](#getexternalaibinding) - Get external AI connection state
 * [putExternalAIBinding](#putexternalaibinding) - Connect or rotate an external AI provider key
 * [deleteExternalAIBinding](#deleteexternalaibinding) - Revoke the external AI connection
 * [createExternalAIModelCheck](#createexternalaimodelcheck) - Queue an explicit external model access check
 * [getExternalAIModelCheck](#getexternalaimodelcheck) - Get an external model access check
+
+## createDeploymentGroup
+
+Create a new deployment group
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createDeploymentGroup" method="post" path="/v1/deployment-groups" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.createDeploymentGroup({
+    name: "prod-us-east-1",
+    externalId: "ext_example_01",
+    project: "<value>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsCreateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroup.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsCreateDeploymentGroup(alien, {
+    name: "prod-us-east-1",
+    externalId: "ext_example_01",
+    project: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsCreateDeploymentGroup failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsCreateDeploymentGroupMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateDeploymentGroup.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.CreateDeploymentGroupRequest](../../models/createdeploymentgrouprequest.md)                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## listDeploymentGroups
 
@@ -205,104 +303,6 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## createDeploymentGroup
-
-Create a new deployment group
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="createDeploymentGroup" method="post" path="/v1/deployment-groups" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deploymentGroups.createDeploymentGroup({
-    name: "prod-us-east-1",
-    externalId: "ext_example_01",
-    project: "<value>",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsCreateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroup.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentGroupsCreateDeploymentGroup(alien, {
-    name: "prod-us-east-1",
-    externalId: "ext_example_01",
-    project: "<value>",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentGroupsCreateDeploymentGroup failed:", res.error);
-  }
-}
-
-run();
-```
-
-### React hooks and utilities
-
-This method can be used in React components through the following hooks and
-associated utilities.
-
-> Check out [this guide][hook-guide] for information about each of the utilities
-> below and how to get started using React hooks.
-
-[hook-guide]: ../../../REACT_QUERY.md
-
-```tsx
-import {
-  // Mutation hook for triggering the API call.
-  useDeploymentGroupsCreateDeploymentGroupMutation
-} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateDeploymentGroup.js";
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.CreateDeploymentGroupRequest](../../models/createdeploymentgrouprequest.md)                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## ensureDeploymentGroupByName
 
 Get or create a deployment group by project and name
@@ -383,111 +383,6 @@ import {
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `request`                                                                                                                                                                      | [models.EnsureDeploymentGroupByNameRequest](../../models/ensuredeploymentgroupbynamerequest.md)                                                                                | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## getDeploymentGroupByExternalId
-
-Get a deployment group by project and external ID
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="getDeploymentGroupByExternalId" method="get" path="/v1/deployment-groups/by-external-id" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deploymentGroups.getDeploymentGroupByExternalId({
-    externalId: "ext_example_01",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsGetDeploymentGroupByExternalId } from "@alienplatform/platform-api/funcs/deploymentGroupsGetDeploymentGroupByExternalId.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentGroupsGetDeploymentGroupByExternalId(alien, {
-    externalId: "ext_example_01",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentGroupsGetDeploymentGroupByExternalId failed:", res.error);
-  }
-}
-
-run();
-```
-
-### React hooks and utilities
-
-This method can be used in React components through the following hooks and
-associated utilities.
-
-> Check out [this guide][hook-guide] for information about each of the utilities
-> below and how to get started using React hooks.
-
-[hook-guide]: ../../../REACT_QUERY.md
-
-```tsx
-import {
-  // Query hooks for fetching data.
-  useDeploymentGroupsGetDeploymentGroupByExternalId,
-  useDeploymentGroupsGetDeploymentGroupByExternalIdSuspense,
-
-  // Utility for prefetching data during server-side rendering and in React
-  // Server Components that will be immediately available to client components
-  // using the hooks.
-  prefetchDeploymentGroupsGetDeploymentGroupByExternalId,
-
-  // Utilities to invalidate the query cache for this query in response to
-  // mutations and other user actions.
-  invalidateDeploymentGroupsGetDeploymentGroupByExternalId,
-  invalidateAllDeploymentGroupsGetDeploymentGroupByExternalId,
-} from "@alienplatform/platform-api/react-query/deploymentGroupsGetDeploymentGroupByExternalId.js";
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GetDeploymentGroupByExternalIdRequest](../../models/operations/getdeploymentgroupbyexternalidrequest.md)                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -602,6 +497,111 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## getDeploymentGroupByExternalId
+
+Get a deployment group by project and external ID
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentGroupByExternalId" method="get" path="/v1/deployment-groups/by-external-id" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.getDeploymentGroupByExternalId({
+    externalId: "ext_example_01",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsGetDeploymentGroupByExternalId } from "@alienplatform/platform-api/funcs/deploymentGroupsGetDeploymentGroupByExternalId.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsGetDeploymentGroupByExternalId(alien, {
+    externalId: "ext_example_01",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsGetDeploymentGroupByExternalId failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsGetDeploymentGroupByExternalId,
+  useDeploymentGroupsGetDeploymentGroupByExternalIdSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsGetDeploymentGroupByExternalId,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsGetDeploymentGroupByExternalId,
+  invalidateAllDeploymentGroupsGetDeploymentGroupByExternalId,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsGetDeploymentGroupByExternalId.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentGroupByExternalIdRequest](../../models/operations/getdeploymentgroupbyexternalidrequest.md)                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## getDeploymentGroup
 
 Get deployment group details
@@ -707,6 +707,101 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## updateDeploymentGroup
+
+Update deployment group
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="updateDeploymentGroup" method="patch" path="/v1/deployment-groups/{id}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.updateDeploymentGroup("dg_r27ict8c7vcgsumpj90ackf7b", {
+    name: "prod-us-east-1",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsUpdateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsUpdateDeploymentGroup.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsUpdateDeploymentGroup(alien, "dg_r27ict8c7vcgsumpj90ackf7b", {
+    name: "prod-us-east-1",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsUpdateDeploymentGroup failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useDeploymentGroupsUpdateDeploymentGroupMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsUpdateDeploymentGroup.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `updateDeploymentGroupRequest`                                                                                                                                                 | [models.UpdateDeploymentGroupRequest](../../models/updatedeploymentgrouprequest.md)                                                                                            | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
+
+### Response
+
+**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## deleteDeploymentGroup
 
 Delete deployment group
@@ -801,106 +896,6 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## updateDeploymentGroup
-
-Update deployment group
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="updateDeploymentGroup" method="patch" path="/v1/deployment-groups/{id}" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deploymentGroups.updateDeploymentGroup({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    updateDeploymentGroupRequest: {
-      name: "prod-us-east-1",
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsUpdateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsUpdateDeploymentGroup.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentGroupsUpdateDeploymentGroup(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    updateDeploymentGroupRequest: {
-      name: "prod-us-east-1",
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentGroupsUpdateDeploymentGroup failed:", res.error);
-  }
-}
-
-run();
-```
-
-### React hooks and utilities
-
-This method can be used in React components through the following hooks and
-associated utilities.
-
-> Check out [this guide][hook-guide] for information about each of the utilities
-> below and how to get started using React hooks.
-
-[hook-guide]: ../../../REACT_QUERY.md
-
-```tsx
-import {
-  // Mutation hook for triggering the API call.
-  useDeploymentGroupsUpdateDeploymentGroupMutation
-} from "@alienplatform/platform-api/react-query/deploymentGroupsUpdateDeploymentGroup.js";
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.UpdateDeploymentGroupRequest](../../models/operations/updatedeploymentgrouprequest.md)                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## setDeploymentGroupExternalId
 
 Set or clear a deployment group's external ID
@@ -917,11 +912,8 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deploymentGroups.setDeploymentGroupExternalId({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    setDeploymentGroupExternalIdRequest: {
-      externalId: "ext_example_01",
-    },
+  const result = await alien.deploymentGroups.setDeploymentGroupExternalId("dg_r27ict8c7vcgsumpj90ackf7b", {
+    externalId: "ext_example_01",
   });
 
   console.log(result);
@@ -946,11 +938,8 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentGroupsSetDeploymentGroupExternalId(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    setDeploymentGroupExternalIdRequest: {
-      externalId: "ext_example_01",
-    },
+  const res = await deploymentGroupsSetDeploymentGroupExternalId(alien, "dg_r27ict8c7vcgsumpj90ackf7b", {
+    externalId: "ext_example_01",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -982,12 +971,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SetDeploymentGroupExternalIdRequest](../../models/operations/setdeploymentgroupexternalidrequest.md)                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `setDeploymentGroupExternalIdRequest`                                                                                                                                          | [models.SetDeploymentGroupExternalIdRequest](../../models/setdeploymentgroupexternalidrequest.md)                                                                              | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1001,7 +991,7 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## createDeploymentGroupToken
+## createToken
 
 Creates a deployment-group scoped API key and returns both the token and formatted deployment link
 
@@ -1017,15 +1007,12 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deploymentGroups.createDeploymentGroupToken({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    createDeploymentGroupTokenRequest: {
-      deploymentSetupConfig: {
-        validatedReleaseSelection: {
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-          releaseChannel: "<value>",
-          platform: "local",
-        },
+  const result = await alien.deploymentGroups.createToken("dg_r27ict8c7vcgsumpj90ackf7b", {
+    deploymentSetupConfig: {
+      validatedReleaseSelection: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseChannel: "<value>",
+        platform: "local",
       },
     },
   });
@@ -1042,7 +1029,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsCreateDeploymentGroupToken } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroupToken.js";
+import { deploymentGroupsCreateToken } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateToken.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -1052,15 +1039,12 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentGroupsCreateDeploymentGroupToken(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    createDeploymentGroupTokenRequest: {
-      deploymentSetupConfig: {
-        validatedReleaseSelection: {
-          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-          releaseChannel: "<value>",
-          platform: "local",
-        },
+  const res = await deploymentGroupsCreateToken(alien, "dg_r27ict8c7vcgsumpj90ackf7b", {
+    deploymentSetupConfig: {
+      validatedReleaseSelection: {
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        releaseChannel: "<value>",
+        platform: "local",
       },
     },
   });
@@ -1068,7 +1052,7 @@ async function run() {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("deploymentGroupsCreateDeploymentGroupToken failed:", res.error);
+    console.log("deploymentGroupsCreateToken failed:", res.error);
   }
 }
 
@@ -1088,18 +1072,19 @@ associated utilities.
 ```tsx
 import {
   // Mutation hook for triggering the API call.
-  useDeploymentGroupsCreateDeploymentGroupTokenMutation
-} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateDeploymentGroupToken.js";
+  useDeploymentGroupsCreateTokenMutation
+} from "@alienplatform/platform-api/react-query/deploymentGroupsCreateToken.js";
 ```
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateDeploymentGroupTokenRequest](../../models/operations/createdeploymentgrouptokenrequest.md)                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `createDeploymentGroupTokenRequest`                                                                                                                                            | [models.CreateDeploymentGroupTokenRequest](../../models/createdeploymentgrouptokenrequest.md)                                                                                  | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -1328,13 +1313,10 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deploymentGroups.putExternalAIBinding({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    putExternalAIBindingRequest: {
-      provider: "anthropic",
-      apiKey: "<value>",
-      acknowledgeAlienCredentialAccess: true,
-    },
+  const result = await alien.deploymentGroups.putExternalAIBinding("dg_r27ict8c7vcgsumpj90ackf7b", {
+    provider: "anthropic",
+    apiKey: "<value>",
+    acknowledgeAlienCredentialAccess: true,
   });
 
   console.log(result);
@@ -1359,13 +1341,10 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentGroupsPutExternalAIBinding(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    putExternalAIBindingRequest: {
-      provider: "anthropic",
-      apiKey: "<value>",
-      acknowledgeAlienCredentialAccess: true,
-    },
+  const res = await deploymentGroupsPutExternalAIBinding(alien, "dg_r27ict8c7vcgsumpj90ackf7b", {
+    provider: "anthropic",
+    apiKey: "<value>",
+    acknowledgeAlienCredentialAccess: true,
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1397,12 +1376,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.PutExternalAIBindingRequest](../../models/operations/putexternalaibindingrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `putExternalAIBindingRequest`                                                                                                                                                  | *models.PutExternalAIBindingRequestUnion*                                                                                                                                      | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 

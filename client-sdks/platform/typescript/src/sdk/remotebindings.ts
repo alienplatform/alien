@@ -5,7 +5,6 @@
 import { remoteBindingsCreateExternalAccess } from "../funcs/remoteBindingsCreateExternalAccess.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class RemoteBindings extends ClientSDK {
@@ -16,12 +15,15 @@ export class RemoteBindings extends ClientSDK {
    * Selects a connected external resource by Project and external ID, then returns a short-lived deployment-scoped Manager capability. The caller never receives the external cloud credentials from Platform.
    */
   async createExternalAccess(
-    request: operations.CreateRemoteBindingsExternalAccessRequest,
+    idOrName: string,
+    remoteBindingsExternalAccessRequest:
+      models.RemoteBindingsExternalAccessRequest,
     options?: RequestOptions,
   ): Promise<models.RemoteBindingsExternalAccessResponse> {
     return unwrapAsync(remoteBindingsCreateExternalAccess(
       this,
-      request,
+      idOrName,
+      remoteBindingsExternalAccessRequest,
       options,
     ));
   }

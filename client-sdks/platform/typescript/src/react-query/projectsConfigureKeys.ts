@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ProjectsConfigureKeysMutationVariables = {
-  request: operations.ConfigureProjectKeysRequest;
+  idOrName: string;
+  requestBody?: operations.ConfigureProjectKeysRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -84,7 +85,8 @@ export function buildProjectsConfigureKeysMutation(
   return {
     mutationKey: mutationKeyProjectsConfigureKeys(),
     mutationFn: function projectsConfigureKeysMutationFn({
-      request,
+      idOrName,
+      requestBody,
       options,
     }): Promise<ProjectsConfigureKeysMutationData> {
       const mergedOptions = {
@@ -101,7 +103,8 @@ export function buildProjectsConfigureKeysMutation(
       };
       return unwrapAsync(projectsConfigureKeys(
         client$,
-        request,
+        idOrName,
+        requestBody,
         mergedOptions,
       ));
     },

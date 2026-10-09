@@ -179,7 +179,7 @@ describe("deployment request serialization", () => {
   it("sends input updates with the expected base operation CAS", async () => {
     const { client, requests } = captureClient()
     const body = { inputValues: { enabled: true }, expectedBaseOperationId: "op_demo" }
-    await deploymentsUpdateInputs(client, { id: "dep_demo", updateDeploymentInputsRequest: body })
+    await deploymentsUpdateInputs(client, "dep_demo", body)
     expect(requests).toEqual([
       {
         method: "PATCH",

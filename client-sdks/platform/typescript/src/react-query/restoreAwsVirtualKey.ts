@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type RestoreAwsVirtualKeyMutationVariables = {
-  request: operations.RestoreAwsVirtualKeyRequest;
+  id: string;
+  requestBody?: operations.RestoreAwsVirtualKeyRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildRestoreAwsVirtualKeyMutation(
   return {
     mutationKey: mutationKeyRestoreAwsVirtualKey(),
     mutationFn: function restoreAwsVirtualKeyMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<RestoreAwsVirtualKeyMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildRestoreAwsVirtualKeyMutation(
       };
       return unwrapAsync(restoreAwsVirtualKey(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

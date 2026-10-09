@@ -29,7 +29,8 @@ import { Result } from "../types/fp.js";
 
 export function createWorkspaceInviteLink(
   client: AlienCore,
-  request: operations.CreateWorkspaceInviteLinkRequest,
+  id: string,
+  requestBody?: operations.CreateWorkspaceInviteLinkRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -47,14 +48,16 @@ export function createWorkspaceInviteLink(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateWorkspaceInviteLinkRequest,
+  id: string,
+  requestBody?: operations.CreateWorkspaceInviteLinkRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -73,8 +76,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateWorkspaceInviteLinkRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateWorkspaceInviteLinkRequest$outboundSchema.parse(value),
     "Input validation failed",

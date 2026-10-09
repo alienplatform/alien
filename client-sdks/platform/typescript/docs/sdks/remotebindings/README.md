@@ -22,12 +22,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.remoteBindings.createExternalAccess({
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    remoteBindingsExternalAccessRequest: {
-      externalId: "ext_example_01",
-      capability: "storage",
-    },
+  const result = await alien.remoteBindings.createExternalAccess("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+    externalId: "ext_example_01",
+    capability: "storage",
   });
 
   console.log(result);
@@ -52,12 +49,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await remoteBindingsCreateExternalAccess(alien, {
-    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    remoteBindingsExternalAccessRequest: {
-      externalId: "ext_example_01",
-      capability: "storage",
-    },
+  const res = await remoteBindingsCreateExternalAccess(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+    externalId: "ext_example_01",
+    capability: "storage",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -98,12 +92,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.remoteBindings.createExternalAccess({
-    idOrName: "my-project",
-    remoteBindingsExternalAccessRequest: {
-      externalId: "ext_example_01",
-      capability: "storage",
-    },
+  const result = await alien.remoteBindings.createExternalAccess("my-project", {
+    externalId: "ext_example_01",
+    capability: "storage",
   });
 
   console.log(result);
@@ -128,12 +119,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await remoteBindingsCreateExternalAccess(alien, {
-    idOrName: "my-project",
-    remoteBindingsExternalAccessRequest: {
-      externalId: "ext_example_01",
-      capability: "storage",
-    },
+  const res = await remoteBindingsCreateExternalAccess(alien, "my-project", {
+    externalId: "ext_example_01",
+    capability: "storage",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -167,7 +155,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateRemoteBindingsExternalAccessRequest](../../models/operations/createremotebindingsexternalaccessrequest.md)                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `idOrName`                                                                                                                                                                     | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Project ID or name.                                                                                                                                                            |
+| `remoteBindingsExternalAccessRequest`                                                                                                                                          | [models.RemoteBindingsExternalAccessRequest](../../models/remotebindingsexternalaccessrequest.md)                                                                              | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

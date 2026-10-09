@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentsRestoreVolume(
   client: AlienCore,
-  request: operations.CreateDeploymentVolumeRestoreRequest,
+  id: string,
+  createVolumeRestoreRequest: models.CreateVolumeRestoreRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function deploymentsRestoreVolume(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    createVolumeRestoreRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateDeploymentVolumeRestoreRequest,
+  id: string,
+  createVolumeRestoreRequest: models.CreateVolumeRestoreRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateDeploymentVolumeRestoreRequest = {
+    id: id,
+    createVolumeRestoreRequest: createVolumeRestoreRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateDeploymentVolumeRestoreRequest$outboundSchema.parse(
         value,

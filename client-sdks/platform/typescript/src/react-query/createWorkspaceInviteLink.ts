@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type CreateWorkspaceInviteLinkMutationVariables = {
-  request: operations.CreateWorkspaceInviteLinkRequest;
+  id: string;
+  requestBody?: operations.CreateWorkspaceInviteLinkRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildCreateWorkspaceInviteLinkMutation(
   return {
     mutationKey: mutationKeyCreateWorkspaceInviteLink(),
     mutationFn: function createWorkspaceInviteLinkMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<CreateWorkspaceInviteLinkMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildCreateWorkspaceInviteLinkMutation(
       };
       return unwrapAsync(createWorkspaceInviteLink(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

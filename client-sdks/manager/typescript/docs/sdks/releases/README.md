@@ -534,11 +534,8 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.releases.promoteManagerRelease({
-    id: "<id>",
-    promoteReleaseRequest: {
-      channel: "<value>",
-    },
+  const result = await alienManager.releases.promoteManagerRelease("<id>", {
+    channel: "<value>",
   });
 
   console.log(result);
@@ -563,11 +560,8 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await releasesPromoteManagerRelease(alienManager, {
-    id: "<id>",
-    promoteReleaseRequest: {
-      channel: "<value>",
-    },
+  const res = await releasesPromoteManagerRelease(alienManager, "<id>", {
+    channel: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -584,7 +578,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.PromoteManagerReleaseRequest](../../models/operations/promotemanagerreleaserequest.md)                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Release ID                                                                                                                                                                     |
+| `promoteReleaseRequest`                                                                                                                                                        | [models.PromoteReleaseRequest](../../models/promotereleaserequest.md)                                                                                                          | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

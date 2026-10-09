@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function projectsConfigureRemoteSandbox(
   client: AlienCore,
-  request: operations.ConfigureProjectRemoteSandboxRequest,
+  idOrName: string,
+  configureRemoteSandboxRequest?:
+    | models.ConfigureRemoteSandboxRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function projectsConfigureRemoteSandbox(
 > {
   return new APIPromise($do(
     client,
-    request,
+    idOrName,
+    configureRemoteSandboxRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ConfigureProjectRemoteSandboxRequest,
+  idOrName: string,
+  configureRemoteSandboxRequest?:
+    | models.ConfigureRemoteSandboxRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ConfigureProjectRemoteSandboxRequest = {
+    idOrName: idOrName,
+    configureRemoteSandboxRequest: configureRemoteSandboxRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ConfigureProjectRemoteSandboxRequest$outboundSchema.parse(
         value,

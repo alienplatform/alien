@@ -104,6 +104,22 @@ export class Commands extends ClientSDK {
   }
 
   /**
+   * Update command state. Called by manager when command is dispatched or completes.
+   */
+  async update(
+    id: string,
+    updateCommandRequest?: models.UpdateCommandRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.Command> {
+    return unwrapAsync(commandsUpdate(
+      this,
+      id,
+      updateCommandRequest,
+      options,
+    ));
+  }
+
+  /**
    * Retrieve a command by ID.
    */
   async get(
@@ -118,29 +134,17 @@ export class Commands extends ClientSDK {
   }
 
   /**
-   * Update command state. Called by manager when command is dispatched or completes.
-   */
-  async update(
-    request: operations.UpdateCommandRequest,
-    options?: RequestOptions,
-  ): Promise<models.Command> {
-    return unwrapAsync(commandsUpdate(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
    */
   async dispatch(
-    request: operations.DispatchCommandRequest,
+    id: string,
+    dispatchCommandRequest?: models.DispatchCommandRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.DispatchCommandResponse> {
     return unwrapAsync(commandsDispatch(
       this,
-      request,
+      id,
+      dispatchCommandRequest,
       options,
     ));
   }
@@ -149,12 +153,14 @@ export class Commands extends ClientSDK {
    * Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
    */
   async complete(
-    request: operations.CompleteCommandRequest,
+    id: string,
+    completeCommandRequest?: models.CompleteCommandRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.CompleteCommandResponse> {
     return unwrapAsync(commandsComplete(
       this,
-      request,
+      id,
+      completeCommandRequest,
       options,
     ));
   }

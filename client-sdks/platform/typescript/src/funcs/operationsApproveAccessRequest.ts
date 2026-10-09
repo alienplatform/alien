@@ -31,7 +31,8 @@ import { Result } from "../types/fp.js";
  */
 export function operationsApproveAccessRequest(
   client: AlienCore,
-  request: operations.ApproveAccessRequestRequest,
+  id: string,
+  requestBody?: operations.ApproveAccessRequestRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -49,14 +50,16 @@ export function operationsApproveAccessRequest(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ApproveAccessRequestRequest,
+  id: string,
+  requestBody?: operations.ApproveAccessRequestRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -75,8 +78,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ApproveAccessRequestRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ApproveAccessRequestRequest$outboundSchema.parse(value),
     "Input validation failed",

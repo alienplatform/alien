@@ -23,13 +23,14 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type RemoteBindingsCreateExternalAccessMutationVariables = {
-  request: operations.CreateRemoteBindingsExternalAccessRequest;
+  idOrName: string;
+  remoteBindingsExternalAccessRequest:
+    models.RemoteBindingsExternalAccessRequest;
   options?: RequestOptions;
 };
 
@@ -91,7 +92,8 @@ export function buildRemoteBindingsCreateExternalAccessMutation(
   return {
     mutationKey: mutationKeyRemoteBindingsCreateExternalAccess(),
     mutationFn: function remoteBindingsCreateExternalAccessMutationFn({
-      request,
+      idOrName,
+      remoteBindingsExternalAccessRequest,
       options,
     }): Promise<RemoteBindingsCreateExternalAccessMutationData> {
       const mergedOptions = {
@@ -108,7 +110,8 @@ export function buildRemoteBindingsCreateExternalAccessMutation(
       };
       return unwrapAsync(remoteBindingsCreateExternalAccess(
         client$,
-        request,
+        idOrName,
+        remoteBindingsExternalAccessRequest,
         mergedOptions,
       ));
     },

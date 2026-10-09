@@ -30,7 +30,10 @@ import { MutationHookOptions } from "./_types.js";
 
 export type ContainerRegistryCreateContainerRegistryCredentialMutationVariables =
   {
-    request: operations.CreateContainerRegistryCredentialRequest;
+    id: string;
+    requestBody?:
+      | operations.CreateContainerRegistryCredentialRequestBody
+      | undefined;
     options?: RequestOptions;
   };
 
@@ -92,7 +95,8 @@ export function buildContainerRegistryCreateContainerRegistryCredentialMutation(
       mutationKeyContainerRegistryCreateContainerRegistryCredential(),
     mutationFn:
       function containerRegistryCreateContainerRegistryCredentialMutationFn({
-        request,
+        id,
+        requestBody,
         options,
       }): Promise<
         ContainerRegistryCreateContainerRegistryCredentialMutationData
@@ -111,7 +115,8 @@ export function buildContainerRegistryCreateContainerRegistryCredentialMutation(
         };
         return unwrapAsync(containerRegistryCreateContainerRegistryCredential(
           client$,
-          request,
+          id,
+          requestBody,
           mergedOptions,
         ));
       },

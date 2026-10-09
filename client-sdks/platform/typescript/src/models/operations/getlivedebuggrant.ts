@@ -21,6 +21,9 @@ export type GetLiveDebugGrantRequest = {
    * The deployment to check for a live debug grant.
    */
   deploymentId: string;
+  /**
+   * Requests a remote-debugging grant for this tool, alongside or instead of an operations grant.
+   */
   debugTool: models.DebugGrantTool;
   /**
    * Match a `kubectl` grant scoped to this namespace exactly.

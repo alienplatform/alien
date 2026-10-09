@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentGroupsUpdateDeploymentGroup(
   client: AlienCore,
-  request: operations.UpdateDeploymentGroupRequest,
+  id: string,
+  updateDeploymentGroupRequest?:
+    | models.UpdateDeploymentGroupRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function deploymentGroupsUpdateDeploymentGroup(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    updateDeploymentGroupRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateDeploymentGroupRequest,
+  id: string,
+  updateDeploymentGroupRequest?:
+    | models.UpdateDeploymentGroupRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateDeploymentGroupRequest = {
+    id: id,
+    updateDeploymentGroupRequest: updateDeploymentGroupRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.UpdateDeploymentGroupRequest$outboundSchema.parse(value),
     "Input validation failed",

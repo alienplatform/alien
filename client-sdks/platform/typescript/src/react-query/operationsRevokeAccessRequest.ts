@@ -22,13 +22,15 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type OperationsRevokeAccessRequestMutationVariables = {
-  request: operations.RevokeAccessRequestRequest;
+  id: string;
+  revokeAccessRequest?: models.RevokeAccessRequest | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +85,8 @@ export function buildOperationsRevokeAccessRequestMutation(
   return {
     mutationKey: mutationKeyOperationsRevokeAccessRequest(),
     mutationFn: function operationsRevokeAccessRequestMutationFn({
-      request,
+      id,
+      revokeAccessRequest,
       options,
     }): Promise<OperationsRevokeAccessRequestMutationData> {
       const mergedOptions = {
@@ -100,7 +103,8 @@ export function buildOperationsRevokeAccessRequestMutation(
       };
       return unwrapAsync(operationsRevokeAccessRequest(
         client$,
-        request,
+        id,
+        revokeAccessRequest,
         mergedOptions,
       ));
     },

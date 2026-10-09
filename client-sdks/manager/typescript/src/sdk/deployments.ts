@@ -68,12 +68,14 @@ export class Deployments extends ClientSDK {
   }
 
   async signDeploymentBundle(
-    request: operations.SignDeploymentBundleRequest,
+    id: string,
+    bundleSignatureRequest: models.BundleSignatureRequest,
     options?: RequestOptions,
   ): Promise<models.BundleSignatureResponse> {
     return unwrapAsync(deploymentsSignDeploymentBundle(
       this,
-      request,
+      id,
+      bundleSignatureRequest,
       options,
     ));
   }
@@ -90,23 +92,27 @@ export class Deployments extends ClientSDK {
   }
 
   async setDeploymentChannel(
-    request: operations.SetDeploymentChannelRequest,
+    id: string,
+    setDeploymentChannelRequest: models.SetDeploymentChannelRequest,
     options?: RequestOptions,
   ): Promise<models.DeploymentRoutingResponse> {
     return unwrapAsync(deploymentsSetDeploymentChannel(
       this,
-      request,
+      id,
+      setDeploymentChannelRequest,
       options,
     ));
   }
 
   async deleteDeployment(
-    request: operations.DeleteDeploymentRequest,
+    id: string,
+    deleteDeploymentRequest: models.DeleteDeploymentRequest,
     options?: RequestOptions,
   ): Promise<models.DeleteDeploymentResponse> {
     return unwrapAsync(deploymentsDeleteDeployment(
       this,
-      request,
+      id,
+      deleteDeploymentRequest,
       options,
     ));
   }
@@ -134,12 +140,14 @@ export class Deployments extends ClientSDK {
   }
 
   async setDeploymentPin(
-    request: operations.SetDeploymentPinRequest,
+    id: string,
+    setDeploymentPinRequest: models.SetDeploymentPinRequest,
     options?: RequestOptions,
   ): Promise<models.DeploymentRoutingResponse> {
     return unwrapAsync(deploymentsSetDeploymentPin(
       this,
-      request,
+      id,
+      setDeploymentPinRequest,
       options,
     ));
   }
@@ -178,12 +186,14 @@ export class Deployments extends ClientSDK {
   }
 
   async importDeploymentStatus(
-    request: operations.ImportDeploymentStatusRequest,
+    id: string,
+    statusReport: models.StatusReport,
     options?: RequestOptions,
   ): Promise<models.StatusReportResponse> {
     return unwrapAsync(deploymentsImportDeploymentStatus(
       this,
-      request,
+      id,
+      statusReport,
       options,
     ));
   }

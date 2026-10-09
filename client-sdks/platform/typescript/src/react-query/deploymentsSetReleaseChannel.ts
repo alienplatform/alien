@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentsSetReleaseChannelMutationVariables = {
-  request: operations.SetDeploymentReleaseChannelRequest;
+  id: string;
+  requestBody?: operations.SetDeploymentReleaseChannelRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildDeploymentsSetReleaseChannelMutation(
   return {
     mutationKey: mutationKeyDeploymentsSetReleaseChannel(),
     mutationFn: function deploymentsSetReleaseChannelMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<DeploymentsSetReleaseChannelMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildDeploymentsSetReleaseChannelMutation(
       };
       return unwrapAsync(deploymentsSetReleaseChannel(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

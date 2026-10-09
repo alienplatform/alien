@@ -5,12 +5,18 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
+/**
+ * Requests a remote-debugging grant for this tool, alongside or instead of an operations grant.
+ */
 export const DebugGrantTool = {
   Kubectl: "kubectl",
   Aws: "aws",
   Gcloud: "gcloud",
   Az: "az",
 } as const;
+/**
+ * Requests a remote-debugging grant for this tool, alongside or instead of an operations grant.
+ */
 export type DebugGrantTool = ClosedEnum<typeof DebugGrantTool>;
 
 /** @internal */

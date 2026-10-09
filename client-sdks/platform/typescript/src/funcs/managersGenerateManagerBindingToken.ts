@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function managersGenerateManagerBindingToken(
   client: AlienCore,
-  request: operations.GenerateManagerBindingTokenRequest,
+  id: string,
+  generateManagerBindingTokenRequest: models.GenerateManagerBindingTokenRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function managersGenerateManagerBindingToken(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    generateManagerBindingTokenRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.GenerateManagerBindingTokenRequest,
+  id: string,
+  generateManagerBindingTokenRequest: models.GenerateManagerBindingTokenRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.GenerateManagerBindingTokenRequest = {
+    id: id,
+    generateManagerBindingTokenRequest: generateManagerBindingTokenRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.GenerateManagerBindingTokenRequest$outboundSchema.parse(value),
     "Input validation failed",

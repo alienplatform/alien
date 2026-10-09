@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ContainerRegistryPutContainerRegistryMutationVariables = {
-  request: operations.PutContainerRegistryRequest;
+  id: string;
+  requestBody?: operations.PutContainerRegistryRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -84,7 +85,8 @@ export function buildContainerRegistryPutContainerRegistryMutation(
   return {
     mutationKey: mutationKeyContainerRegistryPutContainerRegistry(),
     mutationFn: function containerRegistryPutContainerRegistryMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<ContainerRegistryPutContainerRegistryMutationData> {
       const mergedOptions = {
@@ -101,7 +103,8 @@ export function buildContainerRegistryPutContainerRegistryMutation(
       };
       return unwrapAsync(containerRegistryPutContainerRegistry(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

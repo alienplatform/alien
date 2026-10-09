@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentsRestoreVolumeMutationVariables = {
-  request: operations.CreateDeploymentVolumeRestoreRequest;
+  id: string;
+  createVolumeRestoreRequest: models.CreateVolumeRestoreRequest;
   options?: RequestOptions;
 };
 
@@ -83,7 +83,8 @@ export function buildDeploymentsRestoreVolumeMutation(
   return {
     mutationKey: mutationKeyDeploymentsRestoreVolume(),
     mutationFn: function deploymentsRestoreVolumeMutationFn({
-      request,
+      id,
+      createVolumeRestoreRequest,
       options,
     }): Promise<DeploymentsRestoreVolumeMutationData> {
       const mergedOptions = {
@@ -100,7 +101,8 @@ export function buildDeploymentsRestoreVolumeMutation(
       };
       return unwrapAsync(deploymentsRestoreVolume(
         client$,
-        request,
+        id,
+        createVolumeRestoreRequest,
         mergedOptions,
       ));
     },

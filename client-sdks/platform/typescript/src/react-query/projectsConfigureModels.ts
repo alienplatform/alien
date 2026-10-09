@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ProjectsConfigureModelsMutationVariables = {
-  request: operations.ConfigureProjectModelsRequest;
+  idOrName: string;
+  configureModelsRequest?: models.ConfigureModelsRequest | undefined;
   options?: RequestOptions;
 };
 
@@ -84,7 +84,8 @@ export function buildProjectsConfigureModelsMutation(
   return {
     mutationKey: mutationKeyProjectsConfigureModels(),
     mutationFn: function projectsConfigureModelsMutationFn({
-      request,
+      idOrName,
+      configureModelsRequest,
       options,
     }): Promise<ProjectsConfigureModelsMutationData> {
       const mergedOptions = {
@@ -101,7 +102,8 @@ export function buildProjectsConfigureModelsMutation(
       };
       return unwrapAsync(projectsConfigureModels(
         client$,
-        request,
+        idOrName,
+        configureModelsRequest,
         mergedOptions,
       ));
     },

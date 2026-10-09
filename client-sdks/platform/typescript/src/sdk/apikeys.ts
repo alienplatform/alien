@@ -57,6 +57,22 @@ export class ApiKeys extends ClientSDK {
   }
 
   /**
+   * Update an API key (enable/disable, change description).
+   */
+  async update(
+    id: string,
+    updateAPIKeyRequest?: models.UpdateAPIKeyRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.APIKey> {
+    return unwrapAsync(apiKeysUpdate(
+      this,
+      id,
+      updateAPIKeyRequest,
+      options,
+    ));
+  }
+
+  /**
    * Revoke (soft delete) an API key.
    */
   async revoke(
@@ -64,20 +80,6 @@ export class ApiKeys extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(apiKeysRevoke(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Update an API key (enable/disable, change description).
-   */
-  async update(
-    request: operations.UpdateAPIKeyRequest,
-    options?: RequestOptions,
-  ): Promise<models.APIKey> {
-    return unwrapAsync(apiKeysUpdate(
       this,
       request,
       options,

@@ -35,7 +35,8 @@ import { Result } from "../types/fp.js";
  */
 export function releaseChannelsCreate(
   client: AlienCore,
-  request: operations.CreateReleaseChannelRequest,
+  project: string,
+  requestBody?: operations.CreateReleaseChannelRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -53,14 +54,16 @@ export function releaseChannelsCreate(
 > {
   return new APIPromise($do(
     client,
-    request,
+    project,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateReleaseChannelRequest,
+  project: string,
+  requestBody?: operations.CreateReleaseChannelRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -79,8 +82,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateReleaseChannelRequest = {
+    project: project,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateReleaseChannelRequest$outboundSchema.parse(value),
     "Input validation failed",

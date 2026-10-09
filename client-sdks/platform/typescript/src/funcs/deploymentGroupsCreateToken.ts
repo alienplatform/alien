@@ -33,9 +33,12 @@ import { Result } from "../types/fp.js";
  * @remarks
  * Creates a deployment-group scoped API key and returns both the token and formatted deployment link
  */
-export function deploymentGroupsCreateDeploymentGroupToken(
+export function deploymentGroupsCreateToken(
   client: AlienCore,
-  request: operations.CreateDeploymentGroupTokenRequest,
+  id: string,
+  createDeploymentGroupTokenRequest?:
+    | models.CreateDeploymentGroupTokenRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -53,14 +56,18 @@ export function deploymentGroupsCreateDeploymentGroupToken(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    createDeploymentGroupTokenRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateDeploymentGroupTokenRequest,
+  id: string,
+  createDeploymentGroupTokenRequest?:
+    | models.CreateDeploymentGroupTokenRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -79,8 +86,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateDeploymentGroupTokenRequest = {
+    id: id,
+    createDeploymentGroupTokenRequest: createDeploymentGroupTokenRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateDeploymentGroupTokenRequest$outboundSchema.parse(value),
     "Input validation failed",

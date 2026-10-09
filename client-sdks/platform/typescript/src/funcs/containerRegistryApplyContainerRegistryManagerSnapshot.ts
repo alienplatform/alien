@@ -29,7 +29,10 @@ import { Result } from "../types/fp.js";
 
 export function containerRegistryApplyContainerRegistryManagerSnapshot(
   client: AlienCore,
-  request: operations.ApplyContainerRegistryManagerSnapshotRequest,
+  id: string,
+  requestBody?:
+    | operations.ApplyContainerRegistryManagerSnapshotRequestBody
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -47,14 +50,18 @@ export function containerRegistryApplyContainerRegistryManagerSnapshot(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ApplyContainerRegistryManagerSnapshotRequest,
+  id: string,
+  requestBody?:
+    | operations.ApplyContainerRegistryManagerSnapshotRequestBody
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -73,8 +80,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ApplyContainerRegistryManagerSnapshotRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ApplyContainerRegistryManagerSnapshotRequest$outboundSchema
         .parse(value),

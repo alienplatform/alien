@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentGroupsPutExternalAIBinding(
   client: AlienCore,
-  request: operations.PutExternalAIBindingRequest,
+  id: string,
+  putExternalAIBindingRequest: models.PutExternalAIBindingRequestUnion,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function deploymentGroupsPutExternalAIBinding(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    putExternalAIBindingRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.PutExternalAIBindingRequest,
+  id: string,
+  putExternalAIBindingRequest: models.PutExternalAIBindingRequestUnion,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.PutExternalAIBindingRequest = {
+    id: id,
+    putExternalAIBindingRequest: putExternalAIBindingRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.PutExternalAIBindingRequest$outboundSchema.parse(value),
     "Input validation failed",
