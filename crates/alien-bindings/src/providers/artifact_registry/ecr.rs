@@ -802,23 +802,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         policy_regions.extend(aws_access.regions.iter().cloned());
         policy_regions.sort();
         policy_regions.dedup();
-        let mut filtered_account_ids = current_aws_access.account_ids;
-        let mut filtered_regions = current_aws_access.regions;
-        let mut filtered_service_types = current_aws_access.allowed_service_types;
-        let mut filtered_role_arns = current_aws_access.role_arns;
-
-        filtered_account_ids.retain(|id| !aws_access.account_ids.contains(id));
-        filtered_regions.retain(|r| !aws_access.regions.contains(r));
-        filtered_service_types
-            .retain(|service_type| !aws_access.allowed_service_types.contains(service_type));
-        filtered_role_arns.retain(|arn| !aws_access.role_arns.contains(arn));
-
-        let filtered_access = AwsCrossAccountAccess {
-            account_ids: filtered_account_ids,
-            regions: filtered_regions,
-            allowed_service_types: filtered_service_types,
-            role_arns: filtered_role_arns,
-        };
+        let filtered_access = remaining_cross_account_access(current_aws_access, &aws_access);
 
         self.set_full_policy(&full_repo_name, &filtered_access)
             .await?;
@@ -1138,6 +1122,32 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 }
 
+/// A surviving deployment role still needs its account's Lambda image grant. Keep that
+/// shared service grant until the final role/account consumer is removed.
+fn remaining_cross_account_access(
+    mut current: AwsCrossAccountAccess,
+    removed: &AwsCrossAccountAccess,
+) -> AwsCrossAccountAccess {
+    current
+        .role_arns
+        .retain(|arn| !removed.role_arns.contains(arn));
+    current
+        .account_ids
+        .retain(|id| !removed.account_ids.contains(id));
+    for arn in &current.role_arns {
+        if let Some(account_id) = arn.split(':').nth(4) {
+            current.account_ids.push(account_id.to_string());
+        }
+    }
+    current.account_ids.sort();
+    current.account_ids.dedup();
+    if current.account_ids.is_empty() {
+        current.regions.clear();
+        current.allowed_service_types.clear();
+    }
+    current
+}
+
 fn parse_cross_account_repository_policy(policy: &Value) -> AwsCrossAccountAccess {
     let mut account_ids = Vec::new();
     let mut role_arns = Vec::new();
@@ -1233,6 +1243,39 @@ fn parse_cross_account_repository_policy(policy: &Value) -> AwsCrossAccountAcces
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_one_deployment_preserves_its_siblings_lambda_pull_access() {
+        let role_a = "arn:aws:iam::123456789012:role/deployment-a-management".to_string();
+        let role_b = "arn:aws:iam::123456789012:role/deployment-b-management".to_string();
+        let current = AwsCrossAccountAccess {
+            account_ids: vec!["123456789012".to_string()],
+            regions: vec!["us-east-2".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            role_arns: vec![role_a.clone(), role_b.clone()],
+        };
+        let removed = AwsCrossAccountAccess {
+            role_arns: vec![role_a],
+            ..current.clone()
+        };
+        let remaining = remaining_cross_account_access(current, &removed);
+        assert_eq!(remaining.role_arns, vec![role_b.clone()]);
+        assert_eq!(remaining.account_ids, vec!["123456789012"]);
+        assert_eq!(
+            remaining.allowed_service_types,
+            vec![ComputeServiceType::Worker]
+        );
+        assert_eq!(remaining.regions, vec!["us-east-2"]);
+        let removed = AwsCrossAccountAccess {
+            role_arns: vec![role_b],
+            ..removed
+        };
+        let final_access = remaining_cross_account_access(remaining, &removed);
+        assert!(cross_account_repository_policy(&final_access)["Statement"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
 
     #[test]
     fn account_roots_are_not_retained_as_roles_after_account_revocation() {
