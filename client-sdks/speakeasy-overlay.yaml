@@ -1,0 +1,10 @@
+overlay: 1.0.0
+info:
+  title: TypeScript SDK method arguments
+  version: 1.0.0
+actions:
+  # Keep query-heavy operations as named request objects. JSON-body operations
+  # with at most one other parameter accept the body directly or (id, body).
+  - target: "$['paths'][*][?(@.requestBody)]"
+    update:
+      x-speakeasy-max-method-params: 2
