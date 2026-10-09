@@ -83,6 +83,62 @@ fn delete_denied(identifier: &str) -> bool {
     }
 }
 
+/// The step of a test worker that needs something only the installation's setup provides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestSetupGrant {
+    /// CreateWorker needs setup-owned configuration rewritten, as a workload role whose trust
+    /// does not admit the nodes that run the worker.
+    Create,
+    /// UpdateConfigPolling, a step after the update started, needs a management permission,
+    /// as an update that grows a volume and must read its modification state.
+    Update,
+}
+
+/// Workers whose step needs something only setup provides, by worker id, with how many
+/// times the step was refused.
+static SETUP_GRANTS_WITHHELD: Mutex<Vec<(String, TestSetupGrant, u32)>> = Mutex::new(Vec::new());
+
+/// Makes the given step of the worker with this id fail, as it would on an installation whose
+/// setup has not granted what the step needs, until [`give_test_worker_setup_grant`].
+pub fn withhold_test_worker_setup_grant(worker_id: &str, step: TestSetupGrant) {
+    let mut withheld = SETUP_GRANTS_WITHHELD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    withheld.retain(|(id, _, _)| id != worker_id);
+    withheld.push((worker_id.to_string(), step, 0));
+}
+
+/// What a setup run does for the worker: grants what its step needs. Returns how many times
+/// the step was refused meanwhile.
+pub fn give_test_worker_setup_grant(worker_id: &str) -> u32 {
+    let mut withheld = SETUP_GRANTS_WITHHELD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let refused = withheld
+        .iter()
+        .find(|(id, _, _)| id == worker_id)
+        .map_or(0, |(_, _, refused)| *refused);
+    withheld.retain(|(id, _, _)| id != worker_id);
+    refused
+}
+
+/// Counts a refused step, or `false` when setup granted what it needs.
+fn setup_grant_withheld(worker_id: &str, step: TestSetupGrant) -> bool {
+    let mut withheld = SETUP_GRANTS_WITHHELD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match withheld
+        .iter_mut()
+        .find(|(id, withheld_step, _)| id == worker_id && *withheld_step == step)
+    {
+        Some((_, _, refused)) => {
+            *refused += 1;
+            true
+        }
+        None => false,
+    }
+}
+
 /// Every config the test controller deployed to a worker: in CreateWorker, where a real
 /// controller creates the function with its code, and in UpdateStart, where it updates it.
 static DEPLOYED_CONFIGS: Mutex<Vec<(String, Worker)>> = Mutex::new(Vec::new());
@@ -338,6 +394,16 @@ impl TestWorkerController {
             }));
         }
 
+        if setup_grant_withheld(&target_func.id, TestSetupGrant::Create) {
+            return Err(AlienError::new(ErrorData::SetupRerunRequired {
+                resource_id: target_func.id.clone(),
+                message: format!(
+                    "the workload role of `{identifier}` does not trust the nodes that run it; \
+                     rerun setup to rewrite its trust"
+                ),
+            }));
+        }
+
         record_deployed_config(identifier, target_func);
         info!(
             "→ [test-create] Start polling (0/{}) for worker readiness `{}`",
@@ -588,6 +654,14 @@ impl TestWorkerController {
                 message: "Identifier missing in UpdateConfigPolling state".to_string(),
             })
         })?;
+
+        if setup_grant_withheld(&target_func.id, TestSetupGrant::Update) {
+            return Err(AlienError::new(ErrorData::ManagementPermissionMissing {
+                resource_id: target_func.id.clone(),
+                operation: format!("finish updating `{identifier}`"),
+                action: "test:DescribeWorkerModifications".to_string(),
+            }));
+        }
 
         self.update_config_poll_count += 1;
 

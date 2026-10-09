@@ -3809,3 +3809,271 @@ async fn update_retry_resumes_a_failed_create_with_deployer_only_drift() {
         deployed[1].environment.get(alien_core::ENV_ALIEN_SECRETS)
     );
 }
+
+/// Reruns setup on a failed or installed deployment the way the setup CLIs do: prepare the
+/// desired release, retry failed setup-owned resources, and step setup until it hands the
+/// deployment back at Provisioning, where the runtime continues.
+async fn rerun_setup(mut state: DeploymentState, config: &DeploymentConfig) -> DeploymentState {
+    let target = state
+        .target_release
+        .as_ref()
+        .expect("setup applies the desired release")
+        .stack
+        .clone();
+    let metadata = alien_deployment::prepare_direct_setup_update(
+        target,
+        state.stack_state.as_ref().expect("stack state"),
+        config,
+        &ClientConfig::Test,
+        state.runtime_metadata.as_ref().expect("runtime metadata"),
+    )
+    .await
+    .expect("setup update should prepare");
+    alien_deployment::retry_failed_setup_resources(
+        state.stack_state.as_mut().expect("stack state"),
+        &metadata,
+        config,
+    )
+    .expect("setup-owned failures should be retried");
+    state.runtime_metadata = Some(metadata);
+    state.status = DeploymentStatus::InitialSetup;
+    // The setup CLIs rebuild the state from the manager without its deployment error.
+    state.error = None;
+    let handed_back = run_until_status(
+        state,
+        config.clone(),
+        &[
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::InitialSetupFailed,
+        ],
+    )
+    .await;
+    assert_eq!(handed_back.status, DeploymentStatus::Provisioning);
+    assert!(
+        !handed_back.retry_requested,
+        "setup does not request a retry"
+    );
+    handed_back
+}
+
+/// A running deployment's update stops at a step its management role is not allowed to run.
+/// The deployment says it waits for setup, and stepping it changes nothing. A setup run that
+/// does not grant the permission leaves it waiting the same way, as an update failure. One
+/// that grants it hands the deployment back and the update finishes from the failed step,
+/// with no retry.
+#[tokio::test]
+async fn an_update_waiting_for_a_setup_grant_finishes_when_setup_reruns() {
+    let _vault = test_vault_env().await;
+    let worker_id = "setup-grant-update-fn";
+    let identifier = "test:worker:setup-grant-update-fn";
+    let config = create_test_config("hash_v1", false);
+    let mut stack_v1 = create_test_stack_with_storage("setup-grant-stack", "archive", "base-fn");
+    add_live_worker(&mut stack_v1, image_worker(worker_id, "test:v1", 1024));
+    let mut state = run_to_completion(create_initial_state(stack_v1.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let mut stack_v2 = stack_v1;
+    add_live_worker(&mut stack_v2, image_worker(worker_id, "test:v2", 1024));
+    alien_infra::withhold_test_worker_setup_grant(worker_id, alien_infra::TestSetupGrant::Update);
+    start_update(&mut state, release_of("rel_v2", stack_v2));
+    let state = run_to_completion(state, config.clone()).await;
+
+    let assert_waiting_for_setup = |state: &DeploymentState| {
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        assert_eq!(
+            state
+                .current_release
+                .as_ref()
+                .unwrap()
+                .release_id
+                .as_deref(),
+            Some("rel_v1")
+        );
+        let error = state
+            .error
+            .as_ref()
+            .expect("the deployment says what it waits for");
+        assert_eq!(error.code, "DEPLOYMENT_RESOURCE_SETUP_REQUIRED");
+        assert_eq!(
+            error.context.as_ref().unwrap()["resource_ids"],
+            serde_json::json!([worker_id])
+        );
+        assert!(
+            error.message.contains("test:DescribeWorkerModifications"),
+            "{}",
+            error.message
+        );
+        let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+        assert_eq!(worker.status, alien_core::ResourceStatus::UpdateFailed);
+        assert_eq!(
+            worker.error.as_ref().unwrap().code,
+            "MANAGEMENT_PERMISSION_MISSING"
+        );
+        assert_eq!(
+            worker.last_failed_state.as_ref().unwrap()["state"],
+            "updateConfigPolling"
+        );
+    };
+    assert_waiting_for_setup(&state);
+
+    // Without setup nothing moves: the runtime does not retry it.
+    let idle = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("the idle step should succeed")
+        .state;
+    assert_eq!(
+        serde_json::to_value(&idle).unwrap(),
+        serde_json::to_value(&state).unwrap()
+    );
+
+    // An older setup that does not grant it: the runtime resumes the step once, which fails
+    // the same way. The deployment keeps serving rel_v1 and is not provisioning-failed.
+    let state = run_to_completion(rerun_setup(state, &config).await, config.clone()).await;
+    assert_waiting_for_setup(&state);
+
+    // Setup grants it. The handed-back deployment finishes the update from the failed step.
+    let handed_back = rerun_setup(state, &config).await;
+    assert_eq!(
+        alien_infra::give_test_worker_setup_grant(worker_id),
+        2,
+        "refused once by the update and once after the first setup"
+    );
+    let state = run_to_completion(handed_back, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state.error.is_none());
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v2")
+    );
+    assert!(state.target_release.is_none());
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    assert!(worker.error.is_none());
+    let deployed = alien_infra::test_worker_configs_deployed(identifier)
+        .into_iter()
+        .map(|worker| worker.code)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deployed,
+        vec![
+            WorkerCode::Image {
+                image: "test:v1".into()
+            },
+            WorkerCode::Image {
+                image: "test:v2".into()
+            },
+        ],
+        "the update resumed at its failed step instead of starting over"
+    );
+}
+
+/// The update that waits for setup also removes a worker. Setup hands the deployment back at
+/// Provisioning, which finishes the update: the removed worker's deletion tombstone is done,
+/// not work in progress, so the deployment reaches Running on the new release.
+#[tokio::test]
+async fn an_update_that_removes_a_resource_finishes_after_setup_reruns() {
+    let _vault = test_vault_env().await;
+    let worker_id = "setup-grant-removal-fn";
+    let removed_id = "setup-grant-removed-fn";
+    let config = create_test_config("hash_v1", false);
+    let mut stack_v1 = create_test_stack_with_storage("setup-removal-stack", "archive", "base-fn");
+    add_live_worker(&mut stack_v1, image_worker(worker_id, "test:v1", 1024));
+    let mut stack_v2 = stack_v1.clone();
+    add_live_worker(&mut stack_v1, image_worker(removed_id, "test:v1", 1024));
+    let mut state = run_to_completion(create_initial_state(stack_v1), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    add_live_worker(&mut stack_v2, image_worker(worker_id, "test:v2", 1024));
+    alien_infra::withhold_test_worker_setup_grant(worker_id, alien_infra::TestSetupGrant::Update);
+    start_update(&mut state, release_of("rel_v2", stack_v2));
+    let state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    assert_eq!(
+        state.error.as_ref().map(|error| error.code.as_str()),
+        Some("DEPLOYMENT_RESOURCE_SETUP_REQUIRED")
+    );
+
+    let handed_back = rerun_setup(state, &config).await;
+    alien_infra::give_test_worker_setup_grant(worker_id);
+    let state = run_to_completion(handed_back, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state.error.is_none());
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v2")
+    );
+    assert!(state.target_release.is_none());
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert_eq!(
+        resources[worker_id].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        resources[removed_id].status,
+        alien_core::ResourceStatus::Deleted,
+        "the removed worker is deleted and its tombstone kept"
+    );
+}
+
+/// A first install stops before creating a workload whose setup-owned configuration does not
+/// allow it. Setup rerun with the fix hands it back and the create continues from that step.
+#[tokio::test]
+async fn a_first_install_waiting_for_setup_continues_when_setup_reruns() {
+    let _vault = test_vault_env().await;
+    let worker_id = "setup-grant-create-fn";
+    let identifier = "test:worker:setup-grant-create-fn";
+    let config = create_test_config("hash_v1", false);
+    let mut stack = create_test_stack_with_storage("setup-create-stack", "archive", "base-fn");
+    add_live_worker(&mut stack, image_worker(worker_id, "test:v1", 1024));
+    alien_infra::withhold_test_worker_setup_grant(worker_id, alien_infra::TestSetupGrant::Create);
+    let state = run_to_completion(create_initial_state(stack), config.clone()).await;
+
+    assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+    assert!(state.current_release.is_none());
+    let error = state
+        .error
+        .as_ref()
+        .expect("the deployment says what it waits for");
+    assert_eq!(error.code, "DEPLOYMENT_RESOURCE_SETUP_REQUIRED");
+    let worker = &state.stack_state.as_ref().unwrap().resources[worker_id];
+    assert_eq!(worker.status, alien_core::ResourceStatus::ProvisionFailed);
+    assert_eq!(worker.error.as_ref().unwrap().code, "SETUP_RERUN_REQUIRED");
+    assert_eq!(
+        worker.last_failed_state.as_ref().unwrap()["state"],
+        "createWorker"
+    );
+    assert!(alien_infra::test_worker_configs_deployed(identifier).is_empty());
+
+    let handed_back = rerun_setup(state, &config).await;
+    assert_eq!(alien_infra::give_test_worker_setup_grant(worker_id), 1);
+    let state = run_to_completion(handed_back, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state.error.is_none());
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources[worker_id].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        alien_infra::test_worker_configs_deployed(identifier).len(),
+        1
+    );
+}
