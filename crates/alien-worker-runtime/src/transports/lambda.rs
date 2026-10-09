@@ -162,9 +162,109 @@ pub mod wait_until_extension {
                         );
                     }
 
+                    // Returning lets Lambda freeze the environment, and a batch still pending
+                    // then waits for the next invocation, or is lost if none comes. Export it
+                    // now, after the drain, so wait_until output is included. The extension's
+                    // time counts toward the function timeout, so stop short of the deadline.
+                    let budget = flush_budget(invoke.deadline_ms, std::time::SystemTime::now());
+                    match tokio::time::timeout(budget, crate::otlp::flush_otlp_logs()).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => error!(
+                            request_id = %request_id,
+                            error = %e,
+                            "Failed to export application logs after the invocation"
+                        ),
+                        Err(_) => warn!(
+                            request_id = %request_id,
+                            budget_ms = budget.as_millis() as u64,
+                            "Application log export did not finish before the invocation deadline"
+                        ),
+                    }
+
                     Ok(())
                 }
             }
+        }
+    }
+
+    /// Time left to export logs before `deadline_ms` (epoch milliseconds), less a margin for the
+    /// extension to call `/next`.
+    fn flush_budget(deadline_ms: u64, now: std::time::SystemTime) -> std::time::Duration {
+        const MARGIN: std::time::Duration = std::time::Duration::from_millis(250);
+        let now = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        std::time::Duration::from_millis(deadline_ms)
+            .saturating_sub(now)
+            .saturating_sub(MARGIN)
+    }
+
+    #[cfg(all(test, feature = "otlp"))]
+    mod tests {
+        use super::*;
+        use lambda_extension::{InvokeEvent, Tracing};
+        use opentelemetry::logs::AnyValue;
+        use opentelemetry_sdk::logs::{
+            BatchConfigBuilder, BatchLogProcessor, InMemoryLogExporter, SdkLoggerProvider,
+        };
+        use std::time::Duration;
+
+        #[tokio::test]
+        async fn an_invocation_exports_its_logs_before_lambda_freezes_the_environment() {
+            let exporter = InMemoryLogExporter::default();
+            // A batch that would wait an hour, so only an explicit flush exports it.
+            let processor = BatchLogProcessor::builder(exporter.clone())
+                .with_batch_config(
+                    BatchConfigBuilder::default()
+                        .with_scheduled_delay(Duration::from_secs(3600))
+                        .build(),
+                )
+                .build();
+            crate::otlp::store_otlp_provider(
+                SdkLoggerProvider::builder()
+                    .with_log_processor(processor)
+                    .build(),
+            );
+            crate::otlp::emit_log("stdout", "[e2e-endpoint] release=v2", 0);
+
+            let (request_done, request_done_receiver) = tokio::sync::mpsc::unbounded_channel();
+            let extension = WaitUntilExtension::new(request_done_receiver);
+            request_done.send(()).expect("the extension is listening");
+            extension
+                .invoke(LambdaEvent {
+                    next: NextEvent::Invoke(InvokeEvent {
+                        deadline_ms: (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            + Duration::from_secs(60))
+                        .as_millis() as u64,
+                        request_id: "request-1".to_string(),
+                        invoked_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:f"
+                            .to_string(),
+                        tracing: Tracing::default(),
+                    }),
+                })
+                .await
+                .expect("the invocation completes");
+
+            let exported = exporter.get_emitted_logs().expect("exporter is readable");
+            let bodies: Vec<_> = exported
+                .iter()
+                .map(|log| log.record.body().cloned())
+                .collect();
+            assert_eq!(
+                bodies,
+                vec![Some(AnyValue::String(
+                    "[e2e-endpoint] release=v2".to_string().into()
+                ))]
+            );
+        }
+
+        #[test]
+        fn the_log_export_stops_short_of_the_invocation_deadline() {
+            let now = std::time::UNIX_EPOCH + Duration::from_secs(1_000);
+            assert_eq!(flush_budget(1_010_000, now), Duration::from_millis(9_750));
+            assert_eq!(flush_budget(999_000, now), Duration::ZERO);
         }
     }
 }
@@ -208,6 +308,53 @@ type StreamingBody = BoxBody<Bytes, crate::error::Error>;
 pin_project! {
     pub struct BodyStream<B> {
         #[pin] body: B,
+    }
+}
+
+/// Tells the wait_until extension that an invocation is over when dropped.
+struct InvocationDone {
+    sender: UnboundedSender<()>,
+    request_id: String,
+}
+
+impl Drop for InvocationDone {
+    fn drop(&mut self) {
+        if let Err(e) = self.sender.send(()) {
+            warn!(
+                request_id = %self.request_id,
+                error = ?e,
+                "Failed to signal request completion to extension"
+            );
+        }
+    }
+}
+
+pin_project! {
+    /// A streamed response body that ends its invocation once Lambda is done with it: after the
+    /// last frame was sent, the stream failed, or the response was abandoned.
+    struct SignalWhenDropped<B> {
+        #[pin] body: B,
+        done: InvocationDone,
+    }
+}
+
+impl<B: HttpBody> HttpBody for SignalWhenDropped<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<std::result::Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        self.project().body.poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.body.size_hint()
     }
 }
 
@@ -340,18 +487,15 @@ impl Service<LambdaRequest> for StreamingAdapter {
 
         Box::pin(
             async move {
-                let result = handle_streaming_event(&state, &request_id, req).await;
-
-                // Signal that the handler has completed
-                if let Err(e) = request_done_sender.send(()) {
-                    warn!(
-                        request_id = %request_id,
-                        error = ?e,
-                        "Failed to signal request completion to extension"
-                    );
-                }
-
-                result
+                // The headers return before the app has finished writing the body, so the
+                // invocation ends when Lambda drops the body, or here if there is none.
+                let done = InvocationDone {
+                    sender: request_done_sender,
+                    request_id: request_id.clone(),
+                };
+                handle_streaming_event(&state, &request_id, req)
+                    .await
+                    .map(|response| response.map(|body| SignalWhenDropped { body, done }.boxed()))
             }
             .instrument(span),
         )
@@ -1130,6 +1274,25 @@ async fn forward_http_request_buffered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_streamed_invocation_ends_when_its_body_is_done_not_at_the_headers() {
+        let (sender, mut receiver) = unbounded_channel();
+        let body = SignalWhenDropped {
+            body: Full::new(Bytes::from_static(b"streamed")),
+            done: InvocationDone {
+                sender,
+                request_id: "request-1".to_string(),
+            },
+        };
+        assert!(
+            receiver.try_recv().is_err(),
+            "headers alone must not end it"
+        );
+        let collected = body.collect().await.expect("body streams").to_bytes();
+        assert_eq!(collected, Bytes::from_static(b"streamed"));
+        assert_eq!(receiver.try_recv(), Ok(()));
+    }
 
     fn s3_event_json() -> serde_json::Value {
         serde_json::json!({

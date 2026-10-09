@@ -252,7 +252,7 @@ fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
 }
 
 #[cfg(feature = "otlp")]
-fn store_otlp_provider(provider: SdkLoggerProvider) {
+pub(crate) fn store_otlp_provider(provider: SdkLoggerProvider) {
     *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = Some(provider);
 }
 
@@ -419,15 +419,14 @@ pub(crate) fn emit_captured_log(
 ) {
 }
 
-/// Flush all pending OTLP logs
-/// This should be called before shutdown to ensure all logs are sent
+/// Exports every pending app log. Called before shutdown and, on Lambda, after each invocation,
+/// since Lambda freezes the environment once the invocation completes.
 pub async fn flush_otlp_logs() -> Result<()> {
     let configured = OTLP_PROVIDER
         .lock()
         .expect("OTLP provider mutex poisoned")
         .clone();
     if let Some(provider) = configured {
-        info!("Flushing OTLP logs before shutdown...");
         force_flush_provider(provider).await
     } else {
         // No OTLP provider configured, nothing to flush
@@ -440,10 +439,7 @@ pub async fn flush_otlp_logs() -> Result<()> {
 /// Shared by [`flush_otlp_logs`] and [`OwnedOtlpLogger::flush`].
 async fn force_flush_provider(provider: SdkLoggerProvider) -> Result<()> {
     let flush_result = tokio::task::spawn_blocking(move || match provider.force_flush() {
-        Ok(_) => {
-            info!("OTLP logs flushed successfully");
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(e) => {
             error!(error = %e, "Failed to flush OTLP logs");
             Err(AlienError::new(ErrorData::Other {
