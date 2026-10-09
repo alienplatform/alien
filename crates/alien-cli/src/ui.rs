@@ -66,11 +66,11 @@ pub fn print_cli_banner(current_dir: &Path) {
     let cwd = abbreviate_home(current_dir);
     let glyph = ["  .-^-.", " (o u o)", "  \\_=_/"];
     let title = if supports_ansi() {
-        style(format!("Alien CLI v{}", env!("CARGO_PKG_VERSION")))
+        style(format!("Alien CLI v{}", crate::CLI_VERSION))
             .bold()
             .to_string()
     } else {
-        format!("Alien CLI v{}", env!("CARGO_PKG_VERSION"))
+        format!("Alien CLI v{}", crate::CLI_VERSION)
     };
     let rows = [
         (glyph[0], title),

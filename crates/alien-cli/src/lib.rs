@@ -65,8 +65,13 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+pub const CLI_VERSION: &str = match option_env!("ALIEN_CLI_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
-#[command(name = "alien", author, version, about, long_about = None)]
+#[command(name = "alien", author, version = CLI_VERSION, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
     #[command(subcommand)]
@@ -201,7 +206,7 @@ pub enum Commands {
     Dev(DevCommand),
     /// Show current authenticated user information
     Whoami(WhoamiArgs),
-    /// Upgrade the Alien CLI to the latest stable version
+    /// Upgrade the Alien CLI to the latest stable or canary version
     #[command(visible_alias = "update")]
     Upgrade(UpgradeArgs),
 
