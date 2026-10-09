@@ -4,6 +4,8 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 
 ## Release
 
+- `python3 scripts/test-cli-upgrade.py /path/to/stable /path/to/canary /path/to/next-canary --sdk-version 3.3.30` exercises the CLI updater through a local HTTP server and disposable executable copies. Set `--sdk-version` to the `workspace.package.version` from the `Cargo.toml` used to build both canaries. Build the canary fixtures with `ALIEN_CLI_VERSION=3.3.31-ffffffff` and `ALIEN_CLI_VERSION=3.3.31-00000001`, using a base version newer than the stable fixture. It checks channel switching, checksum and version validation, dry runs, force, and package-manager refusal.
+
 - **`smoke-sandbox-agent.sh`** — Used by `.github/workflows/release.yml` to qualify the published `alien-sandbox-agent` image on both `linux/amd64` and `linux/arm64`, and usable on any GCP sandbox image built from the same contract. Takes the image reference and needs a Docker daemon that can pull it. `--platforms` narrows the platforms probed, and `--tools docker/sandbox-default-tools.txt` also runs every tool of the default sandbox base as the image's user. `scripts/smoke-sandbox-agent.test.sh` runs every probe and every failure mode against a stub `docker`, so the script itself is testable without a daemon or an image.
 
 ## Test environment
