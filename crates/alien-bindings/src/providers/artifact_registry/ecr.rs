@@ -813,8 +813,22 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             let client = self
                 .policy_management_client(&region, &full_repo_name)
                 .await?;
-            self.set_full_policy_with_client(&client, &full_repo_name, &filtered_access)
-                .await?;
+            match self
+                .set_full_policy_with_client(&client, &full_repo_name, &filtered_access)
+                .await
+            {
+                Ok(()) => {}
+                // A replica that never arrived holds no grant. Stopping here would also leave
+                // the source grant, and the caller reads this 404 as a repository already gone.
+                Err(error) if error.http_status_code == Some(404) => {
+                    info!(
+                        full_repo_name = %full_repo_name,
+                        region = %region,
+                        "Replica repository is missing, so it holds no grant to revoke"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
         self.set_full_policy(&full_repo_name, &filtered_access)
             .await
