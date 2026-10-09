@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth"
-import { alien } from "@/lib/config"
+import { alien, config } from "@/lib/config"
 import { db } from "@/lib/db"
 import { integration, organizationMetadata } from "@/lib/schema"
 import { eq } from "drizzle-orm"
@@ -38,7 +38,10 @@ export default async function DashboardPage() {
       .limit(1)
 
     if (metadata?.deploymentGroupId) {
-      const result = await alien.deployments.list({ deploymentGroup: metadata.deploymentGroupId })
+      const result = await alien.deployments.list({
+        workspace: config.workspace,
+        deploymentGroup: metadata.deploymentGroupId,
+      })
       hasAgents = (result.items && result.items.length > 0) || false
     }
   } catch (error) {
@@ -60,7 +63,10 @@ export default async function DashboardPage() {
         .limit(1)
 
       if (metadata?.deploymentGroupId) {
-        const result = await alien.deployments.list({ deploymentGroup: metadata.deploymentGroupId })
+        const result = await alien.deployments.list({
+          workspace: config.workspace,
+          deploymentGroup: metadata.deploymentGroupId,
+        })
         if (result.items && result.items.length > 0) {
           agentId = result.items[0].id
         }

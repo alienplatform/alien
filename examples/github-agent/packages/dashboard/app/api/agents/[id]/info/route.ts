@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth"
-import { alien } from "@/lib/config"
+import { alien, config } from "@/lib/config"
 import { headers } from "next/headers"
 
 type RouteContext = {
@@ -23,7 +23,10 @@ export async function GET(_request: Request, context: RouteContext): Promise<Res
 
   try {
     const { id } = await context.params
-    const info = await alien.deployments.getInfo({ id })
+    const info = await alien.deployments.getInfo({
+      workspace: config.workspace,
+      id,
+    })
     return Response.json(info)
   } catch (error) {
     console.error("Failed to get agent info:", error)

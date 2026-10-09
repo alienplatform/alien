@@ -8,7 +8,10 @@ import { alien, config } from "./config"
  * then creates a client configured to communicate with that deployment.
  */
 export async function getCommandsClient(deploymentId: string) {
-  const info = await alien.deployments.getInfo({ id: deploymentId })
+  const info = await alien.deployments.getInfo({
+    workspace: config.workspace,
+    id: deploymentId,
+  })
 
   return new CommandsClient({
     managerUrl: info.arc?.url || config.alienApiUrl,
