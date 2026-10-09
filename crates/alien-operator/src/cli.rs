@@ -1172,14 +1172,11 @@ fn parse_platform(s: &str) -> std::result::Result<Platform, String> {
 /// Parse `OPERATOR_OPERATIONS`. An Operator installed on its own has no stack,
 /// so setting values must be literals or local environment variables.
 fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::OperationsConfig>> {
-    let Some(value) = parse_json_opt::<serde_json::Value>(json, "operations")? else {
+    let Some(config) =
+        parse_json_opt::<alien_core::OperationsConfig>(json.map(with_plugins_key), "operations")?
+    else {
         return Ok(None);
     };
-    let config: alien_core::OperationsConfig = serde_json::from_value(with_plugins_key(value))
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Invalid operations JSON".to_string(),
-        })?;
     let plugins = config
         .plugins
         .iter()
@@ -1211,17 +1208,18 @@ fn parse_operator_operations(json: Option<String>) -> Result<Option<alien_core::
 /// Earlier Operators read `OPERATOR_OPERATIONS` as the plugin map itself, as in
 /// `{"kubernetes":{"approval":{"get-pods":"auto"}}}`. Helm values written for them
 /// have no `plugins` key, and would otherwise parse as an empty declaration.
-fn with_plugins_key(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map)
+/// Preserve the JSON text so typed deserialization still rejects duplicate fields.
+fn with_plugins_key(json: String) -> String {
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(serde_json::Value::Object(map))
             if !map.is_empty() && !map.contains_key("plugins") && !map.contains_key("custom") =>
         {
             warn!(
                 "OPERATOR_OPERATIONS has no `plugins` key; reading its entries as built-in plugins"
             );
-            serde_json::json!({ "plugins": map })
+            format!(r#"{{"plugins":{json}}}"#)
         }
-        other => other,
+        _ => json,
     }
 }
 
@@ -1661,6 +1659,25 @@ mod tests {
             .expect("the current shape parses")
             .expect("a declared plugin yields a config"),
         );
+    }
+
+    #[test]
+    fn operator_operations_reject_duplicate_fields() {
+        for json in [
+            r#"{"plugins":{},"plugins":{"kubernetes":{}}}"#,
+            r#"{"custom":[],"custom":[]}"#,
+            r#"{"plugins":{"kubernetes":{"approval":{"*":"manual"},"approval":{"*":"auto"}}}}"#,
+            r#"{"plugins":{"db":{"settings":{"url":"first"},"settings":{"url":"second"}}}}"#,
+            r#"{"kubernetes":{"approval":{"*":"manual"},"approval":{"*":"auto"}}}"#,
+            r#"{"db":{"settings":{"url":"first"},"settings":{"url":"second"}}}"#,
+            r#"{"custom":[{"name":"first","name":"second","version":"1.0.0"}]}"#,
+            r#"{"custom":[{"name":"db","version":"1.0.0","version":"2.0.0"}]}"#,
+        ] {
+            let error = parse_operator_operations(Some(json.to_string()))
+                .expect_err("duplicate configuration fields must be rejected");
+            assert_eq!(error.code, "CONFIGURATION_ERROR", "input: {json}");
+            assert!(error.to_string().contains("duplicate field"), "{error}");
+        }
     }
 
     #[test]
