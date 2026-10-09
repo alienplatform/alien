@@ -226,16 +226,48 @@ fn service_account_trust_policy(
 }
 
 fn service_account_policy_document(
-    _ctx: &EmitContext<'_>,
+    ctx: &EmitContext<'_>,
     service_account: &ServiceAccount,
 ) -> Result<Option<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = permission_context().with_resource_name(service_account.id.clone());
 
-    for permission_set in &service_account.stack_permission_sets {
+    let mut grants: Vec<_> = service_account
+        .stack_permission_sets
+        .iter()
+        .map(|set| (set, BindingTarget::Stack, context.clone()))
+        .collect();
+    for (target, sets) in &service_account.resource_permission_sets {
+        let target_id = if ctx.stack.resources().any(|(id, entry)| {
+            id == target && entry.config.downcast_ref::<ServiceAccount>().is_some()
+        }) {
+            target.clone()
+        } else {
+            format!("{target}-sa")
+        };
+        if !ctx.stack.resources().any(|(id, entry)| {
+            id == &target_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
+        }) {
+            continue;
+        }
+        for set in sets
+            .iter()
+            .filter(|set| set.id == "service-account/impersonate")
+        {
+            grants.push((
+                set,
+                BindingTarget::Resource,
+                context
+                    .clone()
+                    .with_stack_prefix("${AWS::StackName}")
+                    .with_resource_name(target_id.clone()),
+            ));
+        }
+    }
+    for (permission_set, target, context) in grants {
         let policy = generator
-            .generate_policy(permission_set, BindingTarget::Stack, &context)
+            .generate_policy(permission_set, target, &context)
             .context(ErrorData::GenericError {
                 message: format!(
                     "failed to generate AWS CloudFormation policy for service account '{}'",

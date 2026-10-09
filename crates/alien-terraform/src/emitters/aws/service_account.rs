@@ -11,8 +11,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy, iam_role_name_template,
-        jsonencode, required_label, service_assume_role_policy, tags,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy,
+        emit_iam_role_policy_for_target_with_label, iam_role_name_template, jsonencode,
+        required_label, service_assume_role_policy, tags,
     },
     expr,
 };
@@ -20,6 +21,7 @@ use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, Build, ComputeCluster, Result,
     ServiceAccount, Worker,
 };
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
 
@@ -55,6 +57,37 @@ impl TfEmitter for AwsServiceAccountEmitter {
             aws_terraform_permission_context().with_resource_name(service_account.id.clone());
         for (index, permission_set) in service_account.stack_permission_sets.iter().enumerate() {
             emit_iam_role_policy(&mut fragment, label, permission_set, index, &context)?;
+        }
+
+        for (target, sets) in &service_account.resource_permission_sets {
+            let target_id = if ctx.stack.resources().any(|(id, entry)| {
+                id == target && entry.config.downcast_ref::<ServiceAccount>().is_some()
+            }) {
+                target.clone()
+            } else {
+                format!("{target}-sa")
+            };
+            if !ctx.stack.resources().any(|(id, entry)| {
+                id == &target_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
+            }) {
+                continue;
+            }
+            let context = aws_terraform_permission_context().with_resource_name(target_id.clone());
+            for (index, set) in sets
+                .iter()
+                .enumerate()
+                .filter(|(_, set)| set.id == "service-account/impersonate")
+            {
+                emit_iam_role_policy_for_target_with_label(
+                    &mut fragment,
+                    label,
+                    set,
+                    &format!("{label}_{target_id}_impersonate_{index}"),
+                    &format!("impersonate-{target_id}-{index}"),
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
         }
 
         Ok(fragment)

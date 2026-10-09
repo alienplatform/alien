@@ -8,8 +8,7 @@ use alien_core::{permissions::PermissionSetReference, Platform, ServiceAccount, 
 /// 1. `service-account/impersonate` must NEVER be used at stack level ("*" scope)
 /// 2. `service-account/impersonate` must only be scoped to resources that are ServiceAccounts
 ///    or will become ServiceAccounts via permission profile conversion
-/// 3. Warns if a manually-defined ServiceAccount has impersonate permissions targeting it
-///    (impersonation only works for profile-generated ServiceAccounts)
+/// 3. Warns when a non-AWS backend cannot grant impersonation of a manually-defined ServiceAccount.
 pub struct ServiceAccountImpersonateValidationCheck;
 
 #[async_trait::async_trait]
@@ -240,7 +239,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manually_defined_service_account_warns() {
+    async fn manually_defined_service_account_checks_backend_support() {
         // Manually create a ServiceAccount without a corresponding profile
         let manual_sa = ServiceAccount::new("manual-sa".to_string()).build();
         let mut resources = IndexMap::new();
