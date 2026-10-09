@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type CancelDeploymentCredentialRotationMutationVariables = {
-  request: operations.CancelDeploymentCredentialRotationRequest;
+  id: string;
+  requestBody: operations.CancelDeploymentCredentialRotationRequestBody;
   options?: RequestOptions;
 };
 
@@ -81,7 +82,8 @@ export function buildCancelDeploymentCredentialRotationMutation(
   return {
     mutationKey: mutationKeyCancelDeploymentCredentialRotation(),
     mutationFn: function cancelDeploymentCredentialRotationMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<CancelDeploymentCredentialRotationMutationData> {
       const mergedOptions = {
@@ -98,7 +100,8 @@ export function buildCancelDeploymentCredentialRotationMutation(
       };
       return unwrapAsync(cancelDeploymentCredentialRotation(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

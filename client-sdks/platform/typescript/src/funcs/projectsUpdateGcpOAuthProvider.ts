@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function projectsUpdateGcpOAuthProvider(
   client: AlienCore,
-  request: operations.UpdateProjectGcpOAuthProviderRequest,
+  idOrName: string,
+  updateProjectGcpOAuthProvider?:
+    | models.UpdateProjectGcpOAuthProvider
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function projectsUpdateGcpOAuthProvider(
 > {
   return new APIPromise($do(
     client,
-    request,
+    idOrName,
+    updateProjectGcpOAuthProvider,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateProjectGcpOAuthProviderRequest,
+  idOrName: string,
+  updateProjectGcpOAuthProvider?:
+    | models.UpdateProjectGcpOAuthProvider
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateProjectGcpOAuthProviderRequest = {
+    idOrName: idOrName,
+    updateProjectGcpOAuthProvider: updateProjectGcpOAuthProvider,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.UpdateProjectGcpOAuthProviderRequest$outboundSchema.parse(
         value,

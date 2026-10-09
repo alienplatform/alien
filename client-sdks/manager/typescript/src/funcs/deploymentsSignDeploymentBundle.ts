@@ -27,7 +27,8 @@ import { Result } from "../types/fp.js";
 
 export function deploymentsSignDeploymentBundle(
   client: AlienManagerCore,
-  request: operations.SignDeploymentBundleRequest,
+  id: string,
+  bundleSignatureRequest: models.BundleSignatureRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -44,14 +45,16 @@ export function deploymentsSignDeploymentBundle(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    bundleSignatureRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.SignDeploymentBundleRequest,
+  id: string,
+  bundleSignatureRequest: models.BundleSignatureRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -69,8 +72,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.SignDeploymentBundleRequest = {
+    id: id,
+    bundleSignatureRequest: bundleSignatureRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.SignDeploymentBundleRequest$outboundSchema.parse(value),
     "Input validation failed",

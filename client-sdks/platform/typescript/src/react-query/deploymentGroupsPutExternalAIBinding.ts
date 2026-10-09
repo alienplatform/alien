@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentGroupsPutExternalAIBindingMutationVariables = {
-  request: operations.PutExternalAIBindingRequest;
+  id: string;
+  putExternalAIBindingRequest: models.PutExternalAIBindingRequestUnion;
   options?: RequestOptions;
 };
 
@@ -88,7 +88,8 @@ export function buildDeploymentGroupsPutExternalAIBindingMutation(
   return {
     mutationKey: mutationKeyDeploymentGroupsPutExternalAIBinding(),
     mutationFn: function deploymentGroupsPutExternalAIBindingMutationFn({
-      request,
+      id,
+      putExternalAIBindingRequest,
       options,
     }): Promise<DeploymentGroupsPutExternalAIBindingMutationData> {
       const mergedOptions = {
@@ -105,7 +106,8 @@ export function buildDeploymentGroupsPutExternalAIBindingMutation(
       };
       return unwrapAsync(deploymentGroupsPutExternalAIBinding(
         client$,
-        request,
+        id,
+        putExternalAIBindingRequest,
         mergedOptions,
       ));
     },

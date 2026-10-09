@@ -27,7 +27,8 @@ import { Result } from "../types/fp.js";
 
 export function deploymentsSetDeploymentPin(
   client: AlienManagerCore,
-  request: operations.SetDeploymentPinRequest,
+  id: string,
+  setDeploymentPinRequest: models.SetDeploymentPinRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -44,14 +45,16 @@ export function deploymentsSetDeploymentPin(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    setDeploymentPinRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.SetDeploymentPinRequest,
+  id: string,
+  setDeploymentPinRequest: models.SetDeploymentPinRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -69,8 +72,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.SetDeploymentPinRequest = {
+    id: id,
+    setDeploymentPinRequest: setDeploymentPinRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.SetDeploymentPinRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

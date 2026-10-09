@@ -12,6 +12,14 @@ docker-compose up -d
 
 ### 2. Set up the database
 
+The example links the API SDK from this checkout. Build it before installing
+the dashboard dependencies:
+
+```bash
+pnpm --dir ../../../.. install --filter @alienplatform/platform-api
+pnpm --dir ../../../.. --filter @alienplatform/platform-api build
+```
+
 ```bash
 pnpm install
 pnpm db:push

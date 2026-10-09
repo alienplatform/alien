@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function operationsUpdatePolicy(
   client: AlienCore,
-  request: operations.UpdateOperationsPolicyRequest,
+  project: string,
+  updateOperationsPolicyRequest?:
+    | models.UpdateOperationsPolicyRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function operationsUpdatePolicy(
 > {
   return new APIPromise($do(
     client,
-    request,
+    project,
+    updateOperationsPolicyRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateOperationsPolicyRequest,
+  project: string,
+  updateOperationsPolicyRequest?:
+    | models.UpdateOperationsPolicyRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateOperationsPolicyRequest = {
+    project: project,
+    updateOperationsPolicyRequest: updateOperationsPolicyRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.UpdateOperationsPolicyRequest$outboundSchema.parse(value),
     "Input validation failed",

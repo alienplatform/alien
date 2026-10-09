@@ -132,12 +132,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.containerRegistry.putContainerRegistry({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    requestBody: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      resourceId: "<id>",
-    },
+  const result = await alien.containerRegistry.putContainerRegistry("dg_r27ict8c7vcgsumpj90ackf7b", {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    resourceId: "<id>",
   });
 
   console.log(result);
@@ -162,12 +159,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await containerRegistryPutContainerRegistry(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    requestBody: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      resourceId: "<id>",
-    },
+  const res = await containerRegistryPutContainerRegistry(alien, "dg_r27ict8c7vcgsumpj90ackf7b", {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    resourceId: "<id>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -199,12 +193,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.PutContainerRegistryRequest](../../models/operations/putcontainerregistryrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `requestBody`                                                                                                                                                                  | [operations.PutContainerRegistryRequestBody](../../models/operations/putcontainerregistryrequestbody.md)                                                                       | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -232,9 +227,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.containerRegistry.createContainerRegistryRepository({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-  });
+  const result = await alien.containerRegistry.createContainerRegistryRepository("dg_r27ict8c7vcgsumpj90ackf7b");
 
   console.log(result);
 }
@@ -258,9 +251,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await containerRegistryCreateContainerRegistryRepository(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-  });
+  const res = await containerRegistryCreateContainerRegistryRepository(alien, "dg_r27ict8c7vcgsumpj90ackf7b");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -291,12 +282,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateContainerRegistryRepositoryRequest](../../models/operations/createcontainerregistryrepositoryrequest.md)                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `requestBody`                                                                                                                                                                  | [operations.CreateContainerRegistryRepositoryRequestBody](../../models/operations/createcontainerregistryrepositoryrequestbody.md)                                             | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -324,9 +316,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.containerRegistry.createContainerRegistryCredential({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-  });
+  const result = await alien.containerRegistry.createContainerRegistryCredential("dg_r27ict8c7vcgsumpj90ackf7b");
 
   console.log(result);
 }
@@ -350,9 +340,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await containerRegistryCreateContainerRegistryCredential(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-  });
+  const res = await containerRegistryCreateContainerRegistryCredential(alien, "dg_r27ict8c7vcgsumpj90ackf7b");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -383,12 +371,13 @@ import {
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateContainerRegistryCredentialRequest](../../models/operations/createcontainerregistrycredentialrequest.md)                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment group.                                                                                                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                                                                   |
+| `requestBody`                                                                                                                                                                  | [operations.CreateContainerRegistryCredentialRequestBody](../../models/operations/createcontainerregistrycredentialrequestbody.md)                                             | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
 
 ### Response
 
@@ -888,24 +877,21 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.containerRegistry.applyContainerRegistryManagerSnapshot({
-    id: "<id>",
-    requestBody: {
-      routeId: "crroute_c9t4xoy7fmiq7equtu20",
-      desiredRevision: 186433,
-      repositories: [
-        {
-          id: "crrepo_625temdq3bnu25jw9rcux",
-          status: "failed",
-          routableUpstreamName: "<value>",
-          error: "<value>",
-        },
-      ],
-      verification: {
-        succeeded: false,
-        observedAt: new Date("2026-11-26T10:14:03.486Z"),
+  const result = await alien.containerRegistry.applyContainerRegistryManagerSnapshot("<id>", {
+    routeId: "crroute_c9t4xoy7fmiq7equtu20",
+    desiredRevision: 186433,
+    repositories: [
+      {
+        id: "crrepo_625temdq3bnu25jw9rcux",
+        status: "failed",
+        routableUpstreamName: "<value>",
         error: "<value>",
       },
+    ],
+    verification: {
+      succeeded: false,
+      observedAt: new Date("2026-11-26T10:14:03.486Z"),
+      error: "<value>",
     },
   });
 
@@ -930,24 +916,21 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await containerRegistryApplyContainerRegistryManagerSnapshot(alien, {
-    id: "<id>",
-    requestBody: {
-      routeId: "crroute_c9t4xoy7fmiq7equtu20",
-      desiredRevision: 186433,
-      repositories: [
-        {
-          id: "crrepo_625temdq3bnu25jw9rcux",
-          status: "failed",
-          routableUpstreamName: "<value>",
-          error: "<value>",
-        },
-      ],
-      verification: {
-        succeeded: false,
-        observedAt: new Date("2026-11-26T10:14:03.486Z"),
+  const res = await containerRegistryApplyContainerRegistryManagerSnapshot(alien, "<id>", {
+    routeId: "crroute_c9t4xoy7fmiq7equtu20",
+    desiredRevision: 186433,
+    repositories: [
+      {
+        id: "crrepo_625temdq3bnu25jw9rcux",
+        status: "failed",
+        routableUpstreamName: "<value>",
         error: "<value>",
       },
+    ],
+    verification: {
+      succeeded: false,
+      observedAt: new Date("2026-11-26T10:14:03.486Z"),
+      error: "<value>",
     },
   });
   if (res.ok) {
@@ -982,7 +965,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ApplyContainerRegistryManagerSnapshotRequest](../../models/operations/applycontainerregistrymanagersnapshotrequest.md)                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `requestBody`                                                                                                                                                                  | [operations.ApplyContainerRegistryManagerSnapshotRequestBody](../../models/operations/applycontainerregistrymanagersnapshotrequestbody.md)                                     | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

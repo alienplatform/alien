@@ -272,12 +272,14 @@ export class Alien extends ClientSDK {
   }
 
   async updateProjectLogExport(
-    request: operations.UpdateProjectLogExportRequest,
+    idOrName: string,
+    requestBody?: operations.UpdateProjectLogExportRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.UpdateProjectLogExportResponse> {
     return unwrapAsync(updateProjectLogExport(
       this,
-      request,
+      idOrName,
+      requestBody,
       options,
     ));
   }
@@ -305,12 +307,14 @@ export class Alien extends ClientSDK {
   }
 
   async reportLogExportDelivery(
-    request: operations.ReportLogExportDeliveryRequest,
+    id: string,
+    requestBody?: operations.ReportLogExportDeliveryRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.ReportLogExportDeliveryResponse> {
     return unwrapAsync(reportLogExportDelivery(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -327,12 +331,14 @@ export class Alien extends ClientSDK {
   }
 
   async createWorkspaceInvitation(
-    request: operations.CreateWorkspaceInvitationRequest,
+    id: string,
+    requestBody?: operations.CreateWorkspaceInvitationRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.WorkspaceInvitation> {
     return unwrapAsync(createWorkspaceInvitation(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -371,12 +377,14 @@ export class Alien extends ClientSDK {
   }
 
   async createWorkspaceInviteLink(
-    request: operations.CreateWorkspaceInviteLinkRequest,
+    id: string,
+    requestBody?: operations.CreateWorkspaceInviteLinkRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.WorkspaceInviteLink> {
     return unwrapAsync(createWorkspaceInviteLink(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -404,34 +412,40 @@ export class Alien extends ClientSDK {
   }
 
   async prepareDeploymentCredentialRotation(
-    request: operations.PrepareDeploymentCredentialRotationRequest,
+    id: string,
+    requestBody: operations.PrepareDeploymentCredentialRotationRequestBody,
     options?: RequestOptions,
   ): Promise<models.DeploymentCredentialRotation> {
     return unwrapAsync(prepareDeploymentCredentialRotation(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async cancelDeploymentCredentialRotation(
-    request: operations.CancelDeploymentCredentialRotationRequest,
+    id: string,
+    requestBody: operations.CancelDeploymentCredentialRotationRequestBody,
     options?: RequestOptions,
   ): Promise<models.DeploymentCredentialRotation> {
     return unwrapAsync(cancelDeploymentCredentialRotation(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async getDeploymentCredentialRotationValues(
-    request: operations.GetDeploymentCredentialRotationValuesRequest,
+    id: string,
+    requestBody: operations.GetDeploymentCredentialRotationValuesRequestBody,
     options?: RequestOptions,
   ): Promise<models.DeploymentCredentialRotationValues> {
     return unwrapAsync(getDeploymentCredentialRotationValues(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -459,45 +473,57 @@ export class Alien extends ClientSDK {
   }
 
   async rotateAwsVirtualKeyCredential(
-    request: operations.RotateAwsVirtualKeyCredentialRequest,
+    id: string,
+    requestBody?:
+      | operations.RotateAwsVirtualKeyCredentialRequestBody
+      | undefined,
     options?: RequestOptions,
   ): Promise<operations.RotateAwsVirtualKeyCredentialResponse> {
     return unwrapAsync(rotateAwsVirtualKeyCredential(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async restoreAwsVirtualKey(
-    request: operations.RestoreAwsVirtualKeyRequest,
+    id: string,
+    requestBody?: operations.RestoreAwsVirtualKeyRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.RestoreAwsVirtualKeyResponse> {
     return unwrapAsync(restoreAwsVirtualKey(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async finalizeAwsVirtualKeyDeletion(
-    request: operations.FinalizeAwsVirtualKeyDeletionRequest,
+    id: string,
+    requestBody?:
+      | operations.FinalizeAwsVirtualKeyDeletionRequestBody
+      | undefined,
     options?: RequestOptions,
   ): Promise<operations.FinalizeAwsVirtualKeyDeletionResponse> {
     return unwrapAsync(finalizeAwsVirtualKeyDeletion(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async decommissionAwsVirtualKey(
-    request: operations.DecommissionAwsVirtualKeyRequest,
+    id: string,
+    requestBody?: operations.DecommissionAwsVirtualKeyRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.DecommissionAwsVirtualKeyResponse> {
     return unwrapAsync(decommissionAwsVirtualKey(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -514,12 +540,14 @@ export class Alien extends ClientSDK {
   }
 
   async continueAwsVirtualKey(
-    request: operations.ContinueAwsVirtualKeyRequest,
+    id: string,
+    requestBody?: operations.ContinueAwsVirtualKeyRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.ContinueAwsVirtualKeyResponse> {
     return unwrapAsync(continueAwsVirtualKey(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }

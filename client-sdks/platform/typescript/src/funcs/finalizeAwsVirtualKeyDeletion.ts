@@ -28,7 +28,8 @@ import { Result } from "../types/fp.js";
 
 export function finalizeAwsVirtualKeyDeletion(
   client: AlienCore,
-  request: operations.FinalizeAwsVirtualKeyDeletionRequest,
+  id: string,
+  requestBody?: operations.FinalizeAwsVirtualKeyDeletionRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -46,14 +47,16 @@ export function finalizeAwsVirtualKeyDeletion(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.FinalizeAwsVirtualKeyDeletionRequest,
+  id: string,
+  requestBody?: operations.FinalizeAwsVirtualKeyDeletionRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -72,8 +75,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.FinalizeAwsVirtualKeyDeletionRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.FinalizeAwsVirtualKeyDeletionRequest$outboundSchema.parse(
         value,

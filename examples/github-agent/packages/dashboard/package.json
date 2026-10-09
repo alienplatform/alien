@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@alienplatform/commands": "^3.3.11",
-    "@alienplatform/platform-api": "^1.0.52",
+    "@alienplatform/platform-api": "link:../../../../client-sdks/platform/typescript",
     "@hookform/resolvers": "^3.10.0",
     "@tabler/icons-react": "^3.46.0",
     "@tanstack/react-query": "^5.62.11",

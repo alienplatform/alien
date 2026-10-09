@@ -22,13 +22,17 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentsUpdateEnvironmentVariablesMutationVariables = {
-  request: operations.UpdateDeploymentEnvironmentVariablesRequest;
+  id: string;
+  updateDeploymentEnvironmentVariablesRequest?:
+    | models.UpdateDeploymentEnvironmentVariablesRequest
+    | undefined;
   options?: RequestOptions;
 };
 
@@ -87,7 +91,8 @@ export function buildDeploymentsUpdateEnvironmentVariablesMutation(
   return {
     mutationKey: mutationKeyDeploymentsUpdateEnvironmentVariables(),
     mutationFn: function deploymentsUpdateEnvironmentVariablesMutationFn({
-      request,
+      id,
+      updateDeploymentEnvironmentVariablesRequest,
       options,
     }): Promise<DeploymentsUpdateEnvironmentVariablesMutationData> {
       const mergedOptions = {
@@ -104,7 +109,8 @@ export function buildDeploymentsUpdateEnvironmentVariablesMutation(
       };
       return unwrapAsync(deploymentsUpdateEnvironmentVariables(
         client$,
-        request,
+        id,
+        updateDeploymentEnvironmentVariablesRequest,
         mergedOptions,
       ));
     },

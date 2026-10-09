@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type OperationsApproveAccessRequestMutationVariables = {
-  request: operations.ApproveAccessRequestRequest;
+  id: string;
+  requestBody?: operations.ApproveAccessRequestRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +84,8 @@ export function buildOperationsApproveAccessRequestMutation(
   return {
     mutationKey: mutationKeyOperationsApproveAccessRequest(),
     mutationFn: function operationsApproveAccessRequestMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<OperationsApproveAccessRequestMutationData> {
       const mergedOptions = {
@@ -100,7 +102,8 @@ export function buildOperationsApproveAccessRequestMutation(
       };
       return unwrapAsync(operationsApproveAccessRequest(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

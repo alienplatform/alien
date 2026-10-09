@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function managersResolveGcpOAuthProvider(
   client: AlienCore,
-  request: operations.ResolveManagerGcpOAuthProviderRequest,
+  id: string,
+  resolveManagerGcpOAuthProviderRequest?:
+    | models.ResolveManagerGcpOAuthProviderRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function managersResolveGcpOAuthProvider(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    resolveManagerGcpOAuthProviderRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ResolveManagerGcpOAuthProviderRequest,
+  id: string,
+  resolveManagerGcpOAuthProviderRequest?:
+    | models.ResolveManagerGcpOAuthProviderRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,14 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ResolveManagerGcpOAuthProviderRequest = {
+    id: id,
+    resolveManagerGcpOAuthProviderRequest:
+      resolveManagerGcpOAuthProviderRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ResolveManagerGcpOAuthProviderRequest$outboundSchema.parse(
         value,

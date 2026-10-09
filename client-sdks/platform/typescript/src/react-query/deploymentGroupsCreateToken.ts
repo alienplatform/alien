@@ -8,7 +8,7 @@ import {
   UseMutationResult,
 } from "@tanstack/react-query";
 import { AlienCore } from "../core.js";
-import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
+import { deploymentGroupsCreateToken } from "../funcs/deploymentGroupsCreateToken.js";
 import { combineSignals } from "../lib/primitives.js";
 import { RequestOptions } from "../lib/sdks.js";
 import { AlienError } from "../models/errors/alienerror.js";
@@ -23,20 +23,22 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
-export type DeploymentGroupsCreateDeploymentGroupTokenMutationVariables = {
-  request: operations.CreateDeploymentGroupTokenRequest;
+export type DeploymentGroupsCreateTokenMutationVariables = {
+  id: string;
+  createDeploymentGroupTokenRequest?:
+    | models.CreateDeploymentGroupTokenRequest
+    | undefined;
   options?: RequestOptions;
 };
 
-export type DeploymentGroupsCreateDeploymentGroupTokenMutationData =
+export type DeploymentGroupsCreateTokenMutationData =
   models.CreateDeploymentGroupTokenResponse;
 
-export type DeploymentGroupsCreateDeploymentGroupTokenMutationError =
+export type DeploymentGroupsCreateTokenMutationError =
   | errors.APIError
   | AlienError
   | ResponseValidationError
@@ -53,47 +55,44 @@ export type DeploymentGroupsCreateDeploymentGroupTokenMutationError =
  * @remarks
  * Creates a deployment-group scoped API key and returns both the token and formatted deployment link
  */
-export function useDeploymentGroupsCreateDeploymentGroupTokenMutation(
+export function useDeploymentGroupsCreateTokenMutation(
   options?: MutationHookOptions<
-    DeploymentGroupsCreateDeploymentGroupTokenMutationData,
-    DeploymentGroupsCreateDeploymentGroupTokenMutationError,
-    DeploymentGroupsCreateDeploymentGroupTokenMutationVariables
+    DeploymentGroupsCreateTokenMutationData,
+    DeploymentGroupsCreateTokenMutationError,
+    DeploymentGroupsCreateTokenMutationVariables
   >,
 ): UseMutationResult<
-  DeploymentGroupsCreateDeploymentGroupTokenMutationData,
-  DeploymentGroupsCreateDeploymentGroupTokenMutationError,
-  DeploymentGroupsCreateDeploymentGroupTokenMutationVariables
+  DeploymentGroupsCreateTokenMutationData,
+  DeploymentGroupsCreateTokenMutationError,
+  DeploymentGroupsCreateTokenMutationVariables
 > {
   const client = useAlienContext();
   return useMutation({
-    ...buildDeploymentGroupsCreateDeploymentGroupTokenMutation(client, options),
+    ...buildDeploymentGroupsCreateTokenMutation(client, options),
     ...options,
   });
 }
 
-export function mutationKeyDeploymentGroupsCreateDeploymentGroupToken(): MutationKey {
-  return [
-    "@alienplatform/platform-api",
-    "deployment-groups",
-    "createDeploymentGroupToken",
-  ];
+export function mutationKeyDeploymentGroupsCreateToken(): MutationKey {
+  return ["@alienplatform/platform-api", "deployment-groups", "createToken"];
 }
 
-export function buildDeploymentGroupsCreateDeploymentGroupTokenMutation(
+export function buildDeploymentGroupsCreateTokenMutation(
   client$: AlienCore,
   hookOptions?: RequestOptions,
 ): {
   mutationKey: MutationKey;
   mutationFn: (
-    variables: DeploymentGroupsCreateDeploymentGroupTokenMutationVariables,
-  ) => Promise<DeploymentGroupsCreateDeploymentGroupTokenMutationData>;
+    variables: DeploymentGroupsCreateTokenMutationVariables,
+  ) => Promise<DeploymentGroupsCreateTokenMutationData>;
 } {
   return {
-    mutationKey: mutationKeyDeploymentGroupsCreateDeploymentGroupToken(),
-    mutationFn: function deploymentGroupsCreateDeploymentGroupTokenMutationFn({
-      request,
+    mutationKey: mutationKeyDeploymentGroupsCreateToken(),
+    mutationFn: function deploymentGroupsCreateTokenMutationFn({
+      id,
+      createDeploymentGroupTokenRequest,
       options,
-    }): Promise<DeploymentGroupsCreateDeploymentGroupTokenMutationData> {
+    }): Promise<DeploymentGroupsCreateTokenMutationData> {
       const mergedOptions = {
         ...hookOptions,
         ...options,
@@ -106,9 +105,10 @@ export function buildDeploymentGroupsCreateDeploymentGroupTokenMutation(
           ),
         },
       };
-      return unwrapAsync(deploymentGroupsCreateDeploymentGroupToken(
+      return unwrapAsync(deploymentGroupsCreateToken(
         client$,
-        request,
+        id,
+        createDeploymentGroupTokenRequest,
         mergedOptions,
       ));
     },

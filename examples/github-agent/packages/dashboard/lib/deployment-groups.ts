@@ -18,21 +18,14 @@ export async function createDeploymentGroupForOrganization(
   const name = organizationSlug ?? organizationName.toLowerCase().replace(/[^a-z0-9-]/g, "-")
 
   const deploymentGroup = await alien.deploymentGroups.createDeploymentGroup({
-    workspace: config.workspace,
-    createDeploymentGroupRequest: {
-      name,
-      project: config.project,
-      maxAgents: 10,
-    },
+    name,
+    project: config.project,
+    maxDeployments: 10,
   })
 
   // Create deployment group token
-  const tokenResponse = await alien.deploymentGroups.createDeploymentGroupToken({
-    workspace: config.workspace,
-    id: deploymentGroup.id,
-    createDeploymentGroupTokenRequest: {
-      description: `Deployment token for ${organizationName}`,
-    },
+  const tokenResponse = await alien.deploymentGroups.createToken(deploymentGroup.id, {
+    description: `Deployment token for ${organizationName}`,
   })
 
   if (!deploymentGroup.id || !tokenResponse.token) {

@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type FinalizeAwsVirtualKeyDeletionMutationVariables = {
-  request: operations.FinalizeAwsVirtualKeyDeletionRequest;
+  id: string;
+  requestBody?: operations.FinalizeAwsVirtualKeyDeletionRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildFinalizeAwsVirtualKeyDeletionMutation(
   return {
     mutationKey: mutationKeyFinalizeAwsVirtualKeyDeletion(),
     mutationFn: function finalizeAwsVirtualKeyDeletionMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<FinalizeAwsVirtualKeyDeletionMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildFinalizeAwsVirtualKeyDeletionMutation(
       };
       return unwrapAsync(finalizeAwsVirtualKeyDeletion(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

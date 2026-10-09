@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function operationsSetBuiltinPlugins(
   client: AlienCore,
-  request: operations.SetBuiltinOperationsPluginsRequest,
+  project: string,
+  setBuiltinOperationsPluginsRequest?:
+    | models.SetBuiltinOperationsPluginsRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function operationsSetBuiltinPlugins(
 > {
   return new APIPromise($do(
     client,
-    request,
+    project,
+    setBuiltinOperationsPluginsRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.SetBuiltinOperationsPluginsRequest,
+  project: string,
+  setBuiltinOperationsPluginsRequest?:
+    | models.SetBuiltinOperationsPluginsRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.SetBuiltinOperationsPluginsRequest = {
+    project: project,
+    setBuiltinOperationsPluginsRequest: setBuiltinOperationsPluginsRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.SetBuiltinOperationsPluginsRequest$outboundSchema.parse(value),
     "Input validation failed",

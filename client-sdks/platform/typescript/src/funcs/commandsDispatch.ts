@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function commandsDispatch(
   client: AlienCore,
-  request: operations.DispatchCommandRequest,
+  id: string,
+  dispatchCommandRequest?: models.DispatchCommandRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function commandsDispatch(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    dispatchCommandRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.DispatchCommandRequest,
+  id: string,
+  dispatchCommandRequest?: models.DispatchCommandRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.DispatchCommandRequest = {
+    id: id,
+    dispatchCommandRequest: dispatchCommandRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.DispatchCommandRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

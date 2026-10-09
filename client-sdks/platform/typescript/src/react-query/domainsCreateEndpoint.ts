@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DomainsCreateEndpointMutationVariables = {
-  request: operations.CreateDomainEndpointRequest;
+  id: string;
+  requestBody?: operations.CreateDomainEndpointRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +84,8 @@ export function buildDomainsCreateEndpointMutation(
   return {
     mutationKey: mutationKeyDomainsCreateEndpoint(),
     mutationFn: function domainsCreateEndpointMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<DomainsCreateEndpointMutationData> {
       const mergedOptions = {
@@ -100,7 +102,8 @@ export function buildDomainsCreateEndpointMutation(
       };
       return unwrapAsync(domainsCreateEndpoint(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

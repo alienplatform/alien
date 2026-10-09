@@ -207,12 +207,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.releaseChannels.create({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    requestBody: {
-      name: "<value>",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
+  const result = await alien.releaseChannels.create("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+    name: "<value>",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
 
   console.log(result);
@@ -237,12 +234,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await releaseChannelsCreate(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    requestBody: {
-      name: "<value>",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
+  const res = await releaseChannelsCreate(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+    name: "<value>",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -283,12 +277,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.releaseChannels.create({
-    project: "my-project",
-    requestBody: {
-      name: "<value>",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
+  const result = await alien.releaseChannels.create("my-project", {
+    name: "<value>",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
 
   console.log(result);
@@ -313,12 +304,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await releaseChannelsCreate(alien, {
-    project: "my-project",
-    requestBody: {
-      name: "<value>",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
+  const res = await releaseChannelsCreate(alien, "my-project", {
+    name: "<value>",
+    releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -352,7 +340,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateReleaseChannelRequest](../../models/operations/createreleasechannelrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `requestBody`                                                                                                                                                                  | [operations.CreateReleaseChannelRequestBody](../../models/operations/createreleasechannelrequestbody.md)                                                                       | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

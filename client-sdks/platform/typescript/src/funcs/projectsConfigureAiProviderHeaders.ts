@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function projectsConfigureAiProviderHeaders(
   client: AlienCore,
-  request: operations.ConfigureProjectAiProviderHeadersRequest,
+  idOrName: string,
+  aiProviderHeaders?: models.AIProviderHeaders | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function projectsConfigureAiProviderHeaders(
 > {
   return new APIPromise($do(
     client,
-    request,
+    idOrName,
+    aiProviderHeaders,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ConfigureProjectAiProviderHeadersRequest,
+  idOrName: string,
+  aiProviderHeaders?: models.AIProviderHeaders | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ConfigureProjectAiProviderHeadersRequest = {
+    idOrName: idOrName,
+    aiProviderHeaders: aiProviderHeaders,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ConfigureProjectAiProviderHeadersRequest$outboundSchema.parse(
         value,

@@ -45,12 +45,16 @@ export class Operations extends ClientSDK {
    * Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
    */
   async publishPlugin(
-    request: operations.PublishOperationsPluginRequest,
+    project: string,
+    publishOperationsPluginRequest?:
+      | models.PublishOperationsPluginRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.PublishOperationsPluginResponse> {
     return unwrapAsync(operationsPublishPlugin(
       this,
-      request,
+      project,
+      publishOperationsPluginRequest,
       options,
     ));
   }
@@ -59,12 +63,16 @@ export class Operations extends ClientSDK {
    * Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
    */
   async setBuiltinPlugins(
-    request: operations.SetBuiltinOperationsPluginsRequest,
+    project: string,
+    setBuiltinOperationsPluginsRequest?:
+      | models.SetBuiltinOperationsPluginsRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.SetBuiltinOperationsPluginsResponse> {
     return unwrapAsync(operationsSetBuiltinPlugins(
       this,
-      request,
+      project,
+      setBuiltinOperationsPluginsRequest,
       options,
     ));
   }
@@ -73,12 +81,16 @@ export class Operations extends ClientSDK {
    * Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
    */
   async createBundleUploadUrl(
-    request: operations.CreateOperationsBundleUploadUrlRequest,
+    project: string,
+    operationsBundleUploadUrlRequest?:
+      | models.OperationsBundleUploadUrlRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.OperationsBundleUploadUrlResponse> {
     return unwrapAsync(operationsCreateBundleUploadUrl(
       this,
-      request,
+      project,
+      operationsBundleUploadUrlRequest,
       options,
     ));
   }
@@ -115,12 +127,16 @@ export class Operations extends ClientSDK {
    * Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
    */
   async updatePolicy(
-    request: operations.UpdateOperationsPolicyRequest,
+    project: string,
+    updateOperationsPolicyRequest?:
+      | models.UpdateOperationsPolicyRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.OperationsPolicyResponse> {
     return unwrapAsync(operationsUpdatePolicy(
       this,
-      request,
+      project,
+      updateOperationsPolicyRequest,
       options,
     ));
   }
@@ -129,12 +145,14 @@ export class Operations extends ClientSDK {
    * Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
    */
   async invoke(
-    request: operations.InvokeOperationRequest,
+    project: string,
+    invokeOperationRequest?: models.InvokeOperationRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.InvokeOperationResponse> {
     return unwrapAsync(operationsInvoke(
       this,
-      request,
+      project,
+      invokeOperationRequest,
       options,
     ));
   }
@@ -143,10 +161,28 @@ export class Operations extends ClientSDK {
    * One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
    */
   async verifyCheck(
-    request: operations.VerifyOperationCheckRequest,
+    project: string,
+    verifyOperationCheckRequest?:
+      | models.VerifyOperationCheckRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.VerifyOperationCheckResponse> {
     return unwrapAsync(operationsVerifyCheck(
+      this,
+      project,
+      verifyOperationCheckRequest,
+      options,
+    ));
+  }
+
+  /**
+   * Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+   */
+  async createAccessRequest(
+    request?: models.CreateAccessRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.CreateAccessRequestResponse> {
+    return unwrapAsync(operationsCreateAccessRequest(
       this,
       request,
       options,
@@ -161,20 +197,6 @@ export class Operations extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.ListAccessRequestsResponse> {
     return unwrapAsync(operationsListAccessRequests(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
-   */
-  async createAccessRequest(
-    request?: models.CreateAccessRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<operations.CreateAccessRequestResponse> {
-    return unwrapAsync(operationsCreateAccessRequest(
       this,
       request,
       options,
@@ -199,12 +221,14 @@ export class Operations extends ClientSDK {
    * Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
    */
   async approveAccessRequest(
-    request: operations.ApproveAccessRequestRequest,
+    id: string,
+    requestBody?: operations.ApproveAccessRequestRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.ApproveAccessRequestResponse> {
     return unwrapAsync(operationsApproveAccessRequest(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -213,12 +237,14 @@ export class Operations extends ClientSDK {
    * Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
    */
   async denyAccessRequest(
-    request: operations.DenyAccessRequestRequest,
+    id: string,
+    requestBody?: operations.DenyAccessRequestRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.DenyAccessRequestResponse> {
     return unwrapAsync(operationsDenyAccessRequest(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -269,12 +295,14 @@ export class Operations extends ClientSDK {
    * Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
    */
   async revokeAccessRequest(
-    request: operations.RevokeAccessRequestRequest,
+    id: string,
+    revokeAccessRequest?: models.RevokeAccessRequest | undefined,
     options?: RequestOptions,
   ): Promise<operations.RevokeAccessRequestResponse> {
     return unwrapAsync(operationsRevokeAccessRequest(
       this,
-      request,
+      id,
+      revokeAccessRequest,
       options,
     ));
   }

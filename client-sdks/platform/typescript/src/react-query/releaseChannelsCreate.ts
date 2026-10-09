@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ReleaseChannelsCreateMutationVariables = {
-  request: operations.CreateReleaseChannelRequest;
+  project: string;
+  requestBody?: operations.CreateReleaseChannelRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -86,7 +87,8 @@ export function buildReleaseChannelsCreateMutation(
   return {
     mutationKey: mutationKeyReleaseChannelsCreate(),
     mutationFn: function releaseChannelsCreateMutationFn({
-      request,
+      project,
+      requestBody,
       options,
     }): Promise<ReleaseChannelsCreateMutationData> {
       const mergedOptions = {
@@ -103,7 +105,8 @@ export function buildReleaseChannelsCreateMutation(
       };
       return unwrapAsync(releaseChannelsCreate(
         client$,
-        request,
+        project,
+        requestBody,
         mergedOptions,
       ));
     },

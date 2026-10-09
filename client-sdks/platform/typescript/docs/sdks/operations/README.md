@@ -13,8 +13,8 @@
 * [updatePolicy](#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
 * [verifyCheck](#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
-* [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
 * [createAccessRequest](#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+* [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
 * [approveAccessRequest](#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 * [denyAccessRequest](#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
@@ -224,9 +224,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.publishPlugin({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const result = await alien.operations.publishPlugin("prj_mcytp6z3j91f7tn5ryqsfwtr");
 
   console.log(result);
 }
@@ -250,9 +248,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsPublishPlugin(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const res = await operationsPublishPlugin(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -292,9 +288,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.publishPlugin({
-    project: "my-project",
-  });
+  const result = await alien.operations.publishPlugin("my-project");
 
   console.log(result);
 }
@@ -318,9 +312,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsPublishPlugin(alien, {
-    project: "my-project",
-  });
+  const res = await operationsPublishPlugin(alien, "my-project");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -353,7 +345,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.PublishOperationsPluginRequest](../../models/operations/publishoperationspluginrequest.md)                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `publishOperationsPluginRequest`                                                                                                                                               | [models.PublishOperationsPluginRequest](../../models/publishoperationspluginrequest.md)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -386,9 +379,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.setBuiltinPlugins({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const result = await alien.operations.setBuiltinPlugins("prj_mcytp6z3j91f7tn5ryqsfwtr");
 
   console.log(result);
 }
@@ -412,9 +403,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsSetBuiltinPlugins(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const res = await operationsSetBuiltinPlugins(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -454,9 +443,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.setBuiltinPlugins({
-    project: "my-project",
-  });
+  const result = await alien.operations.setBuiltinPlugins("my-project");
 
   console.log(result);
 }
@@ -480,9 +467,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsSetBuiltinPlugins(alien, {
-    project: "my-project",
-  });
+  const res = await operationsSetBuiltinPlugins(alien, "my-project");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -515,7 +500,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SetBuiltinOperationsPluginsRequest](../../models/operations/setbuiltinoperationspluginsrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `setBuiltinOperationsPluginsRequest`                                                                                                                                           | [models.SetBuiltinOperationsPluginsRequest](../../models/setbuiltinoperationspluginsrequest.md)                                                                                | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -548,9 +534,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.createBundleUploadUrl({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const result = await alien.operations.createBundleUploadUrl("prj_mcytp6z3j91f7tn5ryqsfwtr");
 
   console.log(result);
 }
@@ -574,9 +558,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsCreateBundleUploadUrl(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const res = await operationsCreateBundleUploadUrl(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -616,9 +598,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.createBundleUploadUrl({
-    project: "my-project",
-  });
+  const result = await alien.operations.createBundleUploadUrl("my-project");
 
   console.log(result);
 }
@@ -642,9 +622,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsCreateBundleUploadUrl(alien, {
-    project: "my-project",
-  });
+  const res = await operationsCreateBundleUploadUrl(alien, "my-project");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -677,7 +655,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateOperationsBundleUploadUrlRequest](../../models/operations/createoperationsbundleuploadurlrequest.md)                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `operationsBundleUploadUrlRequest`                                                                                                                                             | [models.OperationsBundleUploadUrlRequest](../../models/operationsbundleuploadurlrequest.md)                                                                                    | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -1059,9 +1038,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.updatePolicy({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const result = await alien.operations.updatePolicy("prj_mcytp6z3j91f7tn5ryqsfwtr");
 
   console.log(result);
 }
@@ -1085,9 +1062,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsUpdatePolicy(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const res = await operationsUpdatePolicy(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1127,9 +1102,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.updatePolicy({
-    project: "my-project",
-  });
+  const result = await alien.operations.updatePolicy("my-project");
 
   console.log(result);
 }
@@ -1153,9 +1126,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsUpdatePolicy(alien, {
-    project: "my-project",
-  });
+  const res = await operationsUpdatePolicy(alien, "my-project");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1188,7 +1159,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.UpdateOperationsPolicyRequest](../../models/operations/updateoperationspolicyrequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `updateOperationsPolicyRequest`                                                                                                                                                | [models.UpdateOperationsPolicyRequest](../../models/updateoperationspolicyrequest.md)                                                                                          | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -1221,9 +1193,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.invoke({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const result = await alien.operations.invoke("prj_mcytp6z3j91f7tn5ryqsfwtr");
 
   console.log(result);
 }
@@ -1247,9 +1217,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsInvoke(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
+  const res = await operationsInvoke(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1289,9 +1257,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.invoke({
-    project: "my-project",
-  });
+  const result = await alien.operations.invoke("my-project");
 
   console.log(result);
 }
@@ -1315,9 +1281,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsInvoke(alien, {
-    project: "my-project",
-  });
+  const res = await operationsInvoke(alien, "my-project");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -1350,7 +1314,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.InvokeOperationRequest](../../models/operations/invokeoperationrequest.md)                                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `invokeOperationRequest`                                                                                                                                                       | [models.InvokeOperationRequest](../../models/invokeoperationrequest.md)                                                                                                        | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -1383,12 +1348,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.verifyCheck({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    verifyOperationCheckRequest: {
-      deploymentId: "<id>",
-      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    },
+  const result = await alien.operations.verifyCheck("prj_mcytp6z3j91f7tn5ryqsfwtr", {
+    deploymentId: "<id>",
+    commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
 
   console.log(result);
@@ -1413,12 +1375,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsVerifyCheck(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    verifyOperationCheckRequest: {
-      deploymentId: "<id>",
-      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    },
+  const res = await operationsVerifyCheck(alien, "prj_mcytp6z3j91f7tn5ryqsfwtr", {
+    deploymentId: "<id>",
+    commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1459,12 +1418,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.verifyCheck({
-    project: "my-project",
-    verifyOperationCheckRequest: {
-      deploymentId: "<id>",
-      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    },
+  const result = await alien.operations.verifyCheck("my-project", {
+    deploymentId: "<id>",
+    commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
 
   console.log(result);
@@ -1489,12 +1445,9 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsVerifyCheck(alien, {
-    project: "my-project",
-    verifyOperationCheckRequest: {
-      deploymentId: "<id>",
-      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    },
+  const res = await operationsVerifyCheck(alien, "my-project", {
+    deploymentId: "<id>",
+    commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1528,7 +1481,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.VerifyOperationCheckRequest](../../models/operations/verifyoperationcheckrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `project`                                                                                                                                                                      | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Filter by project ID or name.                                                                                                                                                  |
+| `verifyOperationCheckRequest`                                                                                                                                                  | [models.VerifyOperationCheckRequest](../../models/verifyoperationcheckrequest.md)                                                                                              | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -1543,6 +1497,110 @@ import {
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 400, 403, 404            | application/json         |
 | errors.APIError          | 500, 502                 | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## createAccessRequest
+
+Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createAccessRequest" method="post" path="/v1/access-requests" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.operations.createAccessRequest({
+    deploymentId: "<id>",
+    commands: [],
+    operation: "kubernetes/restart-pod",
+    operationPattern: "kubernetes/*",
+    debugNamespace: "braintrust",
+    debugCloudScope: "123456789012/prod-readonly",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { operationsCreateAccessRequest } from "@alienplatform/platform-api/funcs/operationsCreateAccessRequest.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await operationsCreateAccessRequest(alien, {
+    deploymentId: "<id>",
+    commands: [],
+    operation: "kubernetes/restart-pod",
+    operationPattern: "kubernetes/*",
+    debugNamespace: "braintrust",
+    debugCloudScope: "123456789012/prod-readonly",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("operationsCreateAccessRequest failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useOperationsCreateAccessRequestMutation
+} from "@alienplatform/platform-api/react-query/operationsCreateAccessRequest.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.CreateAccessRequest](../../models/createaccessrequest.md)                                                                                                              | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.CreateAccessRequestResponse](../../models/operations/createaccessrequestresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
+| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## listAccessRequests
@@ -1733,110 +1791,6 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## createAccessRequest
-
-Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="createAccessRequest" method="post" path="/v1/access-requests" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.createAccessRequest({
-    deploymentId: "<id>",
-    commands: [],
-    operation: "kubernetes/restart-pod",
-    operationPattern: "kubernetes/*",
-    debugNamespace: "braintrust",
-    debugCloudScope: "123456789012/prod-readonly",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsCreateAccessRequest } from "@alienplatform/platform-api/funcs/operationsCreateAccessRequest.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsCreateAccessRequest(alien, {
-    deploymentId: "<id>",
-    commands: [],
-    operation: "kubernetes/restart-pod",
-    operationPattern: "kubernetes/*",
-    debugNamespace: "braintrust",
-    debugCloudScope: "123456789012/prod-readonly",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsCreateAccessRequest failed:", res.error);
-  }
-}
-
-run();
-```
-
-### React hooks and utilities
-
-This method can be used in React components through the following hooks and
-associated utilities.
-
-> Check out [this guide][hook-guide] for information about each of the utilities
-> below and how to get started using React hooks.
-
-[hook-guide]: ../../../REACT_QUERY.md
-
-```tsx
-import {
-  // Mutation hook for triggering the API call.
-  useOperationsCreateAccessRequestMutation
-} from "@alienplatform/platform-api/react-query/operationsCreateAccessRequest.js";
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.CreateAccessRequest](../../models/createaccessrequest.md)                                                                                                              | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[operations.CreateAccessRequestResponse](../../models/operations/createaccessrequestresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 403, 404, 409       | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## queueAccessRequest
 
 Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
@@ -1946,11 +1900,8 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.approveAccessRequest({
-    id: "<id>",
-    requestBody: {
-      method: "slack",
-    },
+  const result = await alien.operations.approveAccessRequest("<id>", {
+    method: "slack",
   });
 
   console.log(result);
@@ -1975,11 +1926,8 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsApproveAccessRequest(alien, {
-    id: "<id>",
-    requestBody: {
-      method: "slack",
-    },
+  const res = await operationsApproveAccessRequest(alien, "<id>", {
+    method: "slack",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -2013,7 +1961,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ApproveAccessRequestRequest](../../models/operations/approveaccessrequestrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `requestBody`                                                                                                                                                                  | [operations.ApproveAccessRequestRequestBody](../../models/operations/approveaccessrequestrequestbody.md)                                                                       | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -2046,11 +1995,8 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.denyAccessRequest({
-    id: "<id>",
-    requestBody: {
-      method: "slack",
-    },
+  const result = await alien.operations.denyAccessRequest("<id>", {
+    method: "slack",
   });
 
   console.log(result);
@@ -2075,11 +2021,8 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsDenyAccessRequest(alien, {
-    id: "<id>",
-    requestBody: {
-      method: "slack",
-    },
+  const res = await operationsDenyAccessRequest(alien, "<id>", {
+    method: "slack",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -2113,7 +2056,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.DenyAccessRequestRequest](../../models/operations/denyaccessrequestrequest.md)                                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `requestBody`                                                                                                                                                                  | [operations.DenyAccessRequestRequestBody](../../models/operations/denyaccessrequestrequestbody.md)                                                                             | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -2461,9 +2405,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.operations.revokeAccessRequest({
-    id: "<id>",
-  });
+  const result = await alien.operations.revokeAccessRequest("<id>");
 
   console.log(result);
 }
@@ -2487,9 +2429,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await operationsRevokeAccessRequest(alien, {
-    id: "<id>",
-  });
+  const res = await operationsRevokeAccessRequest(alien, "<id>");
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -2522,7 +2462,8 @@ import {
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.RevokeAccessRequestRequest](../../models/operations/revokeaccessrequestrequest.md)                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `revokeAccessRequest`                                                                                                                                                          | [models.RevokeAccessRequest](../../models/revokeaccessrequest.md)                                                                                                              | :heavy_minus_sign:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

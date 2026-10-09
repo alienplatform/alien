@@ -46,12 +46,14 @@ export class Domains extends ClientSDK {
    * Create an endpoint under a workspace domain.
    */
   async createEndpoint(
-    request: operations.CreateDomainEndpointRequest,
+    id: string,
+    requestBody?: operations.CreateDomainEndpointRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.DomainWithUsage> {
     return unwrapAsync(domainsCreateEndpoint(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }

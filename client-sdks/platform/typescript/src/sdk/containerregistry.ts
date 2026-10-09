@@ -30,34 +30,44 @@ export class ContainerRegistry extends ClientSDK {
   }
 
   async putContainerRegistry(
-    request: operations.PutContainerRegistryRequest,
+    id: string,
+    requestBody?: operations.PutContainerRegistryRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<operations.PutContainerRegistryResponse> {
     return unwrapAsync(containerRegistryPutContainerRegistry(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async createContainerRegistryRepository(
-    request: operations.CreateContainerRegistryRepositoryRequest,
+    id: string,
+    requestBody?:
+      | operations.CreateContainerRegistryRepositoryRequestBody
+      | undefined,
     options?: RequestOptions,
   ): Promise<operations.CreateContainerRegistryRepositoryResponse> {
     return unwrapAsync(containerRegistryCreateContainerRegistryRepository(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
 
   async createContainerRegistryCredential(
-    request: operations.CreateContainerRegistryCredentialRequest,
+    id: string,
+    requestBody?:
+      | operations.CreateContainerRegistryCredentialRequestBody
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.CreateContainerRegistryCredentialResponse> {
     return unwrapAsync(containerRegistryCreateContainerRegistryCredential(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -118,12 +128,16 @@ export class ContainerRegistry extends ClientSDK {
   }
 
   async applyContainerRegistryManagerSnapshot(
-    request: operations.ApplyContainerRegistryManagerSnapshotRequest,
+    id: string,
+    requestBody?:
+      | operations.ApplyContainerRegistryManagerSnapshotRequestBody
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.ApplyContainerRegistrySnapshotResponse> {
     return unwrapAsync(containerRegistryApplyContainerRegistryManagerSnapshot(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }

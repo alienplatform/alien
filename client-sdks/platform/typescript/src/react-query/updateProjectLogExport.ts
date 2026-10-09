@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type UpdateProjectLogExportMutationVariables = {
-  request: operations.UpdateProjectLogExportRequest;
+  idOrName: string;
+  requestBody?: operations.UpdateProjectLogExportRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildUpdateProjectLogExportMutation(
   return {
     mutationKey: mutationKeyUpdateProjectLogExport(),
     mutationFn: function updateProjectLogExportMutationFn({
-      request,
+      idOrName,
+      requestBody,
       options,
     }): Promise<UpdateProjectLogExportMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildUpdateProjectLogExportMutation(
       };
       return unwrapAsync(updateProjectLogExport(
         client$,
-        request,
+        idOrName,
+        requestBody,
         mergedOptions,
       ));
     },

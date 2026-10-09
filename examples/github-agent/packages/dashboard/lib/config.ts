@@ -48,4 +48,5 @@ export const config: {
 export const alien = new Alien({
   serverURL: config.alienApiUrl,
   apiKey: config.alienToken,
+  workspace: config.workspace,
 })

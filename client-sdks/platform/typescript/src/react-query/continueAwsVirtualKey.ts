@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ContinueAwsVirtualKeyMutationVariables = {
-  request: operations.ContinueAwsVirtualKeyRequest;
+  id: string;
+  requestBody?: operations.ContinueAwsVirtualKeyRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildContinueAwsVirtualKeyMutation(
   return {
     mutationKey: mutationKeyContinueAwsVirtualKey(),
     mutationFn: function continueAwsVirtualKeyMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<ContinueAwsVirtualKeyMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildContinueAwsVirtualKeyMutation(
       };
       return unwrapAsync(continueAwsVirtualKey(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

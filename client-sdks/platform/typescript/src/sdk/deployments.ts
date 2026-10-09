@@ -39,12 +39,14 @@ export class Deployments extends ClientSDK {
    * Reassign a deployment to another group within its project
    */
   async move(
-    request: operations.MoveDeploymentRequest,
+    id: string,
+    moveDeploymentRequest: models.MoveDeploymentRequest,
     options?: RequestOptions,
   ): Promise<models.MoveDeploymentResponse> {
     return unwrapAsync(deploymentsMove(
       this,
-      request,
+      id,
+      moveDeploymentRequest,
       options,
     ));
   }
@@ -223,12 +225,14 @@ export class Deployments extends ClientSDK {
    * Delete, detach, or forget a deployment by ID.
    */
   async delete(
-    request: operations.DeleteDeploymentRequest,
+    id: string,
+    deleteDeploymentRequest?: models.DeleteDeploymentRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.DeleteDeploymentResponse> {
     return unwrapAsync(deploymentsDelete(
       this,
-      request,
+      id,
+      deleteDeploymentRequest,
       options,
     ));
   }
@@ -251,23 +255,27 @@ export class Deployments extends ClientSDK {
    * Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
    */
   async pinRelease(
-    request: operations.PinDeploymentReleaseRequest,
+    id: string,
+    pinReleaseRequest?: models.PinReleaseRequest | undefined,
     options?: RequestOptions,
   ): Promise<operations.PinDeploymentReleaseResponse> {
     return unwrapAsync(deploymentsPinRelease(
       this,
-      request,
+      id,
+      pinReleaseRequest,
       options,
     ));
   }
 
   async setReleaseChannel(
-    request: operations.SetDeploymentReleaseChannelRequest,
+    id: string,
+    requestBody?: operations.SetDeploymentReleaseChannelRequestBody | undefined,
     options?: RequestOptions,
   ): Promise<models.Deployment> {
     return unwrapAsync(deploymentsSetReleaseChannel(
       this,
-      request,
+      id,
+      requestBody,
       options,
     ));
   }
@@ -304,12 +312,16 @@ export class Deployments extends ClientSDK {
    * Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
    */
   async updateInputs(
-    request: operations.UpdateDeploymentInputsRequest,
+    id: string,
+    updateDeploymentInputsRequest?:
+      | models.UpdateDeploymentInputsRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.UpdateDeploymentInputsResponse> {
     return unwrapAsync(deploymentsUpdateInputs(
       this,
-      request,
+      id,
+      updateDeploymentInputsRequest,
       options,
     ));
   }
@@ -318,12 +330,16 @@ export class Deployments extends ClientSDK {
    * Update deployment-time compute pool selections and request reconciliation by the hosted manager.
    */
   async updateCompute(
-    request: operations.UpdateDeploymentComputeRequest,
+    id: string,
+    updateDeploymentComputeRequest?:
+      | models.UpdateDeploymentComputeRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<operations.UpdateDeploymentComputeResponse> {
     return unwrapAsync(deploymentsUpdateCompute(
       this,
-      request,
+      id,
+      updateDeploymentComputeRequest,
       options,
     ));
   }
@@ -332,12 +348,16 @@ export class Deployments extends ClientSDK {
    * Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
    */
   async updateEnvironmentVariables(
-    request: operations.UpdateDeploymentEnvironmentVariablesRequest,
+    id: string,
+    updateDeploymentEnvironmentVariablesRequest?:
+      | models.UpdateDeploymentEnvironmentVariablesRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<operations.UpdateDeploymentEnvironmentVariablesResponse> {
     return unwrapAsync(deploymentsUpdateEnvironmentVariables(
       this,
-      request,
+      id,
+      updateDeploymentEnvironmentVariablesRequest,
       options,
     ));
   }
@@ -346,12 +366,16 @@ export class Deployments extends ClientSDK {
    * Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
    */
   async createToken(
-    request: operations.CreateDeploymentTokenRequest,
+    id: string,
+    createDeploymentTokenRequest?:
+      | models.CreateDeploymentTokenRequest
+      | undefined,
     options?: RequestOptions,
   ): Promise<models.CreateDeploymentTokenResponse> {
     return unwrapAsync(deploymentsCreateToken(
       this,
-      request,
+      id,
+      createDeploymentTokenRequest,
       options,
     ));
   }
@@ -368,6 +392,22 @@ export class Deployments extends ClientSDK {
   }
 
   /**
+   * Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
+   */
+  async restoreVolume(
+    id: string,
+    createVolumeRestoreRequest: models.CreateVolumeRestoreRequest,
+    options?: RequestOptions,
+  ): Promise<models.VolumeRestore> {
+    return unwrapAsync(deploymentsRestoreVolume(
+      this,
+      id,
+      createVolumeRestoreRequest,
+      options,
+    ));
+  }
+
+  /**
    * List a deployment's volume restore requests, newest first.
    */
   async listVolumeRestores(
@@ -375,20 +415,6 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ListVolumeRestoresResponse> {
     return unwrapAsync(deploymentsListVolumeRestores(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
-   */
-  async restoreVolume(
-    request: operations.CreateDeploymentVolumeRestoreRequest,
-    options?: RequestOptions,
-  ): Promise<models.VolumeRestore> {
-    return unwrapAsync(deploymentsRestoreVolume(
       this,
       request,
       options,

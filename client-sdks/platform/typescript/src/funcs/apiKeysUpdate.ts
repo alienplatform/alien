@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function apiKeysUpdate(
   client: AlienCore,
-  request: operations.UpdateAPIKeyRequest,
+  id: string,
+  updateAPIKeyRequest?: models.UpdateAPIKeyRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function apiKeysUpdate(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    updateAPIKeyRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateAPIKeyRequest,
+  id: string,
+  updateAPIKeyRequest?: models.UpdateAPIKeyRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateAPIKeyRequest = {
+    id: id,
+    updateAPIKeyRequest: updateAPIKeyRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.UpdateAPIKeyRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

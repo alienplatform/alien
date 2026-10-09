@@ -22,13 +22,17 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentsUpdateComputeMutationVariables = {
-  request: operations.UpdateDeploymentComputeRequest;
+  id: string;
+  updateDeploymentComputeRequest?:
+    | models.UpdateDeploymentComputeRequest
+    | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +87,8 @@ export function buildDeploymentsUpdateComputeMutation(
   return {
     mutationKey: mutationKeyDeploymentsUpdateCompute(),
     mutationFn: function deploymentsUpdateComputeMutationFn({
-      request,
+      id,
+      updateDeploymentComputeRequest,
       options,
     }): Promise<DeploymentsUpdateComputeMutationData> {
       const mergedOptions = {
@@ -100,7 +105,8 @@ export function buildDeploymentsUpdateComputeMutation(
       };
       return unwrapAsync(deploymentsUpdateCompute(
         client$,
-        request,
+        id,
+        updateDeploymentComputeRequest,
         mergedOptions,
       ));
     },

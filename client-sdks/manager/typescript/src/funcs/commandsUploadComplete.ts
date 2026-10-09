@@ -31,7 +31,8 @@ import { Result } from "../types/fp.js";
  */
 export function commandsUploadComplete(
   client: AlienManagerCore,
-  request: operations.UploadCompleteRequest,
+  commandId: string,
+  uploadCompleteRequest: models.UploadCompleteRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -49,14 +50,16 @@ export function commandsUploadComplete(
 > {
   return new APIPromise($do(
     client,
-    request,
+    commandId,
+    uploadCompleteRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.UploadCompleteRequest,
+  commandId: string,
+  uploadCompleteRequest: models.UploadCompleteRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -75,8 +78,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UploadCompleteRequest = {
+    commandId: commandId,
+    uploadCompleteRequest: uploadCompleteRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.UploadCompleteRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

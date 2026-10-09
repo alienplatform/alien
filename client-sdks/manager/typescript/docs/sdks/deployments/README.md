@@ -260,11 +260,8 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.deployments.signDeploymentBundle({
-    id: "<id>",
-    bundleSignatureRequest: {
-      manifest: "<value>",
-    },
+  const result = await alienManager.deployments.signDeploymentBundle("<id>", {
+    manifest: "<value>",
   });
 
   console.log(result);
@@ -289,11 +286,8 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await deploymentsSignDeploymentBundle(alienManager, {
-    id: "<id>",
-    bundleSignatureRequest: {
-      manifest: "<value>",
-    },
+  const res = await deploymentsSignDeploymentBundle(alienManager, "<id>", {
+    manifest: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -310,7 +304,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SignDeploymentBundleRequest](../../models/operations/signdeploymentbundlerequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Deployment ID                                                                                                                                                                  |
+| `bundleSignatureRequest`                                                                                                                                                       | [models.BundleSignatureRequest](../../models/bundlesignaturerequest.md)                                                                                                        | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -414,11 +409,8 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.deployments.setDeploymentChannel({
-    id: "<id>",
-    setDeploymentChannelRequest: {
-      channel: "<value>",
-    },
+  const result = await alienManager.deployments.setDeploymentChannel("<id>", {
+    channel: "<value>",
   });
 
   console.log(result);
@@ -443,11 +435,8 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await deploymentsSetDeploymentChannel(alienManager, {
-    id: "<id>",
-    setDeploymentChannelRequest: {
-      channel: "<value>",
-    },
+  const res = await deploymentsSetDeploymentChannel(alienManager, "<id>", {
+    channel: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -464,7 +453,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SetDeploymentChannelRequest](../../models/operations/setdeploymentchannelrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Deployment ID                                                                                                                                                                  |
+| `setDeploymentChannelRequest`                                                                                                                                                  | [models.SetDeploymentChannelRequest](../../models/setdeploymentchannelrequest.md)                                                                                              | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -493,11 +483,8 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.deployments.deleteDeployment({
-    id: "<id>",
-    deleteDeploymentRequest: {
-      action: "forget",
-    },
+  const result = await alienManager.deployments.deleteDeployment("<id>", {
+    action: "forget",
   });
 
   console.log(result);
@@ -522,11 +509,8 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await deploymentsDeleteDeployment(alienManager, {
-    id: "<id>",
-    deleteDeploymentRequest: {
-      action: "forget",
-    },
+  const res = await deploymentsDeleteDeployment(alienManager, "<id>", {
+    action: "forget",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -543,7 +527,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.DeleteDeploymentRequest](../../models/operations/deletedeploymentrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Deployment ID                                                                                                                                                                  |
+| `deleteDeploymentRequest`                                                                                                                                                      | [models.DeleteDeploymentRequest](../../models/deletedeploymentrequest.md)                                                                                                      | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -718,10 +703,7 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.deployments.setDeploymentPin({
-    id: "<id>",
-    setDeploymentPinRequest: {},
-  });
+  const result = await alienManager.deployments.setDeploymentPin("<id>", {});
 
   console.log(result);
 }
@@ -745,10 +727,7 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await deploymentsSetDeploymentPin(alienManager, {
-    id: "<id>",
-    setDeploymentPinRequest: {},
-  });
+  const res = await deploymentsSetDeploymentPin(alienManager, "<id>", {});
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -764,7 +743,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SetDeploymentPinRequest](../../models/operations/setdeploymentpinrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Deployment ID                                                                                                                                                                  |
+| `setDeploymentPinRequest`                                                                                                                                                      | [models.SetDeploymentPinRequest](../../models/setdeploymentpinrequest.md)                                                                                                      | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -1012,12 +992,9 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.deployments.importDeploymentStatus({
-    id: "<id>",
-    statusReport: {
-      state: {
+  const result = await alienManager.deployments.importDeploymentStatus("<id>", {
+    state: {
 
-      },
     },
   });
 
@@ -1043,12 +1020,9 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await deploymentsImportDeploymentStatus(alienManager, {
-    id: "<id>",
-    statusReport: {
-      state: {
+  const res = await deploymentsImportDeploymentStatus(alienManager, "<id>", {
+    state: {
 
-      },
     },
   });
   if (res.ok) {
@@ -1066,7 +1040,8 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ImportDeploymentStatusRequest](../../models/operations/importdeploymentstatusrequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Deployment ID                                                                                                                                                                  |
+| `statusReport`                                                                                                                                                                 | [models.StatusReport](../../models/statusreport.md)                                                                                                                            | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

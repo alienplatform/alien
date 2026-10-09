@@ -27,7 +27,8 @@ import { Result } from "../types/fp.js";
 
 export function deploymentsImportDeploymentStatus(
   client: AlienManagerCore,
-  request: operations.ImportDeploymentStatusRequest,
+  id: string,
+  statusReport: models.StatusReport,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -44,14 +45,16 @@ export function deploymentsImportDeploymentStatus(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    statusReport,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.ImportDeploymentStatusRequest,
+  id: string,
+  statusReport: models.StatusReport,
   options?: RequestOptions,
 ): Promise<
   [
@@ -69,8 +72,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ImportDeploymentStatusRequest = {
+    id: id,
+    statusReport: statusReport,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ImportDeploymentStatusRequest$outboundSchema.parse(value),
     "Input validation failed",

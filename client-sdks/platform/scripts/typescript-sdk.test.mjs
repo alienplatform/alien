@@ -4,6 +4,7 @@ import test from "node:test";
 import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
+import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
 import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import {
   KubernetesPermissions$outboundSchema,
@@ -77,6 +78,39 @@ function client(fetcher) {
     httpClient: new HTTPClient({ fetcher }),
   });
 }
+
+test("deployment-group tokens accept an ID and body without changing the HTTP request", async () => {
+  const body = {
+    description: "Deployment setup",
+    expiresAt: new Date("2027-01-01T00:00:00Z"),
+    setupItems: [{ item: "deployment", required: true }],
+  };
+  let requests = 0;
+  const sdk = client(async request => {
+    requests++;
+    const url = new URL(request.url);
+    assert.equal(request.method, "POST");
+    assert.equal(url.pathname, "/v1/deployment-groups/group%2Fexample/tokens");
+    assert.equal(url.searchParams.get("workspace"), "test-workspace");
+    assert.equal(request.headers.get("Authorization"), "Bearer ax_ws_test");
+    assert.equal(request.headers.get("x-test"), "request-options");
+    assert.deepEqual(await request.json(), {
+      ...body,
+      expiresAt: "2027-01-01T00:00:00.000Z",
+    });
+    return Response.json({ token: "ax_dg_test", deploymentLink: "https://example.com/setup" });
+  });
+
+  const options = {
+    fetchOptions: { headers: { "x-test": "request-options" } },
+  };
+  const result = await sdk.deploymentGroups.createToken("group/example", body, options);
+  assert.equal(result.token, "ax_dg_test");
+  const standalone = await deploymentGroupsCreateToken(sdk, "group/example", body, options);
+  assert.equal(standalone.ok, true);
+  assert.deepEqual(standalone.value, result);
+  assert.equal(requests, 2);
+});
 
 test("command retry keys survive configured transport retries and separate method calls", async () => {
   const request = {
@@ -314,10 +348,9 @@ for (const scenario of [
       else assert.equal(await request.text(), "");
       return Response.json(scenario.response);
     });
-    const result = await sdk[scenario.operation]({
-      id: deploymentId,
-      ...(scenario.body ? { requestBody: scenario.body } : {}),
-    });
+    const result = scenario.body
+      ? await sdk[scenario.operation](deploymentId, scenario.body)
+      : await sdk[scenario.operation]({ id: deploymentId });
     assert.deepEqual(result, scenario.response);
     assert.equal(requests, 1);
   });
@@ -334,13 +367,13 @@ test("Events.get still rejects malformed rotation events", async () => {
 });
 
 const commandId = "cmd_2sxjXxvOYct7IohT3ukliAzfmpqr";
-for (const [operation, request] of [
-  ["resolveTarget", { deploymentId, command: "reindex" }],
-  ["get", { id: commandId }],
-  ["update", { id: commandId, updateCommandRequest: { state: "DISPATCHED" } }],
-  ["dispatch", { id: commandId, dispatchCommandRequest: { dispatchedAt: new Date() } }],
-  ["complete", { id: commandId, completeCommandRequest: { state: "SUCCEEDED", completedAt: new Date() } }],
-  ["incrementAttempt", { id: commandId }],
+for (const [operation, args] of [
+  ["resolveTarget", [{ deploymentId, command: "reindex" }]],
+  ["get", [{ id: commandId }]],
+  ["update", [commandId, { state: "DISPATCHED" }]],
+  ["dispatch", [commandId, { dispatchedAt: new Date() }]],
+  ["complete", [commandId, { state: "SUCCEEDED", completedAt: new Date() }]],
+  ["incrementAttempt", [{ id: commandId }]],
 ]) {
   test(`Commands.${operation} preserves a structured 503 API error`, async () => {
     let requests = 0;
@@ -357,7 +390,7 @@ for (const [operation, request] of [
       return Response.json(body, { status: 503 });
     });
     await assert.rejects(
-      sdk.commands[operation](request, { retries: { strategy: "none" } }),
+      sdk.commands[operation](...args, { retries: { strategy: "none" } }),
       error => {
         assert.ok(error instanceof APIError);
         assert.equal(error.code, body.code);

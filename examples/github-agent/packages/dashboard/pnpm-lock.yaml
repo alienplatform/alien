@@ -18,8 +18,8 @@ importers:
         specifier: ^3.3.11
         version: 3.3.19(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       '@alienplatform/platform-api':
-        specifier: ^1.0.52
-        version: 1.14.1
+        specifier: link:../../../../client-sdks/platform/typescript
+        version: link:../../../../client-sdks/platform/typescript
       '@hookform/resolvers':
         specifier: ^3.10.0
         version: 3.10.0(react-hook-form@7.87.0(react@19.2.8))
@@ -174,9 +174,6 @@ packages:
 
   '@alienplatform/core@3.3.19':
     resolution: {integrity: sha512-R0hYuqw/Sg7Q9SAoyyV7TDmD/vSmlEXPNTSn812Lha/4pGmVxiIjhBGQe5kseaQ6pbvPJaLp7r8S4XL3szR9mQ==}
-
-  '@alienplatform/platform-api@1.14.1':
-    resolution: {integrity: sha512-lrUqJI7GF96/Q+K0L7MN5TOIuOAxPKYIK2iE01WV9yqe8Awz4/v4gcLiuXV6NclcRltdUczk5qtSlcNfpe39tA==}
 
   '@alienplatform/sdk@1.14.1':
     resolution: {integrity: sha512-I+z9qQ2XLyXJmpJkYCBQ3TQfvVe2LSFF7X7olQ4nM7yCdHhLDzLWrieOpKznhnGxSfSoON2I7LF0Y+5MeW/IWg==}
@@ -4617,6 +4614,7 @@ packages:
 
   workflow@4.8.5:
     resolution: {integrity: sha512-EuXVZXa0ZbPgzJdtQZ3Ut/3LcH+SkUsgn0yVIgezVtVyJyX7iJN/HKXdooOCmfNgzQ781MaAm/ucNZaunY4ZMg==}
+    deprecated: A queue transport bug can cause function timeouts under connection-pool saturation. Upgrade to workflow@4.8.8 or later. See https://github.com/vercel/workflow/pull/4049
     hasBin: true
     peerDependencies:
       '@opentelemetry/api': '1'
@@ -4731,10 +4729,6 @@ snapshots:
     transitivePeerDependencies:
       - '@types/json-schema'
       - openapi-types
-
-  '@alienplatform/platform-api@1.14.1':
-    dependencies:
-      zod: 3.25.76
 
   '@alienplatform/sdk@1.14.1(@types/json-schema@7.0.15)(openapi-types@12.1.3)':
     dependencies:

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm"
-import { alien, config } from "./config"
+import { alien } from "./config"
 import { db } from "./db"
 import { organizationMetadata } from "./schema"
 
@@ -32,11 +32,10 @@ export async function listAgents(organizationId: string): Promise<Agent[]> {
   }
 
   const response = await alien.deployments.list({
-    workspace: config.workspace,
     deploymentGroup: metadata.deploymentGroupId,
   })
 
-  return response.items.map(agent => ({
+  return response.items.map((agent) => ({
     id: agent.id,
     name: agent.name,
     platform: agent.platform,

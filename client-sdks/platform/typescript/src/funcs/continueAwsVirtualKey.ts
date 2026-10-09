@@ -28,7 +28,8 @@ import { Result } from "../types/fp.js";
 
 export function continueAwsVirtualKey(
   client: AlienCore,
-  request: operations.ContinueAwsVirtualKeyRequest,
+  id: string,
+  requestBody?: operations.ContinueAwsVirtualKeyRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -46,14 +47,16 @@ export function continueAwsVirtualKey(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.ContinueAwsVirtualKeyRequest,
+  id: string,
+  requestBody?: operations.ContinueAwsVirtualKeyRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -72,8 +75,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.ContinueAwsVirtualKeyRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.ContinueAwsVirtualKeyRequest$outboundSchema.parse(value),
     "Input validation failed",

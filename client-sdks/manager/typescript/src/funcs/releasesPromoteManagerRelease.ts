@@ -27,7 +27,8 @@ import { Result } from "../types/fp.js";
 
 export function releasesPromoteManagerRelease(
   client: AlienManagerCore,
-  request: operations.PromoteManagerReleaseRequest,
+  id: string,
+  promoteReleaseRequest: models.PromoteReleaseRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -44,14 +45,16 @@ export function releasesPromoteManagerRelease(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    promoteReleaseRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: operations.PromoteManagerReleaseRequest,
+  id: string,
+  promoteReleaseRequest: models.PromoteReleaseRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -69,8 +72,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.PromoteManagerReleaseRequest = {
+    id: id,
+    promoteReleaseRequest: promoteReleaseRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.PromoteManagerReleaseRequest$outboundSchema.parse(value),
     "Input validation failed",

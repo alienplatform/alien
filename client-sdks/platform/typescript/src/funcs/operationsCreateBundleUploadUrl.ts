@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function operationsCreateBundleUploadUrl(
   client: AlienCore,
-  request: operations.CreateOperationsBundleUploadUrlRequest,
+  project: string,
+  operationsBundleUploadUrlRequest?:
+    | models.OperationsBundleUploadUrlRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function operationsCreateBundleUploadUrl(
 > {
   return new APIPromise($do(
     client,
-    request,
+    project,
+    operationsBundleUploadUrlRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateOperationsBundleUploadUrlRequest,
+  project: string,
+  operationsBundleUploadUrlRequest?:
+    | models.OperationsBundleUploadUrlRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateOperationsBundleUploadUrlRequest = {
+    project: project,
+    operationsBundleUploadUrlRequest: operationsBundleUploadUrlRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateOperationsBundleUploadUrlRequest$outboundSchema.parse(
         value,

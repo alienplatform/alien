@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DebugSessionsUpdateMutationVariables = {
-  request: operations.UpdateDebugSessionRequest;
+  id: string;
+  updateDebugSessionRequest?: models.UpdateDebugSessionRequest | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +83,8 @@ export function buildDebugSessionsUpdateMutation(
   return {
     mutationKey: mutationKeyDebugSessionsUpdate(),
     mutationFn: function debugSessionsUpdateMutationFn({
-      request,
+      id,
+      updateDebugSessionRequest,
       options,
     }): Promise<DebugSessionsUpdateMutationData> {
       const mergedOptions = {
@@ -100,7 +101,8 @@ export function buildDebugSessionsUpdateMutation(
       };
       return unwrapAsync(debugSessionsUpdate(
         client$,
-        request,
+        id,
+        updateDebugSessionRequest,
         mergedOptions,
       ));
     },

@@ -29,7 +29,8 @@ import { Result } from "../types/fp.js";
 
 export function cancelDeploymentCredentialRotation(
   client: AlienCore,
-  request: operations.CancelDeploymentCredentialRotationRequest,
+  id: string,
+  requestBody: operations.CancelDeploymentCredentialRotationRequestBody,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -47,14 +48,16 @@ export function cancelDeploymentCredentialRotation(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CancelDeploymentCredentialRotationRequest,
+  id: string,
+  requestBody: operations.CancelDeploymentCredentialRotationRequestBody,
   options?: RequestOptions,
 ): Promise<
   [
@@ -73,8 +76,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CancelDeploymentCredentialRotationRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CancelDeploymentCredentialRotationRequest$outboundSchema.parse(
         value,

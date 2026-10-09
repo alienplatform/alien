@@ -28,7 +28,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type RotateAwsVirtualKeyCredentialMutationVariables = {
-  request: operations.RotateAwsVirtualKeyCredentialRequest;
+  id: string;
+  requestBody?: operations.RotateAwsVirtualKeyCredentialRequestBody | undefined;
   options?: RequestOptions;
 };
 
@@ -80,7 +81,8 @@ export function buildRotateAwsVirtualKeyCredentialMutation(
   return {
     mutationKey: mutationKeyRotateAwsVirtualKeyCredential(),
     mutationFn: function rotateAwsVirtualKeyCredentialMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<RotateAwsVirtualKeyCredentialMutationData> {
       const mergedOptions = {
@@ -97,7 +99,8 @@ export function buildRotateAwsVirtualKeyCredentialMutation(
       };
       return unwrapAsync(rotateAwsVirtualKeyCredential(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

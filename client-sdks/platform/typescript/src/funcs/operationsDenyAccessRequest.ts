@@ -31,7 +31,8 @@ import { Result } from "../types/fp.js";
  */
 export function operationsDenyAccessRequest(
   client: AlienCore,
-  request: operations.DenyAccessRequestRequest,
+  id: string,
+  requestBody?: operations.DenyAccessRequestRequestBody | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -49,14 +50,16 @@ export function operationsDenyAccessRequest(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    requestBody,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.DenyAccessRequestRequest,
+  id: string,
+  requestBody?: operations.DenyAccessRequestRequestBody | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -75,8 +78,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.DenyAccessRequestRequest = {
+    id: id,
+    requestBody: requestBody,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.DenyAccessRequestRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

@@ -14,20 +14,6 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class DynamicContainers extends ClientSDK {
   /**
-   * Get one dynamic container's desired generation, status, and internal address.
-   */
-  async get(
-    request: operations.GetDynamicContainerRequest,
-    options?: RequestOptions,
-  ): Promise<models.DynamicContainerResponse> {
-    return unwrapAsync(dynamicContainersGet(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Create or replace a dynamic container in an existing deployment.
    */
   async put(
@@ -35,6 +21,20 @@ export class DynamicContainers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DynamicContainerResponse> {
     return unwrapAsync(dynamicContainersPut(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get one dynamic container's desired generation, status, and internal address.
+   */
+  async get(
+    request: operations.GetDynamicContainerRequest,
+    options?: RequestOptions,
+  ): Promise<models.DynamicContainerResponse> {
+    return unwrapAsync(dynamicContainersGet(
       this,
       request,
       options,

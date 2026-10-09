@@ -23,13 +23,14 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentGroupsSetDeploymentGroupExternalIdMutationVariables = {
-  request: operations.SetDeploymentGroupExternalIdRequest;
+  id: string;
+  setDeploymentGroupExternalIdRequest:
+    models.SetDeploymentGroupExternalIdRequest;
   options?: RequestOptions;
 };
 
@@ -92,7 +93,8 @@ export function buildDeploymentGroupsSetDeploymentGroupExternalIdMutation(
     mutationKey: mutationKeyDeploymentGroupsSetDeploymentGroupExternalId(),
     mutationFn: function deploymentGroupsSetDeploymentGroupExternalIdMutationFn(
       {
-        request,
+        id,
+        setDeploymentGroupExternalIdRequest,
         options,
       },
     ): Promise<DeploymentGroupsSetDeploymentGroupExternalIdMutationData> {
@@ -110,7 +112,8 @@ export function buildDeploymentGroupsSetDeploymentGroupExternalIdMutation(
       };
       return unwrapAsync(deploymentGroupsSetDeploymentGroupExternalId(
         client$,
-        request,
+        id,
+        setDeploymentGroupExternalIdRequest,
         mergedOptions,
       ));
     },

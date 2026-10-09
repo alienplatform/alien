@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth"
-import { alien, config } from "@/lib/config"
+import { alien } from "@/lib/config"
 import { db } from "@/lib/db"
 import { organizationMetadata } from "@/lib/schema"
 import { eq } from "drizzle-orm"
@@ -32,13 +32,10 @@ export async function GET() {
     }
 
     // List agents in deployment group
-    const result = await alien.deployments.list({
-      workspace: config.workspace,
-      deploymentGroup: metadata.deploymentGroupId,
-    })
+    const result = await alien.deployments.list({ deploymentGroup: metadata.deploymentGroupId })
 
     return Response.json({
-      agents: (result.items || []).map(agent => ({
+      agents: (result.items || []).map((agent) => ({
         id: agent.id || "unknown",
         name: agent.name || agent.id || "unknown",
         status: agent.status || "unknown",

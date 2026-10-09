@@ -29,7 +29,10 @@ import { MutationHookOptions } from "./_types.js";
 
 export type ContainerRegistryCreateContainerRegistryRepositoryMutationVariables =
   {
-    request: operations.CreateContainerRegistryRepositoryRequest;
+    id: string;
+    requestBody?:
+      | operations.CreateContainerRegistryRepositoryRequestBody
+      | undefined;
     options?: RequestOptions;
   };
 
@@ -91,7 +94,8 @@ export function buildContainerRegistryCreateContainerRegistryRepositoryMutation(
       mutationKeyContainerRegistryCreateContainerRegistryRepository(),
     mutationFn:
       function containerRegistryCreateContainerRegistryRepositoryMutationFn({
-        request,
+        id,
+        requestBody,
         options,
       }): Promise<
         ContainerRegistryCreateContainerRegistryRepositoryMutationData
@@ -110,7 +114,8 @@ export function buildContainerRegistryCreateContainerRegistryRepositoryMutation(
         };
         return unwrapAsync(containerRegistryCreateContainerRegistryRepository(
           client$,
-          request,
+          id,
+          requestBody,
           mergedOptions,
         ));
       },

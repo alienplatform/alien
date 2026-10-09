@@ -4,7 +4,7 @@ info:
   title: TypeScript SDK method arguments
   version: 1.0.0
 actions:
-  # Keep query-heavy operations as named request objects. JSON-body operations
+  # Keep query-heavy operations as named request objects. Body operations
   # with at most one other parameter accept the body directly or (id, body).
   - target: "$['paths']..[?(@.requestBody)]"
     update:

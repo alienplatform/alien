@@ -23,13 +23,13 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type ManagersGenerateManagerBindingTokenMutationVariables = {
-  request: operations.GenerateManagerBindingTokenRequest;
+  id: string;
+  generateManagerBindingTokenRequest: models.GenerateManagerBindingTokenRequest;
   options?: RequestOptions;
 };
 
@@ -88,7 +88,8 @@ export function buildManagersGenerateManagerBindingTokenMutation(
   return {
     mutationKey: mutationKeyManagersGenerateManagerBindingToken(),
     mutationFn: function managersGenerateManagerBindingTokenMutationFn({
-      request,
+      id,
+      generateManagerBindingTokenRequest,
       options,
     }): Promise<ManagersGenerateManagerBindingTokenMutationData> {
       const mergedOptions = {
@@ -105,7 +106,8 @@ export function buildManagersGenerateManagerBindingTokenMutation(
       };
       return unwrapAsync(managersGenerateManagerBindingToken(
         client$,
-        request,
+        id,
+        generateManagerBindingTokenRequest,
         mergedOptions,
       ));
     },

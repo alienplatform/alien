@@ -23,13 +23,15 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type WorkspacesUpdateSettingsMutationVariables = {
-  request: operations.UpdateWorkspaceSettingsRequest;
+  id: string;
+  updateWorkspaceSettingsRequest?:
+    | models.UpdateWorkspaceSettingsRequest
+    | undefined;
   options?: RequestOptions;
 };
 
@@ -83,7 +85,8 @@ export function buildWorkspacesUpdateSettingsMutation(
   return {
     mutationKey: mutationKeyWorkspacesUpdateSettings(),
     mutationFn: function workspacesUpdateSettingsMutationFn({
-      request,
+      id,
+      updateWorkspaceSettingsRequest,
       options,
     }): Promise<WorkspacesUpdateSettingsMutationData> {
       const mergedOptions = {
@@ -100,7 +103,8 @@ export function buildWorkspacesUpdateSettingsMutation(
       };
       return unwrapAsync(workspacesUpdateSettings(
         client$,
-        request,
+        id,
+        updateWorkspaceSettingsRequest,
         mergedOptions,
       ));
     },

@@ -29,7 +29,8 @@ import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type PrepareDeploymentCredentialRotationMutationVariables = {
-  request: operations.PrepareDeploymentCredentialRotationRequest;
+  id: string;
+  requestBody: operations.PrepareDeploymentCredentialRotationRequestBody;
   options?: RequestOptions;
 };
 
@@ -81,7 +82,8 @@ export function buildPrepareDeploymentCredentialRotationMutation(
   return {
     mutationKey: mutationKeyPrepareDeploymentCredentialRotation(),
     mutationFn: function prepareDeploymentCredentialRotationMutationFn({
-      request,
+      id,
+      requestBody,
       options,
     }): Promise<PrepareDeploymentCredentialRotationMutationData> {
       const mergedOptions = {
@@ -98,7 +100,8 @@ export function buildPrepareDeploymentCredentialRotationMutation(
       };
       return unwrapAsync(prepareDeploymentCredentialRotation(
         client$,
-        request,
+        id,
+        requestBody,
         mergedOptions,
       ));
     },

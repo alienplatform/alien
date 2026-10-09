@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentsCreateToken(
   client: AlienCore,
-  request: operations.CreateDeploymentTokenRequest,
+  id: string,
+  createDeploymentTokenRequest?:
+    | models.CreateDeploymentTokenRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function deploymentsCreateToken(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    createDeploymentTokenRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateDeploymentTokenRequest,
+  id: string,
+  createDeploymentTokenRequest?:
+    | models.CreateDeploymentTokenRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreateDeploymentTokenRequest = {
+    id: id,
+    createDeploymentTokenRequest: createDeploymentTokenRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.CreateDeploymentTokenRequest$outboundSchema.parse(value),
     "Input validation failed",

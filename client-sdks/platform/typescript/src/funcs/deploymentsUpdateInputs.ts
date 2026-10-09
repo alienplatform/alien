@@ -32,7 +32,10 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentsUpdateInputs(
   client: AlienCore,
-  request: operations.UpdateDeploymentInputsRequest,
+  id: string,
+  updateDeploymentInputsRequest?:
+    | models.UpdateDeploymentInputsRequest
+    | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +53,18 @@ export function deploymentsUpdateInputs(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    updateDeploymentInputsRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateDeploymentInputsRequest,
+  id: string,
+  updateDeploymentInputsRequest?:
+    | models.UpdateDeploymentInputsRequest
+    | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +83,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateDeploymentInputsRequest = {
+    id: id,
+    updateDeploymentInputsRequest: updateDeploymentInputsRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) =>
       operations.UpdateDeploymentInputsRequest$outboundSchema.parse(value),
     "Input validation failed",

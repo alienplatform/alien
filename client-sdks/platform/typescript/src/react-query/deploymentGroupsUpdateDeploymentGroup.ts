@@ -23,13 +23,15 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 import { useAlienContext } from "./_context.js";
 import { MutationHookOptions } from "./_types.js";
 
 export type DeploymentGroupsUpdateDeploymentGroupMutationVariables = {
-  request: operations.UpdateDeploymentGroupRequest;
+  id: string;
+  updateDeploymentGroupRequest?:
+    | models.UpdateDeploymentGroupRequest
+    | undefined;
   options?: RequestOptions;
 };
 
@@ -88,7 +90,8 @@ export function buildDeploymentGroupsUpdateDeploymentGroupMutation(
   return {
     mutationKey: mutationKeyDeploymentGroupsUpdateDeploymentGroup(),
     mutationFn: function deploymentGroupsUpdateDeploymentGroupMutationFn({
-      request,
+      id,
+      updateDeploymentGroupRequest,
       options,
     }): Promise<DeploymentGroupsUpdateDeploymentGroupMutationData> {
       const mergedOptions = {
@@ -105,7 +108,8 @@ export function buildDeploymentGroupsUpdateDeploymentGroupMutation(
       };
       return unwrapAsync(deploymentGroupsUpdateDeploymentGroup(
         client$,
-        request,
+        id,
+        updateDeploymentGroupRequest,
         mergedOptions,
       ));
     },

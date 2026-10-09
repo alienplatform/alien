@@ -32,7 +32,8 @@ import { Result } from "../types/fp.js";
  */
 export function debugSessionsUpdate(
   client: AlienCore,
-  request: operations.UpdateDebugSessionRequest,
+  id: string,
+  updateDebugSessionRequest?: models.UpdateDebugSessionRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -50,14 +51,16 @@ export function debugSessionsUpdate(
 > {
   return new APIPromise($do(
     client,
-    request,
+    id,
+    updateDebugSessionRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request: operations.UpdateDebugSessionRequest,
+  id: string,
+  updateDebugSessionRequest?: models.UpdateDebugSessionRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,8 +79,13 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.UpdateDebugSessionRequest = {
+    id: id,
+    updateDebugSessionRequest: updateDebugSessionRequest,
+  };
+
   const parsed = safeParse(
-    request,
+    input,
     (value) => operations.UpdateDebugSessionRequest$outboundSchema.parse(value),
     "Input validation failed",
   );

@@ -30,7 +30,10 @@ import { MutationHookOptions } from "./_types.js";
 
 export type ContainerRegistryApplyContainerRegistryManagerSnapshotMutationVariables =
   {
-    request: operations.ApplyContainerRegistryManagerSnapshotRequest;
+    id: string;
+    requestBody?:
+      | operations.ApplyContainerRegistryManagerSnapshotRequestBody
+      | undefined;
     options?: RequestOptions;
   };
 
@@ -95,7 +98,8 @@ export function buildContainerRegistryApplyContainerRegistryManagerSnapshotMutat
     mutationFn:
       function containerRegistryApplyContainerRegistryManagerSnapshotMutationFn(
         {
-          request,
+          id,
+          requestBody,
           options,
         },
       ): Promise<
@@ -116,7 +120,8 @@ export function buildContainerRegistryApplyContainerRegistryManagerSnapshotMutat
         return unwrapAsync(
           containerRegistryApplyContainerRegistryManagerSnapshot(
             client$,
-            request,
+            id,
+            requestBody,
             mergedOptions,
           ),
         );
