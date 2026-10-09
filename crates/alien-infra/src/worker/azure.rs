@@ -17,10 +17,10 @@ use alien_azure_clients::models::container_apps::{
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
-    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    primary_public_endpoint_url, AzureContainerAppsWorkerHeartbeatData, CertificateStatus,
+    DnsRecordStatus, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    RemoteStackManagement, RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
     WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -1121,7 +1121,7 @@ impl AzureWorkerController {
             .and_then(|meta| meta.resources.get(&worker_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
-        if !self.ensure_domain_info(ctx, &worker_config.id)? {
+        if !self.ensure_domain_info(ctx, &worker_config)? {
             return Ok(HandlerAction::Continue {
                 state: ConfiguringDaprComponents,
                 suggested_delay: None,
@@ -1162,7 +1162,7 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        self.ensure_domain_info(ctx, &worker_config.id)?;
+        self.ensure_domain_info(ctx, &worker_config)?;
         let azure_cfg = ctx.get_azure_config()?;
         let resource = ctx
             .deployment_config
@@ -2572,7 +2572,16 @@ impl AzureWorkerController {
                         .public_endpoints
                         .as_ref()
                         .and_then(|resources| resources.get(&func_cfg.id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                        .and_then(|endpoints| {
+                            primary_public_endpoint_url(
+                                endpoints,
+                                func_cfg
+                                    .public_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.name.as_str()),
+                            )
+                            .cloned()
+                        })
                         .or(container_app_url);
 
                     Ok(HandlerAction::Continue {
@@ -3949,8 +3958,9 @@ impl AzureWorkerController {
     fn ensure_domain_info(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
+        config: &Worker,
     ) -> Result<bool> {
+        let resource_id = config.id.as_str();
         if self.fqdn.is_some()
             && (self.certificate_id.is_some()
                 || self.keyvault_cert_id.is_some()
@@ -3972,7 +3982,16 @@ impl AzureWorkerController {
                         .public_endpoints
                         .as_ref()
                         .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                        .and_then(|endpoints| {
+                            primary_public_endpoint_url(
+                                endpoints,
+                                config
+                                    .public_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.name.as_str()),
+                            )
+                            .cloned()
+                        })
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -4012,7 +4031,16 @@ impl AzureWorkerController {
                 .public_endpoints
                 .as_ref()
                 .and_then(|resources| resources.get(&config.id))
-                .and_then(|endpoints| endpoints.values().next().cloned())
+                .and_then(|endpoints| {
+                    primary_public_endpoint_url(
+                        endpoints,
+                        config
+                            .public_endpoints
+                            .first()
+                            .map(|endpoint| endpoint.name.as_str()),
+                    )
+                    .cloned()
+                })
                 .or(container_app_url);
         } else {
             self.url = container_app_url;

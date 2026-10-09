@@ -40,10 +40,11 @@ use alien_aws_clients::lambda::{
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, AwsLambdaWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
-    HeartbeatBackend, Network, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
-    ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
+    primary_public_endpoint_url, standard_resource_tags, AwsLambdaWorkerHeartbeatData,
+    CertificateStatus, DnsRecordStatus, HeartbeatBackend, Network, NetworkSettings, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -181,8 +182,9 @@ impl AwsWorkerController {
     fn ensure_domain_info(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
+        config: &Worker,
     ) -> Result<bool> {
+        let resource_id = config.id.as_str();
         if self.fqdn.is_some()
             && self.domain_name.is_some()
             && (self.certificate_id.is_some()
@@ -205,7 +207,16 @@ impl AwsWorkerController {
                         .public_endpoints
                         .as_ref()
                         .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                        .and_then(|endpoints| {
+                            primary_public_endpoint_url(
+                                endpoints,
+                                config
+                                    .public_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.name.as_str()),
+                            )
+                            .cloned()
+                        })
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
@@ -604,7 +615,15 @@ impl AwsWorkerController {
                         .public_endpoints
                         .as_ref()
                         .and_then(|resources| resources.get(&cfg.id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                        .and_then(|endpoints| {
+                            primary_public_endpoint_url(
+                                endpoints,
+                                cfg.public_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.name.as_str()),
+                            )
+                            .cloned()
+                        })
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 None => {
@@ -701,7 +720,7 @@ impl AwsWorkerController {
 
         if is_active {
             if !worker_config.public_endpoints.is_empty() {
-                let has_domain_info = self.ensure_domain_info(ctx, &worker_config.id)?;
+                let has_domain_info = self.ensure_domain_info(ctx, &worker_config)?;
                 let next_state = if has_domain_info {
                     // Platform mode: wait for certificate then create API Gateway + custom domain
                     WaitingForCertificate
@@ -750,7 +769,7 @@ impl AwsWorkerController {
             .and_then(|meta| meta.resources.get(&worker_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
-        if !self.ensure_domain_info(ctx, &worker_config.id)? {
+        if !self.ensure_domain_info(ctx, &worker_config)? {
             return Ok(HandlerAction::Continue {
                 state: Self::gateway_entry_state(&worker_config),
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -791,7 +810,7 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        self.ensure_domain_info(ctx, &worker_config.id)?;
+        self.ensure_domain_info(ctx, &worker_config)?;
         if self.certificate_arn.is_some() {
             // A recorded certificate is not imported again.
             return Ok(HandlerAction::Continue {
@@ -2917,7 +2936,7 @@ impl AwsWorkerController {
             self.url = None;
         }
 
-        let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
+        let has_domain_info = self.ensure_domain_info(ctx, &current_config)?;
         if self.api_id.is_some() || self.rest_api_id.is_some() {
             return Ok(HandlerAction::Continue {
                 state: UpdateRunningReadinessProbe,

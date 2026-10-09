@@ -6,6 +6,26 @@ use url::Url;
 /// Public endpoint URL overrides keyed by resource ID, then endpoint name.
 pub type PublicEndpointUrls = HashMap<String, HashMap<String, String>>;
 
+/// The URL of a resource's primary public endpoint: the first one it declares,
+/// named by `first_declared_endpoint`.
+///
+/// `urls` maps endpoint names to URLs and has no order of its own. Taking whichever
+/// entry a map yields first would choose a different endpoint each time the deployment
+/// config is loaded, so the URL a resource reports would change on its own. Without a
+/// URL for the first declared endpoint, the smallest endpoint name is used.
+pub fn primary_public_endpoint_url<'a>(
+    urls: &'a HashMap<String, String>,
+    first_declared_endpoint: Option<&str>,
+) -> Option<&'a String> {
+    first_declared_endpoint
+        .and_then(|name| urls.get(name))
+        .or_else(|| {
+            urls.iter()
+                .min_by(|(left, _), (right, _)| left.cmp(right))
+                .map(|(_, url)| url)
+        })
+}
+
 /// Parse a public endpoint assignment in `<resource-id>.<endpoint-name>=<absolute-url>` form.
 pub fn parse_public_endpoint_assignment(value: &str) -> Result<(String, String, String)> {
     let (key, public_url) = value.split_once('=').ok_or_else(|| {
@@ -197,5 +217,29 @@ mod tests {
         assert_eq!(public_url_port("https://gateway.example.test"), Some(443));
         assert_eq!(public_url_port("http://localhost:8080"), Some(8080));
         assert_eq!(public_url_port("not a url"), None);
+    }
+
+    #[test]
+    fn primary_public_endpoint_url_follows_declaration_order() {
+        // Declared as web, admin, api.
+        let names = ["web", "admin", "api"];
+        for round in 0..64 {
+            // A fresh map per round gets its own hash seed, so iteration order varies.
+            let mut urls = HashMap::new();
+            for index in 0..names.len() {
+                let name = names[(index + round) % names.len()];
+                urls.insert(name.to_string(), format!("https://{name}.example.com"));
+            }
+            assert_eq!(
+                primary_public_endpoint_url(&urls, Some("web")).map(String::as_str),
+                Some("https://web.example.com")
+            );
+            urls.remove("web");
+            assert_eq!(
+                primary_public_endpoint_url(&urls, Some("web")).map(String::as_str),
+                Some("https://admin.example.com"),
+                "without the first declared endpoint the smallest name wins"
+            );
+        }
     }
 }

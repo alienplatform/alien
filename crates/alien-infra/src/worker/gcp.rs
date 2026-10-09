@@ -26,10 +26,11 @@ use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network,
-    ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
-    WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
+    primary_public_endpoint_url, CertificateStatus, DnsRecordStatus,
+    GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use alien_macros::controller;
@@ -724,7 +725,16 @@ impl GcpWorkerController {
             .public_endpoints
             .as_ref()
             .and_then(|resources| resources.get(&config.id))
-            .and_then(|endpoints| endpoints.values().next().cloned())
+            .and_then(|endpoints| {
+                primary_public_endpoint_url(
+                    endpoints,
+                    config
+                        .public_endpoints
+                        .first()
+                        .map(|endpoint| endpoint.name.as_str()),
+                )
+                .cloned()
+            })
             .or(cloud_run_url);
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
@@ -785,7 +795,7 @@ impl GcpWorkerController {
             .and_then(|meta| meta.resources.get(&worker_config.id));
 
         let status = metadata.map(|m| &m.certificate_status);
-        if !self.ensure_domain_info(ctx, &worker_config.id)? {
+        if !self.ensure_domain_info(ctx, &worker_config)? {
             return Ok(HandlerAction::Continue {
                 state: CreatingPushSubscriptions,
                 suggested_delay: None,
@@ -826,7 +836,7 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        self.ensure_domain_info(ctx, &worker_config.id)?;
+        self.ensure_domain_info(ctx, &worker_config)?;
         let resource = ctx
             .deployment_config
             .domain_metadata
@@ -2540,7 +2550,7 @@ impl GcpWorkerController {
             });
         }
 
-        let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
+        let has_domain_info = self.ensure_domain_info(ctx, &current_config)?;
         if !has_domain_info {
             return Ok(HandlerAction::Continue {
                 state: UpdatePushSubscriptions,
@@ -4393,8 +4403,9 @@ impl GcpWorkerController {
     fn ensure_domain_info(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
+        config: &Worker,
     ) -> Result<bool> {
+        let resource_id = config.id.as_str();
         if self.fqdn.is_some()
             && (self.certificate_id.is_some()
                 || self.ssl_certificate_name.is_some()
@@ -4415,7 +4426,16 @@ impl GcpWorkerController {
                         .public_endpoints
                         .as_ref()
                         .and_then(|resources| resources.get(resource_id))
-                        .and_then(|endpoints| endpoints.values().next().cloned())
+                        .and_then(|endpoints| {
+                            primary_public_endpoint_url(
+                                endpoints,
+                                config
+                                    .public_endpoints
+                                    .first()
+                                    .map(|endpoint| endpoint.name.as_str()),
+                            )
+                            .cloned()
+                        })
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
                 Ok(true)
