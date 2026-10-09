@@ -13,7 +13,7 @@ use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienEr
 use alien_manager_api::{Client as ManagerClient, SdkResultExt, SdkResultExtReadingBody as _};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     error::ErrorData,
@@ -410,7 +410,7 @@ pub async fn acquire_setup_run_deployment(
     session: &str,
     deployment_model: DeploymentModel,
 ) -> Result<AcquiredDeploymentPayload, AlienError> {
-    acquire_deployment_with_statuses(
+    let error = match acquire_deployment_with_statuses(
         client,
         deployment_id,
         session,
@@ -420,7 +420,53 @@ pub async fn acquire_setup_run_deployment(
         Some(setup_run_acquire_statuses()),
     )
     .await
+    {
+        Ok(acquired) => return Ok(acquired),
+        Err(error) => error,
+    };
+    let status_refused = error.code == "DEPLOYMENT_ACQUIRE_UNAVAILABLE"
+        && error
+            .context
+            .as_ref()
+            .and_then(|context| context["reason"].as_str())
+            == Some("statusMismatch");
+    if !status_refused {
+        return Err(error);
+    }
+    // A setup run claims an operation that is waiting for setup or still runnable. A failed
+    // deployment refused with a status mismatch has neither: its last operation failed, and
+    // only a retry runs it again. The lookup only explains the refusal, so when it fails the
+    // refusal is still the error the caller gets.
+    let status = match client.get_deployment().id(deployment_id).send().await {
+        Ok(deployment) => deployment.into_inner().status,
+        Err(lookup_error) => {
+            warn!(
+                deployment_id,
+                error = %lookup_error,
+                "Could not read the deployment the setup run could not acquire"
+            );
+            return Err(error);
+        }
+    };
+    if !SETUP_RUN_FAILED_STATUSES.contains(&status.as_str()) {
+        return Err(error);
+    }
+    Err(error
+        .context(ErrorData::SetupRunAfterFailedOperation {
+            deployment_id: deployment_id.to_string(),
+            status,
+        })
+        .into_generic())
 }
+
+/// Failed statuses a setup run may acquire when an operation is waiting for it.
+const SETUP_RUN_FAILED_STATUSES: [&str; 5] = [
+    "preflights-failed",
+    "initial-setup-failed",
+    "provisioning-failed",
+    "update-failed",
+    "refresh-failed",
+];
 
 fn setup_run_acquire_statuses() -> Vec<String> {
     [
@@ -677,11 +723,11 @@ pub async fn finalize_step_loop(
         result.state_persisted
             && (result.loop_result.final_status.is_failed()
                 || matches!(
-                result.loop_result.stop_reason,
-                LoopStopReason::Synced
-                    | LoopStopReason::Failed
-                    | LoopStopReason::Deleted
-                    | LoopStopReason::Handoff
+                    result.loop_result.stop_reason,
+                    LoopStopReason::Synced
+                        | LoopStopReason::Failed
+                        | LoopStopReason::Deleted
+                        | LoopStopReason::Handoff
                 ))
     });
     let finalized = if checkpointed_terminal {
@@ -1436,7 +1482,8 @@ mod tests {
             &mut state,
             &mut deployment_config(),
             &alien_core::ClientConfig::Aws(Box::new(
-                <alien_aws_clients::AwsClientConfig as alien_aws_clients::AwsClientConfigExt>::mock(),
+                <alien_aws_clients::AwsClientConfig as alien_aws_clients::AwsClientConfigExt>::mock(
+                ),
             )),
             "deployment-1",
             &crate::runner::RunnerPolicy {
@@ -1786,6 +1833,107 @@ mod tests {
         assert!(!error.retryable);
         assert!(error.message.contains("deploymentModelMismatch"));
         acquire.assert_hits_async(1).await;
+    }
+
+    /// A setup run refused for its deployment's status explains a failed operation, which only
+    /// a retry runs again. Any other status, or a lookup that fails, keeps the refusal itself.
+    #[tokio::test]
+    async fn setup_run_refused_after_a_failed_operation_names_the_retry() {
+        for (lookup_status, deployment_status, expected_code) in [
+            (200, "update-failed", "SETUP_RUN_AFTER_FAILED_OPERATION"),
+            (200, "updating", "DEPLOYMENT_ACQUIRE_UNAVAILABLE"),
+            (500, "update-failed", "DEPLOYMENT_ACQUIRE_UNAVAILABLE"),
+        ] {
+            let server = MockServer::start_async().await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/acquire")
+                        .json_body_partial(r#"{"acquireMode":"setup-run"}"#);
+                    then.status(200).json_body(serde_json::json!({
+                        "deployments": [],
+                        "notAcquired": [{"deploymentId": "deployment-1", "reason": "statusMismatch"}]
+                    }));
+                })
+                .await;
+            let lookup = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployments/deployment-1");
+                    if lookup_status == 200 {
+                        then.status(200).json_body(serde_json::json!({
+                            "id": "deployment-1", "name": "demo", "platform": "aws",
+                            "status": deployment_status, "deploymentGroupId": "dg_demo",
+                            "deploymentProtocolVersion": 1, "projectId": "prj_demo",
+                            "workspaceId": "ws_demo", "retryRequested": false,
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "currentReleaseId": "rel_installed", "desiredReleaseId": "rel_next",
+                            "stackSettings": {},
+                        }));
+                    } else {
+                        then.status(500).body("backend unavailable");
+                    }
+                })
+                .await;
+
+            let error = acquire_setup_run_deployment(
+                &ManagerClient::new(&server.base_url()),
+                "deployment-1",
+                "session-1",
+                DeploymentModel::Push,
+            )
+            .await
+            .expect_err("a refused setup run fails");
+
+            assert_eq!(
+                error.code, expected_code,
+                "{deployment_status}/{lookup_status}"
+            );
+            let refusal = std::iter::successors(Some(&error), |error| error.source.as_deref())
+                .find(|error| error.code == "DEPLOYMENT_ACQUIRE_UNAVAILABLE")
+                .expect("the refusal stays in the chain for callers that inspect it");
+            assert_eq!(
+                refusal.context.as_ref().unwrap()["reason"],
+                serde_json::json!("statusMismatch")
+            );
+            if expected_code == "SETUP_RUN_AFTER_FAILED_OPERATION" {
+                assert!(error.message.contains("update-failed"), "{}", error.message);
+                assert!(error.message.contains("Retry the deployment first"));
+            }
+            acquire.assert_hits_async(1).await;
+            lookup.assert_hits_async(1).await;
+        }
+    }
+
+    /// Only a status refusal is explained; other refusals are returned without a lookup.
+    #[tokio::test]
+    async fn setup_run_refused_for_another_reason_is_not_looked_up() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [],
+                    "notAcquired": [{"deploymentId": "deployment-1", "reason": "acquireModeMismatch"}]
+                }));
+            })
+            .await;
+        let lookup = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(500);
+            })
+            .await;
+        let error = acquire_setup_run_deployment(
+            &ManagerClient::new(&server.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .expect_err("a refused setup run fails");
+        assert_eq!(error.code, "DEPLOYMENT_ACQUIRE_UNAVAILABLE");
+        acquire.assert_hits_async(1).await;
+        lookup.assert_hits_async(0).await;
     }
 
     #[tokio::test]

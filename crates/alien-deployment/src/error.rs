@@ -148,6 +148,22 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A setup run found no operation to apply because the deployment's last operation failed
+    /// and is not waiting for setup.
+    #[error(
+        code = "SETUP_RUN_AFTER_FAILED_OPERATION",
+        message = "Setup has nothing to apply to deployment '{deployment_id}': its last operation failed ({status}) and is not waiting for setup. Retry the deployment first (`alien deployments retry {deployment_id}`, or Retry in the dashboard). If the retry fails with an error that asks for setup, rerun setup then",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupRunAfterFailedOperation {
+        /// Deployment the setup run targeted.
+        deployment_id: String,
+        /// Its failed status.
+        status: String,
+    },
+
     /// Required deployer secrets are not in the customer's secret store yet;
     /// workloads wait for them.
     #[error(
@@ -285,6 +301,26 @@ pub enum ErrorData {
         failed_resources: usize,
         /// Number of resources that were stopped because a sibling failed.
         interrupted_resources: usize,
+    },
+
+    /// Every resource that failed stopped at a step that only rerunning the installation's
+    /// setup unblocks, such as a grant the management role lacks.
+    ///
+    /// The platform waits for a setup run instead of retrying, and the deployment resumes the
+    /// failed steps when setup hands it back. Updating a CloudFormation stack or Terraform
+    /// configuration does not hand the deployment back, so those installs retry after it.
+    #[error(
+        code = "DEPLOYMENT_RESOURCE_SETUP_REQUIRED",
+        message = "Waiting for the installation's setup to run again: {summary}. A setup CLI run continues the deployment by itself; after updating a CloudFormation stack or Terraform configuration instead, retry the deployment",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ResourceSetupRequired {
+        /// The resources waiting for setup.
+        resource_ids: Vec<String>,
+        /// Each waiting resource with its error.
+        summary: String,
     },
 }
 

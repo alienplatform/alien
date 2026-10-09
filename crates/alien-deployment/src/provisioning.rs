@@ -44,7 +44,7 @@ pub async fn handle_provisioning(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for provisioning".to_string(),
         })
@@ -150,6 +150,23 @@ pub async fn handle_provisioning(
         });
     }
 
+    // A failure waiting for setup only reaches Provisioning through setup handing the
+    // deployment back: any failure ends Provisioning in the step it happens, and a retry
+    // resumes failures before it returns here. The setup ran, so resume those steps now
+    // instead of failing again on the recorded failure and waiting for a manual retry.
+    if crate::helpers::setup_required_error(&stack_state).is_some() {
+        let outcome = crate::helpers::resume_unchanged_failed_resources(
+            &mut stack_state,
+            &target_stack,
+            |_| true,
+        )?;
+        info!(
+            resumed = ?outcome.retried,
+            unresumed = ?outcome.unresumed,
+            "Setup ran again; resuming the resources that waited for it"
+        );
+    }
+
     // Create executor for live resources. Lifecycle filtering limits mutation
     // scope; already-running managed dependencies still run Ready handlers.
     let executor = StackExecutor::builder(&target_stack, client_config)
@@ -175,26 +192,19 @@ pub async fn handle_provisioning(
                 message: "Failed to execute deployment step for live resources".to_string(),
             })?;
 
-    // Compute the stack status from the resulting state
-    let mut stack_status =
-        step_result
-            .next_state
-            .compute_stack_status()
-            .context(ErrorData::StackExecutionFailed {
-                message: "Failed to compute stack status".to_string(),
-            })?;
-
-    // A create finishes with the config it started with. If the desired config changed while
-    // it ran, the resource is Running on the old one and the next step plans its update.
-    if stack_status == StackStatus::Running
-        && !crate::updating::stack_has_converged(
-            &step_result.next_state,
-            &target_stack,
-            &reconciled_ids,
-        )
-    {
-        stack_status = StackStatus::InProgress;
-    }
+    // Use the same target-aware completion policy as updates: deleted records stay
+    // durable, while desired drift and deferred deletions remain outstanding work.
+    let pending_deletions = executor
+        .pending_deletions(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding provisioning deletions".to_string(),
+        })?;
+    let stack_status = crate::updating::compute_update_status(
+        &step_result.next_state,
+        &target_stack,
+        &reconciled_ids,
+        &pending_deletions,
+    )?;
 
     // Check if all live resources are deployed
     let waiting_for_machines =
@@ -263,9 +273,16 @@ pub async fn handle_provisioning(
         // Interrupt all in-progress resources so every resource reflects its true status.
         crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
 
-        next.status = DeploymentStatus::ProvisioningFailed;
+        // An installed deployment provisions only to continue an update that setup handed
+        // back. Its installed release keeps serving, so the failure is an update failure.
+        next.status = if next.current_release.is_some() {
+            DeploymentStatus::UpdateFailed
+        } else {
+            DeploymentStatus::ProvisioningFailed
+        };
+        next.error =
+            crate::helpers::setup_required_error(&next_state).map(AlienError::into_generic);
         next.stack_state = Some(next_state);
-        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
 
         DeploymentStepResult {

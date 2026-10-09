@@ -1,5 +1,5 @@
 use alien_core::{Platform, ResourceType};
-use alien_error::AlienErrorData;
+use alien_error::{AlienError, AlienErrorData};
 use serde::{Deserialize, Serialize};
 
 /// Represents application-specific errors for alien-infra.
@@ -264,11 +264,11 @@ pub enum ErrorData {
 
     /// The management identity lacks a grant that only rerunning the installation's setup adds.
     ///
-    /// Not retryable: the grant cannot appear by itself. After setup grants it, an explicit
-    /// retry resumes the failed step.
+    /// Not retryable: the grant cannot appear by itself. See [`requires_setup_rerun`] for how
+    /// a setup run resumes the failed step.
     #[error(
         code = "MANAGEMENT_PERMISSION_MISSING",
-        message = "Cannot {operation} for resource '{resource_id}': the installation's management role is not allowed {action}. Rerun the installation's setup to grant it, then retry",
+        message = "Cannot {operation} for resource '{resource_id}': the installation's management role is not allowed {action}. Rerun the installation's setup to grant it",
         retryable = "false",
         internal = "false",
         http_status_code = 403
@@ -280,6 +280,24 @@ pub enum ErrorData {
         operation: String,
         /// The denied cloud action, such as "ec2:DescribeVolumesModifications"
         action: String,
+    },
+
+    /// Setup-owned configuration, such as who may assume a workload role, does not allow the
+    /// step, and only rerunning the installation's setup rewrites it.
+    ///
+    /// Not retryable: runtime credentials cannot change it. See [`requires_setup_rerun`].
+    #[error(
+        code = "SETUP_RERUN_REQUIRED",
+        message = "Resource '{resource_id}' cannot continue until the installation's setup runs again: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupRerunRequired {
+        /// The resource whose step cannot continue
+        resource_id: String,
+        /// What setup must change, naming the setup-owned objects involved
+        message: String,
     },
 
     /// A cloud provider limit refuses the step until a later time, which the message names.
@@ -609,11 +627,70 @@ pub enum ErrorData {
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
 
+/// Codes of the resource errors that only a setup run resolves.
+const SETUP_RERUN_CODES: [&str; 2] = ["MANAGEMENT_PERMISSION_MISSING", "SETUP_RERUN_REQUIRED"];
+
+/// Whether a resource failed at a step that only rerunning the installation's setup unblocks:
+/// the error, or an error it wraps, is [`ErrorData::ManagementPermissionMissing`] or
+/// [`ErrorData::SetupRerunRequired`].
+///
+/// The deployment reports such a failure as needing setup, so the platform waits for a setup
+/// run instead of retrying it, and the setup run's handoff resumes the failed step.
+pub fn requires_setup_rerun<T>(error: &AlienError<T>) -> bool
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    SETUP_RERUN_CODES.contains(&error.code.as_str())
+        || std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .any(|source| SETUP_RERUN_CODES.contains(&source.code.as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_error::{AlienError, ContextError};
+
+    /// A controller error that only setup resolves keeps that meaning when the executor or a
+    /// caller wraps it, and other final errors do not acquire it.
+    #[test]
+    fn setup_rerun_errors_are_recognized_through_wrapping() {
+        let denied = AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "EC2 Resource".to_string(),
+            resource_name: "vol-1".to_string(),
+        })
+        .context(ErrorData::ManagementPermissionMissing {
+            resource_id: "db".to_string(),
+            operation: "inspect EBS volume growth".to_string(),
+            action: "ec2:DescribeVolumesModifications".to_string(),
+        });
+        assert!(requires_setup_rerun(&denied));
+        let wrapped = denied.context(ErrorData::CloudPlatformError {
+            message: "Failed to grow 'db'".to_string(),
+            resource_id: Some("db".to_string()),
+        });
+        assert!(requires_setup_rerun(&wrapped));
+        assert!(requires_setup_rerun(&wrapped.into_generic()));
+
+        let trust = AlienError::new(ErrorData::SetupRerunRequired {
+            resource_id: "api".to_string(),
+            message: "workload role 'x-sa' does not trust node role 'x-node'".to_string(),
+        });
+        assert!(requires_setup_rerun(&trust));
+        assert!(!trust.retryable);
+
+        let invalid = AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "bad".to_string(),
+            resource_id: Some("api".to_string()),
+        });
+        assert!(!requires_setup_rerun(&invalid));
+        assert!(!requires_setup_rerun(&AlienError::new(
+            CloudClientErrorData::RemoteAccessDenied {
+                resource_type: "EC2 Resource".to_string(),
+                resource_name: "vol-1".to_string(),
+            }
+        )));
+    }
 
     /// Controllers wrap the provider's error, which the cloud client marks retryable. The
     /// wrapper must still be final, or the executor spends its retries on a step that only
@@ -637,7 +714,7 @@ mod tests {
             error.message,
             "Cannot inspect EBS volume growth for resource 'db': the installation's management \
              role is not allowed ec2:DescribeVolumesModifications. Rerun the installation's \
-             setup to grant it, then retry"
+             setup to grant it"
         );
         assert_eq!(
             error.source.as_ref().map(|source| source.code.as_str()),

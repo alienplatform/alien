@@ -1109,9 +1109,8 @@ fn is_access_denied<T>(error: &AlienError<T>) -> bool
 where
     T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
 {
-    let denied = |code: &str, status: Option<u16>| {
-        code == "REMOTE_ACCESS_DENIED" || status == Some(403)
-    };
+    let denied =
+        |code: &str, status: Option<u16>| code == "REMOTE_ACCESS_DENIED" || status == Some(403);
     if denied(&error.code, error.http_status_code) {
         return true;
     }
@@ -1300,6 +1299,51 @@ pub fn interrupt_in_progress_resources(
         resource_state.error = Some(interrupted_error.clone());
         resource_state.retry_attempt = 0;
     }
+}
+
+/// The deployment error for a stack whose every failure waits for the installation's setup to
+/// run again (see [`alien_infra::requires_setup_rerun`]).
+///
+/// `None` when nothing failed, or when any failure needs something other than setup: waiting
+/// for setup would hide that failure, which a retry reports instead. Resources interrupted by
+/// a sibling's failure are not failures of their own.
+pub(crate) fn setup_required_error(stack_state: &StackState) -> Option<AlienError<ErrorData>> {
+    let mut waiting = Vec::new();
+    for (resource_id, resource) in &stack_state.resources {
+        if !matches!(
+            resource.status,
+            ResourceStatus::ProvisionFailed
+                | ResourceStatus::UpdateFailed
+                | ResourceStatus::DeleteFailed
+                | ResourceStatus::RefreshFailed
+        ) {
+            continue;
+        }
+        let error = resource.error.as_ref()?;
+        if error.code == "DEPLOYMENT_INTERRUPTED" {
+            continue;
+        }
+        if !alien_infra::requires_setup_rerun(error) {
+            return None;
+        }
+        waiting.push((resource_id.clone(), error.message.clone()));
+    }
+    if waiting.is_empty() {
+        return None;
+    }
+    waiting.sort();
+    let summary = waiting
+        .iter()
+        .map(|(resource_id, message)| format!("'{resource_id}': {message}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(AlienError::new(ErrorData::ResourceSetupRequired {
+        resource_ids: waiting
+            .into_iter()
+            .map(|(resource_id, _)| resource_id)
+            .collect(),
+        summary,
+    }))
 }
 
 /// Creates an aggregated error from resource errors in a stack state.
@@ -1766,6 +1810,61 @@ mod tests {
             make_worker_resource_state("worker", Some(generic_error("worker failed"))),
         );
         stack_state
+    }
+
+    /// A deployment waits for setup only when every real failure needs setup. A sibling it
+    /// interrupted does not count; any other failure does, because only a retry reports it.
+    #[test]
+    fn only_failures_that_all_need_setup_wait_for_setup() {
+        let missing_grant = || {
+            AlienError::new(alien_infra::ErrorData::ManagementPermissionMissing {
+                resource_id: "db".to_string(),
+                operation: "inspect EBS volume growth".to_string(),
+                action: "ec2:DescribeVolumesModifications".to_string(),
+            })
+            .into_generic()
+        };
+        let interrupted = AlienError::new(ErrorData::DeploymentInterrupted {
+            failed_resource_id: "db".to_string(),
+            failed_resource_type: "worker".to_string(),
+        })
+        .into_generic();
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "db".to_string(),
+            make_worker_resource_state("db", Some(missing_grant())),
+        );
+        stack_state.resources.insert(
+            "sibling".to_string(),
+            make_worker_resource_state("sibling", Some(interrupted)),
+        );
+
+        let error = setup_required_error(&stack_state).expect("db waits for setup");
+        assert_eq!(error.code, "DEPLOYMENT_RESOURCE_SETUP_REQUIRED");
+        assert_eq!(
+            error.context.as_ref().unwrap()["resource_ids"],
+            serde_json::json!(["db"])
+        );
+        assert!(error.message.contains("ec2:DescribeVolumesModifications"));
+        assert!(
+            error.message.contains("retry the deployment"),
+            "a stack update does not hand the deployment back: {}",
+            error.message
+        );
+
+        let mut mixed = stack_state.clone();
+        mixed.resources.insert(
+            "api".to_string(),
+            make_worker_resource_state("api", Some(generic_error("api failed"))),
+        );
+        assert!(setup_required_error(&mixed).is_none());
+
+        let mut recovered = stack_state;
+        recovered.resources.get_mut("db").unwrap().status = ResourceStatus::Running;
+        assert!(
+            setup_required_error(&recovered).is_none(),
+            "a stale error on a running resource is not a failure"
+        );
     }
 
     #[test]
