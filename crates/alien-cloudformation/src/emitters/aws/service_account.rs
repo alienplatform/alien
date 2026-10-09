@@ -258,9 +258,7 @@ fn service_account_policy_document(
             grants.push((
                 set,
                 BindingTarget::Resource,
-                context
-                    .clone()
-                    .with_resource_name(target_id.clone()),
+                context.clone().with_resource_name(target_id.clone()),
             ));
         }
     }
