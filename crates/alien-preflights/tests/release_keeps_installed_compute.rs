@@ -269,3 +269,56 @@ async fn release_that_changes_the_stateful_pool_topology_still_needs_setup() {
         "{errors:?}"
     );
 }
+
+/// An install that pinned its stateful pool to a zone keeps that zone on a later release whose
+/// settings no longer name failure domains, and the release does not need setup.
+#[tokio::test]
+async fn release_without_failure_domain_settings_keeps_installed_zones() {
+    let stack = release("database:1");
+    let plain = settings_without_failure_domains(&stack);
+    let mut pinned = plain.clone();
+    let stateful = pinned.pools["stateful"].clone();
+    pinned.pools.insert(
+        "stateful".to_string(),
+        with_failure_domains(
+            &stateful,
+            Some(FailureDomainSelection {
+                spread: 1,
+                selected_failure_domains: vec!["us-east-1b".to_string()],
+            }),
+        ),
+    );
+    let runner = PreflightRunner::new();
+    let installed = runner
+        .apply_mutations(
+            stack,
+            &StackState::new(Platform::Aws),
+            &deployment_config(pinned),
+        )
+        .await
+        .expect("install should prepare");
+    assert_eq!(
+        cluster(&installed).failure_domain_spread.get("stateful"),
+        Some(&1)
+    );
+    assert_eq!(
+        cluster(&installed).selected_failure_domains["stateful"],
+        ["us-east-1b"]
+    );
+
+    let config = deployment_config(plain);
+    let next = runner
+        .apply_mutations(release("database:2"), &installed_state(&installed), &config)
+        .await
+        .expect("the release should prepare");
+    let summary = runner
+        .run_compatibility_checks(&installed, &next, &config, Platform::Aws)
+        .await
+        .expect("compatibility checks should run");
+    assert!(summary.success, "{:?}", errors(&summary));
+    assert_eq!(
+        serde_json::to_value(cluster(&next)).unwrap(),
+        serde_json::to_value(cluster(&installed)).unwrap(),
+        "the release must keep the installed spread and zone"
+    );
+}
