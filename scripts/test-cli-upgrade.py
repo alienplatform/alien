@@ -4,6 +4,7 @@
 Pass a stable CLI, then two canary CLIs built with ALIEN_CLI_VERSION. Use a
 canary base newer than stable and revisions ffffffff then 00000001 to exercise
 rollback and revisions that cannot be ordered or parsed as SemVer integers.
+Set --sdk-version to the workspace package version used to build the canaries.
 """
 
 import argparse
@@ -45,6 +46,10 @@ def main():
     parser.add_argument("stable", type=Path)
     parser.add_argument("canary", type=Path)
     parser.add_argument("next_canary", type=Path)
+    parser.add_argument(
+        "--sdk-version", required=True,
+        help="Workspace package version used to build both canary fixtures",
+    )
     args = parser.parse_args()
     sources = [path.resolve() for path in (args.stable, args.canary, args.next_canary)]
     stable, canary, next_canary = [version(path) for path in sources]
@@ -150,8 +155,8 @@ def main():
 
             plugin = Path(directory) / "version-check"
             run(installed, "operations", "init", "version-check", str(plugin), "--json", env=env)
-            assert f'alien-operations-sdk = "={stable}"' in (plugin / "Cargo.toml").read_text()
-            print("PASS canary CLI scaffolds the stable SDK dependency version")
+            assert f'alien-operations-sdk = "={args.sdk_version}"' in (plugin / "Cargo.toml").read_text()
+            print("PASS canary CLI scaffolds the expected SDK dependency version")
 
             run(installed, "update", env=env)
             assert version(installed) == stable
