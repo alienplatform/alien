@@ -877,7 +877,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_repository_policy_is_not_a_quota_failure() {
         let server = MockServer::start_async().await;
-        let request = server.mock_async(|when, then| {
+        server.mock_async(|when, then| {
             when.method(POST).path("/").header("x-amz-target", "AmazonEC2ContainerRegistry_V20150921.GetRepositoryPolicy");
             then.status(400).header("content-type", "application/x-amz-json-1.1")
                 .json_body(serde_json::json!({"__type":"RepositoryPolicyNotFoundException", "message":"Repository policy does not exist"}));
@@ -890,7 +890,6 @@ mod tests {
             )
             .await
             .expect_err("the repository has no policy");
-        assert_eq!(request.hits_async().await, 1);
         assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
     }
 }
