@@ -268,7 +268,11 @@ struct ManagerSetupResponse {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "mode", rename_all = "camelCase")]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum ManagerRetryResponse {
     Setup {
         manager_id: String,
@@ -1443,6 +1447,30 @@ async fn events_manager_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_response_accepts_camel_case_deployment_fields() {
+        let response: ManagerRetryResponse = serde_json::from_value(serde_json::json!({
+            "mode": "deployment",
+            "managerId": "mgr_test",
+            "setupStatus": "provisioning",
+            "deploymentId": "dep_test",
+            "message": "Manager deployment retry requested."
+        }))
+        .expect("manager retry response should deserialize");
+        let ManagerRetryResponse::Deployment {
+            manager_id,
+            deployment_id,
+            setup_status,
+            ..
+        } = response
+        else {
+            panic!("expected deployment retry");
+        };
+        assert_eq!(manager_id, "mgr_test");
+        assert_eq!(deployment_id, "dep_test");
+        assert_eq!(setup_status, "provisioning");
+    }
 
     #[test]
     fn setup_terminal_statuses_are_terminal() {
