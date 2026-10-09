@@ -17,10 +17,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::{
-    import::EmitContext, permissions::PermissionSetReference, Build, ComputeCluster, Result,
-    ServiceAccount, Worker,
-};
+use alien_core::{import::EmitContext, Build, ComputeCluster, Result, ServiceAccount, Worker};
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
@@ -60,18 +57,9 @@ impl TfEmitter for AwsServiceAccountEmitter {
         }
 
         for (target, sets) in &service_account.resource_permission_sets {
-            let target_id = if ctx.stack.resources().any(|(id, entry)| {
-                id == target && entry.config.downcast_ref::<ServiceAccount>().is_some()
-            }) {
-                target.clone()
-            } else {
-                format!("{target}-sa")
-            };
-            if !ctx.stack.resources().any(|(id, entry)| {
-                id == &target_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
-            }) {
+            let Some(target_id) = ServiceAccount::impersonation_target(ctx.stack, target) else {
                 continue;
-            }
+            };
             let context = aws_terraform_permission_context().with_resource_name(target_id.clone());
             for (index, set) in sets
                 .iter()
@@ -150,27 +138,10 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
 
     // Explicit impersonation grants require trust as well as an IAM action.
     // Use exact role ARN conditions to avoid role creation dependency cycles.
-    for (profile, permissions) in &ctx.stack.permissions.profiles {
-        let can_impersonate = [Some(service_account.id.as_str()), profile_name]
-            .into_iter()
-            .flatten()
-            .filter_map(|scope| permissions.0.get(scope))
-            .flatten()
-            .any(|permission| match permission {
-                PermissionSetReference::Name(name) => name == "service-account/impersonate",
-                PermissionSetReference::Inline(set) => set.id == "service-account/impersonate",
-            });
-        let impersonator_id = format!("{profile}-sa");
-        if can_impersonate
-            && impersonator_id != service_account.id
-            && ctx.stack.resources().any(|(id, entry)| {
-                id == &impersonator_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
-            })
-        {
-            role_arns.push(expr::template(format!(
-                "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{impersonator_id}"
-            )));
-        }
+    for impersonator_id in service_account.impersonators(ctx.stack) {
+        role_arns.push(expr::template(format!(
+            "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{impersonator_id}"
+        )));
     }
 
     if services.is_empty() && role_arns.is_empty() {

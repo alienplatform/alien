@@ -804,8 +804,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         policy_regions.dedup();
         let filtered_access = remaining_cross_account_access(current_aws_access, &aws_access);
 
-        self.set_full_policy(&full_repo_name, &filtered_access)
-            .await?;
+        // Replicas first: the source policy is what a retry reads to find their regions, so it
+        // changes only once every replica has.
         for region in policy_regions {
             if region == self.credentials.region() {
                 continue;
@@ -816,7 +816,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             self.set_full_policy_with_client(&client, &full_repo_name, &filtered_access)
                 .await?;
         }
-        Ok(())
+        self.set_full_policy(&full_repo_name, &filtered_access)
+            .await
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {

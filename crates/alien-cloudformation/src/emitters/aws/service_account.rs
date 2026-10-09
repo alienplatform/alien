@@ -14,8 +14,7 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, permissions::PermissionSetReference, Build, ComputeCluster, ErrorData,
-    Result, ServiceAccount, Worker,
+    import::EmitContext, Build, ComputeCluster, ErrorData, Result, ServiceAccount, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -151,27 +150,10 @@ fn service_account_trust_policy(
 
     // Explicit impersonation grants require trust as well as an IAM action.
     // Use exact role ARN conditions to avoid role creation dependency cycles.
-    for (profile, permissions) in &ctx.stack.permissions.profiles {
-        let can_impersonate = [Some(service_account.id.as_str()), profile_name]
-            .into_iter()
-            .flatten()
-            .filter_map(|scope| permissions.0.get(scope))
-            .flatten()
-            .any(|permission| match permission {
-                PermissionSetReference::Name(name) => name == "service-account/impersonate",
-                PermissionSetReference::Inline(set) => set.id == "service-account/impersonate",
-            });
-        let impersonator_id = format!("{profile}-sa");
-        if can_impersonate
-            && impersonator_id != service_account.id
-            && ctx.stack.resources().any(|(id, entry)| {
-                id == &impersonator_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
-            })
-        {
-            role_arns.push(CfExpression::sub(format!(
-                "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{impersonator_id}"
-            )));
-        }
+    for impersonator_id in service_account.impersonators(ctx.stack) {
+        role_arns.push(CfExpression::sub(format!(
+            "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{impersonator_id}"
+        )));
     }
 
     if services.is_empty() && role_arns.is_empty() {
@@ -239,18 +221,9 @@ fn service_account_policy_document(
         .map(|set| (set, BindingTarget::Stack, context.clone()))
         .collect();
     for (target, sets) in &service_account.resource_permission_sets {
-        let target_id = if ctx.stack.resources().any(|(id, entry)| {
-            id == target && entry.config.downcast_ref::<ServiceAccount>().is_some()
-        }) {
-            target.clone()
-        } else {
-            format!("{target}-sa")
-        };
-        if !ctx.stack.resources().any(|(id, entry)| {
-            id == &target_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
-        }) {
+        let Some(target_id) = ServiceAccount::impersonation_target(ctx.stack, target) else {
             continue;
-        }
+        };
         for set in sets
             .iter()
             .filter(|set| set.id == "service-account/impersonate")

@@ -1,12 +1,14 @@
 use crate::error::{ErrorData, Result};
 use crate::permissions::{PermissionProfile, PermissionSet};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
+use crate::Stack;
 use alien_error::AlienError;
 use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 /// Represents a non-human identity that can be assumed by compute services
@@ -105,6 +107,62 @@ impl ServiceAccount {
             None => Ok(Cow::Borrowed(&self.resource_permission_sets)),
         }
     }
+}
+
+/// The permission set that lets one service account assume another.
+const IMPERSONATE_PERMISSION_SET: &str = "service-account/impersonate";
+
+impl ServiceAccount {
+    /// The service account a resource-scoped impersonation grant targets. A grant names either
+    /// the account itself or the profile it was created from (`{profile}` → `{profile}-sa`).
+    pub fn impersonation_target(stack: &Stack, scope: &str) -> Option<String> {
+        [scope.to_string(), format!("{scope}-sa")]
+            .into_iter()
+            .find(|id| is_service_account(stack, id))
+    }
+
+    /// Ids of the other service accounts in `stack` that may impersonate this one.
+    ///
+    /// Reads the permission profiles and each account's captured grants: a frozen account keeps
+    /// its grants after the profile that produced them is gone, and the caller policy is written
+    /// from those grants, so its trust has to be too.
+    pub fn impersonators(&self, stack: &Stack) -> BTreeSet<String> {
+        let scopes = [Some(self.id.as_str()), self.id.strip_suffix("-sa")];
+        let mut ids: BTreeSet<String> = stack
+            .permissions
+            .profiles
+            .iter()
+            .filter(|(_, profile)| {
+                scopes
+                    .iter()
+                    .flatten()
+                    .filter_map(|scope| profile.0.get(*scope))
+                    .flatten()
+                    .any(|reference| reference.id() == IMPERSONATE_PERMISSION_SET)
+            })
+            .map(|(profile, _)| format!("{profile}-sa"))
+            .collect();
+        for (id, entry) in stack.resources() {
+            let Some(caller) = entry.config.downcast_ref::<ServiceAccount>() else {
+                continue;
+            };
+            let grants_this = caller.resource_permission_sets.iter().any(|(scope, sets)| {
+                sets.iter().any(|set| set.id == IMPERSONATE_PERMISSION_SET)
+                    && Self::impersonation_target(stack, scope).as_deref() == Some(self.id.as_str())
+            });
+            if grants_this {
+                ids.insert(id.clone());
+            }
+        }
+        ids.retain(|id| id != &self.id && is_service_account(stack, id));
+        ids
+    }
+}
+
+fn is_service_account(stack: &Stack, id: &str) -> bool {
+    stack.resources().any(|(resource_id, entry)| {
+        resource_id == id && entry.config.downcast_ref::<ServiceAccount>().is_some()
+    })
 }
 
 impl ServiceAccountBuilder {
@@ -229,6 +287,58 @@ mod tests {
             }]}
         }))
         .unwrap()
+    }
+
+    fn impersonate() -> PermissionSet {
+        serde_json::from_value(json!({
+            "id": "service-account/impersonate", "description": "Assume a service account",
+            "platforms": {"aws": [{"grant": {"actions": ["sts:AssumeRole"]},
+                "binding": {"resource": {"resources": ["*"]}}}]}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_frozen_callers_captured_grant_makes_it_an_impersonator_without_a_profile() {
+        use crate::{permissions::PermissionsConfig, ResourceLifecycle, Stack};
+        let target = ServiceAccount::new("target-sa".to_string()).build();
+        // Captured grants name the target by profile ("target") and by id ("target-sa").
+        let by_profile = ServiceAccount::new("manager-sa".to_string())
+            .resource_permission_sets(IndexMap::from([(
+                "target".to_string(),
+                vec![impersonate()],
+            )]))
+            .build();
+        let by_id = ServiceAccount::new("operator-sa".to_string())
+            .resource_permission_sets(IndexMap::from([(
+                "target-sa".to_string(),
+                vec![impersonate()],
+            )]))
+            .build();
+        let bystander = ServiceAccount::new("reader-sa".to_string())
+            .resource_permission_sets(IndexMap::from([("target".to_string(), vec![signing("*")])]))
+            .build();
+        let profiled = ServiceAccount::new("execution-sa".to_string()).build();
+        let stack = Stack::new("acme".to_string())
+            .add(target.clone(), ResourceLifecycle::Frozen)
+            .add(by_profile, ResourceLifecycle::Frozen)
+            .add(by_id, ResourceLifecycle::Frozen)
+            .add(bystander, ResourceLifecycle::Frozen)
+            .add(profiled, ResourceLifecycle::Frozen)
+            .permissions(PermissionsConfig::new().with_profile(
+                "execution",
+                PermissionProfile::new().resource("target", ["service-account/impersonate"]),
+            ))
+            .build();
+
+        assert_eq!(
+            target.impersonators(&stack),
+            BTreeSet::from([
+                "execution-sa".to_string(),
+                "manager-sa".to_string(),
+                "operator-sa".to_string(),
+            ])
+        );
     }
 
     #[test]
