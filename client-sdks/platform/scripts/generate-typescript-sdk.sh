@@ -18,6 +18,11 @@ if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- "$sd
   exit 1
 fi
 
+"$speakeasy_bin" overlay apply --strict \
+  --schema "$repo_root/client-sdks/platform/openapi.json" \
+  --overlay "$repo_root/client-sdks/speakeasy-overlay.yaml" \
+  --out /dev/null
+
 (
   cd "$sdk_dir"
   "$speakeasy_bin" run \
