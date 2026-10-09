@@ -16,7 +16,10 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, Build, ComputeCluster, Result, ServiceAccount, Worker};
+use alien_core::{
+    import::EmitContext, permissions::PermissionSetReference, Build, ComputeCluster, Result,
+    ServiceAccount, Worker,
+};
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
 
@@ -30,7 +33,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
 
         let TrustPrincipals {
             services,
-            compute_role_arns,
+            role_arns,
         } = trust_principals(ctx, service_account);
         let services_ref: Vec<&str> = services.iter().copied().collect();
 
@@ -42,7 +45,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
                 attr("name", iam_role_name_template(&service_account.id)),
                 attr(
                     "assume_role_policy",
-                    trust_assume_role_policy(&services_ref, compute_role_arns),
+                    trust_assume_role_policy(&services_ref, role_arns),
                 ),
                 attr("tags", tags(ctx, "service-account")),
             ],
@@ -78,13 +81,13 @@ impl TfEmitter for AwsServiceAccountEmitter {
 
 struct TrustPrincipals {
     services: BTreeSet<&'static str>,
-    compute_role_arns: Vec<Expression>,
+    role_arns: Vec<Expression>,
 }
 
 fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> TrustPrincipals {
     let profile_name = service_account.id.strip_suffix("-sa");
     let mut services: BTreeSet<&'static str> = BTreeSet::new();
-    let mut compute_role_arns = Vec::new();
+    let mut role_arns = Vec::new();
 
     for (_id, entry) in ctx.stack.resources() {
         if let Some(function) = entry.config.downcast_ref::<Worker>() {
@@ -104,7 +107,7 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
             // traversal here would therefore create a Terraform dependency
             // cycle between the two roles.
             for suffix in ["instances", "isolation-v1"] {
-                compute_role_arns.push(expr::template(format!(
+                role_arns.push(expr::template(format!(
                     "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{}-{suffix}",
                     cluster.id
                 )));
@@ -112,7 +115,32 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
         }
     }
 
-    if services.is_empty() && compute_role_arns.is_empty() {
+    // Explicit impersonation grants require trust as well as an IAM action.
+    // Use exact role ARN conditions to avoid role creation dependency cycles.
+    for (profile, permissions) in &ctx.stack.permissions.profiles {
+        let can_impersonate = [Some(service_account.id.as_str()), profile_name]
+            .into_iter()
+            .flatten()
+            .filter_map(|scope| permissions.0.get(scope))
+            .flatten()
+            .any(|permission| match permission {
+                PermissionSetReference::Name(name) => name == "service-account/impersonate",
+                PermissionSetReference::Inline(set) => set.id == "service-account/impersonate",
+            });
+        let impersonator_id = format!("{profile}-sa");
+        if can_impersonate
+            && impersonator_id != service_account.id
+            && ctx.stack.resources().any(|(id, entry)| {
+                id == &impersonator_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
+            })
+        {
+            role_arns.push(expr::template(format!(
+                "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{impersonator_id}"
+            )));
+        }
+    }
+
+    if services.is_empty() && role_arns.is_empty() {
         services.insert("lambda.amazonaws.com");
         services.insert("codebuild.amazonaws.com");
         services.insert("ec2.amazonaws.com");
@@ -120,12 +148,12 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
 
     TrustPrincipals {
         services,
-        compute_role_arns,
+        role_arns,
     }
 }
 
-fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression>) -> Expression {
-    if compute_role_arns.is_empty() {
+fn trust_assume_role_policy(services: &[&str], role_arns: Vec<Expression>) -> Expression {
+    if role_arns.is_empty() {
         return service_assume_role_policy(services);
     }
 
@@ -163,7 +191,7 @@ fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression
             "Condition",
             expr::object([(
                 "ArnEquals",
-                expr::object([("aws:PrincipalArn", Expression::Array(compute_role_arns))]),
+                expr::object([("aws:PrincipalArn", Expression::Array(role_arns))]),
             )]),
         ),
     ]));

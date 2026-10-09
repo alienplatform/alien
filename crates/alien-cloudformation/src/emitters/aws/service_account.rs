@@ -14,7 +14,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, Build, ComputeCluster, ErrorData, Result, ServiceAccount, Worker,
+    import::EmitContext, permissions::PermissionSetReference, Build, ComputeCluster, ErrorData,
+    Result, ServiceAccount, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -120,7 +121,7 @@ fn service_account_trust_policy(
         );
     }
     let mut services = BTreeSet::new();
-    let mut compute_role_arns = Vec::new();
+    let mut role_arns = Vec::new();
 
     for (id, entry) in ctx.stack.resources() {
         if let Some(function) = entry.config.downcast_ref::<Worker>() {
@@ -135,26 +136,51 @@ fn service_account_trust_policy(
         }
         if entry.config.downcast_ref::<ComputeCluster>().is_some() {
             if let Some(logical_id) = ctx.name_for(id) {
-                compute_role_arns.push(CfExpression::get_att(
+                role_arns.push(CfExpression::get_att(
                     format!("{logical_id}InstanceRole"),
                     "Arn",
                 ));
                 // An exact ARN condition can retain both node generations without
                 // resolving a not-yet-created role or adding a dependency cycle.
-                compute_role_arns.push(CfExpression::sub(format!(
+                role_arns.push(CfExpression::sub(format!(
                     "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{id}-isolation-v1"
                 )));
             }
         }
     }
 
-    if services.is_empty() && compute_role_arns.is_empty() {
+    // Explicit impersonation grants require trust as well as an IAM action.
+    // Use exact role ARN conditions to avoid role creation dependency cycles.
+    for (profile, permissions) in &ctx.stack.permissions.profiles {
+        let can_impersonate = [Some(service_account.id.as_str()), profile_name]
+            .into_iter()
+            .flatten()
+            .filter_map(|scope| permissions.0.get(scope))
+            .flatten()
+            .any(|permission| match permission {
+                PermissionSetReference::Name(name) => name == "service-account/impersonate",
+                PermissionSetReference::Inline(set) => set.id == "service-account/impersonate",
+            });
+        let impersonator_id = format!("{profile}-sa");
+        if can_impersonate
+            && impersonator_id != service_account.id
+            && ctx.stack.resources().any(|(id, entry)| {
+                id == &impersonator_id && entry.config.downcast_ref::<ServiceAccount>().is_some()
+            })
+        {
+            role_arns.push(CfExpression::sub(format!(
+                "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{impersonator_id}"
+            )));
+        }
+    }
+
+    if services.is_empty() && role_arns.is_empty() {
         services.insert("lambda.amazonaws.com");
         services.insert("codebuild.amazonaws.com");
         services.insert("ec2.amazonaws.com");
     }
 
-    if compute_role_arns.is_empty() {
+    if role_arns.is_empty() {
         return service_trust_policy(services);
     }
 
@@ -188,7 +214,7 @@ fn service_account_trust_policy(
             "Condition",
             CfExpression::object([(
                 "ArnEquals",
-                CfExpression::object([("aws:PrincipalArn", CfExpression::list(compute_role_arns))]),
+                CfExpression::object([("aws:PrincipalArn", CfExpression::list(role_arns))]),
             )]),
         ),
     ]));

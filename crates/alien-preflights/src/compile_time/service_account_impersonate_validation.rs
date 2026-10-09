@@ -23,7 +23,7 @@ impl CompileTimeCheck for ServiceAccountImpersonateValidationCheck {
         !stack.permissions.profiles.is_empty()
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
 
@@ -111,7 +111,9 @@ impl CompileTimeCheck for ServiceAccountImpersonateValidationCheck {
                             ));
                         }
                         // Warn if targeting a manually-defined ServiceAccount
-                        else if manually_defined_sa.contains(resource_scope) {
+                        else if platform != Platform::Aws
+                            && manually_defined_sa.contains(resource_scope)
+                        {
                             warnings.push(format!(
                                 "Permission profile '{}' uses 'service-account/impersonate' on manually-defined ServiceAccount '{}'. \
                                 Impersonation only works for ServiceAccounts created from permission profiles. \
@@ -273,8 +275,11 @@ mod tests {
         };
 
         let check = ServiceAccountImpersonateValidationCheck;
-        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        let aws = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(aws.success);
+        assert!(aws.warnings.is_empty());
 
+        let result = check.check(&stack, Platform::Gcp).await.unwrap();
         assert!(result.success); // Success but with warnings
         assert!(!result.warnings.is_empty());
         assert!(result
