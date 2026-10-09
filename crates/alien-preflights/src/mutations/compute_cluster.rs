@@ -409,12 +409,35 @@ impl ComputeClusterMutation {
                             .iter()
                             .any(|existing_group| existing_group.group_id == group.group_id)
                     });
-                // Without an explicit choice, a persistent pool that does not exist yet gets
-                // the planner's default. Leaving it aggregate would spread its machines over
-                // every zone while its volumes are created in one. A pool that already exists
-                // keeps the topology it was created with.
+                // Without an explicit choice, a pool that already exists keeps the topology it
+                // was created with, including a default it got at install. Dropping that default
+                // here would make every later release differ from the installed setup-owned
+                // cluster and ask for setup.
+                if explicit_selection.is_none() {
+                    if let Some(existing) = existing_group {
+                        if let Some(spread) = existing.failure_domain_spread.get(&group.group_id) {
+                            cluster
+                                .failure_domain_spread
+                                .entry(group.group_id.clone())
+                                .or_insert(*spread);
+                        }
+                        if let Some(domains) =
+                            existing.selected_failure_domains.get(&group.group_id)
+                        {
+                            cluster
+                                .selected_failure_domains
+                                .entry(group.group_id.clone())
+                                .or_insert_with(|| domains.clone());
+                        }
+                        continue;
+                    }
+                }
+                // A persistent pool that does not exist yet gets the planner's default. Leaving
+                // it aggregate would spread its machines over every zone while its volumes are
+                // created in one.
                 let Some(selection) = explicit_selection.or_else(|| {
-                    (existing_group.is_none() && fresh_persistent_pools.contains(&group.group_id))
+                    fresh_persistent_pools
+                        .contains(&group.group_id)
                         .then(default_persistent_failure_domains)
                 }) else {
                     continue;
