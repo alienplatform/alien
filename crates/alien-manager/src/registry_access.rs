@@ -412,7 +412,8 @@ fn service_type_name(service_type: &ComputeServiceType) -> String {
     }
 }
 
-/// Revokes registry access after a Deleted state has been persisted.
+/// Revokes registry access after runtime teardown has been persisted.
+/// AWS also revokes at TeardownRequired, before setup deletion removes its identity and record.
 ///
 /// Cloud Run's service agent is project-scoped, so multiple deployments in
 /// the same GCP project share one GAR reader grant. The final active consumer
@@ -426,8 +427,12 @@ pub async fn cleanup_deleted_registry_access(
     project_id: &str,
     state: &DeploymentState,
 ) -> Result<()> {
-    if state.status != DeploymentStatus::Deleted {
-        return Ok(());
+    // AWS setup deletion removes the target role and then the deployment record. Revoke
+    // while runtime teardown is complete and that setup handoff is still recorded.
+    match (state.status, state.environment_info.as_ref()) {
+        (DeploymentStatus::Deleted, _)
+        | (DeploymentStatus::TeardownRequired, Some(EnvironmentInfo::Aws(_))) => {}
+        _ => return Ok(()),
     }
     let Some(environment_info) = state.environment_info.as_ref() else {
         return Ok(());
@@ -1628,6 +1633,34 @@ mod tests {
 
         assert_eq!(error.code, "REGISTRY_ACCESS_CLEANUP_FAILED");
         assert!(registry.removals.lock().expect("removals lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn teardown_required_revokes_registry_access_before_setup_deletion() {
+        let registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: true,
+            removed_repository_is_gone: false,
+        });
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry,
+        });
+        let mut state = aws_state_with_stack(worker_stack(
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:latest",
+        ));
+        state.status = DeploymentStatus::TeardownRequired;
+        let error = cleanup_deleted_registry_access(
+            &MockDeploymentStore::new(),
+            &Some(provider),
+            &HashMap::new(),
+            "dep_test",
+            "prj_test",
+            &state,
+        )
+        .await
+        .expect_err("setup handoff must attempt the revoke and propagate its failure");
+        assert_eq!(error.code, "REGISTRY_ACCESS_CLEANUP_FAILED");
     }
 
     #[tokio::test]

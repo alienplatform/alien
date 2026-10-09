@@ -1268,7 +1268,7 @@ impl AwsArtifactRegistryController {
                 {
                     "Sid": "RegionalRepositoryPolicies",
                     "Effect": "Allow",
-                    "Action": ["ecr:GetRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"],
+                    "Action": ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"],
                     "Resource": format!("arn:aws:ecr:*:{}:repository/{}-{}-*", aws_cfg.account_id, ctx.resource_prefix, registry_id)
                 }
             ]

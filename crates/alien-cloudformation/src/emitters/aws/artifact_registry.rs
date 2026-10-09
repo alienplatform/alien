@@ -210,7 +210,7 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
             ("Sid", CfExpression::from("RegionalRepositoryPolicies")),
             ("Effect", CfExpression::from("Allow")),
             ("Action", CfExpression::list([
-                "ecr:GetRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories",
+                "ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories",
             ].into_iter().map(CfExpression::from))),
             ("Resource", CfExpression::list([
                 CfExpression::sub(format!("arn:${{AWS::Partition}}:ecr:*:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}", registry.id())),

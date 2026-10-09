@@ -224,6 +224,7 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
                 Expression::Array(
                     [
                         "ecr:GetRepositoryPolicy",
+                        "ecr:DeleteRepositoryPolicy",
                         "ecr:SetRepositoryPolicy",
                         "ecr:DescribeRepositories",
                     ]
