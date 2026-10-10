@@ -30,9 +30,16 @@ fn shutdown(signal: &str) {
     let mut server = Server(
         Command::new(env!("CARGO_BIN_EXE_alien"))
             .current_dir(directory.path())
-            .args(["dev", "server", "--port", &port.to_string(), "--status-file"])
+            .args(["dev", "--status-file"])
             .arg(&status_file)
-            .args(["--workspace", "example", "--project", "example", "--no-browser"])
+            .args(["server", "--port", &port.to_string()])
+            .args([
+                "--workspace",
+                "example",
+                "--project",
+                "example",
+                "--no-browser",
+            ])
             .env_remove("ALIEN_API_KEY")
             .stdout(log.try_clone().unwrap())
             .stderr(log)
@@ -41,17 +48,25 @@ fn shutdown(signal: &str) {
     );
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let status = fs::read(&status_file).ok().and_then(|bytes| {
-            serde_json::from_slice::<serde_json::Value>(&bytes).ok()
-        });
+        let status = fs::read(&status_file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
         if status.as_ref().and_then(|value| value["status"].as_str()) == Some("ready") {
             break;
         }
-        assert!(server.0.try_wait().unwrap().is_none(), "server exited: {}", fs::read_to_string(directory.path().join("server.log")).unwrap());
+        assert!(
+            server.0.try_wait().unwrap().is_none(),
+            "server exited: {}",
+            fs::read_to_string(directory.path().join("server.log")).unwrap()
+        );
         assert!(Instant::now() < deadline, "server did not become ready");
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(Command::new("kill").args([signal, &server.0.id().to_string()]).status().unwrap().success());
+    assert!(Command::new("kill")
+        .args([signal, &server.0.id().to_string()])
+        .status()
+        .unwrap()
+        .success());
     let deadline = Instant::now() + Duration::from_secs(10);
     let exit = loop {
         if let Some(exit) = server.0.try_wait().unwrap() {
@@ -60,8 +75,12 @@ fn shutdown(signal: &str) {
         assert!(Instant::now() < deadline, "server did not stop");
         thread::sleep(Duration::from_millis(20));
     };
-    assert!(exit.success(), "{signal} should drain the manager, got {exit}");
-    let status: serde_json::Value = serde_json::from_slice(&fs::read(status_file).unwrap()).unwrap();
+    assert!(
+        exit.success(),
+        "{signal} should drain the manager, got {exit}"
+    );
+    let status: serde_json::Value =
+        serde_json::from_slice(&fs::read(status_file).unwrap()).unwrap();
     assert_eq!(status["status"], "shuttingDown");
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
 }

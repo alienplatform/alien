@@ -21,12 +21,12 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
-    DeploymentListItemResponse, DeploymentUpdateOperationStatus,
-    DeploymentUpdateOperationSummaryInner, GetDeploymentId, GetDeploymentWorkspace,
-    ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
-    PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
-    CreateVolumeRestoreRequest, VolumeRestore,
+    CreateDeploymentWorkspace, CreateVolumeRestoreRequest, DeploymentDetailResponse,
+    DeploymentDetailResponseUpdateState, DeploymentListItemResponse,
+    DeploymentUpdateOperationStatus, DeploymentUpdateOperationSummaryInner, GetDeploymentId,
+    GetDeploymentWorkspace, ListDeploymentsIncludeItem, NewDeploymentRequest,
+    PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
+    PinReleaseRequestReleaseId, VolumeRestore,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -570,12 +570,9 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 let deployment =
                     resolve_deployment_reference(&resolved.manager.client, &deployment_id).await?;
                 let client = ctx.sdk_client().await?;
-                let restores = list_platform_volume_restores(
-                    &client,
-                    workspace.as_str(),
-                    &deployment_id,
-                )
-                .await?;
+                let restores =
+                    list_platform_volume_restores(&client, workspace.as_str(), &deployment_id)
+                        .await?;
                 return volumes_task(&deployment, Some(restores), json);
             }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
@@ -774,12 +771,24 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )
             .await
         }
-        DeploymentsCmd::Move { id, deployment_group, dry_run, expected_membership_revision, json } => {
+        DeploymentsCmd::Move {
+            id,
+            deployment_group,
+            dry_run,
+            expected_membership_revision,
+            json,
+        } => {
             crate::commands::deployment_move::run(
-                &ctx, &id, crate::commands::deployment_move::MoveOptions {
-                    destination: &deployment_group, dry_run, expected_revision: expected_membership_revision, json,
+                &ctx,
+                &id,
+                crate::commands::deployment_move::MoveOptions {
+                    destination: &deployment_group,
+                    dry_run,
+                    expected_revision: expected_membership_revision,
+                    json,
                 },
-            ).await
+            )
+            .await
         }
         DeploymentsCmd::Pin {
             id,
@@ -2331,7 +2340,9 @@ async fn cancel_volume_restore_task(
     println!("{}", success_line("Volume restore cancelled."));
     println!(
         "{}",
-        dim_label("If the deployment failed on this restore, retry it to bring it back to running.")
+        dim_label(
+            "If the deployment failed on this restore, retry it to bring it back to running."
+        )
     );
     println!(
         "{} {}",
@@ -2447,7 +2458,12 @@ fn volumes_task(
     println!();
     println!("{}", heading("Restores"));
     let mut table = make_table(&[
-        "Request", "Resource", "Replica", "Snapshot", "Status", "Requested",
+        "Request",
+        "Resource",
+        "Replica",
+        "Snapshot",
+        "Status",
+        "Requested",
     ]);
     for restore in restores {
         table.add_row(vec![
@@ -3989,7 +4005,11 @@ mod tests {
         assert_eq!(
             volumes
                 .iter()
-                .map(|volume| (volume.resource.as_str(), volume.ordinal, volume.volume_id.as_str()))
+                .map(|volume| (
+                    volume.resource.as_str(),
+                    volume.ordinal,
+                    volume.volume_id.as_str()
+                ))
                 .collect::<Vec<_>>(),
             vec![("db", 0, "vol-0"), ("db", 1, "vol-1")]
         );

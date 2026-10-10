@@ -162,9 +162,7 @@ fn event_title(data: &Value, state: &Value) -> String {
         ("DeploymentRedeployRequested", "started") => "Redeployment In Progress".to_string(),
         ("DeploymentVolumeRestoreRequested", "failed") => "Volume Restore Failed".to_string(),
         ("DeploymentVolumeRestoreRequested", "success") => "Volume Restore Applied".to_string(),
-        ("DeploymentVolumeRestoreRequested", "started") => {
-            "Volume Restore In Progress".to_string()
-        }
+        ("DeploymentVolumeRestoreRequested", "started") => "Volume Restore In Progress".to_string(),
         ("DeploymentCreated", _) => "Deployment Created".to_string(),
         ("DeploymentReleased", _)
             if data.get("previousReleaseId").is_some_and(Value::is_string) =>

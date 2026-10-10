@@ -1499,6 +1499,20 @@ async fn run_dev_server_only(
     status_file: Option<PathBuf>,
     user_env_vars: Vec<CliEnvVar>,
 ) -> Result<()> {
+    // Register before publishing readiness so a supervisor can signal immediately.
+    #[cfg(unix)]
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to listen for SIGINT".to_string(),
+        })?;
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to listen for SIGTERM".to_string(),
+        })?;
+
     println!(
         "{}",
         contextual_heading(
@@ -1507,7 +1521,14 @@ async fn run_dev_server_only(
             &[("on", &format!("http://localhost:{port}"))],
         )
     );
-    ensure_server_running_with_env(port, status_file.clone(), user_env_vars).await?;
+    let _ = user_env_vars;
+    if let Some(status_file) = &status_file {
+        write_dev_status(
+            status_file,
+            &build_dev_status(port, alien_core::DevStatusState::Initializing, None, None),
+        )?;
+    }
+    let manager = commands::start_owned_dev_server(port).await?;
 
     if let Some(status_file) = &status_file {
         write_dev_status(
@@ -1528,12 +1549,23 @@ async fn run_dev_server_only(
         command("alien dev")
     );
 
-    tokio::signal::ctrl_c()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ServerStartFailed {
-            reason: "Failed to wait for Ctrl+C".to_string(),
-        })?;
+    #[cfg(unix)]
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+    }
+    #[cfg(not(unix))]
+    let signal_result =
+        tokio::signal::ctrl_c()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to wait for Ctrl+C".to_string(),
+            });
+
+    manager.shutdown().await?;
+    #[cfg(not(unix))]
+    signal_result?;
 
     if let Some(status_file) = &status_file {
         write_dev_status(
