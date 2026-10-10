@@ -1343,6 +1343,7 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, stack, settings.network.as_ref(), target);
+    add_container_resource_parameters(template, stack, settings.compute.as_ref())?;
     if !target.is_kubernetes() {
         add_compute_parameters(template, stack, settings.compute.as_ref())?;
     }
@@ -1640,6 +1641,32 @@ fn add_compute_parameters(
                 );
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn add_container_resource_parameters(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Result<()> {
+    // Planning validates both the declared ranges and the supplied defaults first.
+    let plan = alien_core::compute_planner::plan_compute(stack, Platform::Aws, compute)?;
+    for container in plan.containers {
+        let prefix = format!("Container{}", pascal_identifier(&container.container_id));
+        if let Some(range) = container.choices.cpu {
+            let mut parameter = number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
+            parameter.default = Some(CfExpression::Number(alien_core::instance_catalog::parse_cpu(&container.cpu.desired).expect("planner validated CPU")));
+            parameter.min_value = Some(CfExpression::Number(alien_core::instance_catalog::parse_cpu(&range.min).expect("planner validated CPU")));
+            parameter.max_value = Some(CfExpression::Number(alien_core::instance_catalog::parse_cpu(&range.max).expect("planner validated CPU")));
+            template.parameters.insert(format!("{prefix}Cpu"), parameter);
+        }
+        if container.choices.memory.is_some() {
+            template.parameters.insert(format!("{prefix}Memory"), string_parameter(
+                "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
+                Some(container.memory.desired), None, false,
+            ));
         }
     }
     Ok(())
@@ -2093,20 +2120,23 @@ fn compute_settings_expression(
     if !pools.is_empty() {
         fields.push(("pools", CfExpression::object(pools)));
     }
-    if let Some(compute) = compute.filter(|compute| !compute.containers.is_empty()) {
-        let mut ids: Vec<_> = compute.containers.keys().collect();
-        ids.sort();
-        let containers = ids.into_iter().map(|id| {
-            let selection = &compute.containers[id];
-            let mut allocation = Vec::new();
-            if let Some(cpu) = &selection.cpu {
-                allocation.push(("cpu", CfExpression::Number(cpu.as_f64().expect("JSON numbers are finite"))));
-            }
-            if let Some(memory) = &selection.memory {
-                allocation.push(("memory", CfExpression::from(memory.clone())));
-            }
-            (id.as_str(), CfExpression::object(allocation))
-        });
+    let mut containers = Vec::new();
+    let mut ids: Vec<_> = stack.resources.keys().collect();
+    ids.sort();
+    for id in ids {
+        let Some(container) = stack.resources[id].config.downcast_ref::<alien_core::Container>() else { continue; };
+        let Some(choices) = &container.resource_choices else { continue; };
+        let prefix = format!("Container{}", pascal_identifier(id));
+        let mut allocation = Vec::new();
+        if choices.cpu.is_some() {
+            allocation.push(("cpu", CfExpression::ref_(format!("{prefix}Cpu"))));
+        }
+        if choices.memory.is_some() {
+            allocation.push(("memory", CfExpression::ref_(format!("{prefix}Memory"))));
+        }
+        if !allocation.is_empty() { containers.push((id.as_str(), CfExpression::object(allocation))); }
+    }
+    if !containers.is_empty() {
         fields.push(("containers", CfExpression::object(containers)));
     }
     (!fields.is_empty()).then(|| CfExpression::object(fields))
