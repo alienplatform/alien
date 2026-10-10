@@ -1027,6 +1027,37 @@ mod tests {
     }
 
     #[test]
+    fn explicit_machine_can_fit_a_low_cpu_high_memory_workload() {
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.cpu = ResourceSpec {
+            min: "0.5".into(),
+            desired: "0.5".into(),
+        };
+        container.memory = ResourceSpec {
+            min: "8Gi".into(),
+            desired: "8Gi".into(),
+        };
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {"general":{"mode":"fixed","machines":1,"machine":"n2-standard-4"}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Gcp, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0].errors.is_empty(),
+            "{:?}",
+            plan.pools[0].errors
+        );
+        assert_eq!(plan.pools[0].selected.machine(), Some("n2-standard-4"));
+    }
+
+    #[test]
     fn invalid_deployment_resources_fail_before_capacity_planning() {
         let mut stack = stack_with_container();
         stack

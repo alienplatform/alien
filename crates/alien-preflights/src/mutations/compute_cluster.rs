@@ -71,10 +71,11 @@ impl StackMutation for ComputeClusterMutation {
             .compute
             .as_ref()
             .is_some_and(|settings| {
-                settings
-                    .pools
-                    .values()
-                    .any(|selection| selection.machine().is_none())
+                !settings.containers.is_empty()
+                    || settings
+                        .pools
+                        .values()
+                        .any(|selection| selection.machine().is_none())
             })
         {
             // Resource updates must recompute automatic machine choices even
@@ -2389,7 +2390,7 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
         assert!(!mutation.should_run(&stack, &stack_state, &config));
-        let prepared = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let mut prepared = mutation.mutate(stack, &stack_state, &config).await.unwrap();
         let cluster = prepared.resources["compute"]
             .config
             .downcast_ref::<ComputeCluster>()
@@ -2398,6 +2399,31 @@ mod tests {
             cluster.capacity_groups[0].instance_type.as_deref(),
             Some("m7i.large")
         );
+        prepared
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .resource_choices = Some(alien_core::ContainerResourceChoices {
+            cpu: Some(alien_core::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "4".into(),
+                default: "1".into(),
+            }),
+            memory: None,
+        });
+        let mut selected_config = config.clone();
+        selected_config.stack_settings.compute = Some(
+            serde_json::from_value(serde_json::json!({"containers":{"api":{"cpu":4}}})).unwrap(),
+        );
+        assert!(mutation.should_run(&prepared, &stack_state, &selected_config));
+        let error = mutation
+            .mutate(prepared, &stack_state, &selected_config)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
     }
 
     #[tokio::test]
