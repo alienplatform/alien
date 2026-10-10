@@ -430,3 +430,16 @@ test("existing deployment model paths use the current resource parser", async ()
   const compute = { containers: { api: { cpu: 1.5, memory: "2Gi" } } };
   assert.deepEqual(deploymentComputeFromJSON(JSON.stringify(compute)), { ok: true, value: compute });
 });
+
+
+test("published deep imports retain moved enums and response parsers", async () => {
+  const release = await import("../typescript/esm/models/releaseinfotypestringlist.js");
+  assert.equal(release.ReleaseInfoTypeStringList.StringList, "stringList");
+  assert.equal(release.ReleaseInfoTypeStringList$inboundSchema.parse("stringList"), "stringList");
+  const deployment = await import("../typescript/esm/models/deploymentpendingpreparedstacktypeunion.js");
+  assert.equal(deployment.DeploymentPendingPreparedStackTypeUnion$inboundSchema.parse("string"), "string");
+  assert.deepEqual(deployment.deploymentPendingPreparedStackTypeUnionFromJSON('"string"'), { ok: true, value: "string" });
+  const manager = await import("../typescript/esm/models/createmanagerresponseproviderawsalb2.js");
+  const provider = { type: "aws-alb" };
+  assert.deepEqual(manager.CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(provider), provider);
+});

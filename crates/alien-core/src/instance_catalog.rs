@@ -1268,13 +1268,15 @@ pub fn find_instance_type(platform: Platform, name: &str) -> Option<&'static Ins
 /// Whether a capacity group may move from AWS machine `old` to `new` without setup: both are
 /// catalog machines of one CPU architecture, so the stack's images still run on the new one.
 pub fn is_same_architecture_aws_machine(old: &str, new: &str) -> bool {
-    match (
-        find_instance_type(Platform::Aws, old),
-        find_instance_type(Platform::Aws, new),
-    ) {
-        (Some(old), Some(new)) => old.architecture == new.architecture,
-        _ => false,
-    }
+    is_same_architecture_machine(Platform::Aws, old, new)
+}
+
+/// Whether two catalog machines belong to the given cloud and share a CPU architecture.
+pub fn is_same_architecture_machine(platform: Platform, old: &str, new: &str) -> bool {
+    matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+        && find_instance_type(platform, old)
+            .zip(find_instance_type(platform, new))
+            .is_some_and(|(old, new)| old.architecture == new.architecture)
 }
 
 // ---------------------------------------------------------------------------

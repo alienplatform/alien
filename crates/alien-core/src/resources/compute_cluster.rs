@@ -8,7 +8,7 @@
 //! - Launch templates/instance configurations
 
 use crate::error::{ErrorData, Result};
-use crate::instance_catalog::{is_same_architecture_aws_machine, Architecture};
+use crate::instance_catalog::{is_same_architecture_machine, Architecture};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
 use crate::{PermissionProfile, Platform, ResourceType};
 use alien_error::AlienError;
@@ -397,16 +397,20 @@ impl ResourceDefinition for ComputeCluster {
             {
                 // The controller rolls the fleet onto another machine of the same architecture;
                 // the stack's images may not run on any other machine. Preflights also limit
-                // this to AWS, which this check can't see.
+                // this to the installed cloud, which this check can't see.
                 if let (Some(old), Some(new)) = (
                     existing_group.instance_type.as_deref(),
                     new_group.instance_type.as_deref(),
                 ) {
-                    if old != new && !is_same_architecture_aws_machine(old, new) {
+                    if old != new
+                        && ![Platform::Aws, Platform::Gcp, Platform::Azure]
+                            .into_iter()
+                            .any(|platform| is_same_architecture_machine(platform, old, new))
+                    {
                         return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                             resource_id: self.id.clone(),
                             reason: format!(
-                                "capacity group '{}' can't change machine from '{old}' to '{new}': only an AWS machine of the same CPU architecture can replace it",
+                                "capacity group '{}' can't change machine from '{old}' to '{new}': only a catalog machine in the same cloud and of the same CPU architecture can replace it",
                                 new_group.group_id
                             ),
                         }));
@@ -586,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn machine_changes_stay_within_one_aws_architecture() {
+    fn machine_changes_stay_within_one_cloud_and_architecture() {
         let cluster = |machine: &str| {
             ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
@@ -600,13 +604,20 @@ mod tests {
                 })
                 .build()
         };
-        cluster("t4g.small")
-            .validate_update(&cluster("t4g.medium"))
-            .expect("arm64 to arm64");
+        for (old, new) in [
+            ("t4g.small", "t4g.medium"),
+            ("e2-medium", "n2-standard-4"),
+            ("Standard_D2s_v5", "Standard_D4s_v5"),
+        ] {
+            cluster(old)
+                .validate_update(&cluster(new))
+                .expect("same cloud and architecture");
+        }
         for (old, new) in [
             ("t4g.small", "m7i.large"),
             ("t4g.small", "t4g.unknown"),
-            ("n2-standard-2", "n2-standard-4"),
+            ("n2-standard-2", "m7i.large"),
+            ("Standard_D2s_v5", "n2-standard-4"),
         ] {
             let error = cluster(old)
                 .validate_update(&cluster(new))

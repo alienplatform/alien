@@ -1,7 +1,7 @@
 use crate::compatibility::narrowing::service_account_narrowed;
 use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
-use alien_core::instance_catalog::find_instance_type;
+use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Platform,
     Resource, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
@@ -25,7 +25,7 @@ pub struct FrozenResourcesUnchangedCheck {
 
 /// Setup owns the ComputeCluster identity and network boundary, but its
 /// registered runtime controller deliberately owns the fleet: capacity and, on
-/// AWS, the machine type within one CPU architecture. The compute mutation has
+/// AWS, GCP and Azure, the machine type within one CPU architecture. The compute mutation has
 /// already checked the new machine against the workloads and derived its
 /// profile, so the profile follows the machine. Changing groups, placement, or
 /// networking still requires setup.
@@ -103,10 +103,7 @@ fn machine_change<'a>(
 }
 
 fn runtime_machine_change(platform: Platform, old: &str, new: &str) -> bool {
-    matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-        && find_instance_type(platform, old)
-            .zip(find_instance_type(platform, new))
-            .is_some_and(|(old, new)| old.architecture == new.architecture)
+    is_same_architecture_machine(platform, old, new)
 }
 
 /// Explains machine changes that need setup, so the deployment error names them.
