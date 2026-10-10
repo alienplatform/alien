@@ -542,6 +542,15 @@ mod tests {
                 .code(alien_core::ContainerCode::Image {
                     image: "api:latest".to_string(),
                 })
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions("execution-sa".to_string())
                 .build()
         };
         let declared = Stack::new("gated-resources".to_string())
