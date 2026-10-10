@@ -152,9 +152,23 @@ pub fn plan_compute_with_state(
                 selected.map(ComputePoolSelection::max_size),
             );
         }
+        let machines = selected
+            .map(ComputePoolSelection::max_size)
+            .unwrap_or(group.scale.default_max_size())
+            .max(1);
+        let mut sizing = requirements.clone();
+        // A bounded fleet must fit total demand as well as its largest replica.
+        sizing.max_cpu_per_container = sizing
+            .max_cpu_per_container
+            .max(sizing.total_cpu_at_desired / f64::from(machines));
+        sizing.max_memory_per_container = sizing.max_memory_per_container.max(
+            sizing
+                .total_memory_bytes_at_desired
+                .div_ceil(u64::from(machines)),
+        );
         let recommended = recommended_selection(
             platform,
-            &requirements,
+            &sizing,
             &group.scale,
             group.requires_failure_domain,
             group.generated,
