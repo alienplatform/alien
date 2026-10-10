@@ -113,7 +113,6 @@ export type QueueAccessRequestRevokedBy = {
  * The queued access request, with the customer approve command.
  */
 export type QueueAccessRequestResponse = {
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: QueueAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -148,6 +147,7 @@ export type QueueAccessRequestResponse = {
   approvedBy: QueueAccessRequestApprovedBy | null;
   deniedBy: QueueAccessRequestDeniedBy | null;
   revokedBy: QueueAccessRequestRevokedBy | null;
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   kubectlApprove: string | null;
 };
 
@@ -300,8 +300,6 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   QueueAccessRequestResponse,
   unknown
 > = z.object({
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
   id: z.string(),
   requesterKind: z.nullable(QueueAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -329,6 +327,8 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   revokedBy: z.nullable(
     z.lazy(() => QueueAccessRequestRevokedBy$inboundSchema),
   ),
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   kubectlApprove: z.nullable(z.string()),
 });
 

@@ -91,6 +91,7 @@ async function $do(
   const path = pathToFunc("/v1/operations/plugins")();
 
   const query = encodeFormQuery({
+    "deployment": payload.deployment,
     "project": payload.project,
     "workspace": client._options.workspace,
   });

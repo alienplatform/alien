@@ -18,7 +18,7 @@ export type AcceptRemoteOperatorPermissionsGlobals = {
 
 export type AcceptRemoteOperatorPermissionsRequestBody = {
   /**
-   * The enabled operations' permission declarations that the owner reviewed and re-applied.
+   * The built-in operation plugins' permission declarations that the owner reviewed and re-applied.
    */
   reviewedPermissions: Array<models.RemoteOperatorPermissionPlugin>;
 };

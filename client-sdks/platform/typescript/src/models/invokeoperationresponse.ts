@@ -24,14 +24,14 @@ export type InvokeOperationResponseTier = ClosedEnum<
 >;
 
 /**
- * The approval decision the policy resolved to.
+ * The decision the approval rules resolved to.
  */
 export const InvokeOperationResponseDecision = {
   Auto: "auto",
   Manual: "manual",
 } as const;
 /**
- * The approval decision the policy resolved to.
+ * The decision the approval rules resolved to.
  */
 export type InvokeOperationResponseDecision = ClosedEnum<
   typeof InvokeOperationResponseDecision
@@ -59,7 +59,7 @@ export type InvokeOperationResponse = {
    */
   tier: InvokeOperationResponseTier;
   /**
-   * The approval decision the policy resolved to.
+   * The decision the approval rules resolved to.
    */
   decision: InvokeOperationResponseDecision;
   /**

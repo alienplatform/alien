@@ -16,18 +16,19 @@ let value: OperationsPluginOperation = {
   outputSchema: {},
   timeoutSeconds: 463935,
   retries: {
-    maxAttempts: 804051,
-    intervalSeconds: 912712,
+    maxAttempts: 205100,
+    intervalSeconds: 659570,
   },
   verification: {
     changes: "<value>",
     pollOperation: "<value>",
     pollParamsFromResult: {
       "key": "<value>",
+      "key1": "<value>",
     },
     successField: "<value>",
     successValue: "<value>",
-    timeoutSeconds: 61821,
+    timeoutSeconds: 554324,
   },
   sensitiveOutput: {
     kind: "redact",
@@ -38,6 +39,7 @@ let value: OperationsPluginOperation = {
   requiredPermissions: [
     "<value 1>",
     "<value 2>",
+    "<value 3>",
   ],
   permissions: {
     azure: [
@@ -45,21 +47,7 @@ let value: OperationsPluginOperation = {
       "<value 2>",
       "<value 3>",
     ],
-    aws: [
-      {
-        effect: "Deny",
-        actions: [],
-        resources: [
-          "<value 1>",
-          "<value 2>",
-          "<value 3>",
-        ],
-        condition: {
-          "key": {},
-        },
-        reason: "<value>",
-      },
-    ],
+    aws: [],
     gcp: [],
   },
 };
