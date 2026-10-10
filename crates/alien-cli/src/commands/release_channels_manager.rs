@@ -6,7 +6,7 @@ use alien_manager_api::types::{
     CreateReleaseChannelRequest, DeploymentRoutingResponse, PromoteReleaseRequest,
     ReleaseChannelResponse, SetDeploymentChannelRequest, SetDeploymentPinRequest,
 };
-use alien_manager_api::SdkResultExtReadingBody as _;
+use alien_manager_api::SdkResultExt as _;
 
 use crate::error::{ErrorData, Result};
 use crate::output::print_json;
@@ -66,7 +66,7 @@ pub async fn list_channels(client: &alien_manager_api::Client, json: bool) -> Re
         .list_manager_release_channels()
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(api_failed("listing release channels"))?
         .into_inner();
@@ -104,7 +104,7 @@ pub async fn create_channel(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(api_failed(format!("creating channel '{name}'")))?
         .into_inner();
@@ -117,7 +117,7 @@ pub async fn delete_channel(client: &alien_manager_api::Client, name: &str) -> R
         .name(name)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(api_failed(format!("deleting channel '{name}'")))?;
     println!("{}", success_line(&format!("Deleted channel {name}.")));
@@ -138,7 +138,7 @@ pub async fn promote(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(api_failed(format!(
             "promoting {release_id} to channel '{channel}'"
@@ -161,7 +161,7 @@ pub async fn set_channel(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(api_failed(format!(
             "moving deployment '{deployment_id}' to channel '{channel}'"
@@ -184,7 +184,7 @@ pub async fn pin(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(api_failed(format!("pinning deployment '{deployment_id}'")))?
         .into_inner();

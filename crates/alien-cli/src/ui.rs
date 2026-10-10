@@ -677,7 +677,7 @@ mod event_tests {
                 .to_string(),
             )
             .expect("test response should build");
-        let error = alien_manager_api::convert_sdk_error_reading_body(
+        let error = alien_manager_api::convert_sdk_error(
             alien_manager_api::Error::UnexpectedResponse(reqwest::Response::from(response)),
         )
         .await;

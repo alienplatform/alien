@@ -14,7 +14,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
-use alien_manager_api::SdkResultExtReadingBody as _;
+use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
@@ -758,7 +758,7 @@ async fn ensure_manager_channel(manager: &ManagerContext, channel: &str) -> Resu
         .list_manager_release_channels()
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ApiRequestFailed {
             message: "listing release channels".to_string(),
@@ -800,7 +800,7 @@ async fn create_manager_release(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create release".to_string(),

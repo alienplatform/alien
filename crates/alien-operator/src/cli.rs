@@ -21,6 +21,7 @@ use alien_core::{
     DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::SdkResultExt as _;
 use clap::{Parser, ValueEnum};
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -1126,13 +1127,15 @@ async fn initialize_with_manager(
         builder = builder.body_map(|b| b.setup_method(setup_method.to_string()));
     }
 
-    let response = builder
-        .send()
-        .await
-        .map_err(alien_manager_api::convert_sdk_error)
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to call initialize endpoint".to_string(),
-        })?;
+    let response =
+        builder
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to call initialize endpoint".to_string(),
+            })?;
 
     let init_response = response.into_inner();
 

@@ -8,7 +8,6 @@ use alien_core::DeploymentStatus;
 use alien_error::Context;
 use alien_manager_api::types::{DeploymentResponse, ReleaseResponse, StackByPlatform};
 use alien_manager_api::SdkResultExt as _;
-use alien_manager_api::SdkResultExtReadingBody as _;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
@@ -553,6 +552,7 @@ async fn list_releases_task(client: &alien_manager_api::Client, json: bool) -> R
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "listing releases".to_string(),
             url: None,
@@ -596,7 +596,7 @@ async fn get_release_task(client: &alien_manager_api::Client, id: &str, json: bo
         .id(id)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ApiRequestFailed {
             message: format!("fetching release '{id}'"),
@@ -609,6 +609,7 @@ async fn get_release_task(client: &alien_manager_api::Client, id: &str, json: bo
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "listing deployments for rollout".to_string(),
             url: None,

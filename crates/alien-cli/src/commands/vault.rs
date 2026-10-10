@@ -190,6 +190,7 @@ async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<S
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to list deployments from dev server".to_string(),
             url: None,

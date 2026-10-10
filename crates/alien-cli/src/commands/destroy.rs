@@ -154,6 +154,7 @@ async fn resolve_destroy_target(
             .send()
             .await
             .into_sdk_error()
+            .await
             .context(ErrorData::ConfigurationError {
                 message: "Failed to resolve the deployment token's target".to_string(),
             })?
@@ -379,6 +380,7 @@ async fn resolve_untracked_name(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to resolve deployment '{name}'"),
         })?

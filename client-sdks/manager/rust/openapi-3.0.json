@@ -55,46 +55,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "The deployment, release, or binding is not eligible for remote access",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlienError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication is required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlienError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The caller cannot resolve bindings for this deployment",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlienError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The deployment, release, or binding was not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlienError"
-                }
-              }
-            }
           }
         },
         "security": [
@@ -131,26 +91,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid command",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -182,16 +122,6 @@
                 }
               }
             }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -217,26 +147,6 @@
         "responses": {
           "200": {
             "description": "Lease released successfully"
-          },
-          "404": {
-            "description": "Lease not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -266,26 +176,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommandStatusResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Command not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -319,26 +209,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommandPayloadResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Command payload not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -376,26 +246,6 @@
         "responses": {
           "200": {
             "description": "Payload stored successfully"
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -431,36 +281,6 @@
         "responses": {
           "200": {
             "description": "Response submitted successfully"
-          },
-          "400": {
-            "description": "Invalid command or state",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Command not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       }
@@ -500,36 +320,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UploadCompleteResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid command or state",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Command not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -659,9 +449,6 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Deployment group not found"
           }
         },
         "security": [
@@ -698,9 +485,6 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "Deployment group not found"
           }
         },
         "security": [
@@ -758,12 +542,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
           }
         }
       },
@@ -794,15 +572,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
           }
         }
       }
@@ -834,15 +603,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Not found"
           }
         }
       }
@@ -1021,15 +781,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Not found"
           }
         }
       }
@@ -1061,15 +812,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Not found"
           }
         }
       }
@@ -1198,15 +940,6 @@
         "responses": {
           "200": {
             "description": "Redeploy requested"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Not found"
           }
         }
       }
@@ -1231,15 +964,6 @@
         "responses": {
           "200": {
             "description": "Retry requested"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Not found"
           }
         }
       }
@@ -1415,15 +1139,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Deployment or secret not found"
           }
         },
         "security": [
@@ -1486,15 +1201,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Deployment not found"
           }
         },
         "security": [
@@ -1547,15 +1253,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Deployment not found"
           }
         },
         "security": [
@@ -1740,9 +1437,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
           }
         },
         "security": [
@@ -1801,9 +1495,6 @@
                 }
               }
             }
-          },
-          "404": {
-            "description": "No releases found"
           }
         },
         "security": [
@@ -1837,16 +1528,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReleaseResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Release not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlienError"
                 }
               }
             }
@@ -1943,21 +1624,6 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Bad request"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Forbidden"
-          },
-          "404": {
-            "description": "Deployment group or release not found"
-          },
-          "409": {
-            "description": "Deployment name conflict, or the current release cannot be read to resolve a gate answer"
           }
         }
       }

@@ -66,6 +66,7 @@ async fn whoami_task_dev(args: WhoamiArgs, port: u16) -> Result<()> {
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to get local manager identity".to_string(),
             url: Some(format!("{base_url}/v1/whoami")),

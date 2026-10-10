@@ -27,139 +27,76 @@ include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
 use alien_error::{AlienError, GenericError, HumanLayerPresentation};
 
 /// Extension trait for converting manager SDK results to `AlienError`.
+///
+/// Async because it reads the body of an error response. The manager answers
+/// every failure with an Alien error JSON body, and the spec this client is
+/// generated from declares no error responses (see
+/// `client-sdks/manager/scripts/fix-openapi.mjs`), so every error status
+/// arrives as `Error::UnexpectedResponse` with its body unread. Reading it keeps
+/// the server's code, message, hint and source instead of "Unexpected response".
 pub trait SdkResultExt<T> {
     /// Convert SDK result to `AlienError` result, preserving API error details.
-    fn into_sdk_error(self) -> Result<T, AlienError<GenericError>>;
-}
-
-/// Async counterpart for operations whose OpenAPI schema does not describe
-/// every error status. Progenitor leaves those response bodies unread, so an
-/// async adapter is required to preserve the structured Alien error payload.
-pub trait SdkResultExtReadingBody<T> {
-    fn into_sdk_error_reading_body(
+    fn into_sdk_error(
         self,
     ) -> impl std::future::Future<Output = Result<T, AlienError<GenericError>>> + Send;
 }
 
-impl<T: Send> SdkResultExtReadingBody<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
-    fn into_sdk_error_reading_body(
+impl<T: Send> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
+    fn into_sdk_error(
         self,
     ) -> impl std::future::Future<Output = Result<ResponseValue<T>, AlienError<GenericError>>> + Send
     {
         async move {
             match self {
                 Ok(response) => Ok(response),
-                Err(error) => Err(convert_sdk_error_reading_body(error).await),
+                Err(error) => Err(convert_sdk_error(error).await),
             }
         }
     }
 }
 
-impl<T: Send> SdkResultExtReadingBody<ResponseValue<T>>
-    for Result<ResponseValue<T>, Error<types::AlienError>>
-{
-    fn into_sdk_error_reading_body(
-        self,
-    ) -> impl std::future::Future<Output = Result<ResponseValue<T>, AlienError<GenericError>>> + Send
-    {
-        async move {
-            match self {
-                Ok(response) => Ok(response),
-                Err(error) => Err(convert_typed_sdk_error_reading_body(error).await),
-            }
-        }
-    }
-}
-
-impl<T> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
-    fn into_sdk_error(self) -> Result<ResponseValue<T>, AlienError<GenericError>> {
-        self.map_err(convert_sdk_error)
-    }
-}
-
-/// Convert a progenitor SDK error to `AlienError`, reading the response body
-/// of error statuses so structured Alien errors returned by the manager
-/// (code, message, hint, retryable) survive the round-trip instead of
-/// collapsing into a generic "Unexpected response" error.
+/// Convert a progenitor SDK error to `AlienError`, preserving all details.
 ///
-/// Async because reading the response body requires awaiting; falls back to
-/// [`convert_sdk_error`] semantics when the body is not an Alien error payload.
-pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<GenericError> {
+/// For an error status it reads the response body, so a structured Alien
+/// error returned by the manager survives the round-trip. A body that is not
+/// an Alien error (a proxy's HTML page) gives an `UNEXPECTED_RESPONSE` error
+/// that keeps the status, so retry decisions still work.
+pub async fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
     match err {
-        Error::UnexpectedResponse(response) => {
-            convert_unexpected_response_reading_body(response).await
-        }
-        other => convert_sdk_error(other),
+        Error::UnexpectedResponse(response) => convert_unexpected_response(response).await,
+        other => convert_sdk_error_without_body(other),
     }
 }
 
-async fn convert_typed_sdk_error_reading_body(
-    err: Error<types::AlienError>,
-) -> AlienError<GenericError> {
-    match err {
-        Error::ErrorResponse(response) => convert_typed_error_response(response),
-        Error::UnexpectedResponse(response) => {
-            convert_unexpected_response_reading_body(response).await
-        }
-        other => convert_sdk_error(other.into_untyped()),
-    }
-}
-
-fn convert_typed_error_response(
-    response: ResponseValue<types::AlienError>,
-) -> AlienError<GenericError> {
-    let status = response.status().as_u16();
-    let request_id = response
-        .headers()
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    let api_error = response.into_inner();
-    let message = String::from(api_error.message);
-    let source = api_error
-        .source
-        .and_then(|value| serde_json::from_value::<AlienError<GenericError>>(value).ok())
-        .map(Box::new);
-    let http_status_code = api_error
-        .http_status_code
-        .and_then(|value| u16::try_from(value).ok())
-        .filter(|value| (100..=599).contains(value))
-        .or(Some(status));
-
-    AlienError {
-        code: String::from(api_error.code),
-        message: message.clone(),
-        context: context_with_request_id(api_error.context, request_id.as_deref()),
-        hint: api_error.hint,
-        retryable: api_error.retryable,
-        internal: api_error.internal,
-        http_status_code,
-        source,
-        human_layer_presentation: HumanLayerPresentation::Normal,
-        error: Some(GenericError { message }),
-    }
-}
-
-async fn convert_unexpected_response_reading_body(
-    response: reqwest::Response,
-) -> AlienError<GenericError> {
-    let status = response.status().as_u16();
-    let canonical_reason = response
-        .status()
-        .canonical_reason()
-        .unwrap_or("Unknown")
-        .to_string();
+async fn convert_unexpected_response(response: reqwest::Response) -> AlienError<GenericError> {
+    let status = response.status();
     let url = response.url().to_string();
     let header_request_id = response
         .headers()
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let body = response.text().await.unwrap_or_default();
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(read_error) => {
+            let mut error = unexpected_status_error(status, Some(&url));
+            error.source = Some(Box::new(AlienError::new(GenericError {
+                message: reqwest_failure_message("HTTP error response body read", &read_error),
+            })));
+            return error;
+        }
+    };
 
     if let Ok(mut api_error) = serde_json::from_str::<AlienError<GenericError>>(&body) {
         if api_error.http_status_code.is_none() {
-            api_error.http_status_code = Some(status);
+            api_error.http_status_code = Some(status.as_u16());
+        }
+        // GENERIC_ERROR is the unclassified error: it is always sent with
+        // `retryable: false`, including a server's sanitized "Internal server
+        // error" that hides a retryable cause (a database error, say). Its
+        // flag is no retry decision, so the HTTP status decides.
+        if api_error.code == "GENERIC_ERROR" {
+            api_error.retryable = is_retryable_http_status(status.as_u16());
         }
         let body_request_id = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
@@ -171,21 +108,35 @@ async fn convert_unexpected_response_reading_body(
         return api_error;
     }
 
+    unexpected_status_error(status, Some(&url))
+}
+
+/// An error for an HTTP status whose body carried no Alien error.
+fn unexpected_status_error(
+    status: reqwest::StatusCode,
+    url: Option<&str>,
+) -> AlienError<GenericError> {
+    let code = status.as_u16();
+    let mut context = serde_json::json!({ "status": code });
+    if let Some(url) = url {
+        context["url"] = serde_json::Value::String(url.to_string());
+    }
     AlienError {
         code: "UNEXPECTED_RESPONSE".to_string(),
-        message: format!("Unexpected response: {} {}", status, canonical_reason),
-        context: Some(serde_json::json!({
-            "status": status,
-            "url": url,
-        })),
+        message: format!(
+            "Unexpected response: {} {}",
+            code,
+            status.canonical_reason().unwrap_or("Unknown")
+        ),
+        context: Some(context),
         hint: None,
-        retryable: is_retryable_http_status(status),
+        retryable: is_retryable_http_status(code),
         internal: false,
-        http_status_code: Some(status),
+        http_status_code: Some(code),
         source: None,
         human_layer_presentation: HumanLayerPresentation::Normal,
         error: Some(GenericError {
-            message: format!("Unexpected response status: {}", status),
+            message: format!("Unexpected response status: {}", code),
         }),
     }
 }
@@ -219,32 +170,12 @@ pub fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 425 | 429) || (500..=599).contains(&status)
 }
 
-/// Convert a progenitor SDK error to AlienError, preserving all details.
-pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
+/// Convert an SDK error that carries no unread response body.
+fn convert_sdk_error_without_body(err: Error<()>) -> AlienError<GenericError> {
     match err {
-        Error::ErrorResponse(response) => {
-            let status = response.status().as_u16();
-            AlienError {
-                code: "UNEXPECTED_RESPONSE".to_string(),
-                message: format!(
-                    "Unexpected response: {} {}",
-                    status,
-                    response.status().canonical_reason().unwrap_or("Unknown")
-                ),
-                context: Some(serde_json::json!({
-                    "status": status,
-                })),
-                hint: None,
-                retryable: is_retryable_http_status(status),
-                internal: false,
-                http_status_code: Some(status),
-                source: None,
-                human_layer_presentation: HumanLayerPresentation::Normal,
-                error: Some(GenericError {
-                    message: format!("Unexpected response status: {}", status),
-                }),
-            }
-        }
+        // The generation spec declares no error statuses, so this only covers a
+        // body-less error type; there is no body left to read.
+        Error::ErrorResponse(response) => unexpected_status_error(response.status(), None),
         Error::CommunicationError(reqwest_err) => {
             let retryable =
                 reqwest_err.is_connect() || reqwest_err.is_timeout() || reqwest_err.is_request();
@@ -334,28 +265,7 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
             }
         }
         Error::UnexpectedResponse(response) => {
-            let status = response.status().as_u16();
-            AlienError {
-                code: "UNEXPECTED_RESPONSE".to_string(),
-                message: format!(
-                    "Unexpected response: {} {}",
-                    status,
-                    response.status().canonical_reason().unwrap_or("Unknown")
-                ),
-                context: Some(serde_json::json!({
-                    "status": status,
-                    "url": response.url().to_string(),
-                })),
-                hint: None,
-                retryable: is_retryable_http_status(status),
-                internal: false,
-                http_status_code: Some(status),
-                source: None,
-                human_layer_presentation: HumanLayerPresentation::Normal,
-                error: Some(GenericError {
-                    message: format!("Unexpected response status: {}", status),
-                }),
-            }
+            unexpected_status_error(response.status(), Some(response.url().as_str()))
         }
         Error::Custom(msg) => AlienError {
             code: "SDK_HOOK_ERROR".to_string(),
@@ -411,6 +321,7 @@ fn build_reqwest_source(reqwest_err: &reqwest::Error) -> Option<Box<AlienError<G
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     fn unexpected_response<E>(status: u16, body: &str) -> Error<E> {
         let response = http::Response::builder()
@@ -433,7 +344,7 @@ mod tests {
         })
         .to_string();
 
-        let error = convert_sdk_error_reading_body(unexpected_response(400, &body)).await;
+        let error = convert_sdk_error(unexpected_response(400, &body)).await;
 
         assert_eq!(error.code, "PUBLIC_SUBDOMAIN_REQUIRES_CUSTOM_DOMAIN");
         assert_eq!(
@@ -450,49 +361,53 @@ mod tests {
         assert!(!error.internal);
     }
 
+    /// A server hides an internal error behind GENERIC_ERROR "Internal server
+    /// error" with `retryable: false`, whatever the cause. A transient database
+    /// failure must stay retryable for callers like `alien deployments wait`.
     #[tokio::test]
-    async fn typed_error_response_preserves_alien_error_and_request_id() {
-        let api_error = serde_json::from_value::<types::AlienError>(serde_json::json!({
-            "code": "FORBIDDEN",
-            "message": "Binding access denied",
-            "context": { "deploymentId": "dep_123" },
-            "hint": "Use the assigned manager",
+    async fn an_unclassified_server_error_is_retryable_by_its_status() {
+        let sanitized = |status: u16| {
+            serde_json::json!({
+                "code": "GENERIC_ERROR",
+                "message": "Internal server error",
+                "retryable": false,
+                "internal": false,
+                "httpStatusCode": status,
+            })
+            .to_string()
+        };
+
+        let error = convert_sdk_error(unexpected_response(500, &sanitized(500))).await;
+        assert_eq!(error.code, "GENERIC_ERROR");
+        assert_eq!(error.message, "Internal server error");
+        assert_eq!(error.http_status_code, Some(500));
+        assert!(error.retryable);
+
+        let error = convert_sdk_error(unexpected_response(400, &sanitized(400))).await;
+        assert!(!error.retryable);
+    }
+
+    /// A classified error keeps the server's decision, even on a 5xx status.
+    #[tokio::test]
+    async fn a_classified_server_error_keeps_its_own_retryable_flag() {
+        let body = serde_json::json!({
+            "code": "DEPLOYMENT_LEASE_LOST",
+            "message": "another session holds the lease",
             "retryable": false,
             "internal": false,
-            "httpStatusCode": 403,
-            "source": {
-                "code": "GENERIC_ERROR",
-                "message": "policy rejected request",
-                "retryable": false,
-                "internal": false
-            }
-        }))
-        .expect("typed API error should deserialize");
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("x-request-id", "req_header_123".parse().unwrap());
-        let response = ResponseValue::new(api_error, reqwest::StatusCode::FORBIDDEN, headers);
+            "httpStatusCode": 500,
+        })
+        .to_string();
 
-        let error = convert_typed_sdk_error_reading_body(Error::ErrorResponse(response)).await;
+        let error = convert_sdk_error(unexpected_response(500, &body)).await;
 
-        assert_eq!(error.code, "FORBIDDEN");
-        assert_eq!(error.message, "Binding access denied");
-        assert_eq!(error.http_status_code, Some(403));
-        assert_eq!(error.hint.as_deref(), Some("Use the assigned manager"));
-        assert_eq!(error.context.as_ref().unwrap()["deploymentId"], "dep_123");
-        assert_eq!(
-            error.context.as_ref().unwrap()["requestId"],
-            "req_header_123"
-        );
-        assert_eq!(error.source.as_ref().unwrap().code, "GENERIC_ERROR");
+        assert_eq!(error.code, "DEPLOYMENT_LEASE_LOST");
         assert!(!error.retryable);
-        assert!(!error.internal);
     }
 
     #[tokio::test]
     async fn reading_body_falls_back_to_generic_error_for_non_alien_payloads() {
-        let error =
-            convert_sdk_error_reading_body(unexpected_response(502, "<html>bad gateway</html>"))
-                .await;
+        let error = convert_sdk_error(unexpected_response(502, "<html>bad gateway</html>")).await;
 
         assert_eq!(error.code, "UNEXPECTED_RESPONSE");
         assert_eq!(error.message, "Unexpected response: 502 Bad Gateway");
@@ -502,30 +417,20 @@ mod tests {
 
     #[tokio::test]
     async fn reading_body_classifies_unstructured_rate_limits_as_retryable() {
-        let error = convert_sdk_error_reading_body(unexpected_response(429, "rate limited")).await;
+        let error = convert_sdk_error(unexpected_response(429, "rate limited")).await;
 
         assert_eq!(error.code, "UNEXPECTED_RESPONSE");
         assert_eq!(error.http_status_code, Some(429));
         assert!(error.retryable);
     }
 
-    #[tokio::test]
-    async fn typed_endpoint_classifies_undocumented_rate_limits_as_retryable() {
-        let error = convert_typed_sdk_error_reading_body(unexpected_response::<types::AlienError>(
-            429,
-            "rate limited",
-        ))
-        .await;
-
-        assert_eq!(error.code, "UNEXPECTED_RESPONSE");
-        assert_eq!(error.http_status_code, Some(429));
-        assert!(error.retryable);
-    }
-
-    #[tokio::test]
-    async fn generated_typed_endpoint_preserves_malformed_server_error_status() {
-        use std::io::{Read, Write};
-
+    /// Serves exactly one HTTP response on a loopback port and returns its base URL.
+    /// `head` is the status line plus any extra header lines, each ending in CRLF.
+    fn serve_one_response(head: &str, body: &str) -> (String, std::thread::JoinHandle<()>) {
+        let response = format!(
+            "{head}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
             .expect("test server should bind to a loopback port");
         let address = listener
@@ -540,13 +445,20 @@ mod tests {
                 .read(&mut request)
                 .expect("test server should read the SDK request");
             stream
-                .write_all(
-                    b"HTTP/1.1 500 Internal Server Error\r\ncontent-type: text/html\r\ncontent-length: 17\r\nconnection: close\r\n\r\nupstream exploded",
-                )
-                .expect("test server should return its malformed error body");
+                .write_all(response.as_bytes())
+                .expect("test server should write its response");
         });
+        (format!("http://{address}"), server)
+    }
 
-        let sdk_error = Client::new(&format!("http://{address}"))
+    #[tokio::test]
+    async fn generated_endpoint_preserves_malformed_server_error_status() {
+        let (base_url, server) = serve_one_response(
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-type: text/html\r\n",
+            "upstream exploded",
+        );
+
+        let error = Client::new(&base_url)
             .resolve_binding()
             .body(types::ResolveBindingRequest {
                 deployment_id: "dep_test".to_string(),
@@ -555,19 +467,71 @@ mod tests {
             })
             .send()
             .await
+            .into_sdk_error()
+            .await
             .expect_err("the generated SDK should return the server error");
         server.join().expect("test server should stop cleanly");
-
-        assert!(matches!(
-            &sdk_error,
-            Error::UnexpectedResponse(response)
-                if response.status() == reqwest::StatusCode::INTERNAL_SERVER_ERROR
-        ));
-        let error = convert_typed_sdk_error_reading_body(sdk_error).await;
 
         assert_eq!(error.code, "UNEXPECTED_RESPONSE");
         assert_eq!(error.http_status_code, Some(500));
         assert!(error.retryable);
+    }
+
+    /// Every manager route answers failures with an Alien error body. The
+    /// generated client must hand that error to callers for any status, whether
+    /// or not the route's OpenAPI annotation lists it: GET /v1/deployments/{id}
+    /// lists 404 but not 400.
+    #[tokio::test]
+    async fn generated_endpoint_returns_the_server_error_for_listed_and_unlisted_statuses() {
+        let (base_url, server) = serve_one_response(
+            "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nx-request-id: req_400\r\n",
+            concat!(
+            r#"{"code":"DEPLOYMENT_CONTEXT_UNAVAILABLE","message":"Failed to load deployment context","retryable":false,"internal":false,"httpStatusCode":400,"#,
+            r#""source":{"code":"HOSTNAME_CONFLICT","message":"Hostname 'a.example.com' is used by 'd1' and 'd2'","retryable":false,"internal":false,"httpStatusCode":400}}"#,
+            ),
+        );
+        let error = Client::new(&base_url)
+            .get_deployment()
+            .id("dep_test")
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .expect_err("a 400 should be an error");
+        server.join().expect("test server should stop cleanly");
+
+        assert_eq!(error.code, "DEPLOYMENT_CONTEXT_UNAVAILABLE");
+        assert_eq!(error.message, "Failed to load deployment context");
+        assert_eq!(error.http_status_code, Some(400));
+        assert!(!error.retryable);
+        assert_eq!(error.context.as_ref().unwrap()["requestId"], "req_400");
+        let source = error
+            .source
+            .as_ref()
+            .expect("the source error should survive");
+        assert_eq!(source.code, "HOSTNAME_CONFLICT");
+        assert_eq!(
+            source.message,
+            "Hostname 'a.example.com' is used by 'd1' and 'd2'"
+        );
+
+        let (base_url, server) = serve_one_response(
+            "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\n",
+            r#"{"code":"DEPLOYMENT_NOT_FOUND","message":"Deployment 'dep_test' not found","retryable":false,"internal":false,"httpStatusCode":404}"#,
+        );
+        let error = Client::new(&base_url)
+            .get_deployment()
+            .id("dep_test")
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .expect_err("a 404 should be an error");
+        server.join().expect("test server should stop cleanly");
+
+        assert_eq!(error.code, "DEPLOYMENT_NOT_FOUND");
+        assert_eq!(error.message, "Deployment 'dep_test' not found");
+        assert_eq!(error.http_status_code, Some(404));
     }
 
     #[test]
@@ -594,7 +558,7 @@ mod tests {
             .await
             .expect_err("localhost discard port should refuse the connection");
 
-        let error = super::convert_sdk_error(Error::CommunicationError(reqwest_err));
+        let error = super::convert_sdk_error(Error::CommunicationError(reqwest_err)).await;
 
         assert_eq!(error.code, "COMMUNICATION_ERROR");
         assert!(error
@@ -611,7 +575,7 @@ mod tests {
         let body = br#"{"accessToken":"sensitive-token","unexpected":true}"#.to_vec();
         let parse_error = serde_json::from_slice::<serde_json::Value>(b"{")
             .expect_err("fixture JSON should be invalid");
-        let error = super::convert_sdk_error(Error::InvalidResponsePayload(
+        let error = super::convert_sdk_error_without_body(Error::InvalidResponsePayload(
             body.clone().into(),
             parse_error,
         ));

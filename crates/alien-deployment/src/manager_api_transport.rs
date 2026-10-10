@@ -10,7 +10,7 @@
 
 use alien_core::{DeploymentModel, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
-use alien_manager_api::{Client as ManagerClient, SdkResultExt, SdkResultExtReadingBody as _};
+use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -87,9 +87,13 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .send()
             .await
             .into_sdk_error()
-            .context(alien_error::GenericError {
-                message: "Failed to renew deployment lease via manager API".to_string(),
-            })?;
+            .await
+            // Inherits retryable: the renewal loop retries a retryable failure until the
+            // lease deadline and treats any other failure as a lost lease.
+            .context(crate::ErrorData::ManagerRequestFailed {
+                message: "renew deployment lease".to_string(),
+            })
+            .map_err(AlienError::into_generic)?;
         Ok(())
     }
 
@@ -164,7 +168,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .send()
             .await
             // Reads the body so a structured manager error keeps its own retryable flag.
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             // Inherits retryable: the runner retries a checkpoint only on a retryable error,
             // and a network error reaching the manager must not fail the deployment.
@@ -516,7 +520,8 @@ pub async fn acquire_setup_delete_deployment(
             })
             .send()
             .await
-            .into_sdk_error();
+            .into_sdk_error()
+            .await;
         let resp = match response {
             Ok(response) => response,
             Err(error) => {
@@ -528,7 +533,8 @@ pub async fn acquire_setup_delete_deployment(
                         .id(deployment_id)
                         .send()
                         .await
-                        .into_sdk_error();
+                        .into_sdk_error()
+                        .await;
                     if let Err(lookup_error) = lookup {
                         if is_missing_deployment_response(&lookup_error) {
                             return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
@@ -627,7 +633,7 @@ async fn acquire_deployment_with_statuses(
             })
             .send()
             .await
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             .context(alien_error::GenericError {
                 message: "Failed to acquire sync lock".to_string(),
@@ -777,7 +783,7 @@ pub async fn final_reconcile(
             })
             .send()
             .await
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             .map(|_| ())
     }
@@ -1045,6 +1051,51 @@ mod tests {
 
         assert!(!error.retryable, "{error:?}");
         assert_eq!(error.http_status_code, Some(500));
+    }
+
+    async fn renew_against(base_url: &str) -> AlienError {
+        ManagerApiTransport::new(ManagerClient::new(base_url), "session-1".into())
+            .renew_lease("deployment-1")
+            .await
+            .expect_err("the renewal must fail")
+    }
+
+    /// The renewal loop retries a retryable failure until the lease deadline, so a network
+    /// blip reaching the manager must not end the deployment as a lost lease.
+    #[tokio::test]
+    async fn an_unreachable_manager_fails_the_renewal_as_retryable() {
+        // Bound and released: nothing listens, so the request is refused.
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a loopback port");
+
+        let error = renew_against(&format!("http://{address}")).await;
+
+        assert!(error.retryable, "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_renewal_the_manager_rejects_is_not_retried() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/renew");
+                then.status(500).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_LEASE_LOST",
+                    "message": "another session holds the lease",
+                    "retryable": false,
+                    "internal": false,
+                }));
+            })
+            .await;
+
+        let error = renew_against(&server.base_url()).await;
+
+        assert!(!error.retryable, "{error:?}");
+        assert_eq!(
+            error.source.as_ref().map(|source| source.code.as_str()),
+            Some("DEPLOYMENT_LEASE_LOST")
+        );
     }
 
     fn terminal_result(state: &DeploymentState) -> crate::Result<RunnerResult> {
@@ -2112,7 +2163,7 @@ pub async fn release_deployment(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
     {
         if is_missing_deployment_response(&error) {

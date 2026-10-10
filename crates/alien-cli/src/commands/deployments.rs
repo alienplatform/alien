@@ -18,7 +18,6 @@ use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFI
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{DeleteDeploymentAction, DeploymentResponse};
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
-use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
     CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
@@ -1163,6 +1162,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "listing deployments".to_string(),
             url: None,
@@ -1722,6 +1722,7 @@ async fn delete_deployment_task(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "deleting deployment".to_string(),
             url: None,
@@ -1765,7 +1766,7 @@ async fn retry_deployment_task(
         .id(&deployment.id)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ApiRequestFailed {
             message: "retrying deployment".to_string(),
@@ -1814,7 +1815,7 @@ async fn redeploy_deployment_task(
         .id(&deployment.id)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ApiRequestFailed {
             message: "redeploying deployment".to_string(),
