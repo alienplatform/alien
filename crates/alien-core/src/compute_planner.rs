@@ -1094,6 +1094,35 @@ mod tests {
     }
 
     #[test]
+    fn pin_must_leave_host_capacity_for_one_replica() {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .cpu = ResourceSpec {
+            min: "4".into(),
+            desired: "4".into(),
+        };
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools":{"general":{"mode":"fixed","machines":1,"machine":"t3.xlarge"}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0]
+                .errors
+                .iter()
+                .any(|error| error.contains("host resources")),
+            "{:?}",
+            plan.pools[0].errors
+        );
+    }
+
+    #[test]
     fn valid_pin_does_not_require_automatic_recommendation_headroom() {
         let machine = instance_catalog::catalog_for_platform(Platform::Gcp)
             .into_iter()
