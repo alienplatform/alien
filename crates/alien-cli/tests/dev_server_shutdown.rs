@@ -20,19 +20,41 @@ impl Drop for Server {
     }
 }
 
-fn shutdown(signal: &str) {
+fn shutdown(signal: &str, server_only: bool) {
     let directory = TempDir::new().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     let status_file = directory.path().join("status.json");
     let log = fs::File::create(directory.path().join("server.log")).unwrap();
+    if !server_only {
+        let stack = alien_core::Stack::new("shutdown-test".to_string())
+            .add(
+                alien_core::Storage::new("data".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .permissions(alien_core::PermissionsConfig {
+                profiles: Default::default(),
+                management: alien_core::ManagementPermissions::Auto,
+            })
+            .build();
+        fs::write(
+            directory.path().join("alien.json"),
+            serde_json::to_vec(&stack).unwrap(),
+        )
+        .unwrap();
+    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_alien"));
+    command
+        .current_dir(directory.path())
+        .args(["dev", "--status-file"])
+        .arg(&status_file);
+    if server_only {
+        command.arg("server");
+    }
     let mut server = Server(
-        Command::new(env!("CARGO_BIN_EXE_alien"))
-            .current_dir(directory.path())
-            .args(["dev", "--status-file"])
-            .arg(&status_file)
-            .args(["server", "--port", &port.to_string()])
+        command
+            .args(["--port", &port.to_string()])
             .args([
                 "--workspace",
                 "example",
@@ -87,10 +109,20 @@ fn shutdown(signal: &str) {
 
 #[test]
 fn dev_server_sigint_shuts_down_cleanly() {
-    shutdown("-INT");
+    shutdown("-INT", true);
 }
 
 #[test]
 fn dev_server_sigterm_shuts_down_cleanly() {
-    shutdown("-TERM");
+    shutdown("-TERM", true);
+}
+
+#[test]
+fn dev_session_sigint_shuts_down_cleanly() {
+    shutdown("-INT", false);
+}
+
+#[test]
+fn dev_session_sigterm_shuts_down_cleanly() {
+    shutdown("-TERM", false);
 }
