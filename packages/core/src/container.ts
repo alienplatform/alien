@@ -167,6 +167,9 @@ export class Container extends ResourceBuilder {
       this._config.cpu = value
       if (this._config.resourceChoices) this._config.resourceChoices.cpu = undefined
     }
+    if (!this._config.resourceChoices?.cpu && !this._config.resourceChoices?.memory) {
+      this._config.resourceChoices = undefined
+    }
     return this
   }
 
@@ -190,6 +193,9 @@ export class Container extends ResourceBuilder {
     } else {
       this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
       if (this._config.resourceChoices) this._config.resourceChoices.memory = undefined
+    }
+    if (!this._config.resourceChoices?.cpu && !this._config.resourceChoices?.memory) {
+      this._config.resourceChoices = undefined
     }
     return this
   }

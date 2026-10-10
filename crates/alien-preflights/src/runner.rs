@@ -548,6 +548,64 @@ mod setup_update_authorization_tests {
         }
     }
 
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn removed_container_allocations_do_not_block_updates_but_unknown_ids_do() {
+        use alien_core::{
+            ComputeSettings, Container, ContainerResourceSelection, ResourceLifecycle,
+        };
+        let previous = Stack::new("stack".into())
+            .add(
+                Container::new("removed".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let target = empty_stack();
+        let mut config = deployment_config();
+        config.stack_settings.compute = Some(ComputeSettings {
+            pools: Default::default(),
+            containers: [(
+                "removed".into(),
+                ContainerResourceSelection {
+                    cpu: Some(4.into()),
+                    memory: Some("8Gi".into()),
+                },
+            )]
+            .into(),
+        });
+        let mut registry = crate::PreflightRegistry::new();
+        registry.add_mutation(Box::new(crate::mutations::ContainerResourcesMutation));
+        let runner = PreflightRunner::with_registry(registry);
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&previous),
+                None,
+                None,
+            )
+            .await
+            .expect("removed allocation is obsolete");
+        runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &config,
+                &client,
+                Some(&empty_stack()),
+                None,
+                None,
+            )
+            .await
+            .expect_err("unknown allocation still fails");
+    }
+
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
         SetupUpdateAuthorization {
             nonce: "revision".to_string(),
