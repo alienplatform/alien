@@ -582,6 +582,9 @@ mod permission_update_tests {
         #[builder(default)]
         wildcard_grant: bool,
         #[builder(default = "test-secrets")] vault_prefix: &str,
+        /// The name the `"*"` grant uses for the read set; it may be an alias.
+        #[builder(default = "vault/data-read")]
+        wildcard_set: &str,
     ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
         let iam = Arc::new(Mutex::new(Iam::default()));
         for (role, name) in existing {
@@ -599,7 +602,7 @@ mod permission_update_tests {
             .returning(move |_| Ok(mock.clone()));
         let vault = Vault::new("secrets".to_string()).build();
         let consumer_profile = if wildcard_grant {
-            PermissionProfile::new().global(["vault/data-read"])
+            PermissionProfile::new().global([wildcard_set])
         } else {
             PermissionProfile::new().resource("secrets", ["vault/data-read"])
         };
@@ -941,6 +944,25 @@ mod permission_update_tests {
             .unwrap()
             .updates
             .contains_key("secrets"));
+    }
+
+    /// A set named by its alias resolves to the same set the stack-level policy holds.
+    #[tokio::test]
+    async fn aliased_wildcard_grant_is_left_to_the_stack_level_policy() {
+        let (executor, state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[])
+            .remove_consumer(false)
+            .wildcard_grant(true)
+            .wildcard_set("vault/data_read")
+            .call();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.count("put "), 0, "calls: {:?}", iam.calls);
+        assert!(iam.policies(CONSUMER_ROLE).is_empty());
     }
 
     /// The stack-level policy reaches only names under the stack prefix, so a vault outside it

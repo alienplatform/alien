@@ -1469,7 +1469,11 @@ impl ResourcePermissionsHelper {
 
         let mut kept = Vec::new();
         for reference in refs {
-            let stack_set = stack_sets.iter().find(|set| set.id == reference.id());
+            // Resolved first: a reference may name its set by an alias, and the stack-level
+            // policy holds resolved sets.
+            let stack_set = reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .and_then(|resolved| stack_sets.iter().find(|set| **set == resolved));
             let granted = match stack_set {
                 Some(set) if !named_by_resource.is_some_and(|named| named.contains(&reference)) => {
                     let generate = |target| {
@@ -1483,14 +1487,10 @@ impl ResourcePermissionsHelper {
                                 resource_id: Some(resource_id.to_string()),
                             })
                     };
-                    let same_set = reference
-                        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                        .is_some_and(|resolved| &resolved == set);
-                    same_set
-                        && aws_policy_grants(
-                            &generate(BindingTarget::Stack)?,
-                            &generate(BindingTarget::Resource)?,
-                        )
+                    aws_policy_grants(
+                        &generate(BindingTarget::Stack)?,
+                        &generate(BindingTarget::Resource)?,
+                    )
                 }
                 _ => false,
             };
