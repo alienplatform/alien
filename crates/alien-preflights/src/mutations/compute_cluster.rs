@@ -22,6 +22,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 use tracing::{debug, info};
 
 /// Mutation that auto-generates ComputeCluster resources for Container workloads.
@@ -892,7 +893,8 @@ fn default_max_machines(requirements: &WorkloadRequirements) -> u32 {
     min.max(by_cpu).max(by_mem).max(1)
 }
 
-/// Build capacity groups categorized by hardware type.
+/// Build the generated cluster's capacity groups: one per pool its containers run on. A
+/// container's explicit `pool` names its group; otherwise its hardware needs pick one.
 fn build_categorized_capacity_groups(
     containers: &[&Container],
     platform: Platform,
@@ -901,57 +903,32 @@ fn build_categorized_capacity_groups(
 ) -> Result<Vec<CapacityGroup>> {
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => {
-            let mut general: Vec<&Container> = vec![];
-            let mut stateful: Vec<&Container> = vec![];
-            let mut storage: Vec<&Container> = vec![];
-            let mut gpu: Vec<&Container> = vec![];
+            // Installed clusters list the generated groups in this order; keep it so a release
+            // prepares the same setup-owned cluster. Other explicit pools follow by name.
+            const GENERATED_ORDER: [&str; 4] = ["general", "stateful", "storage", "gpu"];
+            let rank = |pool: &str| {
+                GENERATED_ORDER
+                    .iter()
+                    .position(|known| *known == pool)
+                    .unwrap_or(GENERATED_ORDER.len())
+            };
+            let mut pools: BTreeMap<(usize, &str), Vec<&Container>> = BTreeMap::new();
             for c in containers {
-                match needed_capacity_group(c) {
-                    "stateful" => stateful.push(c),
-                    "gpu" => gpu.push(c),
-                    "storage" => storage.push(c),
-                    _ => general.push(c),
-                }
+                let pool = c
+                    .pool
+                    .as_deref()
+                    .unwrap_or_else(|| needed_capacity_group(c));
+                pools.entry((rank(pool), pool)).or_default().push(c);
             }
-            let mut groups = vec![];
-            if !general.is_empty() || (stateful.is_empty() && gpu.is_empty() && storage.is_empty())
-            {
-                groups.push(build_capacity_group_for_id(
-                    "general",
-                    &general,
-                    platform,
-                    needs_nested_virt,
-                    config,
-                )?);
+            if pools.is_empty() {
+                pools.insert((rank("general"), "general"), vec![]);
             }
-            if !stateful.is_empty() {
-                groups.push(build_capacity_group_for_id(
-                    "stateful",
-                    &stateful,
-                    platform,
-                    needs_nested_virt,
-                    config,
-                )?);
-            }
-            if !storage.is_empty() {
-                groups.push(build_capacity_group_for_id(
-                    "storage",
-                    &storage,
-                    platform,
-                    needs_nested_virt,
-                    config,
-                )?);
-            }
-            if !gpu.is_empty() {
-                groups.push(build_capacity_group_for_id(
-                    "gpu",
-                    &gpu,
-                    platform,
-                    needs_nested_virt,
-                    config,
-                )?);
-            }
-            Ok(groups)
+            pools
+                .into_iter()
+                .map(|((_, id), members)| {
+                    build_capacity_group_for_id(id, &members, platform, needs_nested_virt, config)
+                })
+                .collect()
         }
         Platform::Local => Ok(vec![CapacityGroup {
             group_id: "general".to_string(),

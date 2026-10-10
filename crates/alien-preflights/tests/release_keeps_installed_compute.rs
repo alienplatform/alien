@@ -322,3 +322,148 @@ async fn release_without_failure_domain_settings_keeps_installed_zones() {
         "the release must keep the installed spread and zone"
     );
 }
+
+/// A stateless container placed on a pool by name.
+fn pooled_worker(id: &str, pool: &str) -> Container {
+    Container::new(id.to_string())
+        .code(ContainerCode::Image {
+            image: "worker:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.25".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "256Mi".to_string(),
+        })
+        .port(9090)
+        .permissions("app".to_string())
+        .pool(pool.to_string())
+        .build()
+}
+
+/// The database alone, so the generated cluster has only the `stateful` pool, plus `extra`.
+fn database_release(extra: Option<Container>) -> Stack {
+    let mut stack = Stack::new("test-stack".to_string()).add(
+        container("database", "database:1", true),
+        ResourceLifecycle::Live,
+    );
+    if let Some(extra) = extra {
+        stack = stack.add(extra, ResourceLifecycle::Live);
+    }
+    stack
+        .permissions(PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().global(["storage/data-read"]),
+        ))
+        .build()
+}
+
+fn group_ids(prepared: &Stack) -> Vec<&str> {
+    cluster(prepared)
+        .capacity_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect()
+}
+
+/// A release that adds a stateless container to the installed `stateful` pool by name runs it
+/// there, prepares the installed cluster unchanged, and needs no setup. This holds with the
+/// planner's settings (only `stateful`) and with settings that also name an unused `general`.
+#[tokio::test]
+async fn release_adding_a_container_to_an_installed_pool_keeps_the_cluster() {
+    let runner = PreflightRunner::new();
+    let install_stack = database_release(None);
+    let planned = settings_without_failure_domains(&install_stack);
+    let mut with_general = planned.clone();
+    with_general.pools.insert(
+        "general".to_string(),
+        settings_without_failure_domains(&release("database:1")).pools["general"].clone(),
+    );
+
+    for settings in [planned, with_general] {
+        let config = deployment_config(settings);
+        let installed = runner
+            .apply_mutations(
+                install_stack.clone(),
+                &StackState::new(Platform::Aws),
+                &config,
+            )
+            .await
+            .expect("install should prepare");
+        assert_eq!(group_ids(&installed), ["stateful"]);
+
+        let next = runner
+            .apply_mutations(
+                database_release(Some(pooled_worker("worker", "stateful"))),
+                &installed_state(&installed),
+                &config,
+            )
+            .await
+            .expect("the release should prepare");
+        let worker = next.resources["worker"]
+            .config
+            .downcast_ref::<Container>()
+            .expect("worker is a container");
+        assert_eq!(worker.cluster.as_deref(), Some("compute"));
+        assert_eq!(worker.pool.as_deref(), Some("stateful"));
+        assert_eq!(
+            serde_json::to_value(cluster(&next)).unwrap(),
+            serde_json::to_value(cluster(&installed)).unwrap(),
+            "the release must prepare the installed compute cluster"
+        );
+
+        let summary = runner
+            .run_compatibility_checks(&installed, &next, &config, Platform::Aws)
+            .await
+            .expect("compatibility checks should run");
+        assert!(summary.success, "{:?}", errors(&summary));
+    }
+}
+
+/// A fresh install whose containers all name their pool gets exactly those pools.
+#[tokio::test]
+async fn install_creates_the_pools_containers_name() {
+    let stack = database_release(Some(pooled_worker("worker", "apps")));
+    let config = deployment_config(settings_without_failure_domains(&stack));
+    let prepared = PreflightRunner::new()
+        .apply_mutations(stack, &StackState::new(Platform::Aws), &config)
+        .await
+        .expect("install should prepare");
+    assert_eq!(group_ids(&prepared), ["stateful", "apps"]);
+}
+
+/// A release that adds a container on a pool the installation does not have is a compute
+/// change, and is still refused as one.
+#[tokio::test]
+async fn release_adding_a_new_pool_still_needs_setup() {
+    let runner = PreflightRunner::new();
+    let install_stack = database_release(None);
+    let config = deployment_config(settings_without_failure_domains(&install_stack));
+    let installed = runner
+        .apply_mutations(install_stack, &StackState::new(Platform::Aws), &config)
+        .await
+        .expect("install should prepare");
+
+    let release = database_release(Some(pooled_worker("worker", "extra")));
+    let release_config = deployment_config(settings_without_failure_domains(&release));
+    let next = runner
+        .apply_mutations(release, &installed_state(&installed), &release_config)
+        .await
+        .expect("the release should prepare");
+    assert_eq!(group_ids(&next), ["stateful", "extra"]);
+
+    let summary = runner
+        .run_compatibility_checks(&installed, &next, &release_config, Platform::Aws)
+        .await
+        .expect("compatibility checks should run");
+    assert!(!summary.success, "a new pool must need setup");
+    let errors = errors(&summary);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.starts_with("Frozen resource 'compute' was modified")),
+        "{errors:?}"
+    );
+}
