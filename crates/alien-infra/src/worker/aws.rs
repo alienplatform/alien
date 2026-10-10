@@ -312,6 +312,19 @@ impl AwsWorkerController {
         Some(tags)
     }
 
+    fn foreign_function_error(
+        function_name: &str,
+        resource_id: &str,
+        conflict: AlienError<CloudClientErrorData>,
+    ) -> AlienError<ErrorData> {
+        conflict.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Lambda function '{function_name}' already exists and was not created by this worker"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
+    }
+
     fn foreign_domain_error(
         fqdn: &str,
         resource_id: &str,
@@ -389,6 +402,10 @@ pub struct AwsWorkerController {
     /// after a lost response adopts that domain and no other.
     #[serde(default)]
     pub(crate) domain_create_token: Option<String>,
+    /// Token tagged on the Lambda function by its create call, recorded before the call, so a
+    /// retry after a lost response adopts that function and no other.
+    #[serde(default)]
+    pub(crate) function_create_token: Option<String>,
     /// Token tagged on the certificate this worker imports into ACM, recorded before the import
     /// so a retry after a lost response, and the delete, find that certificate and no other.
     #[serde(default)]
@@ -633,6 +650,19 @@ impl AwsWorkerController {
             info!(name=%aws_worker_name, "Configuring Lambda worker to run inside VPC");
         }
 
+        // The create token is saved by a step of its own, after the checks above and before the
+        // step's first call that changes anything. The executor saves state only between steps,
+        // so a token made in the creating step would be lost if the process stopped after Lambda
+        // accepted the call.
+        let Some(create_token) = self.function_create_token.clone() else {
+            self.function_create_token = Some(Uuid::new_v4().to_string());
+            return Ok(HandlerAction::Continue {
+                state: CreateStart,
+                suggested_delay: None,
+            });
+        };
+        function_tags.insert(CREATE_ATTEMPT_TAG.to_string(), create_token);
+
         Self::ensure_log_group(ctx, aws_cfg, &aws_worker_name, &cfg.id).await?;
 
         let request = CreateFunctionRequest::builder()
@@ -644,22 +674,60 @@ impl AwsWorkerController {
             .timeout(cfg.timeout_seconds as i32)
             .memory_size(cfg.memory_mb as i32)
             .publish(false)
-            .tags(function_tags)
+            .tags(function_tags.clone())
             .maybe_environment(environment)
             .architectures(vec!["arm64".to_string()])
             .maybe_vpc_config(vpc_config)
             .build();
 
-        let response =
-            client
-                .create_function(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
+        let function_arn = match client.create_function(request).await {
+            Ok(response) => response.function_arn,
+            Err(error) if is_remote_resource_conflict(&error) => {
+                // Function names are unique per account and region, and CreateFunction takes no
+                // client token. Our own earlier call may have created the function before its
+                // response was lost: that function carries this create's token, any other does
+                // not. The read is granted only on functions tagged for this stack, so a denied
+                // read means the function is not ours.
+                match client.get_function(&aws_worker_name).await {
+                    Ok(existing) if carries_tags(existing.tags.as_ref(), &function_tags) => {
+                        info!(name=%aws_worker_name, "Function already exists and carries this create's token; adopting it");
+                        existing.configuration.function_arn
+                    }
+                    Ok(_) => {
+                        return Err(Self::foreign_function_error(
+                            &aws_worker_name,
+                            &cfg.id,
+                            error,
+                        ))
+                    }
+                    Err(lookup)
+                        if is_remote_not_found(&lookup) || is_remote_access_denied(&lookup) =>
+                    {
+                        return Err(Self::foreign_function_error(
+                            &aws_worker_name,
+                            &cfg.id,
+                            error,
+                        ))
+                    }
+                    Err(lookup) => {
+                        return Err(lookup.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to look up Lambda function '{aws_worker_name}' after a create conflict"
+                            ),
+                            resource_id: Some(cfg.id.clone()),
+                        }))
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
                     message: "Failed to create Lambda worker".to_string(),
                     resource_id: Some(cfg.id.clone()),
-                })?;
+                }))
+            }
+        };
 
-        self.arn = response.function_arn.clone();
+        self.arn = function_arn;
         self.worker_name = Some(aws_worker_name.clone());
         info!(name=%aws_worker_name, arn=%self.arn.as_deref().unwrap_or("unknown"), "Worker created, waiting for active state");
 
@@ -5218,6 +5286,7 @@ impl AwsWorkerController {
             domain_name: None,
             domain_confirmed: false,
             domain_create_token: None,
+            function_create_token: None,
             certificate_import_token: None,
             load_balancer: None,
             uses_custom_domain: false,
@@ -5254,7 +5323,9 @@ mod tests {
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
-    use alien_aws_clients::lambda::{AddPermissionResponse, FunctionConfiguration, MockLambdaApi};
+    use alien_aws_clients::lambda::{
+        AddPermissionResponse, FunctionConfiguration, GetFunctionResponse, MockLambdaApi,
+    };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
@@ -7806,6 +7877,243 @@ mod tests {
         let state = executor.internal_state::<AwsWorkerController>().unwrap();
         assert!(!state.domain_confirmed);
         assert!(state.load_balancer.is_none());
+    }
+
+    // ─────────────── FUNCTION CREATE TOKEN ────────────────
+
+    /// Lambda as the tests below see it: at most one function, the private worker's, with the
+    /// tags it was created with.
+    type FunctionWorld = Arc<Mutex<Option<HashMap<String, String>>>>;
+
+    /// How GetFunction answers in the tests below.
+    #[derive(Clone, Copy)]
+    enum FunctionRead {
+        Allowed,
+        Denied,
+    }
+
+    /// A Lambda client over `world`. CreateFunction stores the function, or answers
+    /// ResourceConflictException when one exists. While `lose_responses` is above zero, a create
+    /// that Lambda accepted fails with a dropped connection instead, as a lost response does.
+    /// Every CreateFunction's tags are recorded in `creates`.
+    fn function_world_lambda(
+        world: FunctionWorld,
+        creates: Arc<Mutex<Vec<HashMap<String, String>>>>,
+        lose_responses: usize,
+        read: FunctionRead,
+    ) -> MockLambdaApi {
+        let name = format!("test-{}", function_private_ingress().id);
+        let mut lambda = MockLambdaApi::new();
+        let created = world.clone();
+        let create_name = name.clone();
+        let mut lose_responses = lose_responses;
+        lambda.expect_create_function().returning(move |request| {
+            let tags = request.tags.clone().unwrap();
+            creates.lock().unwrap().push(tags.clone());
+            let mut function = created.lock().unwrap();
+            if function.is_some() {
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "Function".to_string(),
+                        resource_name: create_name.clone(),
+                        message: format!("Function already exist: {create_name}"),
+                    },
+                ));
+            }
+            *function = Some(tags);
+            if lose_responses > 0 {
+                lose_responses -= 1;
+                return Err(AlienError::new(CloudClientErrorData::HttpRequestFailed {
+                    message: "connection closed before message completed".to_string(),
+                }));
+            }
+            Ok(create_successful_function_response(&create_name))
+        });
+        let read_world = world.clone();
+        let get_name = name.clone();
+        lambda.expect_get_function().returning(move |_| match read {
+            FunctionRead::Denied => {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "Function".to_string(),
+                    resource_name: get_name.clone(),
+                }))
+            }
+            FunctionRead::Allowed => match read_world.lock().unwrap().clone() {
+                Some(tags) => Ok(GetFunctionResponse {
+                    configuration: create_successful_function_response(&get_name),
+                    tags: Some(tags),
+                }),
+                None => Err(not_found("Function")),
+            },
+        });
+        lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| Ok(create_successful_function_response(&name)));
+        lambda
+    }
+
+    async fn function_executor(
+        controller: AwsWorkerController,
+        lambda: MockLambdaApi,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_private_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(lambda), None, None))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn function_arn() -> String {
+        format!(
+            "arn:aws:lambda:us-east-1:123456789012:function:test-{}",
+            function_private_ingress().id
+        )
+    }
+
+    /// The token is saved by a step of its own, before the step that calls CreateFunction, and
+    /// the create carries it.
+    #[tokio::test]
+    async fn function_create_token_is_saved_before_the_create_step() {
+        let world = FunctionWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = function_executor(
+            AwsWorkerController::default(),
+            function_world_lambda(world, creates.clone(), 0, FunctionRead::Allowed),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(saved.state, AwsWorkerState::CreateStart);
+        let token = saved.function_create_token.clone().expect("token saved");
+        assert!(
+            creates.lock().unwrap().is_empty(),
+            "no create in the token step"
+        );
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let creates = creates.lock().unwrap();
+        assert_eq!(creates.len(), 1);
+        assert_eq!(creates[0].get("CreateAttempt"), Some(&token));
+    }
+
+    /// Lambda creates the function but the response is lost. The retry's CreateFunction is
+    /// answered ResourceConflictException, and the worker adopts the function its own create
+    /// made instead of failing on every retry.
+    #[tokio::test]
+    async fn lost_function_create_response_is_adopted_by_its_create_token() {
+        let world = FunctionWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = function_executor(
+            AwsWorkerController::default(),
+            function_world_lambda(world.clone(), creates.clone(), 1, FunctionRead::Allowed),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        executor.step().await.expect_err("the response is lost");
+        assert!(world.lock().unwrap().is_some(), "Lambda made the function");
+        executor
+            .step()
+            .await
+            .expect("the retry adopts its own function");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreateWaitForActive);
+        assert_eq!(state.arn.as_deref(), Some(function_arn().as_str()));
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let creates = creates.lock().unwrap();
+        assert_eq!(creates.len(), 2);
+        assert_eq!(creates[0], creates[1], "both creates carry the saved token");
+    }
+
+    /// Lambda creates the function but the process stops before the create step is saved. The
+    /// controller restarts from the checkpoint saved before that step, which already holds the
+    /// token, so the retry recognizes the function as its own.
+    #[tokio::test]
+    async fn function_created_before_a_crash_is_adopted_from_the_previous_checkpoint() {
+        let world = FunctionWorld::default();
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = function_executor(
+            AwsWorkerController::default(),
+            function_world_lambda(world.clone(), creates.clone(), 0, FunctionRead::Allowed),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let checkpoint = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone();
+        executor.step().await.expect("Lambda accepts the create");
+        assert!(world.lock().unwrap().is_some());
+        drop(executor);
+
+        let mut restarted = function_executor(
+            checkpoint,
+            function_world_lambda(world, creates.clone(), 0, FunctionRead::Allowed),
+        )
+        .await;
+        restarted.run_until_terminal().await.unwrap();
+        assert_eq!(restarted.status(), ResourceStatus::Running);
+        let state = restarted.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.arn.as_deref(), Some(function_arn().as_str()));
+        assert_eq!(creates.lock().unwrap().len(), 2);
+    }
+
+    /// A function with this worker's name that this create did not make stays an error: one
+    /// left by another create attempt (same ownership tags, another token), one without our
+    /// tags, and one the role is not allowed to read (reads are granted only on functions
+    /// tagged for this stack).
+    #[rstest]
+    #[case::another_attempt(Some("another-attempt"), true, FunctionRead::Allowed)]
+    #[case::untagged(None, false, FunctionRead::Allowed)]
+    #[case::read_denied(None, false, FunctionRead::Denied)]
+    #[tokio::test]
+    async fn function_from_another_create_is_not_adopted(
+        #[case] token: Option<&str>,
+        #[case] ownership_tags: bool,
+        #[case] read: FunctionRead,
+    ) {
+        let worker_id = function_private_ingress().id;
+        let mut tags = if ownership_tags {
+            standard_resource_tags("test", &worker_id)
+        } else {
+            HashMap::new()
+        };
+        if let Some(token) = token {
+            tags.insert("CreateAttempt".to_string(), token.to_string());
+        }
+        let world: FunctionWorld = Arc::new(Mutex::new(Some(tags)));
+        let creates = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = function_executor(
+            AwsWorkerController::default(),
+            function_world_lambda(world, creates, 0, read),
+        )
+        .await;
+
+        executor.step().await.expect("records the token");
+        let error = executor
+            .step()
+            .await
+            .expect_err("the function is not this create's");
+        assert!(
+            error.message.contains("was not created by this worker"),
+            "{error:?}"
+        );
+        assert!(
+            error_chain_codes(&error).contains(&"REMOTE_RESOURCE_CONFLICT".to_string()),
+            "{error:?}"
+        );
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::CreateStart);
+        assert!(state.arn.is_none());
     }
 
     // ─────────────── CERTIFICATE IMPORT TOKEN ────────────────
