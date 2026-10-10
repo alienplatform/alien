@@ -2,7 +2,7 @@
 //!
 //! Implements [`DeploymentLoopTransport`] for the manager's internal loop,
 //! persisting state via [`DeploymentStore::reconcile`] and handling
-//! cross-account registry access after each step.
+//! cross-account registry access with each step.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use crate::traits::deployment_store::{ExecutionClaim, ReconcileData};
 use crate::traits::DeploymentStore;
 
 /// Transport that persists state directly to the deployment store and
-/// reconciles cross-account registry access after each step.
+/// reconciles cross-account registry access with each step.
 pub struct ManagerTransport {
     deployment_store: Arc<dyn DeploymentStore>,
     bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
@@ -77,17 +77,30 @@ impl DeploymentLoopTransport for ManagerTransport {
         // 1. Reconcile cross-account registry access (best-effort).
         //    This must happen before persisting so the `registry_access_granted`
         //    flag is included in the persisted state.
-        let mut updated_state = state.clone();
+        let mut granted_state = state.clone();
         crate::registry_access::reconcile_registry_access(
             &self.bindings_provider,
             &self.target_bindings_providers,
             deployment_id,
             &self.project_id,
-            &mut updated_state,
+            &mut granted_state,
         )
         .await;
 
-        // 2. Persist the step result (including any registry access changes).
+        // 2. Revoke a deleted AWS deployment's access before persisting the state that hands it
+        //    to setup teardown. A denied revoke comes back as a failed delete to persist instead.
+        let updated_state = crate::registry_access::revoke_before_persisting(
+            self.deployment_store.as_ref(),
+            &self.bindings_provider,
+            &self.target_bindings_providers,
+            deployment_id,
+            &self.project_id,
+            granted_state,
+        )
+        .await
+        .map_err(|error| error.into_generic())?;
+
+        // 3. Persist the step result (including any registry access changes).
         // Driven from the deployment loop with no inbound caller — use the
         // synthetic system subject (empty bearer signals to embedders that
         // no caller passthrough is available).
@@ -111,7 +124,7 @@ impl DeploymentLoopTransport for ManagerTransport {
             )
             .await?;
 
-        crate::registry_access::cleanup_deleted_registry_access(
+        crate::registry_access::revoke_after_persisting(
             self.deployment_store.as_ref(),
             &self.bindings_provider,
             &self.target_bindings_providers,
@@ -123,7 +136,8 @@ impl DeploymentLoopTransport for ManagerTransport {
         .map_err(|error| error.into_generic())?;
 
         // Only return updated state if something actually changed.
-        let state_changed = updated_state.runtime_metadata != state.runtime_metadata;
+        let state_changed = updated_state.runtime_metadata != state.runtime_metadata
+            || updated_state.status != state.status;
 
         Ok(StepReconcileResult {
             state: if state_changed {

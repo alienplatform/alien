@@ -170,6 +170,18 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The registry denied removing a deployment's access, so the manager lacks a permission.
+    #[error(
+        code = "REGISTRY_ACCESS_REVOKE_DENIED",
+        message = "The registry denied revoking access to repository '{repository}' for deployment '{deployment_id}'. Grant the manager's registry role permission to change that repository's policy, then retry the delete.",
+        retryable = "false",
+        internal = "false"
+    )]
+    RegistryAccessRevokeDenied {
+        deployment_id: String,
+        repository: String,
+    },
+
     /// Command not found
     #[error(
         code = "COMMAND_NOT_FOUND",
