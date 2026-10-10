@@ -949,7 +949,7 @@ mod tests {
     async fn managed_cloud_machine_changes_preserve_the_setup_boundary() {
         for (platform, old_machine, new_machine) in [
             (Platform::Aws, "m7i.large", "m7i.xlarge"),
-            (Platform::Gcp, "e2-medium", "e2-standard-4"),
+            (Platform::Gcp, "e2-medium", "n2-standard-4"),
             (Platform::Azure, "Standard_D2s_v5", "Standard_D4s_v5"),
         ] {
             let mut old = compute_cluster(1);
