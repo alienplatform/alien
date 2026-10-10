@@ -10,7 +10,10 @@ use std::process::Stdio;
 use std::time::Instant;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
+
+static RUSTUP_TARGET_INSTALL: Mutex<()> = Mutex::const_new(());
 
 /// Rust toolchain implementation using Cargo with Zig cross-compilation
 #[derive(Debug, Clone)]
@@ -331,32 +334,12 @@ impl Toolchain for RustToolchain {
             }
         }
 
-        // Check if target is installed, install if not present (still needed for std library)
-        let list_targets_output = Command::new("rustup")
-            .args(&["target", "list", "--installed"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ImageBuildFailed {
-                resource_name: self.binary_name.clone(),
-                reason: "Failed to execute rustup target list".to_string(),
-                build_output: None,
-            })?;
-
-        let installed_targets = String::from_utf8_lossy(&list_targets_output.stdout);
-        let target_installed = installed_targets
-            .lines()
-            .any(|line| line.trim() == context.build_target.rust_target_triple());
-
-        if !target_installed {
-            info!(
-                "Target {} not found, installing...",
-                context.build_target.rust_target_triple()
-            );
-            let install_target_output = Command::new("rustup")
-                .args(&["target", "add", context.build_target.rust_target_triple()])
+        {
+            // Parallel resource builds share rustup's download and installation files.
+            // Recheck under the lock so only one build installs a missing target.
+            let _target_install = RUSTUP_TARGET_INSTALL.lock().await;
+            let list_targets_output = Command::new("rustup")
+                .args(&["target", "list", "--installed"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()
@@ -364,29 +347,60 @@ impl Toolchain for RustToolchain {
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
                     resource_name: self.binary_name.clone(),
-                    reason: "Failed to execute rustup target add".to_string(),
+                    reason: "Failed to execute rustup target list".to_string(),
                     build_output: None,
                 })?;
 
-            if !install_target_output.status.success() {
+            if !list_targets_output.status.success() {
                 return Err(image_build_error_with_output(
                     self.binary_name.clone(),
-                    format!(
-                        "Failed to install target {}",
-                        context.build_target.rust_target_triple()
-                    ),
-                    &install_target_output,
+                    "Failed to list installed Rust targets",
+                    &list_targets_output,
                 ));
             }
-            info!(
-                "Successfully installed target {}",
-                context.build_target.rust_target_triple()
-            );
-        } else {
-            info!(
-                "Target {} already installed",
-                context.build_target.rust_target_triple()
-            );
+            let installed_targets = String::from_utf8_lossy(&list_targets_output.stdout);
+            let target_installed = installed_targets
+                .lines()
+                .any(|line| line.trim() == context.build_target.rust_target_triple());
+
+            if !target_installed {
+                info!(
+                    "Target {} not found, installing...",
+                    context.build_target.rust_target_triple()
+                );
+                let install_target_output = Command::new("rustup")
+                    .args(&["target", "add", context.build_target.rust_target_triple()])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::ImageBuildFailed {
+                        resource_name: self.binary_name.clone(),
+                        reason: "Failed to execute rustup target add".to_string(),
+                        build_output: None,
+                    })?;
+
+                if !install_target_output.status.success() {
+                    return Err(image_build_error_with_output(
+                        self.binary_name.clone(),
+                        format!(
+                            "Failed to install target {}",
+                            context.build_target.rust_target_triple()
+                        ),
+                        &install_target_output,
+                    ));
+                }
+                info!(
+                    "Successfully installed target {}",
+                    context.build_target.rust_target_triple()
+                );
+            } else {
+                info!(
+                    "Target {} already installed",
+                    context.build_target.rust_target_triple()
+                );
+            }
         }
 
         // Determine the expected binary path before building so stale corrupt
