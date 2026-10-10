@@ -111,7 +111,6 @@ export type CreateAccessRequestRevokedBy = {
  * The created access request.
  */
 export type CreateAccessRequestResponse = {
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: CreateAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -146,6 +145,7 @@ export type CreateAccessRequestResponse = {
   approvedBy: CreateAccessRequestApprovedBy | null;
   deniedBy: CreateAccessRequestDeniedBy | null;
   revokedBy: CreateAccessRequestRevokedBy | null;
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
 };
 
 /** @internal */
@@ -276,8 +276,6 @@ export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
   CreateAccessRequestResponse,
   unknown
 > = z.object({
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
   id: z.string(),
   requesterKind: z.nullable(CreateAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -305,6 +303,8 @@ export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
   revokedBy: z.nullable(
     z.lazy(() => CreateAccessRequestRevokedBy$inboundSchema),
   ),
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
 });
 
 export function createAccessRequestResponseFromJSON(

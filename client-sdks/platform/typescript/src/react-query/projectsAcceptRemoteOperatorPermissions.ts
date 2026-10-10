@@ -50,7 +50,7 @@ export type ProjectsAcceptRemoteOperatorPermissionsMutationError =
  * Record that a Remote Operator installation's setup was re-applied
  *
  * @remarks
- * Records the permissions compiled from the currently enabled operations as the installation's installed permissions. Call it after re-applying the installation's Helm release, manifest, cloud access, or CloudFormation stack.
+ * Records the permissions compiled from every built-in operation plugin as the installation's installed permissions. Call it after re-applying the installation's Helm release, manifest, cloud access, or CloudFormation stack.
  */
 export function useProjectsAcceptRemoteOperatorPermissionsMutation(
   options?: MutationHookOptions<
