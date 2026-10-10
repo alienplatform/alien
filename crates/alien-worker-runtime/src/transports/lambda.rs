@@ -341,6 +341,16 @@ pub mod wait_until_extension {
             }
         }
 
+        /// Releases the endpoint when the test ends, even when an assertion fails first, so the
+        /// batch processor's thread isn't left blocked for the rest of the test process.
+        struct ReleaseOnDrop(UnansweredEndpoint);
+
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                self.0.release();
+            }
+        }
+
         impl LogExporter for UnansweredEndpoint {
             fn export(&self, batch: LogBatch<'_>) -> impl Future<Output = OTelSdkResult> + Send {
                 let (released, answered) = &*self.released;
@@ -376,6 +386,7 @@ pub mod wait_until_extension {
                 released: Arc::new((StdMutex::new(false), Condvar::new())),
             };
             install_app_log_exporter(endpoint.clone());
+            let _release = ReleaseOnDrop(endpoint.clone());
             let (request_done, request_done_receiver) = unbounded_channel();
             let extension = WaitUntilExtension::new(request_done_receiver);
 
