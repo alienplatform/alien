@@ -1327,8 +1327,8 @@ const STORAGE_OPTIMIZED_THRESHOLD: u64 = 200 * GI;
 /// Maximum number of machines per cluster.
 const MAX_MACHINES_PER_CLUSTER: u32 = 10;
 
-/// Hard cap on vCPUs for non-GPU/non-storage workloads. Equivalent to AWS 2xlarge.
-/// Beyond this, horizontal scaling is always preferred over bigger machines.
+/// Preferred vCPU cap for non-GPU/non-storage workloads. A larger indivisible
+/// allocation or bounded fleet can require a bigger machine.
 const MAX_STANDARD_VCPU: u32 = 8;
 
 /// Runtime CPU reserved for system processes on each managed container machine.
@@ -1342,9 +1342,9 @@ const WORKLOAD_HEADROOM_FACTOR: f64 = 1.15;
 /// The algorithm:
 /// 1. GPU workloads: Match by GPU type, find smallest instance with enough GPUs.
 /// 2. Storage-heavy workloads (>200Gi ephemeral): Use storage-optimized instances.
-/// 3. All other workloads: Size the machine to fit a small HA-friendly baseline,
-///    capped at 8 vCPUs. Use GeneralPurpose family for broad availability and
-///    reasonable cost. Scale horizontally for more capacity.
+/// 3. All other workloads: Fit the allocation with system reserve and headroom,
+///    preferring at most 8 vCPUs unless the allocation requires more. Use the
+///    workload's preferred family, with general-purpose fallback when needed.
 ///
 /// Returns an error if no suitable instance type is found.
 pub fn select_instance_type(
