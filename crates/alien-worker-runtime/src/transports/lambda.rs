@@ -58,13 +58,27 @@ pub mod wait_until_extension {
     use crate::error::{ErrorData, Result};
     use alien_error::AlienError;
     use lambda_extension::{service_fn, Extension, LambdaEvent, NextEvent};
-    use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
-    use tracing::{error, info, warn};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::{
+        sync::{mpsc::UnboundedReceiver, Mutex},
+        task::JoinHandle,
+    };
+    use tracing::{debug, error, info, warn};
+
+    /// Longest an invocation waits for its logs to export. Lambda can't hand the environment its
+    /// next invocation until the extension returns, so a slow or unreachable log endpoint must
+    /// not hold every invocation for the whole export.
+    const MAX_LOG_EXPORT_WAIT: Duration = Duration::from_millis(500);
+
+    /// Left for the extension to call `/next` after the export wait.
+    const DEADLINE_MARGIN: Duration = Duration::from_millis(250);
 
     /// Internal extension that drains wait_until tasks after Lambda invocations.
     pub struct WaitUntilExtension {
         /// Receiver for signals that the handler has completed
         request_done_receiver: Mutex<UnboundedReceiver<()>>,
+        /// An export that outlived its invocation's wait and may still be running.
+        unfinished_log_export: Mutex<Option<JoinHandle<Result<()>>>>,
     }
 
     impl WaitUntilExtension {
@@ -72,6 +86,7 @@ pub mod wait_until_extension {
         pub fn new(request_done_receiver: UnboundedReceiver<()>) -> Self {
             Self {
                 request_done_receiver: Mutex::new(request_done_receiver),
+                unfinished_log_export: Mutex::new(None),
             }
         }
 
@@ -162,41 +177,74 @@ pub mod wait_until_extension {
                         );
                     }
 
-                    // Returning lets Lambda freeze the environment, and a batch still pending
-                    // then waits for the next invocation, or is lost if none comes. Export it
-                    // now, after the drain, so wait_until output is included. The extension's
-                    // time counts toward the function timeout, so stop short of the deadline.
-                    let budget = flush_budget(invoke.deadline_ms, std::time::SystemTime::now());
-                    match tokio::time::timeout(budget, crate::otlp::flush_otlp_logs()).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => error!(
-                            request_id = %request_id,
-                            error = %e,
-                            "Failed to export application logs after the invocation"
-                        ),
-                        Err(_) => warn!(
-                            request_id = %request_id,
-                            budget_ms = budget.as_millis() as u64,
-                            "Application log export did not finish before the invocation deadline"
-                        ),
-                    }
+                    self.export_logs(request_id, invoke.deadline_ms).await;
 
                     Ok(())
                 }
             }
         }
+
+        /// Exports the logs this invocation produced before Lambda freezes the environment.
+        ///
+        /// Returning lets Lambda freeze the environment, and a batch still pending then waits for
+        /// the next invocation, or is lost if none comes. This runs after the wait_until drain so
+        /// its output is included. A failed or slow export is logged, never surfaced to the caller.
+        async fn export_logs(&self, request_id: &str, deadline_ms: u64) {
+            let mut unfinished = self.unfinished_log_export.lock().await;
+            if unfinished
+                .as_ref()
+                .is_some_and(|export| !export.is_finished())
+            {
+                // The endpoint hasn't answered an earlier export. This invocation's records stay
+                // in the batch and go out with the next export instead of holding it again.
+                debug!(
+                    request_id = %request_id,
+                    "Earlier application log export still running; not waiting for another"
+                );
+                return;
+            }
+
+            let mut export = tokio::spawn(crate::otlp::flush_otlp_logs());
+            let wait = log_export_wait(deadline_ms, SystemTime::now());
+            *unfinished = match tokio::time::timeout(wait, &mut export).await {
+                Ok(Ok(Ok(()))) => None,
+                Ok(Ok(Err(e))) => {
+                    error!(
+                        request_id = %request_id,
+                        error = %e,
+                        "Failed to export application logs after the invocation"
+                    );
+                    None
+                }
+                Ok(Err(e)) => {
+                    error!(
+                        request_id = %request_id,
+                        error = %e,
+                        "Application log export task failed"
+                    );
+                    None
+                }
+                Err(_) => {
+                    warn!(
+                        request_id = %request_id,
+                        wait_ms = wait.as_millis() as u64,
+                        "Application log export did not finish in time; it continues in the background"
+                    );
+                    Some(export)
+                }
+            };
+        }
     }
 
-    /// Time left to export logs before `deadline_ms` (epoch milliseconds), less a margin for the
-    /// extension to call `/next`.
-    fn flush_budget(deadline_ms: u64, now: std::time::SystemTime) -> std::time::Duration {
-        const MARGIN: std::time::Duration = std::time::Duration::from_millis(250);
-        let now = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        std::time::Duration::from_millis(deadline_ms)
+    /// How long an invocation waits for its logs to export: at most [`MAX_LOG_EXPORT_WAIT`], and
+    /// never past `deadline_ms` (epoch milliseconds) less [`DEADLINE_MARGIN`], because the
+    /// extension's time counts toward the function timeout.
+    fn log_export_wait(deadline_ms: u64, now: SystemTime) -> Duration {
+        let now = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+        Duration::from_millis(deadline_ms)
             .saturating_sub(now)
-            .saturating_sub(MARGIN)
+            .saturating_sub(DEADLINE_MARGIN)
+            .min(MAX_LOG_EXPORT_WAIT)
     }
 
     #[cfg(all(test, feature = "otlp"))]
@@ -204,16 +252,27 @@ pub mod wait_until_extension {
         use super::*;
         use lambda_extension::{InvokeEvent, Tracing};
         use opentelemetry::logs::AnyValue;
-        use opentelemetry_sdk::logs::{
-            BatchConfigBuilder, BatchLogProcessor, InMemoryLogExporter, SdkLoggerProvider,
+        use opentelemetry_sdk::{
+            error::OTelSdkResult,
+            logs::{
+                BatchConfigBuilder, BatchLogProcessor, InMemoryLogExporter, LogBatch, LogExporter,
+                SdkLoggerProvider,
+            },
         };
-        use std::time::Duration;
+        use std::{
+            future::Future,
+            sync::{Arc, Condvar, Mutex as StdMutex},
+            time::Instant,
+        };
+        use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-        #[tokio::test]
-        async fn an_invocation_exports_its_logs_before_lambda_freezes_the_environment() {
-            let exporter = InMemoryLogExporter::default();
-            // A batch that would wait an hour, so only an explicit flush exports it.
-            let processor = BatchLogProcessor::builder(exporter.clone())
+        /// The app-log provider is process-global, so tests that install one run one at a time.
+        static APP_LOG_PROVIDER: Mutex<()> = Mutex::const_new(());
+
+        /// Installs `exporter` behind a batch that would wait an hour, so only an explicit flush
+        /// exports it.
+        fn install_app_log_exporter<E: LogExporter + 'static>(exporter: E) {
+            let processor = BatchLogProcessor::builder(exporter)
                 .with_batch_config(
                     BatchConfigBuilder::default()
                         .with_scheduled_delay(Duration::from_secs(3600))
@@ -225,20 +284,24 @@ pub mod wait_until_extension {
                     .with_log_processor(processor)
                     .build(),
             );
-            crate::otlp::emit_log("stdout", "[e2e-endpoint] release=v2", 0);
+        }
 
-            let (request_done, request_done_receiver) = tokio::sync::mpsc::unbounded_channel();
-            let extension = WaitUntilExtension::new(request_done_receiver);
+        /// Runs one INVOKE through the extension whose handler has already finished, with the
+        /// function timeout a minute away, and returns how long the extension held it.
+        async fn run_invocation(
+            extension: &WaitUntilExtension,
+            request_done: &UnboundedSender<()>,
+            request_id: &str,
+        ) -> Duration {
             request_done.send(()).expect("the extension is listening");
+            let deadline =
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap() + Duration::from_secs(60);
+            let started = Instant::now();
             extension
                 .invoke(LambdaEvent {
                     next: NextEvent::Invoke(InvokeEvent {
-                        deadline_ms: (std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            + Duration::from_secs(60))
-                        .as_millis() as u64,
-                        request_id: "request-1".to_string(),
+                        deadline_ms: deadline.as_millis() as u64,
+                        request_id: request_id.to_string(),
                         invoked_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:f"
                             .to_string(),
                         tracing: Tracing::default(),
@@ -246,25 +309,116 @@ pub mod wait_until_extension {
                 })
                 .await
                 .expect("the invocation completes");
+            started.elapsed()
+        }
 
-            let exported = exporter.get_emitted_logs().expect("exporter is readable");
-            let bodies: Vec<_> = exported
+        fn exported_bodies(exporter: &InMemoryLogExporter) -> Vec<Option<AnyValue>> {
+            exporter
+                .get_emitted_logs()
+                .expect("exporter is readable")
                 .iter()
                 .map(|log| log.record.body().cloned())
-                .collect();
+                .collect()
+        }
+
+        fn body(text: &str) -> Option<AnyValue> {
+            Some(AnyValue::String(text.to_string().into()))
+        }
+
+        /// An endpoint that doesn't answer until released: the export call blocks the batch
+        /// processor's thread, as the blocking HTTP client does on an unreachable endpoint.
+        #[derive(Debug, Clone)]
+        struct UnansweredEndpoint {
+            delivered: InMemoryLogExporter,
+            released: Arc<(StdMutex<bool>, Condvar)>,
+        }
+
+        impl UnansweredEndpoint {
+            fn release(&self) {
+                let (released, answered) = &*self.released;
+                *released.lock().unwrap() = true;
+                answered.notify_all();
+            }
+        }
+
+        impl LogExporter for UnansweredEndpoint {
+            fn export(&self, batch: LogBatch<'_>) -> impl Future<Output = OTelSdkResult> + Send {
+                let (released, answered) = &*self.released;
+                let _released = answered
+                    .wait_while(released.lock().unwrap(), |released| !*released)
+                    .unwrap();
+                self.delivered.export(batch)
+            }
+        }
+
+        #[tokio::test]
+        async fn an_invocation_exports_its_logs_before_lambda_freezes_the_environment() {
+            let _provider = APP_LOG_PROVIDER.lock().await;
+            let exporter = InMemoryLogExporter::default();
+            install_app_log_exporter(exporter.clone());
+            crate::otlp::emit_log("stdout", "[e2e-endpoint] release=v2", 0);
+
+            let (request_done, request_done_receiver) = unbounded_channel();
+            let extension = WaitUntilExtension::new(request_done_receiver);
+            run_invocation(&extension, &request_done, "request-1").await;
+
             assert_eq!(
-                bodies,
-                vec![Some(AnyValue::String(
-                    "[e2e-endpoint] release=v2".to_string().into()
-                ))]
+                exported_bodies(&exporter),
+                vec![body("[e2e-endpoint] release=v2")]
+            );
+        }
+
+        #[tokio::test]
+        async fn an_unanswered_log_endpoint_does_not_hold_every_invocation() {
+            let _provider = APP_LOG_PROVIDER.lock().await;
+            let endpoint = UnansweredEndpoint {
+                delivered: InMemoryLogExporter::default(),
+                released: Arc::new((StdMutex::new(false), Condvar::new())),
+            };
+            install_app_log_exporter(endpoint.clone());
+            let (request_done, request_done_receiver) = unbounded_channel();
+            let extension = WaitUntilExtension::new(request_done_receiver);
+
+            crate::otlp::emit_log("stdout", "first", 0);
+            let first = run_invocation(&extension, &request_done, "request-1").await;
+            crate::otlp::emit_log("stdout", "second", 0);
+            let second = run_invocation(&extension, &request_done, "request-2").await;
+
+            // The first invocation waits a bounded time for the endpoint; the second doesn't
+            // wait for it again while that export is still outstanding.
+            assert!(
+                first >= MAX_LOG_EXPORT_WAIT && first < MAX_LOG_EXPORT_WAIT * 2,
+                "first invocation held for {first:?}"
+            );
+            assert!(
+                second < Duration::from_millis(100),
+                "second invocation held for {second:?}"
+            );
+            assert_eq!(exported_bodies(&endpoint.delivered), vec![]);
+
+            // Once the endpoint answers, the next invocation exports what the others left.
+            endpoint.release();
+            let unfinished = extension.unfinished_log_export.lock().await.take();
+            unfinished
+                .expect("the first export outlived its invocation")
+                .await
+                .expect("export task completes")
+                .expect("export succeeds once the endpoint answers");
+            crate::otlp::emit_log("stdout", "third", 0);
+            run_invocation(&extension, &request_done, "request-3").await;
+
+            assert_eq!(
+                exported_bodies(&endpoint.delivered),
+                vec![body("first"), body("second"), body("third")]
             );
         }
 
         #[test]
-        fn the_log_export_stops_short_of_the_invocation_deadline() {
-            let now = std::time::UNIX_EPOCH + Duration::from_secs(1_000);
-            assert_eq!(flush_budget(1_010_000, now), Duration::from_millis(9_750));
-            assert_eq!(flush_budget(999_000, now), Duration::ZERO);
+        fn the_log_export_wait_is_bounded_and_stops_short_of_the_deadline() {
+            let now = UNIX_EPOCH + Duration::from_secs(1_000);
+            assert_eq!(log_export_wait(1_010_000, now), MAX_LOG_EXPORT_WAIT);
+            assert_eq!(log_export_wait(1_000_600, now), Duration::from_millis(350));
+            assert_eq!(log_export_wait(999_000, now), Duration::ZERO);
         }
     }
 }
