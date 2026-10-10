@@ -91,6 +91,13 @@ async fn convert_unexpected_response(response: reqwest::Response) -> AlienError<
         if api_error.http_status_code.is_none() {
             api_error.http_status_code = Some(status.as_u16());
         }
+        // GENERIC_ERROR is the unclassified error: it is always sent with
+        // `retryable: false`, including a server's sanitized "Internal server
+        // error" that hides a retryable cause (a database error, say). Its
+        // flag is no retry decision, so the HTTP status decides.
+        if api_error.code == "GENERIC_ERROR" {
+            api_error.retryable = is_retryable_http_status(status.as_u16());
+        }
         let body_request_id = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|value| value.get("requestId")?.as_str().map(str::to_string));
@@ -352,6 +359,50 @@ mod tests {
         assert_eq!(error.context.as_ref().unwrap()["requestId"], "req_body_123");
         assert!(!error.retryable);
         assert!(!error.internal);
+    }
+
+    /// A server hides an internal error behind GENERIC_ERROR "Internal server
+    /// error" with `retryable: false`, whatever the cause. A transient database
+    /// failure must stay retryable for callers like `alien deployments wait`.
+    #[tokio::test]
+    async fn an_unclassified_server_error_is_retryable_by_its_status() {
+        let sanitized = |status: u16| {
+            serde_json::json!({
+                "code": "GENERIC_ERROR",
+                "message": "Internal server error",
+                "retryable": false,
+                "internal": false,
+                "httpStatusCode": status,
+            })
+            .to_string()
+        };
+
+        let error = convert_sdk_error(unexpected_response(500, &sanitized(500))).await;
+        assert_eq!(error.code, "GENERIC_ERROR");
+        assert_eq!(error.message, "Internal server error");
+        assert_eq!(error.http_status_code, Some(500));
+        assert!(error.retryable);
+
+        let error = convert_sdk_error(unexpected_response(400, &sanitized(400))).await;
+        assert!(!error.retryable);
+    }
+
+    /// A classified error keeps the server's decision, even on a 5xx status.
+    #[tokio::test]
+    async fn a_classified_server_error_keeps_its_own_retryable_flag() {
+        let body = serde_json::json!({
+            "code": "DEPLOYMENT_LEASE_LOST",
+            "message": "another session holds the lease",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 500,
+        })
+        .to_string();
+
+        let error = convert_sdk_error(unexpected_response(500, &body)).await;
+
+        assert_eq!(error.code, "DEPLOYMENT_LEASE_LOST");
+        assert!(!error.retryable);
     }
 
     #[tokio::test]
