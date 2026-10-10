@@ -3120,6 +3120,36 @@ mod tests {
     use super::*;
     use alien_core::{PermissionProfile, Resource, ResourceRef};
 
+    #[test]
+    fn conflicting_container_parameter_names_fail_instead_of_sharing_values() {
+        let mut stack = Stack::new("stack".into()).build();
+        for id in ["api-1", "api1"] {
+            let mut container = Container::new(id.into()).build();
+            container.resource_choices = Some(alien_core::ContainerResourceChoices {
+                cpu: Some(alien_core::ResourceChoiceRange {
+                    min: "1".into(),
+                    max: "4".into(),
+                    default: "1".into(),
+                }),
+                memory: None,
+            });
+            stack.resources.insert(
+                id.into(),
+                alien_core::ResourceEntry {
+                    config: Resource::new(container),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: vec![],
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+        }
+        let mut template = CfTemplate::default();
+        let error = add_container_resource_parameters(&mut template, &stack, None)
+            .expect_err("ambiguous parameter names cannot be installed");
+        assert!(error.message.contains("duplicate CloudFormation parameter"));
+    }
+
     fn node_dependency_fixture() -> (Stack, IndexMap<String, Vec<String>>, CfTemplate) {
         let mut stack = Stack::new("example".to_string())
             .add(
