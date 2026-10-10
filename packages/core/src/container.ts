@@ -146,6 +146,7 @@ export class Container extends ResourceBuilder {
    *
    * For advanced configuration, use ResourceSpec:
    * - `.cpu({ min: "0.5", desired: "1" })`
+   * - `.cpu({ min: 0.5, max: 4, default: 1 })` permits a deployment-time selection.
    *
    * @param value CPU in vCPUs (number) or ResourceSpec with min/desired.
    * @returns The Container builder instance.
@@ -174,6 +175,7 @@ export class Container extends ResourceBuilder {
    * to set them separately on Kubernetes.
    *
    * Examples: `.memory("512Mi")`, `.memory({ min: "128Mi", desired: "512Mi" })`
+   * Use `{ min: "512Mi", max: "8Gi", default: "2Gi" }` for deployment-time choices.
    *
    * @param value Memory size string or ResourceSpec with min/desired.
    * @returns The Container builder instance.
