@@ -2416,9 +2416,18 @@ mod tests {
             ("storage/data-read", "p26eed71-test-alien-storage"),
             ("storage/data-write", "p26eed71-test-alien-storage"),
             ("build/execute", "p26eed71-test-alien-build"),
-            ("artifact-registry/pull", "p26eed71-test-alien-artifact-registry"),
-            ("artifact-registry/push", "p26eed71-test-alien-artifact-registry"),
-            ("artifact-registry/provision", "p26eed71-test-alien-artifact-registry"),
+            (
+                "artifact-registry/pull",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            (
+                "artifact-registry/push",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            (
+                "artifact-registry/provision",
+                "p26eed71-test-alien-artifact-registry",
+            ),
             ("vault/data-read", "p26eed71-test-vault"),
             ("vault/data-write", "p26eed71-secrets"),
             ("kv/data-read", "p26eed71-test-alien-kv"),
@@ -2450,7 +2459,11 @@ mod tests {
         for (pattern, narrow, contains) in [
             ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket", true),
             ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket/*", true),
-            ("arn:aws:ecr:*:1:repository/p-*", "arn:aws:ecr:us-east-1:1:repository/p-r-*", true),
+            (
+                "arn:aws:ecr:*:1:repository/p-*",
+                "arn:aws:ecr:us-east-1:1:repository/p-r-*",
+                true,
+            ),
             ("role/p-*-pull", "role/p-registry-pull", true),
             ("*", "*", true),
             ("a*", "a?", true),
