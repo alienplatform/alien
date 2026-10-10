@@ -3,7 +3,7 @@
 use std::{
     fs,
     net::{TcpListener, TcpStream},
-    process::{Child, Command, Stdio},
+    process::{Child, Command},
     thread,
     time::{Duration, Instant},
 };

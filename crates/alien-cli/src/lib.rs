@@ -40,13 +40,12 @@ use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
     destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
-    ensure_server_running_with_env, fetch_all_dev_deployment_live_states, init_task,
-    local_operations_task, logs_task, onboard_task, operations_task,
-    prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
-    upgrade_task, validate_deploy_config, vault_remote_task, vault_task, whoami_task,
-    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
-    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
-    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
+    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
+    render_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task, vault_task,
+    whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs,
+    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs,
+    ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -1348,7 +1347,7 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
             .await?;
         }
         Some(DevSubcommand::Server) => {
-            run_dev_server_only(port, dev_cmd.status_file, parsed_env_vars).await?;
+            run_dev_server_only(port, dev_cmd.status_file).await?;
         }
         Some(DevSubcommand::Deployments(args)) => deployments_task(args, ctx).await?,
         Some(DevSubcommand::Releases(args)) => releases_task(args, ctx).await?,
@@ -1494,11 +1493,7 @@ async fn run_dev_session(
     result
 }
 
-async fn run_dev_server_only(
-    port: u16,
-    status_file: Option<PathBuf>,
-    user_env_vars: Vec<CliEnvVar>,
-) -> Result<()> {
+async fn run_dev_server_only(port: u16, status_file: Option<PathBuf>) -> Result<()> {
     // Register before publishing readiness so a supervisor can signal immediately.
     #[cfg(unix)]
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -1521,7 +1516,6 @@ async fn run_dev_server_only(
             &[("on", &format!("http://localhost:{port}"))],
         )
     );
-    let _ = user_env_vars;
     if let Some(status_file) = &status_file {
         write_dev_status(
             status_file,
@@ -1529,43 +1523,52 @@ async fn run_dev_server_only(
         )?;
     }
     let manager = commands::start_owned_dev_server(port).await?;
+    let result = async {
+        if let Some(status_file) = &status_file {
+            write_dev_status(
+                status_file,
+                &build_dev_status(port, alien_core::DevStatusState::Ready, None, None),
+            )?;
+        }
 
-    if let Some(status_file) = &status_file {
-        write_dev_status(
-            status_file,
-            &build_dev_status(port, alien_core::DevStatusState::Ready, None, None),
-        )?;
-    }
+        println!("{}", success_line("Local manager ready."));
+        println!(
+            "{} {}",
+            dim_label("Manager"),
+            accent(&format!("http://localhost:{port}"))
+        );
+        println!(
+            "{} run {} for the full local app flow.",
+            dim_label("Next"),
+            command("alien dev")
+        );
 
-    println!("{}", success_line("Local manager ready."));
-    println!(
-        "{} {}",
-        dim_label("Manager"),
-        accent(&format!("http://localhost:{port}"))
-    );
-    println!(
-        "{} run {} for the full local app flow.",
-        dim_label("Next"),
-        command("alien dev")
-    );
-
-    #[cfg(unix)]
-    tokio::select! {
-        _ = interrupt.recv() => {}
-        _ = terminate.recv() => {}
-    }
-    #[cfg(not(unix))]
-    let signal_result =
-        tokio::signal::ctrl_c()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ServerStartFailed {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        #[cfg(not(unix))]
+        let signal_result = tokio::signal::ctrl_c().await.into_alien_error().context(
+            ErrorData::ServerStartFailed {
                 reason: "Failed to wait for Ctrl+C".to_string(),
-            });
+            },
+        );
 
-    manager.shutdown().await?;
-    #[cfg(not(unix))]
-    signal_result?;
+        #[cfg(not(unix))]
+        signal_result?;
+        Ok::<(), alien_error::AlienError<ErrorData>>(())
+    }
+    .await;
+    match (result, manager.shutdown().await) {
+        (Ok(()), shutdown) => shutdown?,
+        (Err(error), Ok(())) => return Err(error),
+        (Err(error), Err(shutdown_error)) => {
+            return Err(error).context(ErrorData::ServerStartFailed {
+                reason: format!("Local manager shutdown also failed: {shutdown_error}"),
+            })
+        }
+    }
 
     if let Some(status_file) = &status_file {
         write_dev_status(
