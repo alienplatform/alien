@@ -190,6 +190,27 @@ async fn ensure_server_running_internal(
     }
 }
 
+async fn recover_dev_state(state_dir: &Path, _ownership: &File) -> Result<()> {
+    let path = state_dir.join("dev-server.db");
+    if path.exists() {
+        let database = SqliteDatabase::new(&path.to_string_lossy()).await.context(
+            ErrorData::ServerStartFailed {
+                reason: "Failed to open the stopped local manager".to_string(),
+            },
+        )?;
+        let recovered = SqliteDeploymentStore::new(Arc::new(database))
+            .recover_local_execution_claims()
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to recover abandoned local execution claims".to_string(),
+            })?;
+        if recovered > 0 {
+            info!(recovered, "Recovered abandoned local execution claims");
+        }
+    }
+    Ok(())
+}
+
 /// Hold an OS lock for the entire manager lifetime, before opening its database.
 /// The lock file stays in place: unlinking it would let another process lock a new inode.
 fn acquire_dev_state_lock(state_dir: &Path) -> Result<File> {
@@ -445,6 +466,7 @@ async fn start_owned_embedded_dev_manager(
     port: u16,
     state_lock: File,
 ) -> Result<EmbeddedDevManager> {
+    recover_dev_state(&get_current_dir()?.join(".alien"), &state_lock).await?;
     let (server, addr) = build_embedded_dev_manager(port).await?;
     alien_local::start_docker_bridge_proxy(addr)
         .await
@@ -482,6 +504,7 @@ pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
 }
 
 async fn start_embedded_dev_manager_with_lock(port: u16, state_lock: File) -> Result<()> {
+    recover_dev_state(&get_current_dir()?.join(".alien"), &state_lock).await?;
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;
 
@@ -1716,6 +1739,156 @@ mod tests {
             "restarted manager owns the same lock inode"
         );
         drop((restarted, independent));
+    }
+
+    async fn prepare_dev_state(state_dir: &Path) -> Result<File> {
+        let ownership = acquire_dev_state_lock(state_dir)?;
+        recover_dev_state(state_dir, &ownership).await?;
+        Ok(ownership)
+    }
+
+    #[tokio::test]
+    async fn local_manager_restart_recovers_only_abandoned_local_claims() {
+        let directory = TempDir::new().unwrap();
+        let owner = prepare_dev_state(directory.path()).await.unwrap();
+        let database = Arc::new(
+            SqliteDatabase::new(&directory.path().join("dev-server.db").to_string_lossy())
+                .await
+                .unwrap(),
+        );
+        let store = SqliteDeploymentStore::new(database.clone());
+        let subject = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &subject,
+                CreateDeploymentGroupParams {
+                    name: "local-dev".to_string(),
+                    max_deployments: 100,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut records = Vec::new();
+        for (name, platform) in [
+            ("local", alien_core::Platform::Local),
+            ("cloud", alien_core::Platform::Aws),
+            ("delayed", alien_core::Platform::Local),
+            ("pull", alien_core::Platform::Local),
+        ] {
+            records.push(
+                store
+                    .create_deployment(
+                        &subject,
+                        CreateDeploymentParams {
+                            name: name.to_string(),
+                            deployment_group_id: group.id.clone(),
+                            platform,
+                            deployment_protocol_version:
+                                alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                            base_platform: None,
+                            stack_settings: Default::default(),
+                            stack_state: Some(StackState::with_resource_prefix(
+                                platform,
+                                "retained".to_string(),
+                            )),
+                            environment_variables: None,
+                            public_subdomain: None,
+                            input_values: Default::default(),
+                            setup_item: None,
+                            deployment_token: None,
+                        },
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            store
+                .acquire(&subject, "old-process", &DeploymentFilter::default(), 10)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+        database.conn().lock().await.execute(
+            &format!("UPDATE deployments SET stack_settings = json_set(stack_settings, '$.deploymentModel', 'pull') WHERE id = '{}'", records[3].id),
+            (),
+        ).await.unwrap();
+        database.conn().lock().await.execute(
+            &format!("UPDATE deployments SET next_step_after = '2099-01-01T00:00:00+00:00' WHERE id = '{}'", records[2].id),
+            (),
+        ).await.unwrap();
+        assert!(
+            prepare_dev_state(directory.path()).await.is_err(),
+            "a live owner must prevent recovery"
+        );
+        let locked = store
+            .get_deployment(&subject, &records[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(locked.locked_by.as_deref(), Some("old-process"));
+        drop((store, database, owner));
+
+        let restarted = prepare_dev_state(directory.path()).await.unwrap();
+        let database = Arc::new(
+            SqliteDatabase::new(&directory.path().join("dev-server.db").to_string_lossy())
+                .await
+                .unwrap(),
+        );
+        let store = SqliteDeploymentStore::new(database);
+        let recovered = store
+            .acquire(&subject, "new-process", &DeploymentFilter::default(), 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered.len(),
+            1,
+            "a replacement manager must acquire local work immediately"
+        );
+        assert_eq!(recovered[0].deployment.id, records[0].id);
+        assert_eq!(
+            recovered[0]
+                .deployment
+                .stack_state
+                .as_ref()
+                .unwrap()
+                .resource_prefix,
+            "retained"
+        );
+        let cloud = store
+            .get_deployment(&subject, &records[1].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cloud.locked_by.as_deref(), Some("old-process"));
+        let pull = store
+            .get_deployment(&subject, &records[3].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pull.locked_by.as_deref(),
+            Some("old-process"),
+            "an independent pull operator must retain its claim"
+        );
+        let delayed = store
+            .get_deployment(&subject, &records[2].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            delayed.locked_by.is_none(),
+            "claim recovery must preserve the scheduled delay"
+        );
+        assert_eq!(
+            serde_json::to_value(&recovered[0].deployment.stack_state).unwrap(),
+            serde_json::to_value(&records[0].stack_state).unwrap()
+        );
+
+        assert!(prepare_dev_state(directory.path()).await.is_err());
+        drop((store, restarted));
     }
 
     #[tokio::test]
