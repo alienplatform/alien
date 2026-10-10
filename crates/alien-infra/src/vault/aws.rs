@@ -440,7 +440,7 @@ mod permission_update_tests {
         }
     }
 
-    fn assert_read_policy(document: &str) {
+    fn assert_read_policy(document: &str, vault_prefix: &str) {
         let policy: serde_json::Value = serde_json::from_str(document).unwrap();
         assert!(policy["Statement"]
             .as_array()
@@ -460,19 +460,20 @@ mod permission_update_tests {
                             resource
                                 .as_str()
                                 .unwrap()
-                                .ends_with(":parameter/test-secrets-*")
+                                .ends_with(&format!(":parameter/{vault_prefix}-*"))
                         })
             }));
     }
 
-    fn fake_iam(iam: Arc<Mutex<Iam>>, fault: Fault) -> MockIamApi {
+    fn fake_iam(iam: Arc<Mutex<Iam>>, fault: Fault, vault_prefix: &str) -> MockIamApi {
         let mut mock = MockIamApi::new();
         let put = iam.clone();
+        let vault_prefix = vault_prefix.to_string();
         mock.expect_put_role_policy()
             .returning(move |role, name, document| {
                 assert_eq!(role, CONSUMER_ROLE);
                 assert_eq!(name, READ_POLICY);
-                assert_read_policy(document);
+                assert_read_policy(document, &vault_prefix);
                 let mut iam = put.lock().unwrap();
                 iam.calls.push(format!("put {role} {name}"));
                 iam.roles
@@ -577,6 +578,13 @@ mod permission_update_tests {
         fault: Fault,
         existing: &[(&str, &str)],
         remove_consumer: bool,
+        /// Grant the consumer every vault through its `"*"` entry instead of naming this one.
+        #[builder(default)]
+        wildcard_grant: bool,
+        #[builder(default = "test-secrets")] vault_prefix: &str,
+        /// The name the `"*"` grant uses for the read set; it may be an alias.
+        #[builder(default = "vault/data-read")]
+        wildcard_set: &str,
     ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
         let iam = Arc::new(Mutex::new(Iam::default()));
         for (role, name) in existing {
@@ -587,13 +595,28 @@ mod permission_update_tests {
                 .or_default()
                 .insert(name.to_string(), "{}".to_string());
         }
-        let mock = Arc::new(fake_iam(iam.clone(), fault));
+        let mock = Arc::new(fake_iam(iam.clone(), fault, vault_prefix));
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_iam_client()
             .returning(move |_| Ok(mock.clone()));
         let vault = Vault::new("secrets".to_string()).build();
-        let consumer = ServiceAccount::new("consumer-sa".to_string()).build();
+        let consumer_profile = if wildcard_grant {
+            PermissionProfile::new().global([wildcard_set])
+        } else {
+            PermissionProfile::new().resource("secrets", ["vault/data-read"])
+        };
+        // As the stack processor builds it, the `"*"` sets become the role's stack-level policy.
+        let consumer = if wildcard_grant {
+            ServiceAccount::from_permission_profile(
+                "consumer-sa".to_string(),
+                &consumer_profile,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .unwrap()
+        } else {
+            ServiceAccount::new("consumer-sa".to_string()).build()
+        };
         let former = ServiceAccount::new("former-sa".to_string()).build();
         let mut stack = Stack::new("test".to_string())
             .add_with_dependencies(
@@ -606,10 +629,7 @@ mod permission_update_tests {
             )
             .add(consumer.clone(), ResourceLifecycle::Frozen)
             .add(former.clone(), ResourceLifecycle::Frozen)
-            .permission(
-                "consumer",
-                PermissionProfile::new().resource("secrets", ["vault/data-read"]),
-            )
+            .permission("consumer", consumer_profile)
             .permission("former", PermissionProfile::new())
             .build();
         if remove_consumer {
@@ -638,7 +658,7 @@ mod permission_update_tests {
             state: AwsVaultState::Ready,
             account_id: Some("123456789012".to_string()),
             region: Some("us-east-1".to_string()),
-            vault_prefix: Some("test-secrets".to_string()),
+            vault_prefix: Some(vault_prefix.to_string()),
             ..Default::default()
         };
         let mut vault_state = StackResourceState::new_pending(
@@ -894,6 +914,75 @@ mod permission_update_tests {
             .unwrap()
             .updates
             .contains_key("secrets"));
+    }
+
+    /// A `"*"` grant is already written on the role as its stack-level policy. Writing it again
+    /// per vault only adds to the role's 10,240-character inline policy quota.
+    #[tokio::test]
+    async fn wildcard_grant_is_left_to_the_stack_level_policy() {
+        let (executor, state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[])
+            .remove_consumer(false)
+            .wildcard_grant(true)
+            .call();
+        assert!(executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.count("put "), 0, "calls: {:?}", iam.calls);
+        assert!(iam.policies(CONSUMER_ROLE).is_empty());
+        assert_eq!(iam.count("delete "), 0);
+        assert!(!executor
+            .plan(&state)
+            .unwrap()
+            .updates
+            .contains_key("secrets"));
+    }
+
+    /// A set named by its alias resolves to the same set the stack-level policy holds.
+    #[tokio::test]
+    async fn aliased_wildcard_grant_is_left_to_the_stack_level_policy() {
+        let (executor, state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[])
+            .remove_consumer(false)
+            .wildcard_grant(true)
+            .wildcard_set("vault/data_read")
+            .call();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.count("put "), 0, "calls: {:?}", iam.calls);
+        assert!(iam.policies(CONSUMER_ROLE).is_empty());
+    }
+
+    /// The stack-level policy reaches only names under the stack prefix, so a vault outside it
+    /// still needs its own policy for the same `"*"` grant.
+    #[tokio::test]
+    async fn wildcard_grant_outside_the_stack_prefix_keeps_its_resource_policy() {
+        let (executor, state, iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::None)
+            .existing(&[])
+            .remove_consumer(false)
+            .wildcard_grant(true)
+            .vault_prefix("customer-secrets")
+            .call();
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.count("put "), 1, "calls: {:?}", iam.calls);
+        assert_eq!(iam.policies(CONSUMER_ROLE), vec![READ_POLICY]);
     }
 
     #[tokio::test]

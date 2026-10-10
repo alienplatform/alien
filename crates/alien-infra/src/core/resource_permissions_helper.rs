@@ -13,7 +13,10 @@ use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
-use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
+use alien_core::{
+    KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle, ServiceAccount,
+    Stack,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
     Binding, CreateRoleRequest, IamApi, IamPolicy, Role, RoleLaunchStage,
@@ -1287,7 +1290,15 @@ impl ResourcePermissionsHelper {
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            let combined_refs = Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix);
+            let combined_refs = Self::without_refs_the_stack_policy_grants(
+                ctx.desired_stack,
+                profile_name,
+                profile,
+                resource_id,
+                Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix),
+                &generator,
+                &permission_context,
+            )?;
 
             if !combined_refs.is_empty() {
                 info!(
@@ -1430,6 +1441,73 @@ impl ResourcePermissionsHelper {
             );
         }
         combined_refs
+    }
+
+    /// Drops the wildcard sets that the service account's stack-level policy already grants for
+    /// this resource.
+    ///
+    /// A profile's `"*"` sets are written once on its role as the stack-level policy, scoped to
+    /// the stack prefix. Writing them again per resource duplicates that grant, and IAM caps a
+    /// role's inline policies at 10,240 characters in total, so a stack with a handful of
+    /// resources fails setup. A set stays when the resource names it, or when the stack-level
+    /// grant does not reach this resource (a bring-your-own resource outside the stack prefix).
+    /// Policies written before this check stay on the role; they are only redundant.
+    fn without_refs_the_stack_policy_grants(
+        stack: &Stack,
+        profile_name: &str,
+        profile: &PermissionProfile,
+        resource_id: &str,
+        refs: Vec<PermissionSetReference>,
+        generator: &AwsRuntimePermissionsGenerator,
+        permission_context: &PermissionContext,
+    ) -> Result<Vec<PermissionSetReference>> {
+        let named_by_resource = profile.0.get(resource_id);
+        let stack_sets = stack
+            .resources
+            .get(&format!("{profile_name}-sa"))
+            .and_then(|entry| entry.config.downcast_ref::<ServiceAccount>())
+            .map(|service_account| service_account.stack_permission_sets.as_slice())
+            .unwrap_or_default();
+
+        let mut kept = Vec::new();
+        for reference in refs {
+            // Resolved first: a reference may name its set by an alias, and the stack-level
+            // policy holds resolved sets.
+            let stack_set = reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .and_then(|resolved| stack_sets.iter().find(|set| **set == resolved));
+            let granted = match stack_set {
+                Some(set) if !named_by_resource.is_some_and(|named| named.contains(&reference)) => {
+                    let generate = |target| {
+                        generator
+                            .generate_policy(set, target, permission_context)
+                            .context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to generate policy for permission set '{}'",
+                                    set.id
+                                ),
+                                resource_id: Some(resource_id.to_string()),
+                            })
+                    };
+                    aws_policy_grants(
+                        &generate(BindingTarget::Stack)?,
+                        &generate(BindingTarget::Resource)?,
+                    )
+                }
+                _ => false,
+            };
+            if granted {
+                debug!(
+                    resource_id = %resource_id,
+                    profile = %profile_name,
+                    permission_set = %reference.id(),
+                    "Stack-level policy already grants this set for the resource; skipping its resource policy"
+                );
+            } else {
+                kept.push(reference);
+            }
+        }
+        Ok(kept)
     }
 
     /// Remove inline policies that `apply_aws_resource_scoped_permissions`
@@ -2128,6 +2206,67 @@ impl ResourcePermissionsHelper {
 
 /// The inline policy on the shared Remote Bindings role that carries one resource's remote grant.
 /// Inline policy a resource attaches to a profile's service-account role.
+/// Whether `broad` allows every request `narrow` allows.
+///
+/// Answers yes only when it can prove it: every statement of `narrow` must be an `Allow` with
+/// plain `Resource`s that one `Allow` statement of `broad` matches, with no condition `narrow`
+/// lacks. A `Deny`, a `NotResource` or a differing condition answers no, which keeps the
+/// narrow policy.
+fn aws_policy_grants(broad: &AwsIamPolicy, narrow: &AwsIamPolicy) -> bool {
+    let plain_allow = |statement: &AwsIamStatement| {
+        statement.effect == "Allow" && statement.not_resource.is_empty()
+    };
+    narrow.statement.iter().all(|wanted| {
+        plain_allow(wanted)
+            && broad.statement.iter().any(|granted| {
+                plain_allow(granted)
+                    && (granted.condition.is_none() || granted.condition == wanted.condition)
+                    && wanted.action.iter().all(|action| {
+                        granted.action.iter().any(|pattern| {
+                            iam_pattern_contains(
+                                &pattern.to_ascii_lowercase(),
+                                &action.to_ascii_lowercase(),
+                            )
+                        })
+                    })
+                    && wanted.resource.iter().all(|resource| {
+                        granted
+                            .resource
+                            .iter()
+                            .any(|pattern| iam_pattern_contains(pattern, resource))
+                    })
+            })
+    })
+}
+
+/// Whether every string IAM matches with `narrow` is also matched by `pattern`, both using IAM's
+/// `*` (any run of characters) and `?` (one character).
+///
+/// A wildcard in `narrow` is only accepted against a wildcard in `pattern` at least as wide, so
+/// a `true` is always a real containment; some true containments answer `false`.
+fn iam_pattern_contains(pattern: &str, narrow: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let narrow: Vec<char> = narrow.chars().collect();
+    // covered[j] after processing pattern[..i]: pattern[..i] covers narrow[..j].
+    let mut covered = vec![false; narrow.len() + 1];
+    covered[0] = true;
+    for &p in &pattern {
+        let mut next = vec![false; narrow.len() + 1];
+        for j in 0..=narrow.len() {
+            next[j] = match p {
+                // `*` covers whatever an earlier prefix covered, extended by any character.
+                '*' => covered[j] || (j > 0 && next[j - 1]),
+                // `?` covers one character, or a `?` in `narrow`, never a `*`.
+                '?' => j > 0 && covered[j - 1] && narrow[j - 1] != '*',
+                // A literal never covers a wildcard in `narrow`, which matches more than it.
+                literal => j > 0 && covered[j - 1] && narrow[j - 1] == literal,
+            };
+        }
+        covered = next;
+    }
+    covered[narrow.len()]
+}
+
 fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
     format!(
         "alien-{}-{}",
@@ -2249,6 +2388,282 @@ mod tests {
             &frozen_stack,
             "missing"
         ));
+    }
+
+    fn aws_policies(set_id: &str, resource_name: &str) -> (AwsIamPolicy, AwsIamPolicy) {
+        let set = alien_permissions::get_permission_set(set_id)
+            .unwrap_or_else(|| panic!("permission set '{set_id}' is registered"));
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012".to_string())
+            .with_aws_region("us-east-1".to_string())
+            .with_stack_prefix("p26eed71".to_string())
+            .with_resource_id("res".to_string())
+            .with_resource_name(resource_name.to_string());
+        let generator = AwsRuntimePermissionsGenerator::new();
+        (
+            generator
+                .generate_policy(set, BindingTarget::Stack, &context)
+                .unwrap(),
+            generator
+                .generate_policy(set, BindingTarget::Resource, &context)
+                .unwrap(),
+        )
+    }
+
+    /// Every `"*"` set of a typical worker stack, for resources named under the stack prefix:
+    /// the stack-level policy already grants each one, so none needs a policy per resource.
+    #[test]
+    fn stack_level_policy_grants_wildcard_sets_for_resources_under_the_stack_prefix() {
+        for (set_id, resource_name) in [
+            ("storage/data-read", "p26eed71-test-alien-storage"),
+            ("storage/data-write", "p26eed71-test-alien-storage"),
+            ("build/execute", "p26eed71-test-alien-build"),
+            (
+                "artifact-registry/pull",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            (
+                "artifact-registry/push",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            (
+                "artifact-registry/provision",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            ("vault/data-read", "p26eed71-test-vault"),
+            ("vault/data-write", "p26eed71-secrets"),
+            ("kv/data-read", "p26eed71-test-alien-kv"),
+            ("kv/data-write", "p26eed71-test-alien-kv"),
+            ("queue/data-read", "p26eed71-test-alien-queue"),
+            ("queue/data-write", "p26eed71-test-alien-queue"),
+        ] {
+            let (stack, resource) = aws_policies(set_id, resource_name);
+            assert!(
+                aws_policy_grants(&stack, &resource),
+                "{set_id} on {resource_name}: stack {stack:#?} resource {resource:#?}"
+            );
+        }
+    }
+
+    /// A bring-your-own bucket is named outside the stack prefix, so only its own policy
+    /// reaches it.
+    #[test]
+    fn stack_level_policy_does_not_grant_a_resource_outside_the_stack_prefix() {
+        for set_id in ["storage/data-read", "storage/data-write"] {
+            let (stack, resource) = aws_policies(set_id, "customer-data");
+            assert!(!aws_policy_grants(&stack, &resource), "{set_id}");
+        }
+    }
+
+    #[test]
+    fn iam_pattern_containment_never_claims_a_wider_pattern() {
+        // (pattern, narrow, pattern matches everything narrow matches)
+        for (pattern, narrow, contains) in [
+            ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket", true),
+            ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket/*", true),
+            (
+                "arn:aws:ecr:*:1:repository/p-*",
+                "arn:aws:ecr:us-east-1:1:repository/p-r-*",
+                true,
+            ),
+            ("role/p-*-pull", "role/p-registry-pull", true),
+            ("*", "*", true),
+            ("a*", "a?", true),
+            ("a?c", "a?c", true),
+            ("arn:aws:s3:::p-*", "arn:aws:s3:::customer", false),
+            ("arn:aws:s3:::p-bucket", "arn:aws:s3:::p-*", false),
+            ("a?c", "a*c", false),
+            ("abc", "a?c", false),
+            ("role/p-*-pull", "role/p-registry-push", false),
+        ] {
+            assert_eq!(
+                iam_pattern_contains(pattern, narrow),
+                contains,
+                "{pattern} vs {narrow}"
+            );
+        }
+    }
+
+    /// A broad statement with a condition grants less than an unconditional one.
+    #[test]
+    fn conditioned_stack_statement_does_not_grant_an_unconditioned_one() {
+        let (mut stack, resource) = aws_policies("kv/data-read", "p26eed71-test-alien-kv");
+        assert!(aws_policy_grants(&stack, &resource));
+        for statement in &mut stack.statement {
+            statement.condition = Some(
+                [(
+                    "StringEquals".to_string(),
+                    [("aws:ResourceTag/owner".to_string(), "x".to_string())].into(),
+                )]
+                .into(),
+            );
+        }
+        assert!(!aws_policy_grants(&stack, &resource));
+    }
+
+    /// Writes, for each stack in `ALIEN_AWS_POLICY_EQUIVALENCE_INPUT`, every inline policy direct
+    /// setup puts on each service-account role before this change (`old`) and with it (`new`), to
+    /// `ALIEN_AWS_POLICY_EQUIVALENCE_OUTPUT`. A raw stack goes through the real stack mutations
+    /// first, with its optional `stackSettings`; a stored prepared stack is used as is.
+    ///
+    /// To check that dropping the duplicates removes no effective permission, evaluate every
+    /// action and resource of each role's `old` policies against `old` and against `new` with
+    /// `aws iam simulate-custom-policy`, and compare the decisions.
+    #[tokio::test]
+    #[ignore = "reads a stack list from ALIEN_AWS_POLICY_EQUIVALENCE_INPUT"]
+    async fn write_old_and_new_service_account_policies() {
+        use alien_core::{
+            AwsManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+            ManagementConfig, Platform, StackSettings, StackState,
+        };
+
+        let input: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(std::env::var("ALIEN_AWS_POLICY_EQUIVALENCE_INPUT").unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let mut output = serde_json::Map::new();
+        for entry in input["stacks"].as_array().unwrap() {
+            let name = entry["name"].as_str().unwrap();
+            let prefix = entry["resourcePrefix"].as_str().unwrap();
+            let managing_role_arn = entry["managingRoleArn"].as_str();
+            let mut stack: Stack = serde_json::from_value(entry["stack"].clone()).unwrap();
+            if !entry["prepared"].as_bool().unwrap() {
+                let mut state = StackState::new(Platform::Aws);
+                state.resource_prefix = prefix.to_string();
+                let config = DeploymentConfig::builder()
+                    .stack_settings(
+                        serde_json::from_value::<Option<StackSettings>>(
+                            entry["stackSettings"].clone(),
+                        )
+                        .unwrap()
+                        .unwrap_or_default(),
+                    )
+                    .maybe_management_config(managing_role_arn.map(|arn| {
+                        ManagementConfig::Aws(AwsManagementConfig {
+                            managing_role_arn: arn.to_string(),
+                        })
+                    }))
+                    .environment_variables(EnvironmentVariablesSnapshot {
+                        variables: vec![],
+                        hash: String::new(),
+                        created_at: String::new(),
+                    })
+                    .external_bindings(ExternalBindings::default())
+                    .allow_frozen_changes(false)
+                    .build();
+                stack = alien_preflights::runner::PreflightRunner::new()
+                    .apply_mutations(stack, &state, &config)
+                    .await
+                    .unwrap();
+            }
+            let mut base = PermissionContext::new()
+                .with_aws_account_id(entry["accountId"].as_str().unwrap().to_string())
+                .with_aws_region(entry["region"].as_str().unwrap().to_string())
+                .with_stack_prefix(prefix.to_string());
+            if let Some(arn) = managing_role_arn {
+                base = base.with_managing_role_arn(arn.to_string());
+                if let Some(account) = PermissionContext::extract_account_id_from_role_arn(arn) {
+                    base = base.with_managing_account_id(account);
+                }
+            }
+            let to_json = |policy: &AwsIamPolicy| serde_json::to_value(policy).unwrap();
+
+            let mut roles = serde_json::Map::new();
+            for (profile_name, profile) in &stack.permissions.profiles {
+                let mut old = serde_json::Map::new();
+                let mut new = serde_json::Map::new();
+                // The service account controller's stack-level policy, the same in both.
+                if let Some(account) = stack
+                    .resources
+                    .get(&format!("{profile_name}-sa"))
+                    .and_then(|entry| entry.config.downcast_ref::<ServiceAccount>())
+                {
+                    let mut statements = Vec::new();
+                    for set in &account.stack_permission_sets {
+                        statements.extend(
+                            generator
+                                .generate_policy(set, BindingTarget::Stack, &base)
+                                .unwrap()
+                                .statement,
+                        );
+                    }
+                    if !statements.is_empty() {
+                        let policy = to_json(&AwsIamPolicy {
+                            version: "2012-10-17".to_string(),
+                            statement: statements,
+                        });
+                        old.insert("deployment-permissions".to_string(), policy.clone());
+                        new.insert("deployment-permissions".to_string(), policy);
+                    }
+                }
+                // What each setup-owned resource controller then writes on the role.
+                for (resource_id, resource) in &stack.resources {
+                    if resource.lifecycle != ResourceLifecycle::Frozen {
+                        continue;
+                    }
+                    let resource_type = resource.config.resource_type().to_string();
+                    let resource_name = match entry["resourceNames"][resource_id.as_str()].as_str() {
+                        Some(name) => name.to_string(),
+                        None => match resource_type.as_str() {
+                            "vault" => format!("{prefix}-{resource_id}"),
+                            "artifact-registry" | "service-account" | "sandbox" | "ai" => {
+                                resource_id.clone()
+                            }
+                            "kv" | "queue" | "storage" | "build" | "worker" => panic!(
+                                "{name}: supply the physical name of '{resource_id}' in resourceNames"
+                            ),
+                            _ => continue,
+                        },
+                    };
+                    let context = base
+                        .clone()
+                        .with_resource_id(resource_id.clone())
+                        .with_resource_name(resource_name);
+                    let type_prefix = format!("{resource_type}/");
+                    let before = ResourcePermissionsHelper::aws_resource_scoped_refs(
+                        profile,
+                        resource_id,
+                        &type_prefix,
+                    );
+                    let after = ResourcePermissionsHelper::without_refs_the_stack_policy_grants(
+                        &stack,
+                        profile_name,
+                        profile,
+                        resource_id,
+                        before.clone(),
+                        &generator,
+                        &context,
+                    )
+                    .unwrap();
+                    for (refs, policies) in [(&before, &mut old), (&after, &mut new)] {
+                        for reference in refs {
+                            let set = reference
+                                .resolve(|id| alien_permissions::get_permission_set(id).cloned())
+                                .unwrap();
+                            let policy = generator
+                                .generate_policy(&set, BindingTarget::Resource, &context)
+                                .unwrap();
+                            policies.insert(
+                                aws_resource_policy_name(resource_id, &set.id),
+                                to_json(&policy),
+                            );
+                        }
+                    }
+                }
+                roles.insert(
+                    format!("{profile_name}-sa"),
+                    serde_json::json!({ "old": old, "new": new }),
+                );
+            }
+            output.insert(name.to_string(), serde_json::Value::Object(roles));
+        }
+        std::fs::write(
+            std::env::var("ALIEN_AWS_POLICY_EQUIVALENCE_OUTPUT").unwrap(),
+            serde_json::to_string_pretty(&output).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
