@@ -92,7 +92,7 @@ fn stack_has_converged(
 pub async fn handle_update_pending(
     current: DeploymentState,
     target_stack: Stack,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
@@ -132,10 +132,11 @@ pub async fn handle_update_pending(
     // Live declines apply AFTER the mutations, so a declined workload's service
     // account and capacity stay identical to the accepted render. Its grant is
     // scrubbed, which `permission_profiles_unchanged`'s gated exemption absorbs.
-    let target_stack = crate::pending::strip_frozen_declines(
+    let target_stack = crate::pending::strip_frozen_declines_with_compute_settings(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
+        config.stack_settings.compute.as_mut(),
     );
 
     let runner = alien_preflights::runner::PreflightRunner::new();

@@ -239,10 +239,11 @@ pub async fn stack_import(
     // a live resource dominated by a declined frozen gate goes with it, or
     // its links to the stripped sibling would dangle through the template
     // preflights. Live-only gates resolve after the mutations, below.
-    let source_stack = alien_deployment::strip_frozen_declines(
+    let source_stack = alien_deployment::strip_frozen_declines_with_compute_settings(
         source_stack.clone(),
         &imported_gate_answers,
         &frozen_gating,
+        req.stack_settings.compute.as_mut(),
     );
 
     let prepared_stack =
