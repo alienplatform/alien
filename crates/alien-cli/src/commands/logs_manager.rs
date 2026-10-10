@@ -54,6 +54,7 @@ pub async fn manager_logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()>
             .send()
             .await
             .into_sdk_error()
+            .await
             .context(ErrorData::ApiRequestFailed {
                 message: format!("Failed to read logs for '{reference}'"),
                 url: None,

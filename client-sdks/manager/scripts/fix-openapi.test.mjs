@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { fixNullablePatterns } from "./fix-openapi.mjs"
+import { fixNullablePatterns, removeErrorResponses } from "./fix-openapi.mjs"
 
 test("wraps nullable references in an OpenAPI 3.0 schema object", () => {
   assert.deepEqual(
@@ -36,6 +36,44 @@ test("fixes nullable references recursively", () => {
         value: {
           nullable: true,
           allOf: [{ $ref: "#/components/schemas/Value" }],
+        },
+      },
+    },
+  )
+})
+
+test("removes error responses so the client reads every error body", () => {
+  assert.deepEqual(
+    removeErrorResponses({
+      paths: {
+        "/v1/deployments/{id}": {
+          parameters: [{ name: "id", in: "path" }],
+          get: {
+            responses: {
+              200: { description: "Deployment details" },
+              401: { description: "Unauthorized" },
+              404: { description: "Not found" },
+            },
+          },
+          delete: {
+            responses: {
+              202: { description: "Accepted" },
+              400: {
+                description: "Bad request",
+                content: { "application/json": { schema: { $ref: "#/components/schemas/AlienError" } } },
+              },
+              default: { description: "Error" },
+            },
+          },
+        },
+      },
+    }),
+    {
+      paths: {
+        "/v1/deployments/{id}": {
+          parameters: [{ name: "id", in: "path" }],
+          get: { responses: { 200: { description: "Deployment details" } } },
+          delete: { responses: { 202: { description: "Accepted" } } },
         },
       },
     },

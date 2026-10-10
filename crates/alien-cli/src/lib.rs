@@ -1416,6 +1416,7 @@ async fn run_dev_session(
                 .send()
                 .await
                 .into_sdk_error()
+                .await
                 .context(ErrorData::ApiRequestFailed {
                     message: "Failed to read the migrated local deployment".to_string(),
                     url: None,

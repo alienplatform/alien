@@ -10,7 +10,7 @@
 
 use alien_core::{DeploymentModel, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
-use alien_manager_api::{Client as ManagerClient, SdkResultExt, SdkResultExtReadingBody as _};
+use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -87,6 +87,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .send()
             .await
             .into_sdk_error()
+            .await
             .context(alien_error::GenericError {
                 message: "Failed to renew deployment lease via manager API".to_string(),
             })?;
@@ -164,7 +165,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .send()
             .await
             // Reads the body so a structured manager error keeps its own retryable flag.
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             // Inherits retryable: the runner retries a checkpoint only on a retryable error,
             // and a network error reaching the manager must not fail the deployment.
@@ -516,7 +517,8 @@ pub async fn acquire_setup_delete_deployment(
             })
             .send()
             .await
-            .into_sdk_error();
+            .into_sdk_error()
+            .await;
         let resp = match response {
             Ok(response) => response,
             Err(error) => {
@@ -528,7 +530,8 @@ pub async fn acquire_setup_delete_deployment(
                         .id(deployment_id)
                         .send()
                         .await
-                        .into_sdk_error();
+                        .into_sdk_error()
+                        .await;
                     if let Err(lookup_error) = lookup {
                         if is_missing_deployment_response(&lookup_error) {
                             return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
@@ -627,7 +630,7 @@ async fn acquire_deployment_with_statuses(
             })
             .send()
             .await
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             .context(alien_error::GenericError {
                 message: "Failed to acquire sync lock".to_string(),
@@ -777,7 +780,7 @@ pub async fn final_reconcile(
             })
             .send()
             .await
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             .map(|_| ())
     }
@@ -2112,7 +2115,7 @@ pub async fn release_deployment(
         })
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
     {
         if is_missing_deployment_response(&error) {

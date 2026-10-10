@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
-use alien_manager_api::SdkResultExtReadingBody;
+use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::SdkResultExt;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -377,7 +377,7 @@ impl ManagerBindingResolver for GeneratedManagerBindingResolver {
             })
             .send()
             .await
-            .into_sdk_error_reading_body()
+            .into_sdk_error()
             .await
             .map_err(into_remote_error)?
             .into_inner();

@@ -1183,6 +1183,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to fetch the latest release. Run `alien release` first.".to_string(),
             url: None,
@@ -1287,6 +1288,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create deployment group".to_string(),
             url: None,
@@ -1305,6 +1307,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create deployment group token".to_string(),
             url: None,
@@ -1612,6 +1615,7 @@ async fn fetch_manager_info(mgr: &crate::execution_context::ManagerContext) -> R
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to read manager information".to_string(),
             url: None,

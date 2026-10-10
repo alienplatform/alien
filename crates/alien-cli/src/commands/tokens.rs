@@ -65,6 +65,7 @@ pub async fn tokens_task(args: TokensArgs, ctx: ExecutionMode) -> Result<()> {
                 .send()
                 .await
                 .into_sdk_error()
+                .await
                 .context(ErrorData::ApiRequestFailed {
                     message: "Failed to list tokens".to_string(),
                     url: None,
@@ -103,6 +104,7 @@ pub async fn tokens_task(args: TokensArgs, ctx: ExecutionMode) -> Result<()> {
                 .send()
                 .await
                 .into_sdk_error()
+                .await
                 .context(ErrorData::ApiRequestFailed {
                     message: "Failed to create token".to_string(),
                     url: None,
@@ -131,6 +133,7 @@ pub async fn tokens_task(args: TokensArgs, ctx: ExecutionMode) -> Result<()> {
                 .send()
                 .await
                 .into_sdk_error()
+                .await
                 .context(ErrorData::ApiRequestFailed {
                     message: format!("Failed to revoke token '{id}'"),
                     url: None,
@@ -148,6 +151,7 @@ async fn resolve_group(client: &alien_manager_api::Client, customer: &str) -> Re
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to list customers".to_string(),
             url: None,

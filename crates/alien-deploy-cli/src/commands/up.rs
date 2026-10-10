@@ -37,7 +37,6 @@ use alien_deployment::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
-use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -2829,6 +2828,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to get deployment from manager".to_string(),
         })?
@@ -2912,6 +2912,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .send()
             .await
             .into_sdk_error()
+            .await
             .context(ErrorData::ConfigurationError {
                 message: "Failed to refresh deployment after setup reconciliation".to_string(),
             })?
@@ -3359,7 +3360,7 @@ async fn fetch_release_stack_by_id(
         .id(release_id)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to fetch release '{release_id}' from manager"),
@@ -4689,7 +4690,7 @@ async fn fetch_setup_release(
         .id(release_id)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to fetch release {release_id} from manager"),
@@ -4960,7 +4961,7 @@ async fn initialize_deployment(
             // Read the error body so server-side rejections surface their own
             // message; the manager-URL hint only applies when the manager was
             // unreachable.
-            let error = alien_manager_api::convert_sdk_error_reading_body(error).await;
+            let error = alien_manager_api::convert_sdk_error(error).await;
             let context = if error.code == "COMMUNICATION_ERROR" {
                 ErrorData::ConfigurationError {
                     message: "Failed to initialize with manager. Is the manager running? Check that --manager-url is correct.".to_string(),
@@ -5371,6 +5372,7 @@ async fn fetch_kubernetes_release_stack(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to get deployment from manager".to_string(),
         })?
@@ -5406,7 +5408,7 @@ async fn fetch_kubernetes_release_stack(
         .id(&release_id)
         .send()
         .await
-        .into_sdk_error_reading_body()
+        .into_sdk_error()
         .await
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to fetch release '{release_id}' from manager"),
@@ -5927,6 +5929,7 @@ async fn push_initial_setup_targeted(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to get deployment from manager".to_string(),
         })?
@@ -6124,6 +6127,7 @@ async fn push_initial_setup_targeted(
             .send()
             .await
             .into_sdk_error()
+            .await
             .context(ErrorData::ConfigurationError {
                 message: "Failed to get deployment from manager".to_string(),
             })?
@@ -6412,6 +6416,7 @@ pub async fn push_deletion(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to get deployment from manager".to_string(),
         })?
@@ -6582,6 +6587,7 @@ async fn run_runtime_deletion(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to get deployment from manager".to_string(),
         })?
@@ -6693,6 +6699,7 @@ async fn run_setup_deletion(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to get deployment from manager".to_string(),
         })?

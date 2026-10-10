@@ -395,11 +395,6 @@ impl TestDeployment {
                 {
                     return Ok(DeletionOutcome::Deleted);
                 }
-                Err(alien_manager_api::Error::ErrorResponse(response))
-                    if response.status() == reqwest::StatusCode::NOT_FOUND =>
-                {
-                    return Ok(DeletionOutcome::Deleted);
-                }
                 Err(error) => {
                     return Err(format!(
                         "Failed to get deployment {} while waiting for deletion: {}",

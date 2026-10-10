@@ -553,6 +553,7 @@ pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to list dev deployment groups".to_string(),
             url: None,
@@ -568,6 +569,7 @@ pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create default dev deployment group".to_string(),
             url: None,
@@ -584,6 +586,7 @@ async fn local_dev_group_id(client: &AlienManagerClient) -> Result<String> {
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Resolving the local development group".to_string(),
             url: None,
@@ -702,6 +705,7 @@ pub async fn build_and_post_release_simple(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create release on dev server".to_string(),
             url: None,
@@ -820,6 +824,7 @@ pub async fn create_initial_deployment(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to list deployments".to_string(),
             url: None,
@@ -852,6 +857,7 @@ pub async fn create_initial_deployment(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to check for an existing local deployment".to_string(),
             url: None,
@@ -910,6 +916,7 @@ pub async fn create_initial_deployment(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to create deployment".to_string(),
             url: None,
@@ -959,6 +966,7 @@ pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: b
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: format!("Failed to delete local deployment '{deployment_name}'"),
             url: None,
@@ -979,6 +987,7 @@ async fn find_named_local_deployment(
         .send()
         .await
         .into_sdk_error()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "Failed to list local development deployments".to_string(),
             url: None,
