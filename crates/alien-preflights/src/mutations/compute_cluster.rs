@@ -13,14 +13,14 @@ use crate::{
 use alien_core::{
     compute_planner::{
         capacity_group_requirements, check_pool_capacity, default_persistent_failure_domains,
-        generated_pool_scale_policy, validate_compute_pool_selection,
+        generated_pool_scale_policy, plan_compute, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
     Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
     ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use tracing::{debug, info};
@@ -58,6 +58,29 @@ impl StackMutation for ComputeClusterMutation {
         }
         if stack_state.platform == Platform::Kubernetes {
             return false;
+        }
+
+        if matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) && stack.resources.values().any(|entry| {
+            entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<ComputeCluster>().is_some()
+        }) && config
+            .stack_settings
+            .compute
+            .as_ref()
+            .is_none_or(|settings| {
+                settings.pools.is_empty()
+                    || settings
+                        .pools
+                        .values()
+                        .any(|selection| selection.machine().is_none())
+            })
+        {
+            // Resource updates must recompute automatic machine choices even
+            // when the previously prepared cluster already has a machine type.
+            return true;
         }
 
         let has_containers = stack
@@ -165,6 +188,41 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let mut resolved_config = config.clone();
+        if matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            let plan = plan_compute(
+                &stack,
+                stack_state.platform,
+                config.stack_settings.compute.as_ref(),
+            )
+            .context(crate::error::ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: "Could not resolve deployment compute choices".to_string(),
+                resource_id: None,
+            })?;
+            let settings = resolved_config
+                .stack_settings
+                .compute
+                .get_or_insert_default();
+            for pool in plan.pools {
+                if !pool.errors.is_empty() {
+                    return Err(AlienError::new(
+                        crate::error::ErrorData::StackMutationFailed {
+                            mutation_name: self.description().to_string(),
+                            message: pool.errors.join("; "),
+                            resource_id: None,
+                        },
+                    ));
+                }
+                settings.pools.insert(pool.pool_id, pool.selected);
+            }
+        }
+        // Resolve only for this mutation. Persisted settings retain the absent
+        // machine so the next resource update is planned automatically too.
+        let config = &resolved_config;
         let stack = self
             .materialize_node_permissions(stack, stack_state.platform)
             .await?;

@@ -126,6 +126,17 @@ pub fn plan_compute(
             group.generated,
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
+        // An omitted machine is deployment intent: let the planner choose on
+        // every preparation. Only the returned plan contains the concrete type;
+        // never write it back into the caller's settings as an override.
+        match &mut selected_choice {
+            ComputePoolSelection::Fixed { machine, .. }
+            | ComputePoolSelection::Autoscale { machine, .. } => {
+                if machine.is_none() {
+                    *machine = recommended.machine().map(ToString::to_string);
+                }
+            }
+        }
         if selected_choice.failure_domains().is_none() {
             if let Some(default_failure_domains) = recommended.failure_domains().cloned() {
                 match &mut selected_choice {
@@ -914,6 +925,7 @@ mod tests {
             }),
         });
         let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": { "general": { "mode": "fixed", "machines": 1 } },
             "containers": { "api": { "cpu": 8, "memory": "16Gi" } }
         }))
         .unwrap();
@@ -930,7 +942,11 @@ mod tests {
             );
             assert_eq!(selected_plan.containers[0].cpu.min, "8");
             assert_eq!(selected_plan.containers[0].memory.desired, "16Gi");
+            assert_eq!(pool.selected.min_size(), 1);
+            assert_eq!(pool.selected.max_size(), 1);
         }
+        assert_eq!(settings.pools["general"].machine(), None,
+            "resolving a plan must preserve automatic machine intent");
         let original = stack.resources["api"]
             .config
             .downcast_ref::<Container>()
