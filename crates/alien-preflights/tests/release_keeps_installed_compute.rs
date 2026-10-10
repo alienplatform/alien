@@ -422,16 +422,42 @@ async fn release_adding_a_container_to_an_installed_pool_keeps_the_cluster() {
     }
 }
 
-/// A fresh install whose containers all name their pool gets exactly those pools.
+/// A fresh install whose containers all name their pool gets exactly those pools, sized from
+/// what runs on them: a CPU-only container on a pool named `gpu` accepts the planner's CPU-only
+/// machine.
 #[tokio::test]
 async fn install_creates_the_pools_containers_name() {
-    let stack = database_release(Some(pooled_worker("worker", "apps")));
+    let stack = Stack::new("test-stack".to_string())
+        .add(
+            container("database", "database:1", true),
+            ResourceLifecycle::Live,
+        )
+        .add(pooled_worker("worker", "apps"), ResourceLifecycle::Live)
+        .add(pooled_worker("encoder", "gpu"), ResourceLifecycle::Live)
+        .permissions(PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().global(["storage/data-read"]),
+        ))
+        .build();
     let config = deployment_config(settings_without_failure_domains(&stack));
     let prepared = PreflightRunner::new()
         .apply_mutations(stack, &StackState::new(Platform::Aws), &config)
         .await
         .expect("install should prepare");
-    assert_eq!(group_ids(&prepared), ["stateful", "apps"]);
+    assert_eq!(group_ids(&prepared), ["stateful", "gpu", "apps"]);
+    let gpu_pool = cluster(&prepared)
+        .capacity_groups
+        .iter()
+        .find(|group| group.group_id == "gpu")
+        .expect("the gpu pool exists");
+    assert_eq!(
+        gpu_pool
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.gpu.as_ref()),
+        None,
+        "the pool runs a CPU-only container on a CPU-only machine"
+    );
 }
 
 /// A release that adds a container on a pool the installation does not have is a compute

@@ -988,31 +988,20 @@ fn build_capacity_group_for_id(
         aggregate_workload_requirements(containers)?
     };
     requirements.nested_virt = needs_nested_virt;
-    let effective = if group_id == "gpu" && requirements.gpu.is_none() {
-        WorkloadRequirements {
-            gpu: Some(alien_core::GpuSpec {
-                gpu_type: "any".to_string(),
-                count: 1,
-            }),
-            ..requirements
-        }
-    } else {
-        requirements
-    };
     let mut group = CapacityGroup {
         group_id: group_id.to_string(),
         instance_type: None,
         // Preserve the portable workload requirements until materialization.
         // The selected provider machine profile replaces this value below.
         profile: Some(MachineProfile {
-            cpu: effective.max_cpu_per_container.to_string(),
-            memory_bytes: effective.max_memory_per_container,
-            ephemeral_storage_bytes: effective.max_ephemeral_storage_bytes,
-            architecture: effective.architecture,
-            gpu: effective.gpu.clone(),
+            cpu: requirements.max_cpu_per_container.to_string(),
+            memory_bytes: requirements.max_memory_per_container,
+            ephemeral_storage_bytes: requirements.max_ephemeral_storage_bytes,
+            architecture: requirements.architecture,
+            gpu: requirements.gpu.clone(),
         }),
-        min_size: default_min_machines(&effective),
-        max_size: default_max_machines(&effective),
+        min_size: default_min_machines(&requirements),
+        max_size: default_max_machines(&requirements),
         scale_policy: None,
         nested_virtualization: None,
     };
@@ -1028,7 +1017,7 @@ fn build_capacity_group_for_id(
         let scale = generated_pool_scale_policy(group.min_size, group.max_size, selected_max);
         let selection = materialize_group(&mut group, platform, config, &scale)?;
         if !containers.is_empty() {
-            check_pool_capacity(platform, group_id, selection, &effective).map_err(|message| {
+            check_pool_capacity(platform, group_id, selection, &requirements).map_err(|message| {
                 AlienError::new(crate::error::ErrorData::StackMutationFailed {
                     mutation_name: "ComputeClusterMutation".to_string(),
                     message,
@@ -1040,16 +1029,16 @@ fn build_capacity_group_for_id(
         group.profile = Some(MachineProfile {
             cpu: format!(
                 "{}.0",
-                effective.max_cpu_per_container.max(1.0).ceil() as u32
+                requirements.max_cpu_per_container.max(1.0).ceil() as u32
             ),
-            memory_bytes: effective
+            memory_bytes: requirements
                 .max_memory_per_container
                 .max(2 * 1024 * 1024 * 1024),
-            ephemeral_storage_bytes: effective
+            ephemeral_storage_bytes: requirements
                 .max_ephemeral_storage_bytes
                 .max(20 * 1024 * 1024 * 1024),
-            architecture: effective.architecture,
-            gpu: effective.gpu,
+            architecture: requirements.architecture,
+            gpu: requirements.gpu,
         });
     }
     Ok(group)
