@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use alien_core::{parse_application_log_level, parse_application_log_message, ApplicationLogLevel};
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use opentelemetry_proto::tonic::{
     collector::logs::v1::ExportLogsServiceRequest,
-    common::v1::{any_value, AnyValue, KeyValue},
+    common::v1::{any_value, AnyValue, ArrayValue, KeyValue, KeyValueList},
     logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber},
     resource::v1::Resource,
 };
@@ -312,7 +311,8 @@ fn otlp_request(
             let log_records = records
                 .into_iter()
                 .map(|record| {
-                    let (severity_text, severity_number) = collector_log_severity(&record);
+                    let parsed = lognorm::parse(&record.body);
+                    let (severity_text, severity_number) = collector_log_severity(&record, &parsed);
 
                     let mut attributes = vec![
                         kv("alien.log.source", source),
@@ -325,18 +325,30 @@ fn otlp_request(
                         attributes.push(kv("log.file.path", filename));
                     }
 
-                    let original_body = record.body.clone();
-                    let readable_body = parse_application_log_message(&original_body);
-                    if readable_body.is_some() {
-                        attributes.push(kv("log.record.original", &original_body));
+                    if parsed.outcome() == lognorm::ParseOutcome::Structured {
+                        attributes.push(KeyValue {
+                            key: "app".to_owned(),
+                            value: Some(object_to_otlp(parsed.fields())),
+                        });
                     }
+                    if parsed.outcome() == lognorm::ParseOutcome::Structured
+                        || parsed.message() != record.body
+                    {
+                        attributes.push(kv("log.record.original", &record.body));
+                    }
+                    let source_time = parsed.timestamp().and_then(|time| {
+                        u64::try_from(time.unix_seconds())
+                            .ok()?
+                            .checked_mul(1_000_000_000)?
+                            .checked_add(u64::from(time.nanoseconds()))
+                    });
 
                     LogRecord {
-                        time_unix_nano: record.timestamp_unix_nanos,
+                        time_unix_nano: source_time.unwrap_or(record.timestamp_unix_nanos),
                         observed_time_unix_nano: record.timestamp_unix_nanos,
                         severity_number,
                         severity_text: severity_text.to_string(),
-                        body: Some(string_value(readable_body.unwrap_or(original_body))),
+                        body: Some(string_value(parsed.message().to_owned())),
                         attributes,
                         dropped_attributes_count: 0,
                         flags: 0,
@@ -369,15 +381,18 @@ fn otlp_request(
     ExportLogsServiceRequest { resource_logs }
 }
 
-fn collector_log_severity(record: &CollectorLogRecord) -> (&'static str, i32) {
-    if let Some(level) = parse_application_log_level(&record.body) {
+fn collector_log_severity(
+    record: &CollectorLogRecord,
+    parsed: &lognorm::ParsedLog<'_>,
+) -> (&'static str, i32) {
+    if let Some(level) = parsed.severity() {
         return match level {
-            ApplicationLogLevel::Trace => ("TRACE", SeverityNumber::Trace as i32),
-            ApplicationLogLevel::Debug => ("DEBUG", SeverityNumber::Debug as i32),
-            ApplicationLogLevel::Info => ("INFO", SeverityNumber::Info as i32),
-            ApplicationLogLevel::Warn => ("WARN", SeverityNumber::Warn as i32),
-            ApplicationLogLevel::Error => ("ERROR", SeverityNumber::Error as i32),
-            ApplicationLogLevel::Fatal => ("FATAL", SeverityNumber::Fatal as i32),
+            lognorm::Severity::Trace => ("TRACE", SeverityNumber::Trace as i32),
+            lognorm::Severity::Debug => ("DEBUG", SeverityNumber::Debug as i32),
+            lognorm::Severity::Info => ("INFO", SeverityNumber::Info as i32),
+            lognorm::Severity::Warn => ("WARN", SeverityNumber::Warn as i32),
+            lognorm::Severity::Error => ("ERROR", SeverityNumber::Error as i32),
+            lognorm::Severity::Fatal => ("FATAL", SeverityNumber::Fatal as i32),
         };
     }
 
@@ -386,6 +401,53 @@ fn collector_log_severity(record: &CollectorLogRecord) -> (&'static str, i32) {
     } else {
         ("INFO", SeverityNumber::Info as i32)
     }
+}
+
+fn object_to_otlp(fields: &serde_json::Map<String, Value>) -> AnyValue {
+    AnyValue {
+        value: Some(any_value::Value::KvlistValue(KeyValueList {
+            values: fields
+                .iter()
+                .map(|(key, value)| KeyValue {
+                    key: key.clone(),
+                    value: Some(json_to_otlp(value)),
+                })
+                .collect(),
+        })),
+    }
+}
+
+fn json_to_otlp(value: &Value) -> AnyValue {
+    let value = match value {
+        Value::Null => None,
+        Value::Bool(value) => Some(any_value::Value::BoolValue(*value)),
+        Value::String(value) => Some(any_value::Value::StringValue(value.clone())),
+        Value::Array(values) => Some(any_value::Value::ArrayValue(ArrayValue {
+            values: values.iter().map(json_to_otlp).collect(),
+        })),
+        Value::Object(fields) => return object_to_otlp(fields),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Some(any_value::Value::IntValue(value))
+            } else {
+                let text = number.to_string();
+                let integer = !text.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E'));
+                let double = (!integer)
+                    .then(|| number.as_f64())
+                    .flatten()
+                    .filter(|value| {
+                        serde_json::Number::from_f64(*value)
+                            .is_some_and(|candidate| candidate.to_string() == text)
+                    });
+                Some(
+                    double
+                        .map(any_value::Value::DoubleValue)
+                        .unwrap_or_else(|| any_value::Value::StringValue(text)),
+                )
+            }
+        }
+    };
+    AnyValue { value }
 }
 
 fn kv(key: &str, value: &str) -> KeyValue {
@@ -636,9 +698,89 @@ mod tests {
     }
 
     #[test]
-    fn collector_leaves_unrecognized_json_body_untouched() {
+    fn collector_extracts_a_generic_json_message() {
         let application_log = r#"{"status":200,"msg":"ready"}"#;
-        assert_eq!(parse_application_log_message(application_log), None);
+        assert_eq!(lognorm::parse(application_log).message(), "ready");
+    }
+
+    #[test]
+    fn pod_logs_preserve_nested_types_and_source_time_on_the_wire() {
+        let original = r#"{"level":"WARN","msg":"ready","time":1700000000123,"payload":{"count":3,"enabled":true,"items":[null,"text"]},"stream":"spoofed"}"#;
+        let encoded = pod_log_records_to_otlp(
+            vec![PodLogRecord {
+                namespace: "demo".to_owned(),
+                pod: "example".to_owned(),
+                container: "example".to_owned(),
+                timestamp_unix_nanos: 1_800_000_000_000_000_000,
+                body: original.to_owned(),
+            }],
+            "deployment-example",
+        )
+        .unwrap();
+        let request = ExportLogsServiceRequest::decode(encoded.as_slice()).unwrap();
+        let record = &request.resource_logs[0].scope_logs[0].log_records[0];
+        assert_eq!(record.time_unix_nano, 1_700_000_000_123_000_000);
+        assert_eq!(record.observed_time_unix_nano, 1_800_000_000_000_000_000);
+        assert_eq!(record.severity_number, SeverityNumber::Warn as i32);
+        let app = record.attributes.iter().find(|kv| kv.key == "app").unwrap();
+        let Some(any_value::Value::KvlistValue(app)) = app.value.as_ref().unwrap().value.as_ref()
+        else {
+            panic!("app should remain a map");
+        };
+        let payload = app.values.iter().find(|kv| kv.key == "payload").unwrap();
+        let Some(any_value::Value::KvlistValue(payload)) =
+            payload.value.as_ref().unwrap().value.as_ref()
+        else {
+            panic!("payload should remain a map");
+        };
+        assert_eq!(
+            payload
+                .values
+                .iter()
+                .find(|kv| kv.key == "count")
+                .unwrap()
+                .value
+                .as_ref()
+                .unwrap()
+                .value,
+            Some(any_value::Value::IntValue(3))
+        );
+        assert_eq!(
+            payload
+                .values
+                .iter()
+                .find(|kv| kv.key == "enabled")
+                .unwrap()
+                .value
+                .as_ref()
+                .unwrap()
+                .value,
+            Some(any_value::Value::BoolValue(true))
+        );
+        let Some(any_value::Value::ArrayValue(items)) = payload
+            .values
+            .iter()
+            .find(|kv| kv.key == "items")
+            .unwrap()
+            .value
+            .as_ref()
+            .unwrap()
+            .value
+            .as_ref()
+        else {
+            panic!("items should remain an array")
+        };
+        assert_eq!(items.values[0].value, None);
+        assert_eq!(
+            items.values[1].value,
+            Some(any_value::Value::StringValue("text".to_owned()))
+        );
+        assert!(record
+            .attributes
+            .iter()
+            .any(|kv| kv.key == "log.record.original"
+                && kv.value.as_ref().unwrap().value
+                    == Some(any_value::Value::StringValue(original.to_owned()))));
     }
 
     #[test]

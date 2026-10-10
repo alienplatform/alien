@@ -24,6 +24,7 @@ kubernetes = ["alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 
 [dependencies]
+lognorm = { workspace = true }
 alien-commands = { workspace = true, default-features = false, features = ["runtime"] }
 alien-bindings = { workspace = true, default-features = false }
 alien-worker-protocol = { workspace = true, features = ["server"] }
@@ -67,7 +68,6 @@ pin-project-lite = { workspace = true, optional = true }
 http-body = { workspace = true, optional = true }
 cloudevents-sdk = { workspace = true, features = ["reqwest"], optional = true }
 port_check = { workspace = true }
-strip-ansi-escapes = { workspace = true }
 
 [dev-dependencies]
 opentelemetry_sdk = { version = "0.30", features = ["logs", "testing"] }

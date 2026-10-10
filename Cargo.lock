@@ -655,6 +655,7 @@ dependencies = [
  "indexmap 2.14.1",
  "insta",
  "libc",
+ "lognorm",
  "nanoid",
  "regex",
  "reqwest 0.12.28",
@@ -1133,6 +1134,7 @@ dependencies = [
  "http 1.5.0",
  "k8s-openapi",
  "libc",
+ "lognorm",
  "opentelemetry-proto",
  "prost 0.13.5",
  "reqwest 0.12.28",
@@ -1455,6 +1457,7 @@ dependencies = [
  "lambda_http",
  "lambda_runtime",
  "libc",
+ "lognorm",
  "lru 0.16.4",
  "once_cell",
  "opentelemetry",
@@ -1470,7 +1473,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snapbox",
- "strip-ansi-escapes",
  "tempfile",
  "test-context",
  "tokio",
@@ -6367,6 +6369,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lognorm"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d450d0e0317c5d991384972d5759e1a6be972ed936043db6d06e4589bedb378e"
+dependencies = [
+ "anstyle-parse 1.0.0",
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "loom"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10298,15 +10312,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "strip-ansi-escapes"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
-dependencies = [
- "vte",
-]
-
-[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11771,15 +11776,6 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
-
-[[package]]
-name = "vte"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "walkdir"

@@ -1,5 +1,7 @@
+mod normalization;
+
 use crate::error::{ErrorData, Result};
-use alien_core::{parse_application_log_level, ApplicationLogLevel, ENV_ALIEN_RUNTIME_SECRETS};
+use alien_core::ENV_ALIEN_RUNTIME_SECRETS;
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     collections::HashMap,
@@ -334,34 +336,36 @@ fn emit_to_provider(
     use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _};
     use std::time::{Duration, UNIX_EPOCH};
 
-    // Get a logger for function output
     let logger = provider.logger("function-output");
-
-    // Create and configure the log record
     let mut record = logger.create_log_record();
+    let log = lognorm::parse(body);
+    let collected = u64::try_from(timestamp_nanos)
+        .ok()
+        .and_then(|nanos| UNIX_EPOCH.checked_add(Duration::from_nanos(nanos)))
+        .unwrap_or(UNIX_EPOCH);
+    record.set_observed_timestamp(collected);
+    record.set_timestamp(if is_system {
+        collected
+    } else {
+        normalization::timestamp(&log).unwrap_or(collected)
+    });
 
-    // Set timestamp from nanos
-    let timestamp = UNIX_EPOCH + Duration::from_nanos(timestamp_nanos as u64);
-    record.set_timestamp(timestamp);
-
-    let (severity, severity_text) = captured_log_severity(stream, body, is_system);
+    let (severity, severity_text) = captured_log_severity(stream, &log, is_system);
     record.set_severity_text(severity_text);
     record.set_severity_number(severity);
-
-    // Captured stdout follows the same readable-body plus original-record
-    // contract as container log collectors. System output stays untouched.
-    let readable_body = (!is_system)
-        .then(|| alien_core::parse_application_log_message(body))
-        .flatten();
-    if readable_body.is_some() {
-        record.add_attribute(
-            "log.record.original",
-            AnyValue::String(body.to_string().into()),
-        );
-    }
     record.set_body(AnyValue::String(
-        readable_body.unwrap_or_else(|| body.to_string()).into(),
+        if is_system { body } else { log.message() }
+            .to_owned()
+            .into(),
     ));
+    if !is_system {
+        if log.outcome() == lognorm::ParseOutcome::Structured {
+            record.add_attribute("app", normalization::fields(log.fields()));
+        }
+        if log.outcome() == lognorm::ParseOutcome::Structured || log.message() != body {
+            record.add_attribute("log.record.original", body.to_owned());
+        }
+    }
 
     // Add stream as attribute
     record.add_attribute("stream", AnyValue::String(stream.to_string().into()));
@@ -379,24 +383,18 @@ fn emit_to_provider(
 #[cfg(feature = "otlp")]
 fn captured_log_severity(
     stream: &str,
-    body: &str,
+    log: &lognorm::ParsedLog<'_>,
     is_system: bool,
 ) -> (opentelemetry::logs::Severity, &'static str) {
     use opentelemetry::logs::Severity;
-
     if !is_system {
-        if let Some(level) = parse_application_log_level(body) {
-            return match level {
-                ApplicationLogLevel::Trace => (Severity::Trace, "TRACE"),
-                ApplicationLogLevel::Debug => (Severity::Debug, "DEBUG"),
-                ApplicationLogLevel::Info => (Severity::Info, "INFO"),
-                ApplicationLogLevel::Warn => (Severity::Warn, "WARN"),
-                ApplicationLogLevel::Error => (Severity::Error, "ERROR"),
-                ApplicationLogLevel::Fatal => (Severity::Fatal, "FATAL"),
-            };
+        if let Some(severity) = normalization::severity(log) {
+            return (
+                severity,
+                log.severity().map(lognorm::Severity::as_str).unwrap_or(""),
+            );
         }
     }
-
     if stream == "stderr" {
         (Severity::Error, "ERROR")
     } else {
@@ -555,15 +553,15 @@ mod tests {
 
         let body = r#"{"level":"INFO","fields":{"message":"ready"}}"#;
         assert_eq!(
-            captured_log_severity("stderr", body, false),
+            captured_log_severity("stderr", &lognorm::parse(body), false),
             (Severity::Info, "INFO")
         );
         assert_eq!(
-            captured_log_severity("stderr", body, true),
+            captured_log_severity("stderr", &lognorm::parse(body), true),
             (Severity::Error, "ERROR")
         );
         assert_eq!(
-            captured_log_severity("stderr", r#"{"level":"LOUD"}"#, false),
+            captured_log_severity("stderr", &lognorm::parse(r#"{"level":"LOUD"}"#), false),
             (Severity::Error, "ERROR")
         );
     }
@@ -706,3 +704,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod normalization_tests;
