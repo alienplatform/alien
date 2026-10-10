@@ -705,12 +705,13 @@ mod tests {
             ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
             SyncInput, SyncRequest,
         },
-        DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
-        ExternalBindings, Platform, ReleaseInfo, ResourceHeartbeatData, RuntimeMetadata, Stack,
-        StackSettings, StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        ContainerHeartbeatData, DeploymentConfig, DeploymentState, DeploymentStatus,
+        EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
+        ResourceHeartbeatData, RuntimeMetadata, Stack, StackSettings, StackState,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
 
     use crate::traits::DeploymentRecord;
@@ -1013,9 +1014,8 @@ mod tests {
         assert_eq!(req.operator_image, None);
     }
 
-    #[test]
-    fn agent_sync_request_accepts_typed_heartbeats() {
-        let req: AgentSyncRequest = serde_json::from_value(json!({
+    fn sync_body_with_container_heartbeat(cpu: Value) -> Value {
+        json!({
             "deploymentId": "dep_test",
             "currentState": null,
             "resourceHeartbeats": [{
@@ -1047,7 +1047,7 @@ mod tests {
                         "workloadKind": "deployment",
                         "replicas": { "desired": 2, "current": 2, "ready": 2, "available": 2, "updated": null, "misscheduled": null },
                         "restarts": 0,
-                        "cpu": null,
+                        "cpu": cpu,
                         "memory": null,
                         "workload": null,
                         "pods": [],
@@ -1057,8 +1057,14 @@ mod tests {
                 },
                 "raw": []
             }]
-        }))
-        .expect("agent sync request should accept typed heartbeat envelopes");
+        })
+    }
+
+    #[test]
+    fn agent_sync_request_accepts_typed_heartbeats() {
+        let req: AgentSyncRequest =
+            serde_json::from_value(sync_body_with_container_heartbeat(Value::Null))
+                .expect("agent sync request should accept typed heartbeat envelopes");
 
         assert_eq!(req.heartbeats.len(), 1);
         assert_eq!(req.heartbeats[0].resource_id, "api");
@@ -1066,6 +1072,26 @@ mod tests {
             req.heartbeats[0].data,
             ResourceHeartbeatData::Container(_)
         ));
+    }
+
+    #[test]
+    fn sync_body_text_with_fractional_metrics_decodes() {
+        // Operators send fractional CPU samples. The body is decoded from text
+        // through a flattened request type, which buffers every number. A
+        // dependency that enables serde_json's `arbitrary_precision` feature
+        // makes this decode fail for the whole build.
+        let body = sync_body_with_container_heartbeat(json!({ "value": 0.25, "unit": "cores" }))
+            .to_string();
+
+        let req: AgentSyncWireRequest =
+            serde_json::from_str(&body).expect("sync body with fractional metrics must decode");
+
+        let ResourceHeartbeatData::Container(ContainerHeartbeatData::Kubernetes(container)) =
+            &req.request.heartbeats[0].data
+        else {
+            panic!("expected a Kubernetes container heartbeat");
+        };
+        assert_eq!(container.cpu.as_ref().map(|cpu| cpu.value), Some(0.25));
     }
 
     #[test]

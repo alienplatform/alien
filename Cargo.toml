@@ -78,7 +78,7 @@ license-file = "LICENSE.md"
 
 [workspace.dependencies]
 strip-ansi-escapes = "0.2"
-lognorm = "0.1.0"
+lognorm = "0.2.0"
 alien-commands = { path = "crates/alien-commands", version = "3.3.31", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
 alien-bindings = { path = "crates/alien-bindings", version = "3.3.31", default-features = false }

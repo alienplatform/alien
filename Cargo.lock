@@ -6371,12 +6371,13 @@ dependencies = [
 
 [[package]]
 name = "lognorm"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d450d0e0317c5d991384972d5759e1a6be972ed936043db6d06e4589bedb378e"
+checksum = "9036277caca17bfd7462bdd010b01420ec0d08a79d5bb6e09933c72a27f2fe2d"
 dependencies = [
  "anstyle-parse 1.0.0",
  "chrono",
+ "memchr",
  "serde",
  "serde_json",
 ]
