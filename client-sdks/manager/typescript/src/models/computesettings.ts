@@ -11,6 +11,12 @@ import {
   ComputePoolSelection$Outbound,
   ComputePoolSelection$outboundSchema,
 } from "./computepoolselection.js";
+import {
+  ContainerResourceSelection,
+  ContainerResourceSelection$inboundSchema,
+  ContainerResourceSelection$Outbound,
+  ContainerResourceSelection$outboundSchema,
+} from "./containerresourceselection.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -24,6 +30,10 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export type ComputeSettings = {
   /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: ContainerResourceSelection } | undefined;
+  /**
    * Selected compute choices keyed by pool ID.
    */
   pools?: { [k: string]: ComputePoolSelection } | undefined;
@@ -34,10 +44,13 @@ export const ComputeSettings$inboundSchema: z.ZodType<
   ComputeSettings,
   unknown
 > = z.object({
+  containers: z.record(z.string(), ContainerResourceSelection$inboundSchema)
+    .optional(),
   pools: z.record(z.string(), ComputePoolSelection$inboundSchema).optional(),
 });
 /** @internal */
 export type ComputeSettings$Outbound = {
+  containers?: { [k: string]: ContainerResourceSelection$Outbound } | undefined;
   pools?: { [k: string]: ComputePoolSelection$Outbound } | undefined;
 };
 
@@ -46,6 +59,8 @@ export const ComputeSettings$outboundSchema: z.ZodType<
   ComputeSettings$Outbound,
   ComputeSettings
 > = z.object({
+  containers: z.record(z.string(), ContainerResourceSelection$outboundSchema)
+    .optional(),
   pools: z.record(z.string(), ComputePoolSelection$outboundSchema).optional(),
 });
 

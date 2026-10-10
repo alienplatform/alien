@@ -2474,6 +2474,17 @@
                 },
                 "description": "Absent for older Operators. This report has no secret values."
               },
+              "operationsConfig": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OperationsConfig",
+                    "description": "Operations an Operator installed without a release declares, without\nsetting values. Opaque to OSS beyond forwarding it."
+                  }
+                ]
+              },
               "operatorImage": {
                 "oneOf": [
                   {
@@ -8203,6 +8214,16 @@
         "type": "object",
         "description": "Deployment-time compute choices for Alien-managed compute pools.\n\nApplication source declares portable pool requirements. This settings\nobject stores the concrete choices made for one deployment, such as the\nprovider machine type and selected machine counts.",
         "properties": {
+          "containers": {
+            "type": "object",
+            "description": "Per-replica resources selected within each container's declared ranges.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContainerResourceSelection"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "pools": {
             "type": "object",
             "description": "Selected compute choices keyed by pool ID.",
@@ -8345,6 +8366,28 @@
             "description": "Container name."
           }
         }
+      },
+      "ContainerResourceSelection": {
+        "type": "object",
+        "description": "Deployment-time resource allocation for a container. Omitted fields use release defaults.",
+        "properties": {
+          "cpu": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU allocation in vCPUs."
+          },
+          "memory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Memory allocation, using binary units such as Mi or Gi."
+          }
+        },
+        "additionalProperties": false
       },
       "CreatableTokenType": {
         "type": "string",
@@ -8724,6 +8767,32 @@
             "description": "Fully qualified domain name to use."
           }
         }
+      },
+      "CustomPluginOperationsConfig": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PluginOperationsConfig",
+            "description": "Settings and approval rules."
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "version"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Plugin name as published."
+              },
+              "version": {
+                "type": "string",
+                "description": "Exact published version."
+              }
+            }
+          }
+        ],
+        "description": "A published custom plugin at an exact version."
       },
       "DaemonHeartbeatData": {
         "oneOf": [
@@ -16193,6 +16262,94 @@
           }
         }
       },
+      "OperationApproval": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OperationApprovalDecision",
+            "description": "Run without approval, or require it."
+          },
+          {
+            "type": "object",
+            "description": "A decision plus the highest risk tier a wildcard access request may cover.",
+            "required": [
+              "decision"
+            ],
+            "properties": {
+              "decision": {
+                "$ref": "#/components/schemas/OperationApprovalDecision",
+                "description": "Run without approval, or require it."
+              },
+              "maxRisk": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard\naccess request for these operations may cover."
+              }
+            }
+          }
+        ],
+        "description": "Approval rule for the operations a pattern matches."
+      },
+      "OperationApprovalDecision": {
+        "type": "string",
+        "description": "Whether matching operations run without approval.",
+        "enum": [
+          "auto",
+          "manual"
+        ]
+      },
+      "OperationSettingValue": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A literal value."
+          },
+          {
+            "type": "object",
+            "description": "The value of a stack input.",
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "type": "string",
+                "description": "Stack input id."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stack resources the plugin may act on, such as buckets or queues.",
+            "required": [
+              "resources"
+            ],
+            "properties": {
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ids in the same stack."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An environment variable of the Operator process. Only for an Operator\ninstalled on its own, so secrets stay in its environment.",
+            "required": [
+              "env"
+            ],
+            "properties": {
+              "env": {
+                "type": "string",
+                "description": "Environment variable name."
+              }
+            }
+          }
+        ],
+        "description": "Value of one plugin setting."
+      },
       "OperationsBundleDownload": {
         "type": "object",
         "description": "One bundle the Operator needs to download to reach `targetBundleHash`.\nThe manager mints a short-lived presigned GET URL per bundle — the\nOperator never holds real cloud storage credentials, mirroring the OCI\nregistry proxy's credential-injection pattern.",
@@ -16202,6 +16359,16 @@
           "url"
         ],
         "properties": {
+          "env": {
+            "type": "object",
+            "description": "Environment the plugin process runs with: its settings, which may hold\nsecrets. Store only in encrypted state, and never log the values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "plugin": {
             "type": "string",
             "description": "Plugin name this bundle provides."
@@ -16213,6 +16380,29 @@
           "url": {
             "type": "string",
             "description": "Presigned URL to GET the bundle ZIP from. Short-lived."
+          }
+        }
+      },
+      "OperationsConfig": {
+        "type": "object",
+        "description": "Operations declared by a stack, or by an Operator installed on its own.",
+        "properties": {
+          "custom": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomPluginOperationsConfig"
+            },
+            "description": "Published custom plugins, pinned to exact versions."
+          },
+          "plugins": {
+            "type": "object",
+            "description": "Built-in plugins, by plugin name.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PluginOperationsConfig"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -16340,6 +16530,32 @@
           "local",
           "test"
         ]
+      },
+      "PluginOperationsConfig": {
+        "type": "object",
+        "description": "Settings and approval rules for one plugin.",
+        "properties": {
+          "approval": {
+            "type": "object",
+            "description": "Approval rule per operation: an operation name, or `*` for all of them.\nOperations no rule matches need approval.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OperationApproval"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "type": "object",
+            "description": "Values for the settings the plugin's manifest declares.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OperationSettingValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       },
       "PostgresBinding": {
         "oneOf": [

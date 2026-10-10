@@ -56,6 +56,7 @@ export * from "./containerregistrymanagersnapshot.js";
 export * from "./containerregistrystate.js";
 export * from "./cpuallocatable.js";
 export * from "./createaccessrequest.js";
+export * from "./createaccessrequestmaxrisk.js";
 export * from "./createapikeyrequest.js";
 export * from "./createapikeyresponse.js";
 export * from "./createcommandrequest.js";
