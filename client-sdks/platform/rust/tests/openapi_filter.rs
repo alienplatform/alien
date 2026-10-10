@@ -851,6 +851,50 @@ fn both_modes_normalize_only_proven_disjoint_required_tags() {
     }
 }
 
+#[test]
+fn externally_tagged_unions_become_one_of_only_when_branches_cannot_overlap() {
+    let unit = |tag: &str| json!({"type": "string", "enum": [tag]});
+    let data = |tag: &str, closed: bool| {
+        let mut branch = json!({
+            "type": "object", "required": [tag],
+            "properties": {tag: {"type": "object"}}
+        });
+        if closed {
+            branch["additionalProperties"] = json!(false);
+        }
+        branch
+    };
+    let cases = json!({
+        // A string never matches an object, so one open object branch is safe.
+        "eventState": {"anyOf": [data("failed", false), unit("none"), unit("success")]},
+        "closedObjects": {"anyOf": [data("extend", true), data("override", true), unit("auto")]},
+        // `{"extend": {}, "override": {}}` matches both open branches.
+        "openObjects": {"anyOf": [data("extend", false), data("override", false), unit("auto")]},
+        "repeatedTag": {"anyOf": [data("auto", false), unit("auto")]},
+        "nullable": {"anyOf": [data("failed", false), {"type": "string", "enum": ["none"], "nullable": true}]}
+    });
+    let document = json!({"components": {"schemas": {
+        "Union": {"type": "object", "properties": cases}
+    }}});
+    let normalized = openapi_filter::normalize_openapi(&document).unwrap();
+    let properties = &normalized["components"]["schemas"]["Union"]["properties"];
+    for name in ["eventState", "closedObjects"] {
+        let mut expected = cases[name].clone();
+        expected["oneOf"] = expected.as_object_mut().unwrap().remove("anyOf").unwrap();
+        // Normalization later drops `additionalProperties: false` from every schema.
+        for branch in expected["oneOf"].as_array_mut().unwrap() {
+            branch
+                .as_object_mut()
+                .unwrap()
+                .remove("additionalProperties");
+        }
+        assert_eq!(properties[name], expected, "{name}");
+    }
+    for name in ["openObjects", "repeatedTag", "nullable"] {
+        assert_eq!(properties[name], cases[name], "{name}");
+    }
+}
+
 fn dereference(value: &Value, document: &Value, depth: usize) -> Value {
     assert!(depth < 64, "fixture references must not cycle");
     match value {
