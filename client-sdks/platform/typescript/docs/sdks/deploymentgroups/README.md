@@ -195,7 +195,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDeploymentGroupsListDeploymentGroups,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDeploymentGroupsListDeploymentGroups,
@@ -274,7 +274,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDeploymentGroupsListDeploymentGroups,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDeploymentGroupsListDeploymentGroups,
@@ -573,7 +573,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDeploymentGroupsGetDeploymentGroupByExternalId,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDeploymentGroupsGetDeploymentGroupByExternalId,
@@ -678,7 +678,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDeploymentGroupsGetDeploymentGroup,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDeploymentGroupsGetDeploymentGroup,
@@ -849,7 +849,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
   }
@@ -1268,7 +1268,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDeploymentGroupsGetExternalAIBinding,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDeploymentGroupsGetExternalAIBinding,
@@ -1443,7 +1443,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("deploymentGroupsDeleteExternalAIBinding failed:", res.error);
   }
@@ -1663,7 +1663,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDeploymentGroupsGetExternalAIModelCheck,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDeploymentGroupsGetExternalAIModelCheck,

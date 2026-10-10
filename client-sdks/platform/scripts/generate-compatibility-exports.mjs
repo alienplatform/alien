@@ -135,9 +135,11 @@ for (const [previous, current] of Object.entries(modules)) {
   const reexports = [];
   for (const [module, names] of Object.entries(additionalExports[previous] ?? {})) {
     const source = await readFile(new URL(`${module}.ts`, models), "utf8");
+    const values = new Set(
+      [...source.matchAll(/export\s+(?:const|function|class)\s+([\w$]+)/g)].map(match => match[1]),
+    );
     for (const name of names) {
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const value = new RegExp(`export\\s+(?:const|function|class)\\s+${escaped}\\b`).test(source);
+      const value = values.has(name);
       reexports.push(`export ${value ? "" : "type "}{ ${name} } from "./${module}.js";`);
     }
   }

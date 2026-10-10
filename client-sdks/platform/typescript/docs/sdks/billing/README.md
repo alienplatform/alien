@@ -79,7 +79,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchBillingListAuditLog,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateBillingListAuditLog,
@@ -178,7 +178,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchBillingGetEntitlements,
-
+  
   // Utility to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateAllBillingGetEntitlements,

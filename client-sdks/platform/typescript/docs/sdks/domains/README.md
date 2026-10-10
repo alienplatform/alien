@@ -83,7 +83,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDomainsList,
-
+  
   // Utility to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateAllDomainsList,
@@ -378,7 +378,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDomainsGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDomainsGet,

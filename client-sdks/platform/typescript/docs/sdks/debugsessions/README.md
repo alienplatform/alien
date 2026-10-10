@@ -87,7 +87,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDebugSessionsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDebugSessionsList,
@@ -168,7 +168,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDebugSessionsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDebugSessionsList,
@@ -462,7 +462,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchDebugSessionsGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateDebugSessionsGet,

@@ -39,7 +39,7 @@ done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 
 node "$repo_root/client-sdks/platform/scripts/generate-compatibility-exports.mjs"
 
-NODE_OPTIONS=--max-old-space-size=12288 pnpm -C "$sdk_dir" build
+NODE_OPTIONS=--max-old-space-size=16384 pnpm -C "$sdk_dir" build
 pnpm -C "$repo_root" install --lockfile-only
 node --test "$repo_root/client-sdks/platform/scripts/typescript-sdk.test.mjs"
 node --test "$repo_root/client-sdks/platform/scripts/dynamic-containers-sdk.test.mjs"

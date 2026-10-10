@@ -83,7 +83,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchUserListMemberships,
-
+  
   // Utility to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateAllUserListMemberships,
@@ -180,7 +180,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchUserGetProfile,
-
+  
   // Utility to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateAllUserGetProfile,
@@ -541,7 +541,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchUserListGitNamespaces,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateUserListGitNamespaces,
@@ -732,7 +732,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchUserListGitNamespaceRepositories,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateUserListGitNamespaceRepositories,

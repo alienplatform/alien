@@ -108,7 +108,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsList,
@@ -315,7 +315,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGet,
@@ -394,7 +394,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGet,
@@ -669,7 +669,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("projectsDelete failed:", res.error);
   }
@@ -792,7 +792,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetGcpOAuthProvider,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetGcpOAuthProvider,
@@ -871,7 +871,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetGcpOAuthProvider,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetGcpOAuthProvider,
@@ -1316,7 +1316,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetDeploymentPortalDomain,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetDeploymentPortalDomain,
@@ -1395,7 +1395,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetDeploymentPortalDomain,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetDeploymentPortalDomain,
@@ -1598,7 +1598,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetTemplateUrls,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetTemplateUrls,
@@ -1677,7 +1677,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetTemplateUrls,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetTemplateUrls,
@@ -1782,7 +1782,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetDeploymentLinkSetup,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetDeploymentLinkSetup,
@@ -1861,7 +1861,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetDeploymentLinkSetup,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetDeploymentLinkSetup,
@@ -1966,7 +1966,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetActiveRelease,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetActiveRelease,
@@ -2045,7 +2045,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetActiveRelease,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetActiveRelease,
@@ -2614,7 +2614,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetAiProviderHeaders,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetAiProviderHeaders,
@@ -2693,7 +2693,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetAiProviderHeaders,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetAiProviderHeaders,
@@ -3890,7 +3890,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetCapabilityOverview,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetCapabilityOverview,
@@ -3969,7 +3969,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetCapabilityOverview,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetCapabilityOverview,
@@ -4074,7 +4074,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetRemoteOperatorSummary,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetRemoteOperatorSummary,
@@ -4153,7 +4153,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetRemoteOperatorSummary,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetRemoteOperatorSummary,
@@ -4587,7 +4587,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetAiUsage,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetAiUsage,
@@ -4666,7 +4666,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetAiUsage,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetAiUsage,
@@ -4769,7 +4769,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetEncryptionUsage,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetEncryptionUsage,
@@ -4848,7 +4848,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetEncryptionUsage,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetEncryptionUsage,
@@ -4951,7 +4951,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetSandboxMetrics,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetSandboxMetrics,
@@ -5030,7 +5030,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchProjectsGetSandboxMetrics,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateProjectsGetSandboxMetrics,

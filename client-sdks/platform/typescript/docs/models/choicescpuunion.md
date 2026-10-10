@@ -18,3 +18,4 @@ const value: models.CpuChoices = {
 ```typescript
 const value: string = "<value>";
 ```
+

@@ -185,7 +185,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchManagersList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateManagersList,
@@ -571,7 +571,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchManagersGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateManagersGet,
@@ -770,7 +770,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchManagersGetDomainBinding,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateManagersGetDomainBinding,
@@ -972,7 +972,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchManagersGetManagementConfig,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateManagersGetManagementConfig,
@@ -1266,7 +1266,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchManagersListEvents,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateManagersListEvents,
@@ -1739,7 +1739,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchManagersGetDeployment,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateManagersGetDeployment,
