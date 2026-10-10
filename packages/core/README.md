@@ -22,7 +22,6 @@ const settings = {
         mode: "autoscale",
         min: 1,
         max: 5,
-        machine: "m7g.large",
       },
     },
   },
@@ -38,6 +37,13 @@ Container allocations are portable across AWS, GCP, Azure, and Kubernetes.
 Pool machine names are provider-specific: use an EC2 instance type, a GCE machine
 type, or an Azure VM SKU. Compute planning uses the selected container allocations
 to recommend suitable machines and validate fleet capacity.
+
+Omit `machine` to let Alien choose it from the selected resources on setup and
+later updates. Set `machine` to a provider machine name to override that choice;
+remove the override to return to automatic sizing. A resource update can replace
+the machine while keeping the pool's count policy and persistent volumes.
+Single-replica stateful workloads may restart during replacement. An explicit
+machine that cannot fit the allocation is rejected before cloud changes.
 
 These are deployment choices, not vertical autoscaling. Each replica receives the
 selected allocation. An autoscaling machine pool adds capacity when replicas need
