@@ -8,17 +8,18 @@ use crate::{
     },
 };
 use alien_core::{
-    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
-    ComputePoolSelection, Container, Daemon, DeploymentModel, DomainSettings, ErrorData,
-    ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
-    NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
+    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
+    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
+    WorkerCode,
+    import::{CURRENT_SETUP_IMPORT_FORMAT_VERSION, EmitContext},
+    ownership_policy_for_resource_type,
 };
 use alien_error::AlienError;
-use indexmap::{indexmap, IndexMap};
-use serde_json::{json, Value};
+use indexmap::{IndexMap, indexmap};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
@@ -1557,9 +1558,19 @@ fn add_compute_parameters(
             continue;
         };
         let machine_parameter = compute_machine_parameter_name(&group.group_id);
-        let allowed_values = plan
-            .pools
-            .iter()
+        // Resource parameters can lower the release defaults, so a machine list
+        // filtered against those defaults would reject valid smaller machines.
+        // Preflight validates the selected machine against the selected resources.
+        let has_resource_choices = stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Container>()
+                .is_some_and(|container| container.resource_choices.is_some())
+        });
+        let allowed_values = (!has_resource_choices)
+            .then(|| &plan)
+            .into_iter()
+            .flat_map(|plan| &plan.pools)
             .find(|pool| pool.pool_id == group.group_id)
             .map(|pool| {
                 pool.machines
@@ -1656,17 +1667,32 @@ fn add_container_resource_parameters(
     for container in plan.containers {
         let prefix = format!("Container{}", pascal_identifier(&container.container_id));
         if let Some(range) = container.choices.cpu {
-            let mut parameter = number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
-            parameter.default = Some(CfExpression::Number(alien_core::instance_catalog::parse_cpu(&container.cpu.desired).expect("planner validated CPU")));
-            parameter.min_value = Some(CfExpression::Number(alien_core::instance_catalog::parse_cpu(&range.min).expect("planner validated CPU")));
-            parameter.max_value = Some(CfExpression::Number(alien_core::instance_catalog::parse_cpu(&range.max).expect("planner validated CPU")));
-            template.parameters.insert(format!("{prefix}Cpu"), parameter);
+            let mut parameter =
+                number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
+            parameter.default = Some(CfExpression::Number(
+                alien_core::instance_catalog::parse_cpu(&container.cpu.desired)
+                    .expect("planner validated CPU"),
+            ));
+            parameter.min_value = Some(CfExpression::Number(
+                alien_core::instance_catalog::parse_cpu(&range.min).expect("planner validated CPU"),
+            ));
+            parameter.max_value = Some(CfExpression::Number(
+                alien_core::instance_catalog::parse_cpu(&range.max).expect("planner validated CPU"),
+            ));
+            template
+                .parameters
+                .insert(format!("{prefix}Cpu"), parameter);
         }
         if container.choices.memory.is_some() {
-            template.parameters.insert(format!("{prefix}Memory"), string_parameter(
-                "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
-                Some(container.memory.desired), None, false,
-            ));
+            template.parameters.insert(
+                format!("{prefix}Memory"),
+                string_parameter(
+                    "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
+                    Some(container.memory.desired),
+                    None,
+                    false,
+                ),
+            );
         }
     }
     Ok(())
@@ -2124,8 +2150,15 @@ fn compute_settings_expression(
     let mut ids: Vec<_> = stack.resources.keys().collect();
     ids.sort();
     for id in ids {
-        let Some(container) = stack.resources[id].config.downcast_ref::<alien_core::Container>() else { continue; };
-        let Some(choices) = &container.resource_choices else { continue; };
+        let Some(container) = stack.resources[id]
+            .config
+            .downcast_ref::<alien_core::Container>()
+        else {
+            continue;
+        };
+        let Some(choices) = &container.resource_choices else {
+            continue;
+        };
         let prefix = format!("Container{}", pascal_identifier(id));
         let mut allocation = Vec::new();
         if choices.cpu.is_some() {
@@ -2134,7 +2167,9 @@ fn compute_settings_expression(
         if choices.memory.is_some() {
             allocation.push(("memory", CfExpression::ref_(format!("{prefix}Memory"))));
         }
-        if !allocation.is_empty() { containers.push((id.as_str(), CfExpression::object(allocation))); }
+        if !allocation.is_empty() {
+            containers.push((id.as_str(), CfExpression::object(allocation)));
+        }
     }
     if !containers.is_empty() {
         fields.push(("containers", CfExpression::object(containers)));
