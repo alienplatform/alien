@@ -129,10 +129,12 @@ pub fn plan_compute_with_state(
             .flat_map(|cluster| &cluster.capacity_groups)
             .find(|group| group.group_id == pool_id)
             .and_then(|group| group.instance_type.as_deref());
+        let machine_override = match selected {
+            Some(selection) => selection.machine(),
+            None => declared_machine,
+        };
         if requirements.architecture.is_none() {
-            requirements.architecture = selected
-                .and_then(ComputePoolSelection::machine)
-                .or_else(|| selected.is_none().then_some(declared_machine).flatten())
+            requirements.architecture = machine_override
                 .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
                 .map(|spec| spec.architecture)
                 .or_else(|| {
@@ -180,6 +182,7 @@ pub fn plan_compute_with_state(
             &group.scale,
             group.requires_failure_domain,
             group.generated,
+            machine_override,
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
         if selected.is_none() {
@@ -231,7 +234,12 @@ pub fn plan_compute_with_state(
                 errors.push(message);
             }
         }
-        let machines = machine_options(platform, &requirements, selected_choice.machine())?;
+        let machines = machine_options(
+            platform,
+            &requirements,
+            selected_choice.machine(),
+            recommended.machine(),
+        )?;
 
         pools.push(ComputePoolPlan {
             pool_id,
@@ -450,17 +458,32 @@ fn recommended_selection(
     scale: &CapacityGroupScalePolicy,
     requires_failure_domain: bool,
     generated: bool,
+    machine_override: Option<&str>,
 ) -> Result<ComputePoolSelection, ErrorData> {
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
-            instance_catalog::select_instance_type(platform, requirements)
-                .map_err(|message| {
-                    AlienError::new(ErrorData::GenericError {
-                        message: format!("Failed to select {platform} machine: {message}"),
-                    })
-                })?
-                .instance_type
-                .to_string(),
+            match instance_catalog::select_instance_type(platform, requirements) {
+                Ok(selection) => selection.instance_type.to_string(),
+                Err(message) => {
+                    // Automatic recommendations add headroom. A valid explicit
+                    // machine remains usable even when no catalog entry can
+                    // provide that extra headroom.
+                    let fallback = machine_override
+                        .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+                        .filter(|spec| {
+                            instance_satisfies(
+                                spec,
+                                requirements,
+                                requirements.architecture.unwrap_or(spec.architecture),
+                            )
+                        });
+                    fallback.map(|spec| spec.name.to_string()).ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("Failed to select {platform} machine: {message}"),
+                        })
+                    })?
+                }
+            },
         ),
         Platform::Local | Platform::Kubernetes | Platform::Machines | Platform::Test => None,
     };
@@ -548,16 +571,11 @@ fn machine_options(
     platform: Platform,
     requirements: &WorkloadRequirements,
     selected_machine: Option<&str>,
+    recommended_machine: Option<&str>,
 ) -> Result<Vec<ComputeMachineOption>, ErrorData> {
     if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         return Ok(Vec::new());
     }
-    let recommended =
-        instance_catalog::select_instance_type(platform, requirements).map_err(|message| {
-            AlienError::new(ErrorData::GenericError {
-                message: format!("Failed to select {platform} machine: {message}"),
-            })
-        })?;
     let resolved_architecture = requirements
         .architecture
         .or_else(|| {
@@ -566,13 +584,16 @@ fn machine_options(
                     .map(|spec| spec.architecture)
             })
         })
-        .or(recommended.profile.architecture)
+        .or_else(|| {
+            recommended_machine
+                .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+                .map(|spec| spec.architecture)
+        })
         .ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
                 message: format!("Selected {platform} machine has no CPU architecture"),
             })
         })?;
-    let recommended = recommended.instance_type.to_string();
 
     let mut options: Vec<ComputeMachineOption> = instance_catalog::catalog_for_platform(platform)
         .into_iter()
@@ -580,7 +601,8 @@ fn machine_options(
         .map(|spec| ComputeMachineOption {
             machine: spec.name.to_string(),
             profile: spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
-            recommended: spec.name == recommended || Some(spec.name) == selected_machine,
+            recommended: Some(spec.name) == recommended_machine
+                || Some(spec.name) == selected_machine,
         })
         .collect();
     options.sort_by(|a, b| a.machine.cmp(&b.machine));
