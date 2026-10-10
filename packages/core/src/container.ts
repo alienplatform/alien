@@ -158,7 +158,9 @@ export class Container extends ResourceBuilder {
     } else if ("default" in value) {
       this._config.resourceChoices ??= {}
       this._config.resourceChoices.cpu = {
-        min: value.min.toString(), max: value.max.toString(), default: value.default.toString(),
+        min: value.min.toString(),
+        max: value.max.toString(),
+        default: value.default.toString(),
       }
       this._config.cpu = { min: value.default.toString(), desired: value.default.toString() }
     } else {
