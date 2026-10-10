@@ -88,9 +88,12 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .await
             .into_sdk_error()
             .await
-            .context(alien_error::GenericError {
-                message: "Failed to renew deployment lease via manager API".to_string(),
-            })?;
+            // Inherits retryable: the renewal loop retries a retryable failure until the
+            // lease deadline and treats any other failure as a lost lease.
+            .context(crate::ErrorData::ManagerRequestFailed {
+                message: "renew deployment lease".to_string(),
+            })
+            .map_err(AlienError::into_generic)?;
         Ok(())
     }
 
@@ -1048,6 +1051,51 @@ mod tests {
 
         assert!(!error.retryable, "{error:?}");
         assert_eq!(error.http_status_code, Some(500));
+    }
+
+    async fn renew_against(base_url: &str) -> AlienError {
+        ManagerApiTransport::new(ManagerClient::new(base_url), "session-1".into())
+            .renew_lease("deployment-1")
+            .await
+            .expect_err("the renewal must fail")
+    }
+
+    /// The renewal loop retries a retryable failure until the lease deadline, so a network
+    /// blip reaching the manager must not end the deployment as a lost lease.
+    #[tokio::test]
+    async fn an_unreachable_manager_fails_the_renewal_as_retryable() {
+        // Bound and released: nothing listens, so the request is refused.
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a loopback port");
+
+        let error = renew_against(&format!("http://{address}")).await;
+
+        assert!(error.retryable, "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_renewal_the_manager_rejects_is_not_retried() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/renew");
+                then.status(500).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_LEASE_LOST",
+                    "message": "another session holds the lease",
+                    "retryable": false,
+                    "internal": false,
+                }));
+            })
+            .await;
+
+        let error = renew_against(&server.base_url()).await;
+
+        assert!(!error.retryable, "{error:?}");
+        assert_eq!(
+            error.source.as_ref().map(|source| source.code.as_str()),
+            Some("DEPLOYMENT_LEASE_LOST")
+        );
     }
 
     fn terminal_result(state: &DeploymentState) -> crate::Result<RunnerResult> {
