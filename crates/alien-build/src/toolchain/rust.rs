@@ -10,7 +10,10 @@ use std::process::Stdio;
 use std::time::Instant;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
+
+static RUSTUP_TARGET_INSTALL: Mutex<()> = Mutex::const_new(());
 
 /// Rust toolchain implementation using Cargo with Zig cross-compilation
 #[derive(Debug, Clone)]
@@ -25,6 +28,70 @@ struct CargoProjectMetadata {
 }
 
 impl RustToolchain {
+    async fn ensure_target_installed(&self, target: BinaryTarget, rustup: &Path) -> Result<()> {
+        // Parallel resource builds share rustup's download and installation files.
+        // Recheck under the lock so only one build installs a missing target.
+        let _target_install = RUSTUP_TARGET_INSTALL.lock().await;
+        let list_targets_output = Command::new(rustup)
+            .args(&["target", "list", "--installed"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImageBuildFailed {
+                resource_name: self.binary_name.clone(),
+                reason: "Failed to execute rustup target list".to_string(),
+                build_output: None,
+            })?;
+
+        if !list_targets_output.status.success() {
+            return Err(image_build_error_with_output(
+                self.binary_name.clone(),
+                "Failed to list installed Rust targets",
+                &list_targets_output,
+            ));
+        }
+        let installed_targets = String::from_utf8_lossy(&list_targets_output.stdout);
+        let target_installed = installed_targets
+            .lines()
+            .any(|line| line.trim() == target.rust_target_triple());
+
+        if !target_installed {
+            info!(
+                "Target {} not found, installing...",
+                target.rust_target_triple()
+            );
+            let install_target_output = Command::new(rustup)
+                .args(&["target", "add", target.rust_target_triple()])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: self.binary_name.clone(),
+                    reason: "Failed to execute rustup target add".to_string(),
+                    build_output: None,
+                })?;
+
+            if !install_target_output.status.success() {
+                return Err(image_build_error_with_output(
+                    self.binary_name.clone(),
+                    format!("Failed to install target {}", target.rust_target_triple()),
+                    &install_target_output,
+                ));
+            }
+            info!(
+                "Successfully installed target {}",
+                target.rust_target_triple()
+            );
+        } else {
+            info!("Target {} already installed", target.rust_target_triple());
+        }
+        Ok(())
+    }
+
     /// Check if the source directory contains a valid Rust project
     pub fn is_rust_project(src_dir: &Path) -> bool {
         src_dir.join("Cargo.toml").exists()
@@ -331,63 +398,8 @@ impl Toolchain for RustToolchain {
             }
         }
 
-        // Check if target is installed, install if not present (still needed for std library)
-        let list_targets_output = Command::new("rustup")
-            .args(&["target", "list", "--installed"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ImageBuildFailed {
-                resource_name: self.binary_name.clone(),
-                reason: "Failed to execute rustup target list".to_string(),
-                build_output: None,
-            })?;
-
-        let installed_targets = String::from_utf8_lossy(&list_targets_output.stdout);
-        let target_installed = installed_targets
-            .lines()
-            .any(|line| line.trim() == context.build_target.rust_target_triple());
-
-        if !target_installed {
-            info!(
-                "Target {} not found, installing...",
-                context.build_target.rust_target_triple()
-            );
-            let install_target_output = Command::new("rustup")
-                .args(&["target", "add", context.build_target.rust_target_triple()])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ImageBuildFailed {
-                    resource_name: self.binary_name.clone(),
-                    reason: "Failed to execute rustup target add".to_string(),
-                    build_output: None,
-                })?;
-
-            if !install_target_output.status.success() {
-                return Err(image_build_error_with_output(
-                    self.binary_name.clone(),
-                    format!(
-                        "Failed to install target {}",
-                        context.build_target.rust_target_triple()
-                    ),
-                    &install_target_output,
-                ));
-            }
-            info!(
-                "Successfully installed target {}",
-                context.build_target.rust_target_triple()
-            );
-        } else {
-            info!(
-                "Target {} already installed",
-                context.build_target.rust_target_triple()
-            );
-        }
+        self.ensure_target_installed(context.build_target, Path::new("rustup"))
+            .await?;
 
         // Determine the expected binary path before building so stale corrupt
         // artifacts from interrupted builds cannot be reused by Cargo.
@@ -599,8 +611,85 @@ impl Toolchain for RustToolchain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
     use tokio::fs;
+
+    #[cfg(unix)]
+    fn fake_rustup(directory: &Path) -> PathBuf {
+        let path = directory.join("rustup");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+case "$*" in
+  "target list --installed")
+    if [ -f fail-list ]; then echo 'cannot inspect toolchain' >&2; exit 7; fi
+    if [ -f installed ]; then echo x86_64-unknown-linux-musl; fi
+    # Hold the snapshot long enough for all unprotected checks to see it missing.
+    sleep 0.1
+    ;;
+  "target add x86_64-unknown-linux-musl")
+    mkdir installing || { echo 'overlapping installers' >&2; exit 8; }
+    echo install >> attempts
+    test ! -f installed || { echo 'duplicate installation' >&2; exit 9; }
+    sleep 0.1
+    touch installed
+    rmdir installing
+    ;;
+  *) echo 'unexpected rustup command' >&2; exit 10 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parallel_target_checks_install_once() {
+        let directory = tempdir().unwrap();
+        let rustup = fake_rustup(directory.path());
+        let builders = ["one", "two", "three"].map(|name| RustToolchain {
+            binary_name: name.to_string(),
+        });
+        let (one, two, three) = tokio::join!(
+            builders[0].ensure_target_installed(BinaryTarget::LinuxX64, &rustup),
+            builders[1].ensure_target_installed(BinaryTarget::LinuxX64, &rustup),
+            builders[2].ensure_target_installed(BinaryTarget::LinuxX64, &rustup),
+        );
+        one.unwrap();
+        two.unwrap();
+        three.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("attempts")).unwrap(),
+            "install\n"
+        );
+        assert!(directory.path().join("installed").exists());
+        assert!(!directory.path().join("installing").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_target_list_does_not_install() {
+        let directory = tempdir().unwrap();
+        let rustup = fake_rustup(directory.path());
+        std::fs::write(directory.path().join("fail-list"), "").unwrap();
+        let builder = RustToolchain {
+            binary_name: "example".to_string(),
+        };
+        let error = builder
+            .ensure_target_installed(BinaryTarget::LinuxX64, &rustup)
+            .await
+            .unwrap_err();
+        let message = format!("{error:?}");
+        assert!(message.contains("cannot inspect toolchain"), "{message}");
+        assert!(!directory.path().join("attempts").exists());
+        assert!(!directory.path().join("installed").exists());
+    }
 
     #[test]
     fn test_is_rust_project() {

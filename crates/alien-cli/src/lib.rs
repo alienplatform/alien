@@ -1374,6 +1374,12 @@ async fn run_dev_session(
     user_env_vars: Vec<CliEnvVar>,
     config_file: Option<PathBuf>,
 ) -> Result<()> {
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .into_alien_error()
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to listen for SIGTERM".to_string(),
+        })?;
     let current_dir = get_current_dir()?;
     let core_env_vars = cli_env_vars_to_core(&user_env_vars);
     let app_name = current_dir
@@ -1453,15 +1459,21 @@ async fn run_dev_session(
         prepare_dev_session_deployment(&deployment_name, port, core_env_vars.clone()).await?;
 
         let screen = DevCardScreen::new(steps.live_region());
-        watch_dev_deployments_until_ctrl_c(
+        let watch = watch_dev_deployments_until_ctrl_c(
             port,
             &deployment_name,
             status_file.as_ref(),
             &screen,
             &steps,
             1,
-        )
-        .await?;
+        );
+        #[cfg(unix)]
+        tokio::select! {
+            result = watch => result?,
+            _ = terminate.recv() => {}
+        }
+        #[cfg(not(unix))]
+        watch.await?;
 
         Ok::<(), alien_error::AlienError<ErrorData>>(())
     }
