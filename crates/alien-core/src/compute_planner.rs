@@ -1080,6 +1080,42 @@ mod tests {
     }
 
     #[test]
+    fn valid_pin_does_not_require_automatic_recommendation_headroom() {
+        let machine = instance_catalog::catalog_for_platform(Platform::Gcp)
+            .into_iter()
+            .max_by_key(|machine| machine.memory_bytes)
+            .unwrap();
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.cpu = ResourceSpec {
+            min: "0.5".into(),
+            desired: "0.5".into(),
+        };
+        container.memory = ResourceSpec {
+            min: machine.memory_bytes.to_string(),
+            desired: machine.memory_bytes.to_string(),
+        };
+        assert!(plan_compute(&stack, Platform::Gcp, None).is_err());
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools":{"general":{"mode":"fixed","machines":1,"machine":machine.name}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Gcp, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0].errors.is_empty(),
+            "{:?}",
+            plan.pools[0].errors
+        );
+        assert_eq!(plan.pools[0].selected.machine(), Some(machine.name));
+    }
+
+    #[test]
     fn invalid_deployment_resources_fail_before_capacity_planning() {
         let mut stack = stack_with_container();
         stack
