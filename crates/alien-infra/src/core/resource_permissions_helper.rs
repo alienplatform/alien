@@ -2504,7 +2504,7 @@ mod tests {
     /// Writes, for each stack in `ALIEN_AWS_POLICY_EQUIVALENCE_INPUT`, every inline policy direct
     /// setup puts on each service-account role before this change (`old`) and with it (`new`), to
     /// `ALIEN_AWS_POLICY_EQUIVALENCE_OUTPUT`. A raw stack goes through the real stack mutations
-    /// first; a stored prepared stack is used as is.
+    /// first, with its optional `stackSettings`; a stored prepared stack is used as is.
     ///
     /// To check that dropping the duplicates removes no effective permission, evaluate every
     /// action and resource of each role's `old` policies against `old` and against `new` with
@@ -2533,7 +2533,13 @@ mod tests {
                 let mut state = StackState::new(Platform::Aws);
                 state.resource_prefix = prefix.to_string();
                 let config = DeploymentConfig::builder()
-                    .stack_settings(StackSettings::default())
+                    .stack_settings(
+                        serde_json::from_value::<Option<StackSettings>>(
+                            entry["stackSettings"].clone(),
+                        )
+                        .unwrap()
+                        .unwrap_or_default(),
+                    )
                     .maybe_management_config(managing_role_arn.map(|arn| {
                         ManagementConfig::Aws(AwsManagementConfig {
                             managing_role_arn: arn.to_string(),
