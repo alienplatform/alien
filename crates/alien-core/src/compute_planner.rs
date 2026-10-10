@@ -929,7 +929,7 @@ mod tests {
         ] {
             let settings: ComputeSettings = serde_json::from_value(serde_json::json!({"containers": selection})).unwrap();
             let error = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap_err();
-            assert!(matches!(error.data(), ErrorData::ContainerResourceSelectionInvalid { .. }));
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
         }
     }
 
