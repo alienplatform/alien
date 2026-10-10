@@ -275,7 +275,12 @@ pub fn generate_cloudformation_template(
     let mut stack_settings = options.stack_settings.clone();
     if options.target.is_kubernetes() {
         // Kubernetes compute pools use existing nodes, not cloud fleet choices.
-        stack_settings.compute = None;
+        if let Some(compute) = stack_settings.compute.as_mut() {
+            compute.pools.clear();
+            if compute.containers.is_empty() {
+                stack_settings.compute = None;
+            }
+        }
     }
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
@@ -2084,13 +2089,27 @@ fn compute_settings_expression(
         let expression = CfExpression::object(fields);
         pools.push((group.group_id.as_str(), expression));
     }
-    if pools.is_empty() {
-        return None;
+    let mut fields = Vec::new();
+    if !pools.is_empty() {
+        fields.push(("pools", CfExpression::object(pools)));
     }
-    Some(CfExpression::object([(
-        "pools",
-        CfExpression::object(pools),
-    )]))
+    if let Some(compute) = compute.filter(|compute| !compute.containers.is_empty()) {
+        let mut ids: Vec<_> = compute.containers.keys().collect();
+        ids.sort();
+        let containers = ids.into_iter().map(|id| {
+            let selection = &compute.containers[id];
+            let mut allocation = Vec::new();
+            if let Some(cpu) = &selection.cpu {
+                allocation.push(("cpu", CfExpression::Number(cpu.as_f64().expect("JSON numbers are finite"))));
+            }
+            if let Some(memory) = &selection.memory {
+                allocation.push(("memory", CfExpression::from(memory.clone())));
+            }
+            (id.as_str(), CfExpression::object(allocation))
+        });
+        fields.push(("containers", CfExpression::object(containers)));
+    }
+    (!fields.is_empty()).then(|| CfExpression::object(fields))
 }
 
 fn compute_machine_parameter_name(pool_id: &str) -> String {
