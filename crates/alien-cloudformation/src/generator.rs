@@ -1694,13 +1694,15 @@ fn add_container_resource_parameters(
                 number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
             parameter.default = Some(CfExpression::Number(
                 alien_core::instance_catalog::parse_cpu(&container.cpu.desired)
-                    .expect("planner validated CPU"),
+                    .expect("resolver validated CPU"),
             ));
             parameter.min_value = Some(CfExpression::Number(
-                alien_core::instance_catalog::parse_cpu(&range.min).expect("planner validated CPU"),
+                alien_core::instance_catalog::parse_cpu(&range.min)
+                    .expect("resolver validated CPU"),
             ));
             parameter.max_value = Some(CfExpression::Number(
-                alien_core::instance_catalog::parse_cpu(&range.max).expect("planner validated CPU"),
+                alien_core::instance_catalog::parse_cpu(&range.max)
+                    .expect("resolver validated CPU"),
             ));
             template
                 .parameters
@@ -3148,7 +3150,7 @@ mod tests {
         let stack = Stack::new("stack".into())
             .add(container, ResourceLifecycle::Live)
             .build();
-        let mut template = CfTemplate::new();
+        let mut template = CfTemplate::default();
         add_container_resource_parameters(&mut template, &stack, None)
             .expect("Kubernetes workload sizes must not be constrained by AWS machines");
     }
