@@ -1773,7 +1773,7 @@ mod tests {
             .collect(),
         };
 
-        // m7g.xlarge: 4 vCPU and 16 GiB.
+        // m7g.xlarge: 3.5 vCPU available after the host reserve.
         let errors = plan_compute(&stack, Platform::Aws, Some(&selection(1)))
             .expect("plan should build")
             .pools
@@ -1782,7 +1782,7 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].starts_with(
-                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge has 4.00 vCPU"
+                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge has 3.50 vCPU"
             ),
             "{errors:?}"
         );
