@@ -1626,11 +1626,11 @@ fn desired_target_machines(requirements: &WorkloadRequirements) -> u32 {
     }
 }
 
-fn allocatable_cpu(instance: &InstanceTypeSpec) -> f64 {
+pub(crate) fn allocatable_cpu(instance: &InstanceTypeSpec) -> f64 {
     (instance.vcpu as f64 - SYSTEM_RESERVE_CPU).max(0.25)
 }
 
-fn allocatable_memory_bytes(instance: &InstanceTypeSpec) -> u64 {
+pub(crate) fn allocatable_memory_bytes(instance: &InstanceTypeSpec) -> u64 {
     instance
         .memory_bytes
         .saturating_sub(system_reserve_memory_bytes(instance.memory_bytes))

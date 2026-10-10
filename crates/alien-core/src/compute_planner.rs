@@ -227,9 +227,9 @@ pub fn plan_compute_with_state(
         );
         // Only workloads assigned to the pool give it real demand; a declared pool without
         // them carries just its machine profile.
-        if !group.workloads.is_empty() {
+        if let Some(workload_requirements) = &group.workload_requirements {
             if let Err(message) =
-                check_pool_capacity(platform, &pool_id, &selected_choice, &requirements)
+                check_pool_capacity(platform, &pool_id, &selected_choice, workload_requirements)
             {
                 errors.push(message);
             }
@@ -274,6 +274,8 @@ pub fn plan_compute_with_state(
 #[derive(Debug, Clone)]
 struct PlannedGroup {
     workloads: Vec<String>,
+    /// Actual allocations, excluding a declaration's minimum machine profile.
+    workload_requirements: Option<WorkloadRequirements>,
     requirements: WorkloadRequirements,
     scale: CapacityGroupScalePolicy,
     requires_failure_domain: bool,
@@ -322,8 +324,8 @@ pub fn generated_pool_scale_policy(
 }
 
 /// Rejects a selection whose largest fleet cannot hold the workloads at their desired replica
-/// counts. Like the per-container machine check, it compares hardware totals and does not model
-/// packing, so passing is necessary but not sufficient.
+/// counts after reserving host resources. It also checks that one replica fits;
+/// arbitrary multi-replica packing can still require runtime validation.
 pub fn check_pool_capacity(
     platform: Platform,
     pool_id: &str,
@@ -338,8 +340,18 @@ pub fn check_pool_capacity(
         return Ok(());
     };
     let machines = selection.max_size();
-    let cpu = f64::from(machines) * f64::from(spec.vcpu);
-    let memory = u64::from(machines) * spec.memory_bytes;
+    let per_machine_cpu = instance_catalog::allocatable_cpu(spec);
+    let per_machine_memory = instance_catalog::allocatable_memory_bytes(spec);
+    if per_machine_cpu + f64::EPSILON < requirements.max_cpu_per_container
+        || per_machine_memory < requirements.max_memory_per_container
+    {
+        return Err(format!(
+            "Pool '{pool_id}' machine '{}' cannot fit one replica after reserving host resources",
+            spec.name,
+        ));
+    }
+    let cpu = f64::from(machines) * per_machine_cpu;
+    let memory = u64::from(machines) * per_machine_memory;
     if cpu + f64::EPSILON >= requirements.total_cpu_at_desired
         && memory >= requirements.total_memory_bytes_at_desired
     {
@@ -392,6 +404,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             pool_id,
             PlannedGroup {
                 workloads: workloads.into_iter().map(|w| w.id).collect(),
+                workload_requirements: Some(requirements.clone()),
                 // Merged with any declared group below; widened in `plan_compute` if none declares it.
                 scale: CapacityGroupScalePolicy::from_selected_bounds(min_size, max_size),
                 requirements,
@@ -442,6 +455,7 @@ fn merge_explicit_compute_groups(
                 })
                 .or_insert_with(|| PlannedGroup {
                     workloads: Vec::new(),
+                    workload_requirements: None,
                     scale,
                     requirements: explicit_requirements,
                     requires_failure_domain: false,
@@ -1097,9 +1111,10 @@ mod tests {
             min: "0.5".into(),
             desired: "0.5".into(),
         };
+        let memory = instance_catalog::allocatable_memory_bytes(machine).to_string();
         container.memory = ResourceSpec {
-            min: machine.memory_bytes.to_string(),
-            desired: machine.memory_bytes.to_string(),
+            min: memory.clone(),
+            desired: memory,
         };
         assert!(plan_compute(&stack, Platform::Gcp, None).is_err());
         let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
