@@ -8,18 +8,17 @@ use crate::{
     },
 };
 use alien_core::{
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
-    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode,
-    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode,
-    import::{CURRENT_SETUP_IMPORT_FORMAT_VERSION, EmitContext},
-    ownership_policy_for_resource_type,
+    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
+    ComputePoolSelection, Container, Daemon, DeploymentModel, DomainSettings, ErrorData,
+    ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
+    NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
-use indexmap::{IndexMap, indexmap};
-use serde_json::{Value, json};
+use indexmap::{indexmap, IndexMap};
+use serde_json::{json, Value};
 use std::collections::HashSet;
 
 const TEMPLATE_VERSION: &str = "2010-09-09";

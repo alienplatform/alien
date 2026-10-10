@@ -192,7 +192,11 @@ pub struct ComputeSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContainerResourceSelection {
     /// CPU allocation in vCPUs.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_selected_cpu")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_selected_cpu"
+    )]
     #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
     pub cpu: Option<serde_json::Number>,
     /// Memory allocation, using binary units such as Mi or Gi.
@@ -207,7 +211,9 @@ fn deserialize_selected_cpu<'de, D: serde::Deserializer<'de>>(
     match Option::<serde_json::Value>::deserialize(deserializer)? {
         None => Ok(None),
         Some(serde_json::Value::Number(number)) => Ok(Some(number)),
-        Some(serde_json::Value::String(number)) => number.parse().map(Some).map_err(serde::de::Error::custom),
+        Some(serde_json::Value::String(number)) => {
+            number.parse().map(Some).map_err(serde::de::Error::custom)
+        }
         Some(_) => Err(serde::de::Error::custom("CPU must be a number")),
     }
 }

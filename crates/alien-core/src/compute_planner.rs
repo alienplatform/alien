@@ -168,14 +168,20 @@ pub fn plan_compute(
         });
     }
 
-    let mut containers: Vec<_> = stack.resources.values().filter_map(|entry| {
-        let container = entry.config.downcast_ref::<Container>()?;
-        let choices = container.resource_choices.clone()?;
-        Some(ContainerResourcePlan {
-            container_id: container.id.clone(), choices,
-            cpu: container.cpu.clone(), memory: container.memory.clone(),
+    let mut containers: Vec<_> = stack
+        .resources
+        .values()
+        .filter_map(|entry| {
+            let container = entry.config.downcast_ref::<Container>()?;
+            let choices = container.resource_choices.clone()?;
+            Some(ContainerResourcePlan {
+                container_id: container.id.clone(),
+                choices,
+                cpu: container.cpu.clone(),
+                memory: container.memory.clone(),
+            })
         })
-    }).collect();
+        .collect();
     containers.sort_by(|a, b| a.container_id.cmp(&b.container_id));
     Ok(ComputePlan { pools, containers })
 }
@@ -888,14 +894,29 @@ mod tests {
     #[test]
     fn deployment_resources_drive_machine_planning_on_every_cloud() {
         let mut stack = stack_with_container();
-        let container = stack.resources.get_mut("api").unwrap().config.downcast_mut::<Container>().unwrap();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
         container.resource_choices = Some(crate::ContainerResourceChoices {
-            cpu: Some(crate::ResourceChoiceRange { min: "0.5".into(), max: "8".into(), default: "2".into() }),
-            memory: Some(crate::ResourceChoiceRange { min: "512Mi".into(), max: "16Gi".into(), default: "4Gi".into() }),
+            cpu: Some(crate::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "8".into(),
+                default: "2".into(),
+            }),
+            memory: Some(crate::ResourceChoiceRange {
+                min: "512Mi".into(),
+                max: "16Gi".into(),
+                default: "4Gi".into(),
+            }),
         });
         let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
             "containers": { "api": { "cpu": 8, "memory": "16Gi" } }
-        })).unwrap();
+        }))
+        .unwrap();
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             let default_plan = plan_compute(&stack, platform, None).unwrap();
             let selected_plan = plan_compute(&stack, platform, Some(&settings)).unwrap();
@@ -903,22 +924,45 @@ mod tests {
             assert!(pool.errors.is_empty(), "{platform}: {:?}", pool.errors);
             assert_eq!(pool.requirements.cpu, "8");
             assert_eq!(pool.requirements.memory_bytes, 16 * 1024 * 1024 * 1024);
-            assert_ne!(pool.selected.machine(), default_plan.pools[0].selected.machine());
+            assert_ne!(
+                pool.selected.machine(),
+                default_plan.pools[0].selected.machine()
+            );
             assert_eq!(selected_plan.containers[0].cpu.min, "8");
             assert_eq!(selected_plan.containers[0].memory.desired, "16Gi");
         }
-        let original = stack.resources["api"].config.downcast_ref::<Container>().unwrap();
-        assert_eq!(original.cpu.desired, "2", "planning must not mutate release defaults");
+        let original = stack.resources["api"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert_eq!(
+            original.cpu.desired, "2",
+            "planning must not mutate release defaults"
+        );
     }
 
     #[test]
     fn invalid_deployment_resources_fail_before_capacity_planning() {
         let mut stack = stack_with_container();
-        stack.resources.get_mut("api").unwrap().config.downcast_mut::<Container>().unwrap()
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
             .resource_choices = Some(crate::ContainerResourceChoices {
-                cpu: Some(crate::ResourceChoiceRange { min: "0.5".into(), max: "4".into(), default: "2".into() }),
-                memory: Some(crate::ResourceChoiceRange { min: "512Mi".into(), max: "8Gi".into(), default: "4Gi".into() }),
-            });
+            cpu: Some(crate::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "4".into(),
+                default: "2".into(),
+            }),
+            memory: Some(crate::ResourceChoiceRange {
+                min: "512Mi".into(),
+                max: "8Gi".into(),
+                default: "4Gi".into(),
+            }),
+        });
         for selection in [
             serde_json::json!({"api":{"cpu": 0}}),
             serde_json::json!({"api":{"cpu": 5}}),
@@ -927,7 +971,8 @@ mod tests {
             serde_json::json!({"api":{"memory": "-1Gi"}}),
             serde_json::json!({"missing":{"cpu": 1}}),
         ] {
-            let settings: ComputeSettings = serde_json::from_value(serde_json::json!({"containers": selection})).unwrap();
+            let settings: ComputeSettings =
+                serde_json::from_value(serde_json::json!({"containers": selection})).unwrap();
             let error = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap_err();
             assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
         }

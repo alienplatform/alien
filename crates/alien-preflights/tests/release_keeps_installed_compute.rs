@@ -494,3 +494,84 @@ async fn release_adding_a_new_pool_still_needs_setup() {
         "{errors:?}"
     );
 }
+
+#[tokio::test]
+async fn deployment_allocations_survive_stateful_install_and_release_preparation() {
+    use alien_core::{ContainerResourceChoices, ContainerResourceSelection, ResourceChoiceRange};
+
+    let mut stack = release("database:1");
+    let database = stack
+        .resources
+        .get_mut("database")
+        .unwrap()
+        .config
+        .downcast_mut::<Container>()
+        .unwrap();
+    database.resource_choices = Some(ContainerResourceChoices {
+        cpu: Some(ResourceChoiceRange {
+            min: "0.5".to_string(),
+            max: "4".to_string(),
+            default: "1".to_string(),
+        }),
+        memory: Some(ResourceChoiceRange {
+            min: "1Gi".to_string(),
+            max: "8Gi".to_string(),
+            default: "1Gi".to_string(),
+        }),
+    });
+    let selections = ComputeSettings {
+        pools: Default::default(),
+        containers: [(
+            "database".to_string(),
+            ContainerResourceSelection {
+                cpu: Some(serde_json::Number::from(4)),
+                memory: Some("8Gi".to_string()),
+            },
+        )]
+        .into(),
+    };
+    let plan = plan_compute(&stack, Platform::Aws, Some(&selections)).unwrap();
+    let config = deployment_config(ComputeSettings {
+        pools: plan
+            .pools
+            .into_iter()
+            .map(|pool| (pool.pool_id, pool.recommended))
+            .collect(),
+        ..selections
+    });
+    let prepared = PreflightRunner::new()
+        .apply_mutations(stack.clone(), &StackState::new(Platform::Aws), &config)
+        .await
+        .unwrap();
+    let installed = installed_state(&prepared);
+    let next = PreflightRunner::new()
+        .apply_mutations(stack, &installed, &config)
+        .await
+        .unwrap();
+    for deployment in [&prepared, &next] {
+        let database = deployment.resources["database"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert_eq!(
+            database.cpu,
+            ResourceSpec {
+                min: "4".into(),
+                desired: "4".into()
+            }
+        );
+        assert_eq!(
+            database.memory,
+            ResourceSpec {
+                min: "8Gi".into(),
+                desired: "8Gi".into()
+            }
+        );
+        assert!(database.stateful);
+        assert_eq!(database.persistent_storage.as_ref().unwrap().size, "20Gi");
+        assert_eq!(
+            cluster(deployment).capacity_groups,
+            cluster(&prepared).capacity_groups
+        );
+    }
+}
