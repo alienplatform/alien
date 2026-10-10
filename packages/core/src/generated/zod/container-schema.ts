@@ -8,6 +8,7 @@ import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
+import { ContainerResourceChoicesSchema } from "./container-resource-choices-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
 import { ContainerTunnelSchema } from "./container-tunnel-schema.js";
 import { HealthCheckSchema } from "./health-check-schema.js";
@@ -72,6 +73,9 @@ get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the container.").optional()
               },
 "replicas": z.int().min(0).describe("Fixed replica count (for stateful containers or stateless without autoscaling)").nullish(),
+get "resourceChoices"(){
+                return z.union([ContainerResourceChoicesSchema, z.null()]).optional()
+              },
 get "security"(){
                 return z.union([ContainerSecuritySchema, z.null()]).optional()
               },

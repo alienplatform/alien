@@ -5,12 +5,16 @@
 
 import * as z from "zod";
 import { ComputePoolSelectionSchema } from "./compute-pool-selection-schema.js";
+import { ContainerResourceSelectionSchema } from "./container-resource-selection-schema.js";
 
 /**
  * @description Deployment-time compute choices for Alien-managed compute pools.\n\nApplication source declares portable pool requirements. This settings\nobject stores the concrete choices made for one deployment, such as the\nprovider machine type and selected machine counts.
  */
 export const ComputeSettingsSchema = z.object({
-    "pools": z.optional(z.object({
+    "containers": z.optional(z.object({
+    
+    }).catchall(z.lazy(() => ContainerResourceSelectionSchema).describe("Deployment-time resource allocation for a container. Omitted fields use release defaults.")).describe("Per-replica resources selected within each container's declared ranges.")),
+"pools": z.optional(z.object({
     
     }).catchall(z.lazy(() => ComputePoolSelectionSchema).describe("User-selected deployment settings for one compute pool.")).describe("Selected compute choices keyed by pool ID."))
     }).describe("Deployment-time compute choices for Alien-managed compute pools.\n\nApplication source declares portable pool requirements. This settings\nobject stores the concrete choices made for one deployment, such as the\nprovider machine type and selected machine counts.")
