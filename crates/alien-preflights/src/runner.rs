@@ -359,6 +359,28 @@ impl PreflightRunner {
         setup_update_authorization: Option<&alien_core::SetupUpdateAuthorization>,
         setup_authority: Option<alien_core::InitialSetupAuthority>,
     ) -> Result<(Stack, PreflightSummary, bool)> {
+        // Saved allocations for containers removed by a release must not block
+        // deleting those containers. Newly supplied unknown IDs still fail validation.
+        let mut effective_config = config.clone();
+        if let (Some(compute), Some(previous)) =
+            (effective_config.stack_settings.compute.as_mut(), old_stack)
+        {
+            compute.containers.retain(|id, _| {
+                stack.resources.get(id).is_some_and(|entry| {
+                    entry
+                        .config
+                        .downcast_ref::<alien_core::Container>()
+                        .is_some()
+                }) || !previous.resources.get(id).is_some_and(|entry| {
+                    entry
+                        .config
+                        .downcast_ref::<alien_core::Container>()
+                        .is_some()
+                })
+            });
+        }
+        let config = &effective_config;
+
         let platform = stack_state.platform;
         info!(
             "Running deployment-time preflights for platform {:?}",

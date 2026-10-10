@@ -1564,7 +1564,12 @@ fn add_compute_parameters(
             entry
                 .config
                 .downcast_ref::<alien_core::Container>()
-                .is_some_and(|container| container.resource_choices.is_some())
+                .is_some_and(|container| {
+                    container
+                        .resource_choices
+                        .as_ref()
+                        .is_some_and(|choices| choices.cpu.is_some() || choices.memory.is_some())
+                })
         });
         let allowed_values = (!has_resource_choices)
             .then(|| &plan)
@@ -1665,6 +1670,17 @@ fn add_container_resource_parameters(
     let plan = alien_core::compute_planner::plan_compute(stack, Platform::Aws, compute)?;
     for container in plan.containers {
         let prefix = format!("Container{}", pascal_identifier(&container.container_id));
+        for suffix in ["Cpu", "Memory"] {
+            if template
+                .parameters
+                .contains_key(&format!("{prefix}{suffix}"))
+            {
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "generate container resource parameters".to_string(),
+                    reason: format!("Container '{}' produces a duplicate CloudFormation parameter name; use distinct alphanumeric container names", container.container_id),
+                }));
+            }
+        }
         if let Some(range) = container.choices.cpu {
             let mut parameter =
                 number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
