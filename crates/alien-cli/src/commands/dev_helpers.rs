@@ -169,7 +169,7 @@ async fn ensure_server_running_internal(
 
     ensure_dev_port_available(port)?;
 
-    let state_lock = prepare_dev_state(&get_current_dir()?.join(".alien")).await?;
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
     if let Some(name) = deployment_name {
         refresh_local_deployment_environment(
             &get_current_dir()?.join(".alien"),
@@ -190,8 +190,7 @@ async fn ensure_server_running_internal(
     }
 }
 
-async fn prepare_dev_state(state_dir: &Path) -> Result<File> {
-    let ownership = acquire_dev_state_lock(state_dir)?;
+async fn recover_dev_state(state_dir: &Path, _ownership: &File) -> Result<()> {
     let path = state_dir.join("dev-server.db");
     if path.exists() {
         let database = SqliteDatabase::new(&path.to_string_lossy()).await.context(
@@ -209,7 +208,7 @@ async fn prepare_dev_state(state_dir: &Path) -> Result<File> {
             info!(recovered, "Recovered abandoned local execution claims");
         }
     }
-    Ok(ownership)
+    Ok(())
 }
 
 /// Hold an OS lock for the entire manager lifetime, before opening its database.
@@ -467,6 +466,7 @@ async fn start_owned_embedded_dev_manager(
     port: u16,
     state_lock: File,
 ) -> Result<EmbeddedDevManager> {
+    recover_dev_state(&get_current_dir()?.join(".alien"), &state_lock).await?;
     let (server, addr) = build_embedded_dev_manager(port).await?;
     alien_local::start_docker_bridge_proxy(addr)
         .await
@@ -492,11 +492,12 @@ async fn start_owned_embedded_dev_manager(
 }
 
 pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
-    let state_lock = prepare_dev_state(&get_current_dir()?.join(".alien")).await?;
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
     start_embedded_dev_manager_with_lock(port, state_lock).await
 }
 
 async fn start_embedded_dev_manager_with_lock(port: u16, state_lock: File) -> Result<()> {
+    recover_dev_state(&get_current_dir()?.join(".alien"), &state_lock).await?;
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;
 
@@ -1731,6 +1732,12 @@ mod tests {
             "restarted manager owns the same lock inode"
         );
         drop((restarted, independent));
+    }
+
+    async fn prepare_dev_state(state_dir: &Path) -> Result<File> {
+        let ownership = acquire_dev_state_lock(state_dir)?;
+        recover_dev_state(state_dir, &ownership).await?;
+        Ok(ownership)
     }
 
     #[tokio::test]
