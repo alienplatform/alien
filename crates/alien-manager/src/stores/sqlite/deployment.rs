@@ -69,6 +69,19 @@ impl SqliteDeploymentStore {
         Self { db }
     }
 
+    /// Release Local execution claims after the caller exclusively owns the stopped database.
+    /// Never call while a manager can still execute work against this database.
+    pub async fn recover_local_execution_claims(&self) -> Result<u64, AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::LockedBy, Option::<String>::None)
+            .value(Deployments::LockedAt, Option::<String>::None)
+            .and_where(Expr::col(Deployments::Platform).eq("local"))
+            .and_where(Expr::col(Deployments::LockedBy).is_not_null())
+            .to_string(SqliteQueryBuilder);
+        self.db.execute_returning_rows_affected(&sql).await
+    }
+
     /// Replace user environment variables without deleting the deployment or its resources.
     /// Callers must own the standalone database and stop its execution loop first.
     pub async fn replace_environment_variables(

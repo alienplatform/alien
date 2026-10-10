@@ -191,7 +191,25 @@ async fn ensure_server_running_internal(
 }
 
 async fn prepare_dev_state(state_dir: &Path) -> Result<File> {
-    acquire_dev_state_lock(state_dir)
+    let ownership = acquire_dev_state_lock(state_dir)?;
+    let path = state_dir.join("dev-server.db");
+    if path.exists() {
+        let database = SqliteDatabase::new(&path.to_string_lossy()).await.context(
+            ErrorData::ServerStartFailed {
+                reason: "Failed to open the stopped local manager".to_string(),
+            },
+        )?;
+        let recovered = SqliteDeploymentStore::new(Arc::new(database))
+            .recover_local_execution_claims()
+            .await
+            .context(ErrorData::ServerStartFailed {
+                reason: "Failed to recover abandoned local execution claims".to_string(),
+            })?;
+        if recovered > 0 {
+            info!(recovered, "Recovered abandoned local execution claims");
+        }
+    }
+    Ok(ownership)
 }
 
 /// Hold an OS lock for the entire manager lifetime, before opening its database.
@@ -1741,6 +1759,7 @@ mod tests {
         for (name, platform) in [
             ("local", alien_core::Platform::Local),
             ("cloud", alien_core::Platform::Aws),
+            ("delayed", alien_core::Platform::Local),
         ] {
             records.push(
                 store
@@ -1775,8 +1794,12 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
-            2
+            3
         );
+        database.conn().lock().await.execute(
+            &format!("UPDATE deployments SET next_step_after = '2099-01-01T00:00:00+00:00' WHERE id = '{}'", records[2].id),
+            (),
+        ).await.unwrap();
         assert!(
             prepare_dev_state(directory.path()).await.is_err(),
             "a live owner must prevent recovery"
@@ -1821,6 +1844,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(cloud.locked_by.as_deref(), Some("old-process"));
+        let delayed = store
+            .get_deployment(&subject, &records[2].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            delayed.locked_by.is_none(),
+            "claim recovery must preserve the scheduled delay"
+        );
+        assert_eq!(
+            serde_json::to_value(&recovered[0].deployment.stack_state).unwrap(),
+            serde_json::to_value(&records[0].stack_state).unwrap()
+        );
+
         assert!(prepare_dev_state(directory.path()).await.is_err());
         drop((store, restarted));
     }
