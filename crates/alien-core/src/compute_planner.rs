@@ -122,9 +122,17 @@ pub fn plan_compute_with_state(
         let mut group = groups.remove(&pool_id).expect("pool id came from map keys");
         let mut requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
+        let declared_machine = stack
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<crate::ComputeCluster>())
+            .flat_map(|cluster| &cluster.capacity_groups)
+            .find(|group| group.group_id == pool_id)
+            .and_then(|group| group.instance_type.as_deref());
         if requirements.architecture.is_none() {
             requirements.architecture = selected
                 .and_then(ComputePoolSelection::machine)
+                .or_else(|| selected.is_none().then_some(declared_machine).flatten())
                 .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
                 .map(|spec| spec.architecture)
                 .or_else(|| {
@@ -174,6 +182,16 @@ pub fn plan_compute_with_state(
             group.generated,
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
+        if selected.is_none() {
+            if let Some(declared_machine) = declared_machine {
+                match &mut selected_choice {
+                    ComputePoolSelection::Fixed { machine, .. }
+                    | ComputePoolSelection::Autoscale { machine, .. } => {
+                        *machine = Some(declared_machine.to_string());
+                    }
+                }
+            }
+        }
         // An omitted machine is deployment intent: let the planner choose on
         // every preparation. Only the returned plan contains the concrete type;
         // never write it back into the caller's settings as an override.

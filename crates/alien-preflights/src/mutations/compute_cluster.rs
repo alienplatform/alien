@@ -208,24 +208,6 @@ impl StackMutation for ComputeClusterMutation {
                 .compute
                 .get_or_insert_default();
             for pool in plan.pools {
-                let has_deployment_selection = config
-                    .stack_settings
-                    .compute
-                    .as_ref()
-                    .is_some_and(|settings| settings.pools.contains_key(&pool.pool_id));
-                let has_declared_machine = stack.resources.values().any(|entry| {
-                    entry
-                        .config
-                        .downcast_ref::<ComputeCluster>()
-                        .is_some_and(|cluster| {
-                            cluster.capacity_groups.iter().any(|group| {
-                                group.group_id == pool.pool_id && group.instance_type.is_some()
-                            })
-                        })
-                });
-                if !has_deployment_selection && has_declared_machine {
-                    continue;
-                }
                 if !pool.errors.is_empty() {
                     return Err(AlienError::new(
                         crate::error::ErrorData::StackMutationFailed {
