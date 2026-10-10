@@ -15,6 +15,7 @@ name = "alien-operator"
 path = "src/main.rs"
 
 [dependencies]
+lognorm = { workspace = true }
 # Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true }

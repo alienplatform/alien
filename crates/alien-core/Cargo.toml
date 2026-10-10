@@ -22,6 +22,7 @@ bundle-signature = ["dep:ed25519-compact"]
 sandbox-process = ["tokio/process", "tokio/io-util", "tokio/time", "tokio/macros", "tokio/sync"]
 
 [dependencies]
+lognorm = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

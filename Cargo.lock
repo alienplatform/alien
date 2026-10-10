@@ -655,6 +655,7 @@ dependencies = [
  "indexmap 2.14.1",
  "insta",
  "libc",
+ "lognorm",
  "nanoid",
  "regex",
  "reqwest 0.12.28",
@@ -1133,6 +1134,7 @@ dependencies = [
  "http 1.5.0",
  "k8s-openapi",
  "libc",
+ "lognorm",
  "opentelemetry-proto",
  "prost 0.13.5",
  "reqwest 0.12.28",
@@ -1455,6 +1457,7 @@ dependencies = [
  "lambda_http",
  "lambda_runtime",
  "libc",
+ "lognorm",
  "lru 0.16.4",
  "once_cell",
  "opentelemetry",
@@ -6364,6 +6367,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 dependencies = [
  "value-bag",
+]
+
+[[package]]
+name = "lognorm"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d450d0e0317c5d991384972d5759e1a6be972ed936043db6d06e4589bedb378e"
+dependencies = [
+ "anstyle-parse 1.0.0",
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

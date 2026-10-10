@@ -347,3 +347,53 @@ async fn stopping_daemon_kills_the_app_process() {
         "health check must fail once the daemon is stopped"
     );
 }
+
+/// Exercises the real supervisor and owned OTLP exporter with an external producer.
+/// Run explicitly in an isolated environment, then assert the stored records at the receiver.
+#[tokio::test]
+#[ignore = "requires producer command, OTLP endpoint, and delivery receipt path"]
+async fn exports_external_producer_through_daemon_supervision() {
+    let command: Vec<String> = serde_json::from_str(
+        &std::env::var("LOGNORM_TEST_PRODUCER_COMMAND").expect("producer command JSON"),
+    )
+    .expect("command array");
+    let endpoint = std::env::var("LOGNORM_TEST_OTLP_ENDPOINT").expect("OTLP endpoint");
+    let receipt = PathBuf::from(
+        std::env::var("LOGNORM_TEST_DELIVERY_RECEIPT").expect("delivery receipt path"),
+    );
+    assert!(!receipt.exists(), "receipt must be unique to this run");
+    let temp = TempDir::new().unwrap();
+    let state_dir = temp.path().join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let provider = LocalBindingsProvider::new(&state_dir).unwrap();
+    let manager = provider.worker_manager();
+    let daemon_dir = state_dir.join("daemons").join("example");
+    std::fs::create_dir_all(&daemon_dir).unwrap();
+    let metadata = serde_json::json!({
+        "worker_id": "example", "extracted_path": daemon_dir,
+        "env_vars": {}, "runtime_command": command,
+        "working_dir": null, "transport_port": null,
+        "runtime_only_binding_names": []
+    });
+    std::fs::write(
+        daemon_dir.join("metadata.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let env_vars = HashMap::from([
+        ("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_owned(), endpoint),
+        (
+            "OTEL_SERVICE_NAME".to_owned(),
+            "lognorm-daemon-validation".to_owned(),
+        ),
+    ]);
+    manager
+        .start_daemon("example", env_vars, Default::default())
+        .await
+        .unwrap();
+    assert!(manager.is_daemon_running("example").await);
+    // The external receiver writes this only after acknowledging this run.
+    read_when_ready(&receipt, Duration::from_secs(30)).await;
+    manager.stop_daemon("example").await.unwrap();
+    assert!(!manager.is_daemon_running("example").await);
+}

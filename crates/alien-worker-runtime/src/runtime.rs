@@ -893,22 +893,18 @@ async fn stream_output(
 
             while let Ok(Some(line)) = lines.next_line().await {
                 let timestamp_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-                let captured = crate::log_text::decode_log_line(&line);
+                let (body, is_system) = crate::log_text::strip_system_log_prefix(&line);
 
-                // Print to local stdout/stderr for debugging
+                // Keep terminal controls out of the local echo, preserving raw telemetry.
+                let echo = crate::log_text::terminal_echo(body);
                 if is_stdout {
-                    println!("{}", captured.body);
+                    println!("{}", echo);
                 } else {
-                    eprintln!("{}", captured.body);
+                    eprintln!("{}", echo);
                 }
 
                 // Emit normalized text via OpenTelemetry SDK (batched, proper protobuf format).
-                crate::otlp::emit_captured_log(
-                    stream_name,
-                    &captured.body,
-                    timestamp_nanos,
-                    captured.is_system,
-                );
+                crate::otlp::emit_captured_log(stream_name, body, timestamp_nanos, is_system);
             }
 
             tracing::debug!("OTLP log streaming ended");
