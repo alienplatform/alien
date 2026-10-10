@@ -162,3 +162,22 @@ fn published_metadata_matches_the_runtime_registry() {
             .expect("serialize manifest");
     assert_eq!(published, generated);
 }
+
+#[test]
+fn published_metadata_with_decimal_schema_bounds_parses_as_a_manifest() {
+    // Generated JSON Schemas write integer bounds as decimals (`"minimum": 1.0`)
+    // inside an untagged schema type. A dependency that enables serde_json's
+    // `arbitrary_precision` feature breaks this decode for every crate in the
+    // build, so `alien operations` commands would reject the manifest.
+    let bytes = include_bytes!("../metadata.json");
+    assert!(
+        String::from_utf8_lossy(bytes).contains("\"minimum\": 1.0"),
+        "the fixture must keep a decimal schema bound"
+    );
+    let manifest = alien_operations_sdk::CanonicalPluginManifest::parse_and_validate(bytes)
+        .expect("published metadata must parse as a plugin manifest");
+    assert_eq!(
+        serde_json::to_value(&manifest).expect("serialize manifest"),
+        serde_json::from_slice::<Value>(bytes).expect("published metadata"),
+    );
+}
