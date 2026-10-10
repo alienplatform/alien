@@ -3124,7 +3124,20 @@ mod tests {
     fn conflicting_container_parameter_names_fail_instead_of_sharing_values() {
         let mut stack = Stack::new("stack".into()).build();
         for id in ["api-1", "api1"] {
-            let mut container = Container::new(id.into()).build();
+            let mut container = Container::new(id.into())
+                .code(alien_core::ContainerCode::Image {
+                    image: "nginx:alpine".into(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".into(),
+                    desired: "1".into(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".into(),
+                    desired: "1Gi".into(),
+                })
+                .permissions("app".into())
+                .build();
             container.resource_choices = Some(alien_core::ContainerResourceChoices {
                 cpu: Some(alien_core::ResourceChoiceRange {
                     min: "1".into(),

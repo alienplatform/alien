@@ -556,7 +556,20 @@ mod setup_update_authorization_tests {
         };
         let previous = Stack::new("stack".into())
             .add(
-                Container::new("removed".into()).build(),
+                Container::new("removed".into())
+                    .code(alien_core::ContainerCode::Image {
+                        image: "nginx:alpine".into(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "1".into(),
+                        desired: "1".into(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "1Gi".into(),
+                        desired: "1Gi".into(),
+                    })
+                    .permissions("app".into())
+                    .build(),
                 ResourceLifecycle::Live,
             )
             .build();
