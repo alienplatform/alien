@@ -1,13 +1,13 @@
-# MaxRisk
+# CreateAccessRequestMaxRisk
 
 Required with `operationPattern`: the highest risk tier the wildcard grant may cover.
 
 ## Example Usage
 
 ```typescript
-import { MaxRisk } from "@alienplatform/platform-api/models";
+import { CreateAccessRequestMaxRisk } from "@alienplatform/platform-api/models";
 
-let value: MaxRisk = "mutating";
+let value: CreateAccessRequestMaxRisk = "mutating";
 ```
 
 ## Values
