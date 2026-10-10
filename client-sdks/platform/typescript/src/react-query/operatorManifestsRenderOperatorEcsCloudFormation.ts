@@ -51,7 +51,7 @@ export type OperatorManifestsRenderOperatorEcsCloudFormationMutationError =
  * Render a Remote Operator ECS Fargate CloudFormation installer
  *
  * @remarks
- * Renders a credential-free CloudFormation artifact that reuses a customer-owned ECS cluster and network; creates retained EFS identity storage unless an existing filesystem and access point are supplied; owns a task role compiled from every built-in operation plugin; and uses a generated local command to hand one-time setup material directly to same-account, same-Region Secrets Manager. Sensitive S3 and SQS wildcard declarations fail closed unless the request supplies exact resource ceilings.
+ * Renders a credential-free CloudFormation artifact that reuses a customer-owned ECS cluster and network; creates retained EFS identity storage unless an existing filesystem and access point are supplied; owns a task role compiled from the project's enabled operations; and uses a generated local command to hand one-time setup material directly to same-account, same-Region Secrets Manager. Sensitive S3 and SQS wildcard declarations fail closed unless the request supplies exact resource ceilings.
  */
 export function useOperatorManifestsRenderOperatorEcsCloudFormationMutation(
   options?: MutationHookOptions<

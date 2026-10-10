@@ -102,9 +102,7 @@ export function useOperationsListPluginsSuspense(
 
 export function setOperationsListPluginsData(
   client: QueryClient,
-  queryKeyBase: [
-    parameters: { project: string; deployment?: string | undefined },
-  ],
+  queryKeyBase: [parameters: { project: string }],
   data: OperationsListPluginsQueryData,
 ): OperationsListPluginsQueryData | undefined {
   const key = queryKeyOperationsListPlugins(...queryKeyBase);
@@ -114,9 +112,7 @@ export function setOperationsListPluginsData(
 
 export function invalidateOperationsListPlugins(
   client: QueryClient,
-  queryKeyBase: TupleToPrefixes<
-    [parameters: { project: string; deployment?: string | undefined }]
-  >,
+  queryKeyBase: TupleToPrefixes<[parameters: { project: string }]>,
   filters?: Omit<InvalidateQueryFilters, "queryKey" | "predicate" | "exact">,
 ): Promise<void> {
   return client.invalidateQueries({

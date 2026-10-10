@@ -26,7 +26,7 @@ export type InvokeOperationRequest = {
    */
   idempotencyKey?: string | undefined;
   /**
-   * A remediation plan (`plan_…`) whose access request the customer has already approved for this exact command. When set and the plan's access request was created by the caller, is `customer-approved` and lists this `plugin/operation` with these params, the invocation is authorized by that approval and dispatches immediately whatever the release's approval rules say — the customer already signed off on this exact command through the access-request flow, so a `manual` rule (or no rule) would otherwise ask for a second approval of the same action. Another principal's approved request never authorizes the caller.
+   * A remediation plan (`plan_…`) whose access request the customer has already approved for this exact command. When set and the plan's access request was created by the caller, is `customer-approved` and lists this `plugin/operation` with these params, the invocation is authorized by that approval and dispatches immediately regardless of the project's operations policy — the customer already signed off on this exact command via the access-request flow, so the project's default `manual` policy (meant for ad-hoc, unreviewed invocations) would otherwise require a second, redundant approval for the same action. Another principal's approved request never authorizes the caller.
    */
   remediationPlanId?: string | undefined;
   /**

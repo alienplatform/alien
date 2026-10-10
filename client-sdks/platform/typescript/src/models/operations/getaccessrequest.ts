@@ -113,6 +113,7 @@ export type GetAccessRequestRevokedBy = {
  * The access request.
  */
 export type GetAccessRequestResponse = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: GetAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -147,7 +148,6 @@ export type GetAccessRequestResponse = {
   approvedBy: GetAccessRequestApprovedBy | null;
   deniedBy: GetAccessRequestDeniedBy | null;
   revokedBy: GetAccessRequestRevokedBy | null;
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
 };
 
 /** @internal */
@@ -299,6 +299,8 @@ export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   GetAccessRequestResponse,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(GetAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -323,8 +325,6 @@ export const GetAccessRequestResponse$inboundSchema: z.ZodType<
   ),
   deniedBy: z.nullable(z.lazy(() => GetAccessRequestDeniedBy$inboundSchema)),
   revokedBy: z.nullable(z.lazy(() => GetAccessRequestRevokedBy$inboundSchema)),
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
 });
 
 export function getAccessRequestResponseFromJSON(

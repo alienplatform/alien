@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Invoke a plugin operation against a deployment. Honors the approval rules the deployment's release declares in `operations()`.
+ * Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
  */
 export function operationsInvoke(
   client: AlienCore,

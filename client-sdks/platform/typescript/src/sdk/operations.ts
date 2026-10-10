@@ -10,12 +10,16 @@ import { operationsGetAccessRequest } from "../funcs/operationsGetAccessRequest.
 import { operationsGetAccessRequestActivity } from "../funcs/operationsGetAccessRequestActivity.js";
 import { operationsGetAccessRequestCoordinates } from "../funcs/operationsGetAccessRequestCoordinates.js";
 import { operationsGetLiveDebugGrant } from "../funcs/operationsGetLiveDebugGrant.js";
+import { operationsGetPolicy } from "../funcs/operationsGetPolicy.js";
 import { operationsInvoke } from "../funcs/operationsInvoke.js";
 import { operationsListAccessRequests } from "../funcs/operationsListAccessRequests.js";
 import { operationsListPlugins } from "../funcs/operationsListPlugins.js";
 import { operationsPublishPlugin } from "../funcs/operationsPublishPlugin.js";
 import { operationsQueueAccessRequest } from "../funcs/operationsQueueAccessRequest.js";
 import { operationsRevokeAccessRequest } from "../funcs/operationsRevokeAccessRequest.js";
+import { operationsSetBuiltinPlugins } from "../funcs/operationsSetBuiltinPlugins.js";
+import { operationsSetPluginEnabled } from "../funcs/operationsSetPluginEnabled.js";
+import { operationsUpdatePolicy } from "../funcs/operationsUpdatePolicy.js";
 import { operationsVerifyCheck } from "../funcs/operationsVerifyCheck.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -38,7 +42,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Register a version of a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Publishing changes no deployment: a release runs the version it declares in `operations()`.
+   * Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default. Returns the cloud permission delta versus the previously enabled set.
    */
   async publishPlugin(
     project: string,
@@ -51,6 +55,24 @@ export class Operations extends ClientSDK {
       this,
       project,
       publishOperationsPluginRequest,
+      options,
+    ));
+  }
+
+  /**
+   * Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
+   */
+  async setBuiltinPlugins(
+    project: string,
+    setBuiltinOperationsPluginsRequest?:
+      | models.SetBuiltinOperationsPluginsRequest
+      | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SetBuiltinOperationsPluginsResponse> {
+    return unwrapAsync(operationsSetBuiltinPlugins(
+      this,
+      project,
+      setBuiltinOperationsPluginsRequest,
       options,
     ));
   }
@@ -74,7 +96,53 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Invoke a plugin operation against a deployment. Honors the approval rules the deployment's release declares in `operations()`.
+   * Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
+   */
+  async setPluginEnabled(
+    request: operations.SetOperationsPluginEnabledRequest,
+    options?: RequestOptions,
+  ): Promise<models.SetOperationsPluginEnabledResponse> {
+    return unwrapAsync(operationsSetPluginEnabled(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
+   */
+  async getPolicy(
+    request: operations.GetOperationsPolicyRequest,
+    options?: RequestOptions,
+  ): Promise<models.OperationsPolicyResponse> {
+    return unwrapAsync(operationsGetPolicy(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
+   */
+  async updatePolicy(
+    project: string,
+    updateOperationsPolicyRequest?:
+      | models.UpdateOperationsPolicyRequest
+      | undefined,
+    options?: RequestOptions,
+  ): Promise<models.OperationsPolicyResponse> {
+    return unwrapAsync(operationsUpdatePolicy(
+      this,
+      project,
+      updateOperationsPolicyRequest,
+      options,
+    ));
+  }
+
+  /**
+   * Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
    */
   async invoke(
     project: string,

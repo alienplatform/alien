@@ -26,15 +26,15 @@ import {
   DeploymentDetailResponseStackState$inboundSchema,
   DeploymentDetailResponseStatus,
   DeploymentDetailResponseStatus$inboundSchema,
-} from "./deploymentdetailresponsependingpreparedstacktypeenvenum.js";
+} from "./deploymentdetailresponsependingpreparedstacktypeunion.js";
 import {
   DeploymentDetailResponsePendingPreparedStackUnion,
   DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema,
   DeploymentDetailResponsePreparedStackInput,
   DeploymentDetailResponsePreparedStackInput$inboundSchema,
-  DeploymentDetailResponsePreparedStackOperations,
-  DeploymentDetailResponsePreparedStackOperations$inboundSchema,
-} from "./deploymentdetailresponsepreparedstackoperations.js";
+  DeploymentDetailResponsePreparedStackOperationsUnion,
+  DeploymentDetailResponsePreparedStackOperationsUnion$inboundSchema,
+} from "./deploymentdetailresponsepreparedstackoperationsunion.js";
 import {
   DeploymentGroupInfo,
   DeploymentGroupInfo$inboundSchema,
@@ -76,10 +76,6 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
-
-export type DeploymentDetailResponsePreparedStackOperationsUnion =
-  | DeploymentDetailResponsePreparedStackOperations
-  | string;
 
 export const DeploymentDetailResponsePreparedStackManagementEnum = {
   Auto: "auto",
@@ -1399,8 +1395,7 @@ export type DeploymentDetailResponsePreparedStack = {
    */
   inputs?: Array<DeploymentDetailResponsePreparedStackInput> | undefined;
   operations?:
-    | DeploymentDetailResponsePreparedStackOperations
-    | string
+    | DeploymentDetailResponsePreparedStackOperationsUnion
     | null
     | undefined;
   /**
@@ -1777,7 +1772,7 @@ export type OperatorSync = {
   statusMessage?: string | null | undefined;
   targetBundleHash: string;
   /**
-   * Plugin bundle set hash last reported by the Operator
+   * Enabled-plugin-bundle-set hash last reported by the Operator
    */
   observedBundleHash?: string | null | undefined;
   /**
@@ -1785,7 +1780,7 @@ export type OperatorSync = {
    */
   missingOperations?: Array<string> | null | undefined;
   /**
-   * Declared plugins compared with what the Operator last reported loading. Null when the sync fingerprints cannot be read.
+   * Enabled plugins compared with what the Operator last reported loading. Null when the sync fingerprints cannot be read.
    */
   plugins?: Array<DeploymentOperatorSyncPlugin> | null | undefined;
   targetSetAt: Date;
@@ -1918,7 +1913,7 @@ export type DeploymentDetailResponse = {
    */
   capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
-   * Plugin bundle set hash the Operator reports having loaded
+   * Enabled-plugin-bundle-set hash the Operator reports having loaded
    */
   observedOperationsBundleHash?: string | null | undefined;
   /**
@@ -1956,30 +1951,6 @@ export type DeploymentDetailResponse = {
    */
   operatorSync?: OperatorSync | null | undefined;
 };
-
-/** @internal */
-export const DeploymentDetailResponsePreparedStackOperationsUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponsePreparedStackOperationsUnion, unknown> = z
-    .union([
-      DeploymentDetailResponsePreparedStackOperations$inboundSchema,
-      z.string(),
-    ]);
-
-export function deploymentDetailResponsePreparedStackOperationsUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponsePreparedStackOperationsUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponsePreparedStackOperationsUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponsePreparedStackOperationsUnion' from JSON`,
-  );
-}
 
 /** @internal */
 export const DeploymentDetailResponsePreparedStackManagementEnum$inboundSchema:
@@ -4063,10 +4034,7 @@ export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
   inputs: z.array(DeploymentDetailResponsePreparedStackInput$inboundSchema)
     .optional(),
   operations: z.nullable(
-    z.union([
-      DeploymentDetailResponsePreparedStackOperations$inboundSchema,
-      z.string(),
-    ]),
+    DeploymentDetailResponsePreparedStackOperationsUnion$inboundSchema,
   ).optional(),
   permissions: z.lazy(() =>
     DeploymentDetailResponsePreparedStackPermissions$inboundSchema

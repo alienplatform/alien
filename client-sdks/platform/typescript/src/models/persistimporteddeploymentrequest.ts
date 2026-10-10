@@ -29,7 +29,7 @@ import {
   PersistImportedDeploymentRequestStackSettings,
   PersistImportedDeploymentRequestStackSettings$Outbound,
   PersistImportedDeploymentRequestStackSettings$outboundSchema,
-} from "./persistimporteddeploymentrequestpendingpreparedstacksettingscustom1.js";
+} from "./persistimporteddeploymentrequestpendingpreparedstackcustomsettingsunion.js";
 import {
   PersistImportedDeploymentRequestPendingPreparedStackUnion,
   PersistImportedDeploymentRequestPendingPreparedStackUnion$Outbound,
@@ -48,30 +48,25 @@ import {
   PersistImportedDeploymentRequestPreparedStackOverrideAzure,
   PersistImportedDeploymentRequestPreparedStackOverrideAzure$Outbound,
   PersistImportedDeploymentRequestPreparedStackOverrideAzure$outboundSchema,
-  PersistImportedDeploymentRequestPreparedStackOverrideConditionStack,
-  PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound,
-  PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema,
   PersistImportedDeploymentRequestPreparedStackOverrideGcpResource,
   PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$Outbound,
   PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$outboundSchema,
-} from "./persistimporteddeploymentrequestpreparedstackoverrideconditionstack.js";
+  PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion,
+  PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound,
+  PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$outboundSchema,
+} from "./persistimporteddeploymentrequestpreparedstackoverridestackconditionunion.js";
 import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
 
-export type PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
-  | string;
-
 /**
  * GCP-specific binding specification
  */
 export type PersistImportedDeploymentRequestPreparedStackOverrideGcpStack = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
-    | string
+    | PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion
     | null
     | undefined;
   /**
@@ -1628,38 +1623,10 @@ export type PersistImportedDeploymentRequest = {
 };
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound
-  | string;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion
-  > = z.union([
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema,
-    z.string(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackOverrideStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
 export type PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$Outbound =
   {
     condition?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound
-      | string
+      | PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound
       | null
       | undefined;
     scope: string;
@@ -1672,10 +1639,7 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$outbo
     PersistImportedDeploymentRequestPreparedStackOverrideGcpStack
   > = z.object({
     condition: z.nullable(
-      z.union([
-        PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema,
-        z.string(),
-      ]),
+      PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$outboundSchema,
     ).optional(),
     scope: z.string(),
   });

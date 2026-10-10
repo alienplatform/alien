@@ -47,19 +47,15 @@ import {
   SyncListResponseStackState$inboundSchema,
   SyncListResponseStatus,
   SyncListResponseStatus$inboundSchema,
-} from "./synclistresponsependingpreparedstacktypeenvenum.js";
+} from "./synclistresponsependingpreparedstacktypeunion.js";
 import {
   SyncListResponsePendingPreparedStackUnion,
   SyncListResponsePendingPreparedStackUnion$inboundSchema,
   SyncListResponsePreparedStackInput,
   SyncListResponsePreparedStackInput$inboundSchema,
-  SyncListResponsePreparedStackOperations,
-  SyncListResponsePreparedStackOperations$inboundSchema,
-} from "./synclistresponsepreparedstackoperations.js";
-
-export type SyncListResponsePreparedStackOperationsUnion =
-  | SyncListResponsePreparedStackOperations
-  | string;
+  SyncListResponsePreparedStackOperationsUnion,
+  SyncListResponsePreparedStackOperationsUnion$inboundSchema,
+} from "./synclistresponsepreparedstackoperationsunion.js";
 
 export const SyncListResponsePreparedStackManagementEnum = {
   Auto: "auto",
@@ -1340,11 +1336,7 @@ export type SyncListResponsePreparedStack = {
    * Input definitions required before setup or deployment can proceed.
    */
   inputs?: Array<SyncListResponsePreparedStackInput> | undefined;
-  operations?:
-    | SyncListResponsePreparedStackOperations
-    | string
-    | null
-    | undefined;
+  operations?: SyncListResponsePreparedStackOperationsUnion | null | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -1902,7 +1894,7 @@ export type SyncListResponseDeployment = {
    */
   capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
-   * Plugin bundle set hash the Operator reports having loaded
+   * Enabled-plugin-bundle-set hash the Operator reports having loaded
    */
   observedOperationsBundleHash?: string | null | undefined;
   /**
@@ -1960,29 +1952,6 @@ export type SyncListResponseDeployment = {
 export type SyncListResponse = {
   deployments: Array<SyncListResponseDeployment>;
 };
-
-/** @internal */
-export const SyncListResponsePreparedStackOperationsUnion$inboundSchema:
-  z.ZodType<SyncListResponsePreparedStackOperationsUnion, unknown> = z.union([
-    SyncListResponsePreparedStackOperations$inboundSchema,
-    z.string(),
-  ]);
-
-export function syncListResponsePreparedStackOperationsUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncListResponsePreparedStackOperationsUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponsePreparedStackOperationsUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponsePreparedStackOperationsUnion' from JSON`,
-  );
-}
 
 /** @internal */
 export const SyncListResponsePreparedStackManagementEnum$inboundSchema:
@@ -4001,10 +3970,7 @@ export const SyncListResponsePreparedStack$inboundSchema: z.ZodType<
   id: z.string(),
   inputs: z.array(SyncListResponsePreparedStackInput$inboundSchema).optional(),
   operations: z.nullable(
-    z.union([
-      SyncListResponsePreparedStackOperations$inboundSchema,
-      z.string(),
-    ]),
+    SyncListResponsePreparedStackOperationsUnion$inboundSchema,
   ).optional(),
   permissions: z.lazy(() =>
     SyncListResponsePreparedStackPermissions$inboundSchema

@@ -124,6 +124,7 @@ export type DenyAccessRequestRevokedBy = {
  * The rejected access request.
  */
 export type DenyAccessRequestResponse = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: DenyAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -158,7 +159,6 @@ export type DenyAccessRequestResponse = {
   approvedBy: DenyAccessRequestApprovedBy | null;
   deniedBy: DenyAccessRequestDeniedBy | null;
   revokedBy: DenyAccessRequestRevokedBy | null;
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
 };
 
 /** @internal */
@@ -344,6 +344,8 @@ export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   DenyAccessRequestResponse,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(DenyAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -369,8 +371,6 @@ export const DenyAccessRequestResponse$inboundSchema: z.ZodType<
   ),
   deniedBy: z.nullable(z.lazy(() => DenyAccessRequestDeniedBy$inboundSchema)),
   revokedBy: z.nullable(z.lazy(() => DenyAccessRequestRevokedBy$inboundSchema)),
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
 });
 
 export function denyAccessRequestResponseFromJSON(

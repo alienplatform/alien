@@ -47,7 +47,7 @@ export type OperationsInvokeMutationError =
   | SDKValidationError;
 
 /**
- * Invoke a plugin operation against a deployment. Honors the approval rules the deployment's release declares in `operations()`.
+ * Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
  */
 export function useOperationsInvokeMutation(
   options?: MutationHookOptions<

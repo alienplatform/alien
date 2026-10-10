@@ -1,5 +1,7 @@
 # CreateAccessRequestMaxRisk
 
+Required with `operationPattern`: the highest risk tier the wildcard grant may cover.
+
 ## Example Usage
 
 ```typescript

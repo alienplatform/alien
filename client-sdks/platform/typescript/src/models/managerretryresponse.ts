@@ -21,7 +21,7 @@ import {
   ManagerRetryResponseSetupConfig$inboundSchema,
   ManagerRetryResponseSetupTerraform,
   ManagerRetryResponseSetupTerraform$inboundSchema,
-} from "./managerretryresponsedomains2.js";
+} from "./managerretryresponseendpointaccess2.js";
 import {
   ManagerRetryResponseCertificateUnion1,
   ManagerRetryResponseCertificateUnion1$inboundSchema,
@@ -41,46 +41,11 @@ import {
   ManagerRetryResponseHeartbeats1$inboundSchema,
   ManagerRetryResponseModeGenerated1,
   ManagerRetryResponseModeGenerated1$inboundSchema,
-  ManagerRetryResponseProviderAzureApplicationGatewayForContainers2,
-  ManagerRetryResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  ManagerRetryResponseProviderGkeGateway2,
-  ManagerRetryResponseProviderGkeGateway2$inboundSchema,
+  ManagerRetryResponseProviderUnion2,
+  ManagerRetryResponseProviderUnion2$inboundSchema,
   ManagerRetryResponseSetupGoogleOauth,
   ManagerRetryResponseSetupGoogleOauth$inboundSchema,
-} from "./managerretryresponseprovidergkegateway2.js";
-
-export const ManagerRetryResponseProviderAwsAlbEnum2 = {
-  AwsAlb: "awsAlb",
-} as const;
-export type ManagerRetryResponseProviderAwsAlbEnum2 = ClosedEnum<
-  typeof ManagerRetryResponseProviderAwsAlbEnum2
->;
-
-export type ManagerRetryResponseProviderAwsAlb2 = {
-  /**
-   * Optional ALB IP address type, such as `dualstack`.
-   */
-  ipAddressType?: string | null | undefined;
-  provider: ManagerRetryResponseProviderAwsAlbEnum2;
-  /**
-   * Internet-facing or internal ALB scheme.
-   */
-  scheme: string;
-  /**
-   * Explicit subnet IDs when the profile cannot rely on controller discovery.
-   */
-  subnetIds?: Array<string> | undefined;
-  /**
-   * ALB target type, usually `ip`.
-   */
-  targetType: string;
-};
-
-export type ManagerRetryResponseProviderUnion2 =
-  | ManagerRetryResponseProviderAwsAlb2
-  | ManagerRetryResponseProviderAzureApplicationGatewayForContainers2
-  | ManagerRetryResponseProviderGkeGateway2
-  | string;
+} from "./managerretryresponseproviderunion2.js";
 
 /**
  * Shared Gateway API route profile values.
@@ -106,13 +71,7 @@ export type ManagerRetryResponseRouteGateway1 = {
    * Listener port, usually 443.
    */
   listenerPort: number;
-  provider?:
-    | ManagerRetryResponseProviderAwsAlb2
-    | ManagerRetryResponseProviderAzureApplicationGatewayForContainers2
-    | ManagerRetryResponseProviderGkeGateway2
-    | string
-    | null
-    | undefined;
+  provider?: ManagerRetryResponseProviderUnion2 | null | undefined;
   routeApi: "gateway";
 };
 
@@ -549,56 +508,6 @@ export type ManagerRetryResponse =
   | ManagerRetryDeploymentResponse;
 
 /** @internal */
-export const ManagerRetryResponseProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
-  typeof ManagerRetryResponseProviderAwsAlbEnum2
-> = z.enum(ManagerRetryResponseProviderAwsAlbEnum2);
-
-/** @internal */
-export const ManagerRetryResponseProviderAwsAlb2$inboundSchema: z.ZodType<
-  ManagerRetryResponseProviderAwsAlb2,
-  unknown
-> = z.object({
-  ipAddressType: z.nullable(z.string()).optional(),
-  provider: ManagerRetryResponseProviderAwsAlbEnum2$inboundSchema,
-  scheme: z.string(),
-  subnetIds: z.array(z.string()).optional(),
-  targetType: z.string(),
-});
-
-export function managerRetryResponseProviderAwsAlb2FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseProviderAwsAlb2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      ManagerRetryResponseProviderAwsAlb2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseProviderAwsAlb2' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerRetryResponseProviderUnion2$inboundSchema: z.ZodType<
-  ManagerRetryResponseProviderUnion2,
-  unknown
-> = z.union([
-  z.lazy(() => ManagerRetryResponseProviderAwsAlb2$inboundSchema),
-  ManagerRetryResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  ManagerRetryResponseProviderGkeGateway2$inboundSchema,
-  z.string(),
-]);
-
-export function managerRetryResponseProviderUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseProviderUnion2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      ManagerRetryResponseProviderUnion2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseProviderUnion2' from JSON`,
-  );
-}
-
-/** @internal */
 export const ManagerRetryResponseRouteGateway1$inboundSchema: z.ZodType<
   ManagerRetryResponseRouteGateway1,
   unknown
@@ -608,14 +517,8 @@ export const ManagerRetryResponseRouteGateway1$inboundSchema: z.ZodType<
   gatewayClassName: z.string(),
   labels: z.record(z.string(), z.string()).optional(),
   listenerPort: z.int(),
-  provider: z.nullable(
-    z.union([
-      z.lazy(() => ManagerRetryResponseProviderAwsAlb2$inboundSchema),
-      ManagerRetryResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-      ManagerRetryResponseProviderGkeGateway2$inboundSchema,
-      z.string(),
-    ]),
-  ).optional(),
+  provider: z.nullable(ManagerRetryResponseProviderUnion2$inboundSchema)
+    .optional(),
   routeApi: z.literal("gateway"),
 });
 

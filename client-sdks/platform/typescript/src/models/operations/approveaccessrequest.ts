@@ -127,6 +127,7 @@ export type ApproveAccessRequestRevokedBy = {
  * The approved access request.
  */
 export type ApproveAccessRequestResponse = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: ApproveAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -161,7 +162,6 @@ export type ApproveAccessRequestResponse = {
   approvedBy: ApproveAccessRequestApprovedBy | null;
   deniedBy: ApproveAccessRequestDeniedBy | null;
   revokedBy: ApproveAccessRequestRevokedBy | null;
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   approvalMethod: string;
 };
 
@@ -352,6 +352,8 @@ export const ApproveAccessRequestResponse$inboundSchema: z.ZodType<
   ApproveAccessRequestResponse,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(ApproveAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -381,8 +383,6 @@ export const ApproveAccessRequestResponse$inboundSchema: z.ZodType<
   revokedBy: z.nullable(
     z.lazy(() => ApproveAccessRequestRevokedBy$inboundSchema),
   ),
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
   approvalMethod: z.string(),
 });
 

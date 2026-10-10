@@ -12,7 +12,6 @@ let value: ListOperationsPluginsRequest = {
 
 ## Fields
 
-| Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `project`                                                              | *string*                                                               | :heavy_check_mark:                                                     | Filter by project ID or name.                                          |
-| `deployment`                                                           | *string*                                                               | :heavy_minus_sign:                                                     | Only the plugins this deployment declares, at their declared versions. |
+| Field                         | Type                          | Required                      | Description                   |
+| ----------------------------- | ----------------------------- | ----------------------------- | ----------------------------- |
+| `project`                     | *string*                      | :heavy_check_mark:            | Filter by project ID or name. |

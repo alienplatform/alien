@@ -24,15 +24,3 @@ actions:
               pattern: "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$"
             example: my-workspace
             x-speakeasy-globals-hidden: true
-  - target: "$['components']['schemas']"
-    update:
-      CreateAccessRequestMaxRisk:
-        type: string
-        enum: [read-only, mutating, destructive]
-  - target: "$['components']['schemas']['CreateAccessRequest']['properties']['maxRisk']"
-    remove: true
-  - target: "$['components']['schemas']['CreateAccessRequest']['properties']"
-    update:
-      maxRisk:
-        $ref: "#/components/schemas/CreateAccessRequestMaxRisk"
-        description: "Required with operationPattern: the highest risk tier the wildcard grant may cover."

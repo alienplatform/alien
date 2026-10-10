@@ -66,11 +66,11 @@ export type RenderOperatorEcsCloudFormationRequest = {
    */
   operatorImagePackageId?: string | undefined;
   /**
-   * Installer-owned S3 ceiling. Required when S3 operations need ListBucket or GetObject; the generated role contains only these bucket and object ARNs.
+   * Installer-owned S3 ceiling. Required when enabled S3 operations need ListBucket or GetObject; the generated role contains only these bucket and object ARNs.
    */
   s3BucketArns?: Array<string> | undefined;
   /**
-   * Installer-owned SQS ceiling. Required when SQS operations read queue attributes; the generated role contains only these queue ARNs.
+   * Installer-owned SQS ceiling. Required when enabled SQS operations read queue attributes; the generated role contains only these queue ARNs.
    */
   sqsQueueArns?: Array<string> | undefined;
 };

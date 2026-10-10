@@ -133,6 +133,7 @@ export type ListAccessRequestsRevokedBy = {
 };
 
 export type ListAccessRequestsItem = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: ListAccessRequestsRequesterKind | null;
   requesterId: string | null;
@@ -167,7 +168,6 @@ export type ListAccessRequestsItem = {
   approvedBy: ListAccessRequestsApprovedBy | null;
   deniedBy: ListAccessRequestsDeniedBy | null;
   revokedBy: ListAccessRequestsRevokedBy | null;
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
 };
 
 /**
@@ -343,6 +343,8 @@ export const ListAccessRequestsItem$inboundSchema: z.ZodType<
   ListAccessRequestsItem,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(ListAccessRequestsRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -370,8 +372,6 @@ export const ListAccessRequestsItem$inboundSchema: z.ZodType<
   revokedBy: z.nullable(
     z.lazy(() => ListAccessRequestsRevokedBy$inboundSchema),
   ),
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
 });
 
 export function listAccessRequestsItemFromJSON(

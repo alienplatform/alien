@@ -43,10 +43,7 @@ export function buildOperationsListPluginsQuery(
   ) => Promise<OperationsListPluginsQueryData>;
 } {
   return {
-    queryKey: queryKeyOperationsListPlugins({
-      project: request.project,
-      deployment: request.deployment,
-    }),
+    queryKey: queryKeyOperationsListPlugins({ project: request.project }),
     queryFn: async function operationsListPluginsQueryFn(
       ctx,
     ): Promise<OperationsListPluginsQueryData> {
@@ -71,7 +68,7 @@ export function buildOperationsListPluginsQuery(
 }
 
 export function queryKeyOperationsListPlugins(
-  parameters: { project: string; deployment?: string | undefined },
+  parameters: { project: string },
 ): QueryKey {
   return [
     "@alienplatform/platform-api",

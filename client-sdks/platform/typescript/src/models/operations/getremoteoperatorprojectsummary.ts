@@ -215,7 +215,7 @@ export type Application = {
 };
 
 /**
- * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from every built-in operation plugin, which setup grants to an Operator installed without a release.
+ * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from the currently enabled operations.
  */
 export const PermissionsStatus = {
   Current: "current",
@@ -223,16 +223,16 @@ export const PermissionsStatus = {
   Unknown: "unknown",
 } as const;
 /**
- * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from every built-in operation plugin, which setup grants to an Operator installed without a release.
+ * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from the currently enabled operations.
  */
 export type PermissionsStatus = ClosedEnum<typeof PermissionsStatus>;
 
 /**
- * Installed cloud and Kubernetes permissions. Setup applies them, so changes to the built-in operation plugins reach an installation only after its setup is re-applied.
+ * Installed cloud and Kubernetes permissions. Setup applies them, so enabling or disabling operations changes them only after the installation's setup is re-applied.
  */
 export type Permissions = {
   /**
-   * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from every built-in operation plugin, which setup grants to an Operator installed without a release.
+   * Whether the Kubernetes RBAC and cloud IAM recorded for this installation match the permissions compiled from the currently enabled operations.
    */
   status: PermissionsStatus;
   /**
@@ -267,7 +267,7 @@ export type GetRemoteOperatorProjectSummaryItem = {
   operationSync: OperationSync | null;
   application: Application;
   /**
-   * Installed cloud and Kubernetes permissions. Setup applies them, so changes to the built-in operation plugins reach an installation only after its setup is re-applied.
+   * Installed cloud and Kubernetes permissions. Setup applies them, so enabling or disabling operations changes them only after the installation's setup is re-applied.
    */
   permissions: Permissions;
 };

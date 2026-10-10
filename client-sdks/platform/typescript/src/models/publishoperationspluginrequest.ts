@@ -373,21 +373,6 @@ export type PublishOperationsPluginRequestOperation = {
   kubernetesPermissions?: KubernetesPermissions | undefined;
 };
 
-export const SettingsKind = {
-  String: "string",
-  Secret: "secret",
-  Resources: "resources",
-} as const;
-export type SettingsKind = ClosedEnum<typeof SettingsKind>;
-
-export type PublishOperationsPluginRequestSettings = {
-  description: string;
-  kind: SettingsKind;
-  env?: string | undefined;
-  resourceType?: string | undefined;
-  required?: boolean | undefined;
-};
-
 /**
  * The complete canonical metadata.json from the uploaded bundle.
  */
@@ -399,9 +384,6 @@ export type Metadata = {
     | PublishOperationsPluginRequestBinaries1
     | PublishOperationsPluginRequestBinaries2;
   operations?: Array<PublishOperationsPluginRequestOperation> | undefined;
-  settings?:
-    | { [k: string]: PublishOperationsPluginRequestSettings }
-    | undefined;
 };
 
 export type PublishOperationsPluginRequest = {
@@ -1822,42 +1804,6 @@ export function publishOperationsPluginRequestOperationToJSON(
 }
 
 /** @internal */
-export const SettingsKind$outboundSchema: z.ZodEnum<typeof SettingsKind> = z
-  .enum(SettingsKind);
-
-/** @internal */
-export type PublishOperationsPluginRequestSettings$Outbound = {
-  description: string;
-  kind: string;
-  env?: string | undefined;
-  resourceType?: string | undefined;
-  required: boolean;
-};
-
-/** @internal */
-export const PublishOperationsPluginRequestSettings$outboundSchema: z.ZodType<
-  PublishOperationsPluginRequestSettings$Outbound,
-  PublishOperationsPluginRequestSettings
-> = z.object({
-  description: z.string(),
-  kind: SettingsKind$outboundSchema,
-  env: z.string().optional(),
-  resourceType: z.string().optional(),
-  required: z.boolean().default(false),
-});
-
-export function publishOperationsPluginRequestSettingsToJSON(
-  publishOperationsPluginRequestSettings:
-    PublishOperationsPluginRequestSettings,
-): string {
-  return JSON.stringify(
-    PublishOperationsPluginRequestSettings$outboundSchema.parse(
-      publishOperationsPluginRequestSettings,
-    ),
-  );
-}
-
-/** @internal */
 export type Metadata$Outbound = {
   name: string;
   version: string;
@@ -1867,9 +1813,6 @@ export type Metadata$Outbound = {
     | PublishOperationsPluginRequestBinaries2$Outbound;
   operations?:
     | Array<PublishOperationsPluginRequestOperation$Outbound>
-    | undefined;
-  settings?:
-    | { [k: string]: PublishOperationsPluginRequestSettings$Outbound }
     | undefined;
 };
 
@@ -1885,10 +1828,6 @@ export const Metadata$outboundSchema: z.ZodType<Metadata$Outbound, Metadata> = z
     ]),
     operations: z.array(
       z.lazy(() => PublishOperationsPluginRequestOperation$outboundSchema),
-    ).optional(),
-    settings: z.record(
-      z.string(),
-      z.lazy(() => PublishOperationsPluginRequestSettings$outboundSchema),
     ).optional(),
   });
 

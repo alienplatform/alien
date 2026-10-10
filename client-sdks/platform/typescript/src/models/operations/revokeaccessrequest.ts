@@ -117,6 +117,7 @@ export type RevokeAccessRequestRevokedBy = {
  * The revoked access request.
  */
 export type RevokeAccessRequestResponse = {
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: RevokeAccessRequestRequesterKind | null;
   requesterId: string | null;
@@ -151,7 +152,6 @@ export type RevokeAccessRequestResponse = {
   approvedBy: RevokeAccessRequestApprovedBy | null;
   deniedBy: RevokeAccessRequestDeniedBy | null;
   revokedBy: RevokeAccessRequestRevokedBy | null;
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
 };
 
 /** @internal */
@@ -309,6 +309,8 @@ export const RevokeAccessRequestResponse$inboundSchema: z.ZodType<
   RevokeAccessRequestResponse,
   unknown
 > = z.object({
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
   id: z.string(),
   requesterKind: z.nullable(RevokeAccessRequestRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -336,8 +338,6 @@ export const RevokeAccessRequestResponse$inboundSchema: z.ZodType<
   revokedBy: z.nullable(
     z.lazy(() => RevokeAccessRequestRevokedBy$inboundSchema),
   ),
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
 });
 
 export function revokeAccessRequestResponseFromJSON(

@@ -10,9 +10,17 @@ import {
   OperationsPlugin,
   OperationsPlugin$inboundSchema,
 } from "./operationsplugin.js";
+import {
+  OperatorInstallationsRollup,
+  OperatorInstallationsRollup$inboundSchema,
+} from "./operatorinstallationsrollup.js";
 
 export type ListOperationsPluginsResponse = {
   plugins: Array<OperationsPlugin>;
+  /**
+   * Rollup of this project's pull-mode installations by operations-bundle sync status, reflecting the currently enabled plugin set.
+   */
+  installations: OperatorInstallationsRollup;
 };
 
 /** @internal */
@@ -21,6 +29,7 @@ export const ListOperationsPluginsResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   plugins: z.array(OperationsPlugin$inboundSchema),
+  installations: OperatorInstallationsRollup$inboundSchema,
 });
 
 export function listOperationsPluginsResponseFromJSON(
