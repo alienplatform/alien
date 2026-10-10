@@ -8,7 +8,7 @@ use crate::{
     instance_catalog::{self, Architecture, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, ComputePoolSelection, Container,
     Daemon, ErrorData, FailureDomainSelection, GpuSpec, MachineProfile, Platform, ResourceSpec,
-    Stack,
+    Stack, StackState,
 };
 use alien_error::{AlienError, Result};
 use serde::{Deserialize, Serialize};
@@ -94,6 +94,17 @@ pub fn plan_compute(
     platform: Platform,
     selected_settings: Option<&crate::ComputeSettings>,
 ) -> Result<ComputePlan, ErrorData> {
+    plan_compute_with_state(stack, platform, selected_settings, None)
+}
+
+/// Plan a configuration update while retaining the installed machine architecture.
+/// Resource changes must not silently require a different workload image target.
+pub fn plan_compute_with_state(
+    stack: &Stack,
+    platform: Platform,
+    selected_settings: Option<&crate::ComputeSettings>,
+    previous_state: Option<&StackState>,
+) -> Result<ComputePlan, ErrorData> {
     let mut resolved_stack = stack.clone();
     crate::container_resources::resolve_container_resources(
         &mut resolved_stack,
@@ -115,7 +126,24 @@ pub fn plan_compute(
             requirements.architecture = selected
                 .and_then(ComputePoolSelection::machine)
                 .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
-                .map(|spec| spec.architecture);
+                .map(|spec| spec.architecture)
+                .or_else(|| {
+                    previous_state.and_then(|state| {
+                        state
+                            .resources
+                            .values()
+                            .filter_map(|resource| {
+                                resource.config.downcast_ref::<crate::ComputeCluster>()
+                            })
+                            .flat_map(|cluster| &cluster.capacity_groups)
+                            .find(|group| group.group_id == pool_id)
+                            .and_then(|group| group.instance_type.as_deref())
+                            .and_then(|machine| {
+                                instance_catalog::find_instance_type(platform, machine)
+                            })
+                            .map(|spec| spec.architecture)
+                    })
+                });
         }
         if group.generated {
             group.scale = generated_pool_scale_policy(

@@ -13,7 +13,7 @@ use crate::{
 use alien_core::{
     compute_planner::{
         capacity_group_requirements, check_pool_capacity, default_persistent_failure_domains,
-        generated_pool_scale_policy, plan_compute, validate_compute_pool_selection,
+        generated_pool_scale_policy, plan_compute_with_state, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
@@ -193,10 +193,11 @@ impl StackMutation for ComputeClusterMutation {
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
-            let plan = plan_compute(
+            let plan = plan_compute_with_state(
                 &stack,
                 stack_state.platform,
                 config.stack_settings.compute.as_ref(),
+                Some(stack_state),
             )
             .context(crate::error::ErrorData::StackMutationFailed {
                 mutation_name: self.description().to_string(),
