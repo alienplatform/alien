@@ -1666,10 +1666,18 @@ fn add_container_resource_parameters(
     stack: &Stack,
     compute: Option<&alien_core::ComputeSettings>,
 ) -> Result<()> {
-    // Planning validates both the declared ranges and the supplied defaults first.
-    let plan = alien_core::compute_planner::plan_compute(stack, Platform::Aws, compute)?;
-    for container in plan.containers {
-        let prefix = format!("Container{}", pascal_identifier(&container.container_id));
+    let mut resolved = stack.clone();
+    alien_core::container_resources::resolve_container_resources(&mut resolved, compute)?;
+    let mut containers: Vec<_> = resolved
+        .resources
+        .values()
+        .filter_map(|entry| entry.config.downcast_ref::<Container>())
+        .filter(|container| container.resource_choices.is_some())
+        .collect();
+    containers.sort_by(|a, b| a.id.cmp(&b.id));
+    for container in containers {
+        let choices = container.resource_choices.as_ref().expect("filtered above");
+        let prefix = format!("Container{}", pascal_identifier(&container.id));
         for suffix in ["Cpu", "Memory"] {
             if template
                 .parameters
@@ -1677,11 +1685,11 @@ fn add_container_resource_parameters(
             {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate container resource parameters".to_string(),
-                    reason: format!("Container '{}' produces a duplicate CloudFormation parameter name; use distinct alphanumeric container names", container.container_id),
+                    reason: format!("Container '{}' produces a duplicate CloudFormation parameter name; use distinct alphanumeric container names", container.id),
                 }));
             }
         }
-        if let Some(range) = container.choices.cpu {
+        if let Some(range) = choices.cpu.as_ref() {
             let mut parameter =
                 number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
             parameter.default = Some(CfExpression::Number(
@@ -1698,12 +1706,12 @@ fn add_container_resource_parameters(
                 .parameters
                 .insert(format!("{prefix}Cpu"), parameter);
         }
-        if container.choices.memory.is_some() {
+        if choices.memory.is_some() {
             template.parameters.insert(
                 format!("{prefix}Memory"),
                 string_parameter(
                     "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
-                    Some(container.memory.desired),
+                    Some(container.memory.desired.clone()),
                     None,
                     false,
                 ),
@@ -3119,6 +3127,31 @@ impl DomainParameterDefaults {
 mod tests {
     use super::*;
     use alien_core::{PermissionProfile, Resource, ResourceRef};
+
+    #[test]
+    fn resource_parameters_do_not_require_a_matching_aws_machine() {
+        let container = Container::new("api".into())
+            .code(alien_core::ContainerCode::Image {
+                image: "nginx:alpine".into(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
+            })
+            .ephemeral_storage("60Ti".into())
+            .permissions("app".into())
+            .build();
+        let stack = Stack::new("stack".into())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let mut template = CfTemplate::new();
+        add_container_resource_parameters(&mut template, &stack, None)
+            .expect("Kubernetes workload sizes must not be constrained by AWS machines");
+    }
 
     #[test]
     fn conflicting_container_parameter_names_fail_instead_of_sharing_values() {

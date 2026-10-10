@@ -416,3 +416,17 @@ test("existing access request risk enum deep imports remain compatible", async (
   const { CreateAccessRequestMaxRisk } = await import("../typescript/esm/models/createaccessrequest.js");
   assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
 });
+
+test("reported resource serializers retain their published imports", async () => {
+  const models = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/syncreconcilerequestdataunion2.js");
+  assert.equal(models.cpuUnion1ToJSON("1"), '"1"');
+  assert.equal(deep.cpuUnion1ToJSON("1"), '"1"');
+  assert.equal(models.memoryUnion1ToJSON("1Gi"), '"1Gi"');
+});
+
+test("existing deployment model paths use the current resource parser", async () => {
+  const { deploymentComputeFromJSON } = await import("../typescript/esm/models/deploymentpendingpreparedstacktypeunion.js");
+  const compute = { containers: { api: { cpu: 1.5, memory: "2Gi" } } };
+  assert.deepEqual(deploymentComputeFromJSON(JSON.stringify(compute)), { ok: true, value: compute });
+});
