@@ -2865,13 +2865,13 @@ mod tests {
             machine: Some("m7g.large".to_string()),
             failure_domains: None,
         };
-        // m7g.large has 2 vCPU; five replicas request 2.5.
+        // m7g.large has 1.5 vCPU available after host reserve; five replicas request 2.5.
         let error = prepare_release(gw_release(ContainerReplicas::Fixed(5)), &fixed_one)
             .await
             .expect_err("five replicas cannot fit one machine");
         assert!(
             error.message.contains(
-                "Pool 'general' is too small for its workloads: 1 x m7g.large has 2.00 vCPU"
+                "Pool 'general' is too small for its workloads: 1 x m7g.large has 1.50 vCPU"
             ),
             "{}",
             error.message
@@ -3204,9 +3204,9 @@ mod tests {
             };
 
             let machine = match platform {
-                Platform::Aws => "m7i.large",
-                Platform::Gcp => "n2-standard-2",
-                Platform::Azure => "Standard_D2s_v5",
+                Platform::Aws => "m7i.xlarge",
+                Platform::Gcp => "n2-standard-4",
+                Platform::Azure => "Standard_D4s_v5",
                 _ => unreachable!("test only covers cloud platforms"),
             };
             let mutation = ComputeClusterMutation;
