@@ -218,7 +218,23 @@ impl StackMutation for ComputeClusterMutation {
                         },
                     ));
                 }
-                settings.pools.insert(pool.pool_id, pool.selected);
+                let mut selection = pool.selected;
+                // Resolving capacity must not turn an omitted topology choice into
+                // an explicit default. Existing pools retain their installed zones.
+                let domains = config
+                    .stack_settings
+                    .compute
+                    .as_ref()
+                    .and_then(|settings| settings.pools.get(&pool.pool_id))
+                    .and_then(ComputePoolSelection::failure_domains)
+                    .cloned();
+                match &mut selection {
+                    ComputePoolSelection::Fixed { failure_domains, .. }
+                    | ComputePoolSelection::Autoscale { failure_domains, .. } => {
+                        *failure_domains = domains;
+                    }
+                }
+                settings.pools.insert(pool.pool_id, selection);
             }
         }
         // Resolve only for this mutation. Persisted settings retain the absent
