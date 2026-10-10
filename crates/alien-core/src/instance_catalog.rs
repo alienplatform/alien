@@ -1351,21 +1351,32 @@ pub fn select_instance_type(
     platform: Platform,
     requirements: &WorkloadRequirements,
 ) -> Result<InstanceSelection, String> {
+    let family = select_family(requirements);
+    let family = if requirements.nested_virt && family == InstanceFamily::Burstable {
+        InstanceFamily::GeneralPurpose
+    } else {
+        family
+    };
+    let selection = select_instance_type_in_family(platform, requirements, family);
+    if selection.is_err() && family == InstanceFamily::Burstable {
+        return select_instance_type_in_family(
+            platform,
+            requirements,
+            InstanceFamily::GeneralPurpose,
+        );
+    }
+    selection
+}
+
+fn select_instance_type_in_family(
+    platform: Platform,
+    requirements: &WorkloadRequirements,
+    family: InstanceFamily,
+) -> Result<InstanceSelection, String> {
     let architecture = requirements
         .architecture
         .or_else(|| default_architecture(platform))
         .ok_or_else(|| format!("platform {platform} has no default compute architecture"))?;
-
-    // Determine which family to use. Nested virt isn't available on
-    // burstable hardware on any cloud, so a workload that classifies as
-    // Burstable but needs nested virt must be upgraded to GeneralPurpose
-    // (the family that actually has nested-virt-capable entries).
-    let raw_family = select_family(requirements);
-    let family = if requirements.nested_virt && raw_family == InstanceFamily::Burstable {
-        InstanceFamily::GeneralPurpose
-    } else {
-        raw_family
-    };
 
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
@@ -1774,6 +1785,27 @@ mod tests {
     }
 
     // -- Selection algorithm tests --
+
+    #[test]
+    fn small_cpu_with_large_memory_falls_back_from_burstable() {
+        let requirements = WorkloadRequirements {
+            total_cpu_at_desired: 0.5,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 0.5,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 0.5,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 0,
+            gpu: None,
+            architecture: Some(Architecture::X86_64),
+            nested_virt: false,
+        };
+        let selected = select_instance_type(Platform::Gcp, &requirements).unwrap();
+        let machine = find_instance_type(Platform::Gcp, selected.instance_type).unwrap();
+        assert!(
+            allocatable_memory_bytes(machine) as f64 >= 8.0 * GI as f64 * WORKLOAD_HEADROOM_FACTOR
+        );
+    }
 
     #[test]
     fn test_select_burstable_for_small_workload() {

@@ -70,12 +70,11 @@ impl StackMutation for ComputeClusterMutation {
             .stack_settings
             .compute
             .as_ref()
-            .is_none_or(|settings| {
-                settings.pools.is_empty()
-                    || settings
-                        .pools
-                        .values()
-                        .any(|selection| selection.machine().is_none())
+            .is_some_and(|settings| {
+                settings
+                    .pools
+                    .values()
+                    .any(|selection| selection.machine().is_none())
             })
         {
             // Resource updates must recompute automatic machine choices even
@@ -209,6 +208,24 @@ impl StackMutation for ComputeClusterMutation {
                 .compute
                 .get_or_insert_default();
             for pool in plan.pools {
+                let has_deployment_selection = config
+                    .stack_settings
+                    .compute
+                    .as_ref()
+                    .is_some_and(|settings| settings.pools.contains_key(&pool.pool_id));
+                let has_declared_machine = stack.resources.values().any(|entry| {
+                    entry
+                        .config
+                        .downcast_ref::<ComputeCluster>()
+                        .is_some_and(|cluster| {
+                            cluster.capacity_groups.iter().any(|group| {
+                                group.group_id == pool.pool_id && group.instance_type.is_some()
+                            })
+                        })
+                });
+                if !has_deployment_selection && has_declared_machine {
+                    continue;
+                }
                 if !pool.errors.is_empty() {
                     return Err(AlienError::new(
                         crate::error::ErrorData::StackMutationFailed {
@@ -2389,7 +2406,16 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build();
-        assert!(mutation.should_run(&stack, &stack_state, &config));
+        assert!(!mutation.should_run(&stack, &stack_state, &config));
+        let prepared = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let cluster = prepared.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        assert_eq!(
+            cluster.capacity_groups[0].instance_type.as_deref(),
+            Some("m7i.large")
+        );
     }
 
     #[tokio::test]

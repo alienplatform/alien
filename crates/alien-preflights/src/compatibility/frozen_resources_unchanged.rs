@@ -132,7 +132,7 @@ fn machine_changes_needing_setup(
             let (old_machine, new_machine) = machine_change(old_group, new_group)?;
             (!runtime_machine_change(platform, old_machine, new_machine)).then(|| {
                 format!(
-                    "capacity group '{}' changes machine from '{old_machine}' to '{new_machine}', but without setup a machine can change only within the same cloud and CPU architecture",
+                    "capacity group '{}' changes machine from '{old_machine}' to '{new_machine}', but without setup a machine can change only within the same cloud and with the same CPU architecture",
                     new_group.group_id
                 )
             })
