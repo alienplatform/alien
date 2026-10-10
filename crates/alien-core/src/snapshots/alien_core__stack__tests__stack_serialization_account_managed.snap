@@ -1,9 +1,20 @@
 ---
 source: crates/alien-core/src/stack.rs
-expression: stack
+expression: "serde_json::to_string_pretty(&json).expect(\"format stack JSON\")"
 ---
 {
   "id": "test-stack",
+  "permissions": {
+    "management": "auto",
+    "profiles": {
+      "execution": {
+        "*": [
+          "storage/data-read",
+          "storage/data-write"
+        ]
+      }
+    }
+  },
   "resources": {
     "my-bucket": {
       "config": {
@@ -14,8 +25,8 @@ expression: stack
         "type": "storage",
         "versioning": false
       },
-      "lifecycle": "frozen",
       "dependencies": [],
+      "lifecycle": "frozen",
       "remoteAccess": false
     },
     "my-worker": {
@@ -41,20 +52,9 @@ expression: stack
         "triggers": [],
         "type": "worker"
       },
-      "lifecycle": "live",
       "dependencies": [],
+      "lifecycle": "live",
       "remoteAccess": false
     }
-  },
-  "permissions": {
-    "profiles": {
-      "execution": {
-        "*": [
-          "storage/data-read",
-          "storage/data-write"
-        ]
-      }
-    },
-    "management": "auto"
   }
 }

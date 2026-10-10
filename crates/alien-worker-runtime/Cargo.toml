@@ -24,6 +24,7 @@ kubernetes = ["alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 
 [dependencies]
+strip-ansi-escapes = { workspace = true }
 lognorm = { workspace = true }
 alien-commands = { workspace = true, default-features = false, features = ["runtime"] }
 alien-bindings = { workspace = true, default-features = false }

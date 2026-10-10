@@ -895,11 +895,12 @@ async fn stream_output(
                 let timestamp_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
                 let (body, is_system) = crate::log_text::strip_system_log_prefix(&line);
 
-                // Print to local stdout/stderr for debugging
+                // Keep terminal controls out of the local echo, preserving raw telemetry.
+                let echo = crate::log_text::terminal_echo(body);
                 if is_stdout {
-                    println!("{}", body);
+                    println!("{}", echo);
                 } else {
-                    eprintln!("{}", body);
+                    eprintln!("{}", echo);
                 }
 
                 // Emit normalized text via OpenTelemetry SDK (batched, proper protobuf format).
