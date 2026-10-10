@@ -1470,6 +1470,19 @@ pub fn select_instance_type(
         ));
     }
 
+    // More machines cannot split one replica. Every candidate must fit its
+    // largest allocation after host reserve and workload headroom.
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|spec| {
+            allocatable_cpu(spec) >= requirements.max_cpu_per_container * WORKLOAD_HEADROOM_FACTOR
+                && allocatable_memory_bytes(spec) as f64
+                    >= requirements.max_memory_per_container as f64 * WORKLOAD_HEADROOM_FACTOR
+        })
+        .collect();
+    let smallest_replica_machine = candidates.iter().map(|spec| spec.vcpu).min()
+        .ok_or_else(|| format!("no {platform} machine can fit one replica with system reserve and workload headroom"))?;
+
     // Apply the policy for the candidates we will actually select from. A
     // storage-heavy request can fall back from fixed-local storage machines to
     // general-purpose machines with provider-backed disks; those machines must
@@ -1480,7 +1493,7 @@ pub fn select_instance_type(
     {
         u32::MAX
     } else {
-        MAX_STANDARD_VCPU
+        MAX_STANDARD_VCPU.max(smallest_replica_machine)
     };
 
     let desired_target_machines = desired_target_machines(requirements);
@@ -2051,7 +2064,7 @@ mod tests {
 
     #[test]
     fn test_instance_size_capped_at_8_vcpu() {
-        // Even with very large containers, instance size is capped at 8 vCPUs
+        // Many small replicas prefer more machines over larger instances.
         let req = WorkloadRequirements {
             total_cpu_at_desired: 70.0,
             total_memory_bytes_at_desired: 140 * GI,

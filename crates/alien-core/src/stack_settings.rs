@@ -241,7 +241,11 @@ pub enum ComputePoolSelection {
         /// Number of machines to run.
         machines: u32,
         /// Provider machine type selected for this deployment.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_machine_override"
+        )]
         machine: Option<String>,
         /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,12 +258,23 @@ pub enum ComputePoolSelection {
         /// Maximum machine count.
         max: u32,
         /// Provider machine type selected for this deployment.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_machine_override"
+        )]
         machine: Option<String>,
         /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure_domains: Option<FailureDomainSelection>,
     },
+}
+
+fn deserialize_machine_override<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    // CloudFormation represents its optional String parameters as empty strings.
+    Ok(Option::<String>::deserialize(deserializer)?.filter(|machine| !machine.is_empty()))
 }
 
 impl ComputePoolSelection {

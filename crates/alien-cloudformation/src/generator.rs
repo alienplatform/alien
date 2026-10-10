@@ -1580,16 +1580,17 @@ fn add_compute_parameters(
                 pool.machines
                     .iter()
                     .map(|machine| CfExpression::from(machine.machine.as_str()))
+                    .chain(std::iter::once(CfExpression::from("")))
                     .collect()
             });
         template.parameters.insert(
             machine_parameter,
             string_parameter(
                 &format!(
-                    "Provider machine type for runtime compute pool '{}'.",
+                    "Optional machine override for runtime compute pool '{}'. Leave empty for automatic sizing.",
                     group.group_id
                 ),
-                selection.machine().map(ToString::to_string),
+                Some(selection.machine().unwrap_or_default().to_string()),
                 allowed_values,
                 false,
             ),
