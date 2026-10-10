@@ -128,7 +128,6 @@ export type GetLiveDebugGrantRevokedBy = {
  * A live access request with a matching debug grant.
  */
 export type GetLiveDebugGrantResponse = {
-  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
   id: string;
   requesterKind: GetLiveDebugGrantRequesterKind | null;
   requesterId: string | null;
@@ -163,6 +162,7 @@ export type GetLiveDebugGrantResponse = {
   approvedBy: GetLiveDebugGrantApprovedBy | null;
   deniedBy: GetLiveDebugGrantDeniedBy | null;
   revokedBy: GetLiveDebugGrantRevokedBy | null;
+  approvalChannels?: Array<models.AccessRequestApprovalChannel> | undefined;
 };
 
 /** @internal */
@@ -320,8 +320,6 @@ export const GetLiveDebugGrantResponse$inboundSchema: z.ZodType<
   GetLiveDebugGrantResponse,
   unknown
 > = z.object({
-  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
-    .optional(),
   id: z.string(),
   requesterKind: z.nullable(GetLiveDebugGrantRequesterKind$inboundSchema),
   requesterId: z.nullable(z.string()),
@@ -347,6 +345,8 @@ export const GetLiveDebugGrantResponse$inboundSchema: z.ZodType<
   ),
   deniedBy: z.nullable(z.lazy(() => GetLiveDebugGrantDeniedBy$inboundSchema)),
   revokedBy: z.nullable(z.lazy(() => GetLiveDebugGrantRevokedBy$inboundSchema)),
+  approvalChannels: z.array(models.AccessRequestApprovalChannel$inboundSchema)
+    .optional(),
 });
 
 export function getLiveDebugGrantResponseFromJSON(

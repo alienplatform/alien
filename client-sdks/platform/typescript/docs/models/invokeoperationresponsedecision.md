@@ -1,6 +1,6 @@
 # InvokeOperationResponseDecision
 
-The approval decision the policy resolved to.
+The decision the approval rules resolved to.
 
 ## Example Usage
 

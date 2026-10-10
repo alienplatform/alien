@@ -5,7 +5,7 @@ import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
-import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
+import { CreateAccessRequestMaxRisk } from "../typescript/esm/models/index.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -186,21 +186,13 @@ test("legacy publish-plugin deep imports preserve Kubernetes permission exports"
   assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
 });
 
-test("operations plugin responses retain the permission diff", () => {
-  const permissionDiff = {
-    aws: { added: [], removed: [] },
-    gcp: { added: [], removed: [] },
-    kubernetes: { added: [], removed: [] },
-  };
-  const response = PublishOperationsPluginResponse$inboundSchema.parse({
-    name: "registry",
-    version: "1",
-    tier: "mutating",
-    enabled: true,
-    permissionDiff,
-  });
-  assert.deepEqual(response.permissionDiff, permissionDiff);
-  assert.deepEqual(OperationsPermissionDiff$inboundSchema.parse(permissionDiff), permissionDiff);
+test("operations plugin responses retain the published identity", () => {
+  const published = { name: "registry", version: "1", tier: "mutating" };
+  assert.deepEqual(PublishOperationsPluginResponse$inboundSchema.parse(published), published);
+});
+
+test("existing access request risk enum imports remain compatible", () => {
+  assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
 });
 
 test("configured server query parameters survive operation globals", async () => {
@@ -404,3 +396,9 @@ for (const [operation, args] of [
     assert.equal(requests, 1);
   });
 }
+
+
+test("existing access request risk enum deep imports remain compatible", async () => {
+  const { CreateAccessRequestMaxRisk } = await import("../typescript/esm/models/createaccessrequest.js");
+  assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+});

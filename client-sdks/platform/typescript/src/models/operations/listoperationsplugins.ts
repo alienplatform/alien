@@ -16,11 +16,16 @@ export type ListOperationsPluginsRequest = {
    * Filter by project ID or name.
    */
   project: string;
+  /**
+   * Only the plugins this deployment declares, at their declared versions.
+   */
+  deployment?: string | undefined;
 };
 
 /** @internal */
 export type ListOperationsPluginsRequest$Outbound = {
   project: string;
+  deployment?: string | undefined;
 };
 
 /** @internal */
@@ -29,6 +34,7 @@ export const ListOperationsPluginsRequest$outboundSchema: z.ZodType<
   ListOperationsPluginsRequest
 > = z.object({
   project: z.string(),
+  deployment: z.string().optional(),
 });
 
 export function listOperationsPluginsRequestToJSON(

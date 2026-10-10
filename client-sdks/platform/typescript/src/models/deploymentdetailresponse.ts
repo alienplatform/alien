@@ -1772,7 +1772,7 @@ export type OperatorSync = {
   statusMessage?: string | null | undefined;
   targetBundleHash: string;
   /**
-   * Enabled-plugin-bundle-set hash last reported by the Operator
+   * Plugin bundle set hash last reported by the Operator
    */
   observedBundleHash?: string | null | undefined;
   /**
@@ -1780,7 +1780,7 @@ export type OperatorSync = {
    */
   missingOperations?: Array<string> | null | undefined;
   /**
-   * Enabled plugins compared with what the Operator last reported loading. Null when the sync fingerprints cannot be read.
+   * Declared plugins compared with what the Operator last reported loading. Null when the sync fingerprints cannot be read.
    */
   plugins?: Array<DeploymentOperatorSyncPlugin> | null | undefined;
   targetSetAt: Date;
@@ -1913,7 +1913,7 @@ export type DeploymentDetailResponse = {
    */
   capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
-   * Enabled-plugin-bundle-set hash the Operator reports having loaded
+   * Plugin bundle set hash the Operator reports having loaded
    */
   observedOperationsBundleHash?: string | null | undefined;
   /**

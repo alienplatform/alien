@@ -1894,7 +1894,7 @@ export type SyncListResponseDeployment = {
    */
   capabilities?: Array<OperatorCapabilityReport> | null | undefined;
   /**
-   * Enabled-plugin-bundle-set hash the Operator reports having loaded
+   * Plugin bundle set hash the Operator reports having loaded
    */
   observedOperationsBundleHash?: string | null | undefined;
   /**
