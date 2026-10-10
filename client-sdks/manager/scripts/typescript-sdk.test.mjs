@@ -3,6 +3,8 @@ import test from "node:test"
 import { HTTPClient } from "../typescript/esm/lib/http.js"
 import { AlienManager } from "../typescript/esm/sdk/sdk.js"
 
+import { computeSettingsFromJSON, computeSettingsToJSON } from "../typescript/esm/models/computesettings.js"
+
 import { agentSyncRequestToJSON } from "../typescript/esm/models/agentsyncrequest.js"
 import { createCommandResponseFromJSON } from "../typescript/esm/models/createcommandresponse.js"
 import { healthResponseFromJSON } from "../typescript/esm/models/healthresponse.js"
@@ -88,4 +90,12 @@ test("manager SDK sends the observed application with a sync request", () => {
     complete: true,
     observedAt: "2026-09-24T10:00:00.000Z",
   })
+})
+
+
+test("manager compute settings preserve selected per-replica resources on the wire", () => {
+  const settings = { containers: { api: { cpu: 1, memory: "1Gi" } } }
+  const encoded = computeSettingsToJSON(settings)
+  assert.deepEqual(JSON.parse(encoded), settings)
+  assert.deepEqual(computeSettingsFromJSON(encoded), { ok: true, value: settings })
 })
