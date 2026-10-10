@@ -558,6 +558,22 @@ async fn reconcile(
         }
     }
 
+    // 1b. Revoke a deleted deployment's access before persisting the state that hands it to
+    //     setup teardown. A denied revoke comes back as a failed delete to persist instead.
+    let final_state = match crate::registry_access::revoke_before_persisting(
+        state.deployment_store.as_ref(),
+        &state.bindings_provider,
+        &state.target_bindings_providers,
+        &req.deployment_id,
+        &deployment.project_id,
+        final_state,
+    )
+    .await
+    {
+        Ok(final_state) => final_state,
+        Err(error) => return error.into_response(),
+    };
+
     // 2. Persist the step result (including any registry access changes).
     let _result = match state
         .deployment_store
@@ -584,27 +600,6 @@ async fn reconcile(
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
-
-    if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
-        state.deployment_store.as_ref(),
-        &state.bindings_provider,
-        &state.target_bindings_providers,
-        &req.deployment_id,
-        &deployment.project_id,
-        &final_state,
-    )
-    .await
-    {
-        // The state is already persisted, and for a deletion the record may be gone, so the
-        // caller cannot repeat this cleanup. Leave the unrevoked grant in the manager's log.
-        tracing::error!(
-            deployment_id = %req.deployment_id,
-            status = ?final_state.status,
-            error = %error,
-            "Registry access cleanup failed after the deployment state was persisted"
-        );
-        return error.into_response();
-    }
 
     // Derive native image host for Lambda/Cloud Run so push clients
     // can set it on their local DeploymentConfig.

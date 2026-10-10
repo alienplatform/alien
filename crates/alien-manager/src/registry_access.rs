@@ -207,6 +207,19 @@ async fn remove_registry_access(
             );
             return Ok(());
         }
+        // A role the manager has held for the deployment's whole life is not still propagating,
+        // so a denial is a permission it lacks. Retrying cannot grant it.
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_bindings::error::ErrorData::RemoteAccessDenied { .. })
+            ) =>
+        {
+            return Err(error).context(ErrorData::RegistryAccessRevokeDenied {
+                deployment_id: deployment_id.to_string(),
+                repository: repo_id.to_string(),
+            })
+        }
         Err(error) => {
             return Err(error).context(ErrorData::RegistryAccessCleanupFailed {
                 deployment_id: deployment_id.to_string(),
@@ -412,7 +425,7 @@ fn service_type_name(service_type: &ComputeServiceType) -> String {
     }
 }
 
-/// Revokes registry access after runtime teardown has been persisted.
+/// Revokes registry access once runtime teardown is complete.
 /// AWS also revokes at TeardownRequired, before setup deletion removes its identity and record.
 ///
 /// Cloud Run's service agent is project-scoped, so multiple deployments in
@@ -560,6 +573,56 @@ pub async fn cleanup_deleted_registry_access(
         .await?;
     }
     Ok(())
+}
+
+/// Revokes a deleted deployment's registry access before the state that ends its runtime cleanup
+/// is persisted, and returns the state to persist instead.
+///
+/// The revoke goes first because a persisted `TeardownRequired` hands the deployment to setup
+/// teardown, which deletes the identity and the record the revoke reads, so a revoke still owed
+/// after that is never made. A registry that denies the revoke fails the delete with that error:
+/// the manager lacks a permission, and a retry of the delete revokes once it is granted. Any other
+/// failure is returned with nothing persisted, for the caller to retry.
+pub async fn revoke_before_persisting(
+    deployment_store: &dyn DeploymentStore,
+    bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    deployment_id: &str,
+    project_id: &str,
+    state: DeploymentState,
+) -> Result<DeploymentState> {
+    match cleanup_deleted_registry_access(
+        deployment_store,
+        bindings_provider,
+        target_bindings_providers,
+        deployment_id,
+        project_id,
+        &state,
+    )
+    .await
+    {
+        Ok(()) => Ok(state),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(ErrorData::RegistryAccessRevokeDenied { .. })
+            ) =>
+        {
+            warn!(
+                deployment_id = %deployment_id,
+                status = ?state.status,
+                error = %error,
+                "The registry denied revoking this deployment's access; failing the delete"
+            );
+            Ok(DeploymentState {
+                status: DeploymentStatus::DeleteFailed,
+                error: Some(error.into_generic()),
+                retry_requested: false,
+                ..state
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn repository_ids_for_access(
@@ -2308,5 +2371,348 @@ mod tests {
             needs_regrant(Some(&other_principals), &needed, true),
             "a change of principal rewrites every repository"
         );
+    }
+
+    /// The revoke a delete owes, run through the transport that persists each deployment step.
+    #[cfg(feature = "sqlite")]
+    mod revoke_before_handoff {
+        use super::*;
+        use alien_core::{DeploymentConfig, EnvironmentVariablesSnapshot, StackSettings};
+        use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
+
+        use crate::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore};
+        use crate::traits::deployment_store::{
+            CreateDeploymentGroupParams, CreateDeploymentParams,
+        };
+        use crate::transports::ManagerTransport;
+
+        const IMAGE: &str =
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:latest";
+
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        enum Answer {
+            Revoke,
+            Deny,
+            Fail,
+        }
+
+        /// A registry that records the deployment's persisted status at each revoke, which is what
+        /// setup teardown would have read at that moment.
+        struct RecordingRegistry {
+            answer: Mutex<Answer>,
+            store: Arc<SqliteDeploymentStore>,
+            deployment_id: Mutex<String>,
+            statuses_at_revoke: Mutex<Vec<String>>,
+        }
+
+        impl std::fmt::Debug for RecordingRegistry {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("RecordingRegistry").finish_non_exhaustive()
+            }
+        }
+
+        impl alien_bindings::traits::Binding for RecordingRegistry {}
+
+        #[async_trait]
+        impl ArtifactRegistry for RecordingRegistry {
+            fn registry_endpoint(&self) -> String {
+                "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+            }
+
+            fn upstream_repository_prefix(&self) -> String {
+                "alien-artifacts".to_string()
+            }
+
+            async fn create_repository(
+                &self,
+                _repo_name: &str,
+            ) -> BindingResult<RepositoryResponse> {
+                unimplemented!("not needed for revoke tests")
+            }
+
+            async fn get_repository(&self, _repo_id: &str) -> BindingResult<RepositoryResponse> {
+                unimplemented!("not needed for revoke tests")
+            }
+
+            async fn add_cross_account_access(
+                &self,
+                _repo_id: &str,
+                _access: CrossAccountAccess,
+            ) -> BindingResult<()> {
+                unimplemented!("not needed for revoke tests")
+            }
+
+            async fn remove_cross_account_access(
+                &self,
+                repo_id: &str,
+                _access: CrossAccountAccess,
+            ) -> BindingResult<()> {
+                let deployment_id = self.deployment_id.lock().expect("id lock").clone();
+                let status = self
+                    .store
+                    .get_deployment(&Subject::system(), &deployment_id)
+                    .await
+                    .expect("deployment read")
+                    .expect("deployment exists")
+                    .status;
+                self.statuses_at_revoke
+                    .lock()
+                    .expect("statuses lock")
+                    .push(status);
+                match *self.answer.lock().expect("answer lock") {
+                    Answer::Revoke => Ok(()),
+                    Answer::Deny => Err(AlienError::new(BindingErrorData::RemoteAccessDenied {
+                        operation_context: format!(
+                            "Failed to delete ECR repository policy for '{repo_id}'"
+                        ),
+                        resource_type: "ECR Repository".to_string(),
+                        resource_name: repo_id.to_string(),
+                    })),
+                    Answer::Fail => Err(AlienError::new(BindingErrorData::Other {
+                        message: "simulated registry outage".to_string(),
+                    })),
+                }
+            }
+
+            async fn get_cross_account_access(
+                &self,
+                _repo_id: &str,
+            ) -> BindingResult<CrossAccountPermissions> {
+                unimplemented!("not needed for revoke tests")
+            }
+
+            async fn generate_credentials(
+                &self,
+                _repo_id: &str,
+                _permissions: ArtifactRegistryPermissions,
+                _ttl_seconds: Option<u32>,
+            ) -> BindingResult<ArtifactRegistryCredentials> {
+                unimplemented!("not needed for revoke tests")
+            }
+
+            async fn delete_repository(&self, _repo_id: &str) -> BindingResult<()> {
+                unimplemented!("not needed for revoke tests")
+            }
+        }
+
+        struct Harness {
+            store: Arc<SqliteDeploymentStore>,
+            registry: Arc<RecordingRegistry>,
+            transport: ManagerTransport,
+            deployment_id: String,
+        }
+
+        /// An AWS deployment whose runtime cleanup is under way, as the manager loop holds it.
+        async fn deleting_deployment(answer: Answer) -> Harness {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.keep().join("manager.db");
+            let db = Arc::new(
+                SqliteDatabase::new(path.to_str().expect("utf-8 path"))
+                    .await
+                    .expect("database"),
+            );
+            let store = Arc::new(SqliteDeploymentStore::new(db));
+            let system = Subject::system();
+            let group = store
+                .create_deployment_group(
+                    &system,
+                    CreateDeploymentGroupParams {
+                        name: "group".to_string(),
+                        max_deployments: 10,
+                        setup: Default::default(),
+                    },
+                )
+                .await
+                .expect("group");
+            let deployment = store
+                .create_deployment(
+                    &system,
+                    CreateDeploymentParams {
+                        deployment_protocol_version:
+                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        name: "worker".to_string(),
+                        deployment_group_id: group.id,
+                        platform: Platform::Aws,
+                        base_platform: None,
+                        stack_settings: Default::default(),
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .expect("deployment");
+            store
+                .set_delete_pending(&system, &deployment.id)
+                .await
+                .expect("delete pending");
+
+            let registry = Arc::new(RecordingRegistry {
+                answer: Mutex::new(answer),
+                store: store.clone(),
+                deployment_id: Mutex::new(deployment.id.clone()),
+                statuses_at_revoke: Mutex::new(Vec::new()),
+            });
+            let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+                binding_name: "artifact-registry",
+                registry: registry.clone(),
+            });
+            let transport = ManagerTransport::new(
+                store.clone(),
+                Some(provider),
+                HashMap::new(),
+                "prj_test".to_string(),
+                "manager-loop".to_string(),
+                None,
+            );
+            let harness = Harness {
+                store,
+                registry,
+                transport,
+                deployment_id: deployment.id,
+            };
+            harness
+                .checkpoint(DeploymentStatus::Deleting)
+                .await
+                .expect("runtime cleanup checkpoint");
+            harness
+        }
+
+        impl Harness {
+            fn state(&self, status: DeploymentStatus) -> DeploymentState {
+                let mut state = aws_state_with_stack(worker_stack(IMAGE));
+                state.status = status;
+                state
+            }
+
+            async fn checkpoint(
+                &self,
+                status: DeploymentStatus,
+            ) -> std::result::Result<StepReconcileResult, AlienError> {
+                self.transport
+                    .reconcile_step(
+                        &self.deployment_id,
+                        &self.state(status),
+                        &DeploymentConfig::builder()
+                            .stack_settings(StackSettings::default())
+                            .environment_variables(EnvironmentVariablesSnapshot {
+                                variables: Vec::new(),
+                                hash: String::new(),
+                                created_at: String::new(),
+                            })
+                            .external_bindings(Default::default())
+                            .allow_frozen_changes(false)
+                            .build(),
+                        false,
+                        None,
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                    .await
+            }
+
+            async fn persisted_status(&self) -> String {
+                self.store
+                    .get_deployment(&Subject::system(), &self.deployment_id)
+                    .await
+                    .expect("deployment read")
+                    .expect("deployment exists")
+                    .status
+            }
+
+            fn statuses_at_revoke(&self) -> Vec<String> {
+                self.registry
+                    .statuses_at_revoke
+                    .lock()
+                    .expect("statuses lock")
+                    .clone()
+            }
+        }
+
+        #[tokio::test]
+        async fn the_revoke_runs_before_setup_teardown_can_take_the_deployment() {
+            let harness = deleting_deployment(Answer::Revoke).await;
+
+            harness
+                .checkpoint(DeploymentStatus::TeardownRequired)
+                .await
+                .expect("the handoff checkpoint should succeed");
+
+            assert_eq!(
+                harness.statuses_at_revoke(),
+                vec!["deleting".to_string()],
+                "the grant must be revoked while the deployment is still deleting: once \
+                 teardown-required is saved, setup teardown deletes the identity and the record"
+            );
+            assert_eq!(harness.persisted_status().await, "teardown-required");
+        }
+
+        #[tokio::test]
+        async fn a_denied_revoke_fails_the_delete_and_a_retry_hands_off_once_granted() {
+            let harness = deleting_deployment(Answer::Deny).await;
+
+            let result = harness
+                .checkpoint(DeploymentStatus::TeardownRequired)
+                .await
+                .expect("a denied revoke must end the step, not ask the runner to retry it");
+
+            let failed = result
+                .state
+                .expect("the runner must adopt the failed delete");
+            assert_eq!(failed.status, DeploymentStatus::DeleteFailed);
+            let error = failed.error.expect("the failed delete carries the denial");
+            assert_eq!(error.code, "REGISTRY_ACCESS_REVOKE_DENIED");
+            assert!(!error.retryable);
+            assert!(
+                error.message.contains("alien-artifacts-prj_test"),
+                "the error names the repository: {}",
+                error.message
+            );
+            assert_eq!(
+                harness.persisted_status().await,
+                "delete-failed",
+                "setup teardown must not be offered a deployment whose grant is still open"
+            );
+
+            // The permission is granted and the delete retried: runtime cleanup reaches the
+            // handoff again and this time revokes.
+            *harness.registry.answer.lock().expect("answer lock") = Answer::Revoke;
+            harness
+                .checkpoint(DeploymentStatus::Deleting)
+                .await
+                .expect("retry");
+            harness
+                .checkpoint(DeploymentStatus::TeardownRequired)
+                .await
+                .expect("the retried handoff should succeed");
+            assert_eq!(harness.persisted_status().await, "teardown-required");
+            assert_eq!(
+                harness.statuses_at_revoke(),
+                vec!["deleting".to_string(), "deleting".to_string()]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_failed_revoke_persists_nothing_for_the_runner_to_retry() {
+            let harness = deleting_deployment(Answer::Fail).await;
+
+            let Err(error) = harness.checkpoint(DeploymentStatus::TeardownRequired).await else {
+                panic!("an unfinished revoke must not let the step complete");
+            };
+
+            assert!(
+                error.retryable,
+                "a registry outage is retried by the runner"
+            );
+            assert_eq!(
+                harness.persisted_status().await,
+                "deleting",
+                "nothing is persisted, so setup teardown cannot take the deployment before the \
+                 retried revoke"
+            );
+        }
     }
 }
