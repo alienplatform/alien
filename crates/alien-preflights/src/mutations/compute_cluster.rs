@@ -16,8 +16,8 @@ use alien_core::{
         generated_pool_scale_policy, plan_compute_with_state, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
-    Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, ComputeSettings,
+    Container, Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
     ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
 use alien_error::{AlienError, Context};
@@ -193,10 +193,22 @@ impl StackMutation for ComputeClusterMutation {
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
+            let installed = installed_pool_selections(
+                &stack,
+                stack_state,
+                config.stack_settings.compute.as_ref(),
+            );
+            let mut planning_settings = config.stack_settings.compute.clone();
+            if !installed.is_empty() {
+                planning_settings
+                    .get_or_insert_default()
+                    .pools
+                    .extend(installed.clone());
+            }
             let plan = plan_compute_with_state(
                 &stack,
                 stack_state.platform,
-                config.stack_settings.compute.as_ref(),
+                planning_settings.as_ref(),
                 Some(stack_state),
             )
             .context(crate::error::ErrorData::StackMutationFailed {
@@ -210,6 +222,18 @@ impl StackMutation for ComputeClusterMutation {
                 .get_or_insert_default();
             for pool in plan.pools {
                 if !pool.errors.is_empty() {
+                    if let Some(kept) = installed.get(&pool.pool_id) {
+                        return Err(AlienError::new(crate::error::ErrorData::SetupRequired {
+                            message: format!(
+                                "Select compute for {} capacity group '{}' in the installation setup. The deployment has no compute choice for it, and the installed {} x {} no longer fits this release: {}",
+                                stack_state.platform,
+                                pool.pool_id,
+                                kept.max_size(),
+                                kept.machine().unwrap_or_default(),
+                                pool.errors.join("; "),
+                            ),
+                        }));
+                    }
                     return Err(AlienError::new(
                         crate::error::ErrorData::StackMutationFailed {
                             mutation_name: self.description().to_string(),
@@ -824,6 +848,58 @@ fn persisted_without_pool(stack_state: &StackState, container: &Container) -> bo
         .get(&container.id)
         .and_then(|state| state.config.downcast_ref::<Container>())
         .is_some_and(|persisted| persisted.pool.is_none())
+}
+
+/// Selections that keep installed cloud pools as they are, for pools the deployment stores no
+/// compute choice for and the release names no machine for.
+///
+/// A pool installed before compute choices were stored has a machine but no choice. Planning it
+/// like a fresh pool would apply whatever the catalog recommends today, so an unchanged release
+/// could replace its machines without setup. The installed machine and counts are the choice the
+/// deployment runs on; the planner validates them against the release like any stored choice.
+/// A stored choice without a machine is the deployment's Automatic intent and stays planned.
+fn installed_pool_selections(
+    stack: &Stack,
+    stack_state: &StackState,
+    settings: Option<&ComputeSettings>,
+) -> BTreeMap<String, ComputePoolSelection> {
+    let release_groups: Vec<&CapacityGroup> = stack
+        .resources
+        .values()
+        .filter_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| &cluster.capacity_groups)
+        .collect();
+    stack_state
+        .resources
+        .values()
+        .filter_map(|state| state.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| &cluster.capacity_groups)
+        .filter(|group| {
+            settings.is_none_or(|settings| !settings.pools.contains_key(&group.group_id))
+                && !release_groups.iter().any(|release_group| {
+                    release_group.group_id == group.group_id
+                        && release_group.instance_type.is_some()
+                })
+        })
+        .filter_map(|group| {
+            let machine = Some(group.instance_type.clone()?);
+            let selection = if group.min_size == group.max_size {
+                ComputePoolSelection::Fixed {
+                    machines: group.max_size,
+                    machine,
+                    failure_domains: None,
+                }
+            } else {
+                ComputePoolSelection::Autoscale {
+                    min: group.min_size,
+                    max: group.max_size,
+                    machine,
+                    failure_domains: None,
+                }
+            };
+            Some((group.group_id.clone(), selection))
+        })
+        .collect()
 }
 
 fn group_needs_materialization(
@@ -2856,6 +2932,127 @@ mod tests {
             "{:?}",
             plan.pools[0].errors
         );
+    }
+
+    /// A pool installed while the deployment stored no compute choice keeps its machine and
+    /// counts on later releases, instead of taking whatever the catalog recommends now, and asks
+    /// for setup once a release outgrows it. A stored choice without a machine stays Automatic.
+    #[tokio::test]
+    async fn installed_pool_without_a_compute_choice_keeps_its_machine() {
+        let release = |cpu: &str, memory: &str| {
+            Stack::new("installed-pool".to_string())
+                .add(test_container("web", cpu, memory), ResourceLifecycle::Live)
+                .build()
+        };
+        let config = |compute: Option<ComputeSettings>| {
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    compute,
+                    ..StackSettings::default()
+                })
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build()
+        };
+        let one_machine = |machine: Option<&str>| ComputeSettings {
+            containers: Default::default(),
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: machine.map(ToString::to_string),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let fresh_state = StackState {
+            platform: Platform::Gcp,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+
+        // The pool was installed on one e2-small, which today's catalog no longer recommends.
+        let installed = ComputeClusterMutation
+            .mutate(
+                release("0.5", "512Mi"),
+                &fresh_state,
+                &config(Some(one_machine(Some("e2-small")))),
+            )
+            .await
+            .expect("installing on e2-small should prepare");
+        let recommended = plan_compute(&release("0.5", "512Mi"), Platform::Gcp, None)
+            .expect("compute plan should build")
+            .pools[0]
+            .recommended
+            .machine()
+            .map(ToString::to_string);
+        assert_ne!(
+            recommended.as_deref(),
+            Some("e2-small"),
+            "fixture needs a recommendation that differs from the installed machine"
+        );
+        let mut stack_state = fresh_state.clone();
+        for (id, entry) in &installed.resources {
+            stack_state.resources.insert(
+                id.clone(),
+                alien_core::StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    entry.dependencies.clone(),
+                ),
+            );
+        }
+
+        // Unchanged release, no stored choice: the prepared stack is the installed one.
+        let unchanged = ComputeClusterMutation
+            .mutate(release("0.5", "512Mi"), &stack_state, &config(None))
+            .await
+            .expect("an unchanged release should keep the installed pool");
+        assert_eq!(
+            serde_json::to_value(&unchanged).unwrap(),
+            serde_json::to_value(&installed).unwrap(),
+            "an unchanged release must not change the installed machine or counts"
+        );
+
+        // A release the installed machine cannot hold needs a compute choice from setup.
+        let error = ComputeClusterMutation
+            .mutate(release("2", "4Gi"), &stack_state, &config(None))
+            .await
+            .expect_err("a release that outgrows the installed machine must ask for setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED", "{}", error.message);
+        assert!(
+            error
+                .message
+                .contains("Select compute for gcp capacity group 'general'"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("the installed 1 x e2-small"),
+            "{}",
+            error.message
+        );
+
+        // A stored choice without a machine is Automatic: it follows the recommendation.
+        let automatic = ComputeClusterMutation
+            .mutate(
+                release("0.5", "512Mi"),
+                &stack_state,
+                &config(Some(one_machine(None))),
+            )
+            .await
+            .expect("an Automatic choice should prepare");
+        let group = &automatic.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .expect("the compute cluster should be prepared")
+            .capacity_groups[0];
+        assert_eq!(group.instance_type, recommended);
+        assert_eq!((group.min_size, group.max_size), (1, 1));
     }
 
     #[tokio::test]
