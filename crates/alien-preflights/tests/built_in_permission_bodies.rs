@@ -13,8 +13,8 @@ use alien_core::{
         ManagementPermissions, PermissionProfile, PermissionSetReference, PermissionsConfig,
     },
     AwsManagementConfig, ComputeSettings, Container, ContainerCode, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, PersistentStorage, Platform, VolumeBackups,
-    ResourceLifecycle, ResourceSpec, Stack, StackSettings, StackState,
+    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, PersistentStorage, Platform,
+    ResourceLifecycle, ResourceSpec, Stack, StackSettings, StackState, VolumeBackups,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -60,6 +60,7 @@ async fn prepared_aws_compute_stack_records_compute_permission_sets_by_name_only
         .build();
     let plan = plan_compute(&stack, Platform::Aws, None).expect("compute plan should build");
     let compute = ComputeSettings {
+        containers: Default::default(),
         pools: plan
             .pools
             .iter()

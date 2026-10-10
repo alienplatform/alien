@@ -15,6 +15,9 @@ import {
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
+/** Deployment-time choices for one resource dimension. */
+export type ContainerResourceRange<T> = { min: T; max: T; default: T }
+
 export type PublicEndpointOptions =
   | "http"
   | "tcp"
@@ -147,11 +150,19 @@ export class Container extends ResourceBuilder {
    * @param value CPU in vCPUs (number) or ResourceSpec with min/desired.
    * @returns The Container builder instance.
    */
-  public cpu(value: number | ResourceSpec): this {
+  public cpu(value: number | ResourceSpec | ContainerResourceRange<number>): this {
     if (typeof value === "number") {
       this._config.cpu = { min: value.toString(), desired: value.toString() }
+      if (this._config.resourceChoices) this._config.resourceChoices.cpu = undefined
+    } else if ("default" in value) {
+      this._config.resourceChoices ??= {}
+      this._config.resourceChoices.cpu = {
+        min: value.min.toString(), max: value.max.toString(), default: value.default.toString(),
+      }
+      this._config.cpu = { min: value.default.toString(), desired: value.default.toString() }
     } else {
       this._config.cpu = value
+      if (this._config.resourceChoices) this._config.resourceChoices.cpu = undefined
     }
     return this
   }
@@ -167,8 +178,15 @@ export class Container extends ResourceBuilder {
    * @param value Memory size string or ResourceSpec with min/desired.
    * @returns The Container builder instance.
    */
-  public memory(value: string | ResourceSpec): this {
-    this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
+  public memory(value: string | ResourceSpec | ContainerResourceRange<string>): this {
+    if (typeof value === "object" && "default" in value) {
+      this._config.resourceChoices ??= {}
+      this._config.resourceChoices.memory = value
+      this._config.memory = { min: value.default, desired: value.default }
+    } else {
+      this._config.memory = typeof value === "string" ? { min: value, desired: value } : value
+      if (this._config.resourceChoices) this._config.resourceChoices.memory = undefined
+    }
     return this
   }
 

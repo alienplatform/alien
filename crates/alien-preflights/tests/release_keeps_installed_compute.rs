@@ -81,6 +81,7 @@ fn with_failure_domains(
 fn settings_without_failure_domains(stack: &Stack) -> ComputeSettings {
     let plan = plan_compute(stack, Platform::Aws, None).expect("compute plan should build");
     ComputeSettings {
+        containers: Default::default(),
         pools: plan
             .pools
             .iter()

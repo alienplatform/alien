@@ -701,6 +701,7 @@ async fn mutated_machine_change_passes_compatibility_and_plans_update() {
 async fn materialize_machine(stack: Stack, machine: &str) -> Stack {
     let mut config = default_deployment_config();
     config.stack_settings.compute = Some(ComputeSettings {
+        containers: Default::default(),
         pools: [(
             "general".to_string(),
             ComputePoolSelection::Fixed {

@@ -76,6 +76,12 @@ pub fn plan_compute(
     platform: Platform,
     selected_settings: Option<&crate::ComputeSettings>,
 ) -> Result<ComputePlan, ErrorData> {
+    let mut resolved_stack = stack.clone();
+    crate::container_resources::resolve_container_resources(
+        &mut resolved_stack,
+        selected_settings,
+    )?;
+    let stack = &resolved_stack;
     let mut groups = collect_workload_groups(stack)?;
     merge_explicit_compute_groups(stack, &mut groups)?;
 
@@ -1003,6 +1009,7 @@ mod tests {
     fn selected_machine_is_preserved_as_static_deployment_choice() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1032,6 +1039,7 @@ mod tests {
             .expect("test stack should contain a container");
         container.ephemeral_storage = Some("8000Gi".to_string());
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "storage".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1062,6 +1070,7 @@ mod tests {
     fn selected_machine_defines_architecture_when_workloads_do_not() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1088,6 +1097,7 @@ mod tests {
     fn graviton4_compute_machine_can_be_selected() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1293,6 +1303,7 @@ mod tests {
             .any(|option| option.machine == "m7g.2xlarge"));
 
         let invalid_settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1336,6 +1347,7 @@ mod tests {
             },
         );
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [("general".to_string(), selection)].into_iter().collect(),
         };
         plan_compute(&stack, Platform::Aws, Some(&settings))
@@ -1410,6 +1422,7 @@ mod tests {
         // 3 x 2 vCPU / 4 GiB requested at the desired count.
         api.replicas = Some(3);
         let selection = |machines| ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {

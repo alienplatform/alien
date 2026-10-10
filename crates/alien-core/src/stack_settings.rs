@@ -181,6 +181,23 @@ pub struct ComputeSettings {
     /// Selected compute choices keyed by pool ID.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub pools: HashMap<String, ComputePoolSelection>,
+    /// Per-replica resources selected within each container's declared ranges.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub containers: HashMap<String, ContainerResourceSelection>,
+}
+
+/// Deployment-time resource allocation for a container. Omitted fields use release defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainerResourceSelection {
+    /// CPU allocation in vCPUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
+    pub cpu: Option<serde_json::Number>,
+    /// Memory allocation, using binary units such as Mi or Gi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
 }
 
 /// Failure-domain policy selected for a compute pool.

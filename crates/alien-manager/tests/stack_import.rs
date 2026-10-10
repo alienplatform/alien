@@ -803,6 +803,7 @@ async fn deployment_token_activates_its_pending_setup_reservation() {
 
     let mut body = aws_s3_import_request("acme-reserved", "us-east-1", "assets", "acme-imports");
     let selected_compute = ComputeSettings {
+        containers: Default::default(),
         pools: HashMap::from([(
             "general".to_string(),
             ComputePoolSelection::Fixed {

@@ -7,6 +7,19 @@ use crate::{Platform, ResourceType};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// A deployment selected resources outside the release's declared choices.
+    #[error(
+        code = "CONTAINER_RESOURCE_SELECTION_INVALID",
+        message = "Invalid {dimension} selection for container '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ContainerResourceSelectionInvalid {
+        resource_id: String,
+        dimension: String,
+        reason: String,
+    },
     /// A fallback error when nothing more specific matches.
     #[error(
         code = "GENERIC_ERROR",

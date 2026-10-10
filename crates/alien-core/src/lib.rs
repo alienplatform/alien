@@ -124,6 +124,7 @@ pub use commands_types::*;
 pub mod debug_session;
 
 pub mod compute_planner;
+pub mod container_resources;
 pub mod crontab_to_eventbridge;
 pub mod file_utils;
 pub mod image_rewrite;

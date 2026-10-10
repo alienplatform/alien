@@ -1017,13 +1017,15 @@ fn build_capacity_group_for_id(
         let scale = generated_pool_scale_policy(group.min_size, group.max_size, selected_max);
         let selection = materialize_group(&mut group, platform, config, &scale)?;
         if !containers.is_empty() {
-            check_pool_capacity(platform, group_id, selection, &requirements).map_err(|message| {
-                AlienError::new(crate::error::ErrorData::StackMutationFailed {
-                    mutation_name: "ComputeClusterMutation".to_string(),
-                    message,
-                    resource_id: None,
-                })
-            })?;
+            check_pool_capacity(platform, group_id, selection, &requirements).map_err(
+                |message| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: "ComputeClusterMutation".to_string(),
+                        message,
+                        resource_id: None,
+                    })
+                },
+            )?;
         }
     } else {
         group.profile = Some(MachineProfile {
@@ -1617,6 +1619,7 @@ mod tests {
             } => *failure_domains = None,
         }
         let installer_settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(pool_id.clone(), installer_selection)]
                 .into_iter()
                 .collect(),
@@ -1635,6 +1638,7 @@ mod tests {
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [(pool_id.clone(), planned_selection)].into_iter().collect(),
                 }),
                 ..StackSettings::default()
@@ -1922,6 +1926,7 @@ mod tests {
             resource_prefix: "test".to_string(),
         };
         let machine_without_domains = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "stateful".to_string(),
                 ComputePoolSelection::Fixed {
@@ -2022,6 +2027,7 @@ mod tests {
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [
                         ("general".to_string(), selection(Vec::new())),
                         (
@@ -2067,6 +2073,7 @@ mod tests {
         DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: selections
                         .iter()
                         .map(|(pool_id, machine, min_size, max_size)| {
@@ -2158,6 +2165,7 @@ mod tests {
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [("general".to_string(), recommendation.clone())]
                         .into_iter()
                         .collect(),
@@ -2479,6 +2487,7 @@ mod tests {
         DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [("general".to_string(), selection)].into_iter().collect(),
                 }),
                 ..StackSettings::default()

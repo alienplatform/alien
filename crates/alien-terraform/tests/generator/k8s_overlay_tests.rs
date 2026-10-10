@@ -58,6 +58,7 @@ fn kubernetes_compute_pools_do_not_emit_cloud_fleets_or_choices() {
         .build();
     let settings = StackSettings {
         compute: Some(ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "apps".to_string(),
                 ComputePoolSelection::Fixed {
