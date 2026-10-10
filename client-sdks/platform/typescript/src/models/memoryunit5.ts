@@ -4443,3 +4443,21 @@ export function syncReconcileRequestEvent5ToJSON(
 export const MemoryUnit5$outboundSchema: z.ZodEnum<typeof MemoryUnit5> = z.enum(
   MemoryUnit5,
 );
+
+// Published resource-name compatibility exports.
+export type { SyncReconcileRequestCpuUnion6 as CpuUnion6 };
+export type { SyncReconcileRequestMemoryUnion6 as MemoryUnion6 };
+export type { SyncReconcileRequestContainer3 as Container3 };
+export type { SyncReconcileRequestCpuUnion5 as CpuUnion5 };
+export type { SyncReconcileRequestCpuUnion6$Outbound as CpuUnion6$Outbound };
+export { SyncReconcileRequestCpuUnion6$outboundSchema as CpuUnion6$outboundSchema };
+export { syncReconcileRequestCpuUnion6ToJSON as cpuUnion6ToJSON };
+export type { SyncReconcileRequestMemoryUnion6$Outbound as MemoryUnion6$Outbound };
+export { SyncReconcileRequestMemoryUnion6$outboundSchema as MemoryUnion6$outboundSchema };
+export { syncReconcileRequestMemoryUnion6ToJSON as memoryUnion6ToJSON };
+export type { SyncReconcileRequestContainer3$Outbound as Container3$Outbound };
+export { SyncReconcileRequestContainer3$outboundSchema as Container3$outboundSchema };
+export { syncReconcileRequestContainer3ToJSON as container3ToJSON };
+export type { SyncReconcileRequestCpuUnion5$Outbound as CpuUnion5$Outbound };
+export { SyncReconcileRequestCpuUnion5$outboundSchema as CpuUnion5$outboundSchema };
+export { syncReconcileRequestCpuUnion5ToJSON as cpuUnion5ToJSON };

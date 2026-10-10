@@ -4443,3 +4443,13 @@ export const CpuAllocatable$outboundSchema: z.ZodType<
 export function cpuAllocatableToJSON(cpuAllocatable: CpuAllocatable): string {
   return JSON.stringify(CpuAllocatable$outboundSchema.parse(cpuAllocatable));
 }
+
+// Published resource-name compatibility exports.
+export type { SyncReconcileRequestCpuUnion11 as CpuUnion11 };
+export type { SyncReconcileRequestMemoryUnion11 as MemoryUnion11 };
+export type { SyncReconcileRequestCpuUnion11$Outbound as CpuUnion11$Outbound };
+export { SyncReconcileRequestCpuUnion11$outboundSchema as CpuUnion11$outboundSchema };
+export { syncReconcileRequestCpuUnion11ToJSON as cpuUnion11ToJSON };
+export type { SyncReconcileRequestMemoryUnion11$Outbound as MemoryUnion11$Outbound };
+export { SyncReconcileRequestMemoryUnion11$outboundSchema as MemoryUnion11$outboundSchema };
+export { syncReconcileRequestMemoryUnion11ToJSON as memoryUnion11ToJSON };
