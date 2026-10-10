@@ -440,6 +440,6 @@ test("published deep imports retain moved enums and response parsers", async () 
   assert.equal(deployment.DeploymentPendingPreparedStackTypeUnion$inboundSchema.parse("string"), "string");
   assert.deepEqual(deployment.deploymentPendingPreparedStackTypeUnionFromJSON('"string"'), { ok: true, value: "string" });
   const manager = await import("../typescript/esm/models/createmanagerresponseproviderawsalb2.js");
-  const provider = { type: "aws-alb" };
+  const provider = { provider: "aws-alb", scheme: "internet-facing", targetType: "ip" };
   assert.deepEqual(manager.CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(provider), provider);
 });
