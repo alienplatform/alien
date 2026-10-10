@@ -1767,6 +1767,7 @@ mod tests {
             ("local", alien_core::Platform::Local),
             ("cloud", alien_core::Platform::Aws),
             ("delayed", alien_core::Platform::Local),
+            ("pull", alien_core::Platform::Local),
         ] {
             records.push(
                 store
@@ -1801,8 +1802,12 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
-            3
+            4
         );
+        database.conn().lock().await.execute(
+            &format!("UPDATE deployments SET stack_settings = json_set(stack_settings, '$.deploymentModel', 'pull') WHERE id = '{}'", records[3].id),
+            (),
+        ).await.unwrap();
         database.conn().lock().await.execute(
             &format!("UPDATE deployments SET next_step_after = '2099-01-01T00:00:00+00:00' WHERE id = '{}'", records[2].id),
             (),
@@ -1851,6 +1856,16 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(cloud.locked_by.as_deref(), Some("old-process"));
+        let pull = store
+            .get_deployment(&subject, &records[3].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pull.locked_by.as_deref(),
+            Some("old-process"),
+            "an independent pull operator must retain its claim"
+        );
         let delayed = store
             .get_deployment(&subject, &records[2].id)
             .await
