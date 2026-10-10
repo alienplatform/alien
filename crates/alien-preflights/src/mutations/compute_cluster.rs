@@ -926,9 +926,11 @@ fn materialize_selection_within(
             resource_id: None,
         })
     })?;
+    if group.instance_type.as_deref() != Some(machine) || group.profile.is_none() {
+        group.profile =
+            Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
+    }
     group.instance_type = Some(machine.to_string());
-    group.profile =
-        Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
     group.min_size = selection.min_size();
     group.max_size = selection.max_size();
     Ok(())
@@ -2390,6 +2392,13 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
         assert!(!mutation.should_run(&stack, &stack_state, &config));
+        let declared_profile = stack.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap()
+            .capacity_groups[0]
+            .profile
+            .clone();
         let mut prepared = mutation.mutate(stack, &stack_state, &config).await.unwrap();
         let cluster = prepared.resources["compute"]
             .config
@@ -2399,6 +2408,7 @@ mod tests {
             cluster.capacity_groups[0].instance_type.as_deref(),
             Some("m7i.large")
         );
+        assert_eq!(cluster.capacity_groups[0].profile, declared_profile);
         prepared
             .resources
             .get_mut("api")
@@ -2415,6 +2425,22 @@ mod tests {
             memory: None,
         });
         let mut selected_config = config.clone();
+        selected_config.stack_settings.compute = Some(
+            serde_json::from_value(serde_json::json!({"containers":{"api":{"cpu":1.5}}})).unwrap(),
+        );
+        let resized = mutation
+            .mutate(prepared.clone(), &stack_state, &selected_config)
+            .await
+            .unwrap();
+        assert_eq!(
+            resized.resources["compute"]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap()
+                .capacity_groups[0]
+                .profile,
+            declared_profile
+        );
         selected_config.stack_settings.compute = Some(
             serde_json::from_value(serde_json::json!({"containers":{"api":{"cpu":4}}})).unwrap(),
         );
