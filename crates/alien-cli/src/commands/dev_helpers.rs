@@ -469,6 +469,13 @@ async fn start_owned_embedded_dev_manager(
     Ok(manager)
 }
 
+/// Start a server-only session that owns and drains its local manager.
+pub async fn start_owned_dev_server(port: u16) -> Result<EmbeddedDevManager> {
+    ensure_dev_port_available(port)?;
+    let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
+    start_owned_embedded_dev_manager(port, state_lock).await
+}
+
 pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
     let state_lock = acquire_dev_state_lock(&get_current_dir()?.join(".alien"))?;
     start_embedded_dev_manager_with_lock(port, state_lock).await
