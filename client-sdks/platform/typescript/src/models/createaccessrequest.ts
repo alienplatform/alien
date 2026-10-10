@@ -39,7 +39,7 @@ export type CreateAccessRequestCommand = {
 /**
  * Required with `operationPattern`: the highest risk tier the wildcard grant may cover.
  */
-export const CreateAccessRequestMaxRisk = {
+export const MaxRisk = {
   ReadOnly: "read-only",
   Mutating: "mutating",
   Destructive: "destructive",
@@ -47,9 +47,7 @@ export const CreateAccessRequestMaxRisk = {
 /**
  * Required with `operationPattern`: the highest risk tier the wildcard grant may cover.
  */
-export type CreateAccessRequestMaxRisk = ClosedEnum<
-  typeof CreateAccessRequestMaxRisk
->;
+export type MaxRisk = ClosedEnum<typeof MaxRisk>;
 
 export type CreateAccessRequest = {
   /**
@@ -89,7 +87,7 @@ export type CreateAccessRequest = {
   /**
    * Required with `operationPattern`: the highest risk tier the wildcard grant may cover.
    */
-  maxRisk?: CreateAccessRequestMaxRisk | undefined;
+  maxRisk?: MaxRisk | undefined;
   debugTool?: DebugGrantTool | undefined;
   /**
    * Scopes a `kubectl` debug grant to one Kubernetes namespace. Requires `debugTool: kubectl`.
@@ -138,9 +136,9 @@ export function createAccessRequestCommandToJSON(
 }
 
 /** @internal */
-export const CreateAccessRequestMaxRisk$outboundSchema: z.ZodEnum<
-  typeof CreateAccessRequestMaxRisk
-> = z.enum(CreateAccessRequestMaxRisk);
+export const MaxRisk$outboundSchema: z.ZodEnum<typeof MaxRisk> = z.enum(
+  MaxRisk,
+);
 
 /** @internal */
 export type CreateAccessRequest$Outbound = {
@@ -176,7 +174,7 @@ export const CreateAccessRequest$outboundSchema: z.ZodType<
   operation: z.string().optional(),
   operationPattern: z.string().optional(),
   params: z.nullable(z.any()).optional(),
-  maxRisk: CreateAccessRequestMaxRisk$outboundSchema.optional(),
+  maxRisk: MaxRisk$outboundSchema.optional(),
   debugTool: DebugGrantTool$outboundSchema.optional(),
   debugNamespace: z.string().optional(),
   debugCloudScope: z.string().optional(),

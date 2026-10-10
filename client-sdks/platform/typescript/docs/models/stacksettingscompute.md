@@ -16,6 +16,7 @@ let value: StackSettingsCompute = {};
 
 ## Fields
 
-| Field                                            | Type                                             | Required                                         | Description                                      |
-| ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
-| `pools`                                          | Record<string, *models.StackSettingsPoolsUnion*> | :heavy_minus_sign:                               | Selected compute choices keyed by pool ID.       |
+| Field                                                                                  | Type                                                                                   | Required                                                                               | Description                                                                            |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `containers`                                                                           | Record<string, [models.StackSettingsContainers](../models/stacksettingscontainers.md)> | :heavy_minus_sign:                                                                     | Per-replica resources selected within each container's declared ranges.                |
+| `pools`                                                                                | Record<string, *models.StackSettingsPoolsUnion*>                                       | :heavy_minus_sign:                                                                     | Selected compute choices keyed by pool ID.                                             |

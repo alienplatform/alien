@@ -58,6 +58,20 @@ export type CreateSetupRegistrationOperationRequestPlatform = ClosedEnum<
 >;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type CreateSetupRegistrationOperationRequestContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type CreateSetupRegistrationOperationRequestFailureDomains2 = {
@@ -154,6 +168,12 @@ export type CreateSetupRegistrationOperationRequestPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type CreateSetupRegistrationOperationRequestCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: {
+    [k: string]: CreateSetupRegistrationOperationRequestContainers;
+  } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1481,6 +1501,33 @@ export const CreateSetupRegistrationOperationRequestPlatform$outboundSchema:
   );
 
 /** @internal */
+export type CreateSetupRegistrationOperationRequestContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestContainers$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestContainers$Outbound,
+    CreateSetupRegistrationOperationRequestContainers
+  > = z.object({
+    cpu: z.nullable(z.number()).optional(),
+    memory: z.nullable(z.string()).optional(),
+  });
+
+export function createSetupRegistrationOperationRequestContainersToJSON(
+  createSetupRegistrationOperationRequestContainers:
+    CreateSetupRegistrationOperationRequestContainers,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestContainers$outboundSchema.parse(
+      createSetupRegistrationOperationRequestContainers,
+    ),
+  );
+}
+
+/** @internal */
 export type CreateSetupRegistrationOperationRequestFailureDomains2$Outbound = {
   selectedFailureDomains?: Array<string> | undefined;
   spread: number;
@@ -1714,6 +1761,9 @@ export function createSetupRegistrationOperationRequestPoolsUnionToJSON(
 
 /** @internal */
 export type CreateSetupRegistrationOperationRequestCompute$Outbound = {
+  containers?: {
+    [k: string]: CreateSetupRegistrationOperationRequestContainers$Outbound;
+  } | undefined;
   pools?: {
     [k: string]:
       | CreateSetupRegistrationOperationRequestPoolsFixed$Outbound
@@ -1727,6 +1777,12 @@ export const CreateSetupRegistrationOperationRequestCompute$outboundSchema:
     CreateSetupRegistrationOperationRequestCompute$Outbound,
     CreateSetupRegistrationOperationRequestCompute
   > = z.object({
+    containers: z.record(
+      z.string(),
+      z.lazy(() =>
+        CreateSetupRegistrationOperationRequestContainers$outboundSchema
+      ),
+    ).optional(),
     pools: z.record(
       z.string(),
       z.union([

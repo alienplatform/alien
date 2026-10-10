@@ -63,6 +63,20 @@ export type DeploymentInfoSetupMethod = ClosedEnum<
 >;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type DeploymentInfoContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type DeploymentInfoFailureDomains2 = {
@@ -151,6 +165,10 @@ export type DeploymentInfoPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type DeploymentInfoCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: DeploymentInfoContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -2016,6 +2034,25 @@ export const DeploymentInfoSetupMethod$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentInfoSetupMethod);
 
 /** @internal */
+export const DeploymentInfoContainers$inboundSchema: z.ZodType<
+  DeploymentInfoContainers,
+  unknown
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function deploymentInfoContainersFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoContainers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoContainers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoContainers' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoFailureDomains2$inboundSchema: z.ZodType<
   DeploymentInfoFailureDomains2,
   unknown
@@ -2178,6 +2215,10 @@ export const DeploymentInfoCompute$inboundSchema: z.ZodType<
   DeploymentInfoCompute,
   unknown
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => DeploymentInfoContainers$inboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

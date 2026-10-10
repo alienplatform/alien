@@ -1501,7 +1501,7 @@ export type SyncReconcileRequestCpu11 = {
   value: number;
 };
 
-export type CpuUnion11 = SyncReconcileRequestCpu11 | string;
+export type SyncReconcileRequestCpuUnion11 = SyncReconcileRequestCpu11 | string;
 
 export type InvolvedObject9 = {
   apiVersion?: string | null | undefined;
@@ -1550,7 +1550,9 @@ export type SyncReconcileRequestMemory11 = {
   value: number;
 };
 
-export type MemoryUnion11 = SyncReconcileRequestMemory11 | string;
+export type SyncReconcileRequestMemoryUnion11 =
+  | SyncReconcileRequestMemory11
+  | string;
 
 export type NodeCounts = {
   current?: number | null | undefined;
@@ -4190,19 +4192,27 @@ export function syncReconcileRequestCpu11ToJSON(
 }
 
 /** @internal */
-export type CpuUnion11$Outbound = SyncReconcileRequestCpu11$Outbound | string;
+export type SyncReconcileRequestCpuUnion11$Outbound =
+  | SyncReconcileRequestCpu11$Outbound
+  | string;
 
 /** @internal */
-export const CpuUnion11$outboundSchema: z.ZodType<
-  CpuUnion11$Outbound,
-  CpuUnion11
+export const SyncReconcileRequestCpuUnion11$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpuUnion11$Outbound,
+  SyncReconcileRequestCpuUnion11
 > = z.union([
   z.lazy(() => SyncReconcileRequestCpu11$outboundSchema),
   z.string(),
 ]);
 
-export function cpuUnion11ToJSON(cpuUnion11: CpuUnion11): string {
-  return JSON.stringify(CpuUnion11$outboundSchema.parse(cpuUnion11));
+export function syncReconcileRequestCpuUnion11ToJSON(
+  syncReconcileRequestCpuUnion11: SyncReconcileRequestCpuUnion11,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpuUnion11$outboundSchema.parse(
+      syncReconcileRequestCpuUnion11,
+    ),
+  );
 }
 
 /** @internal */
@@ -4366,21 +4376,27 @@ export function syncReconcileRequestMemory11ToJSON(
 }
 
 /** @internal */
-export type MemoryUnion11$Outbound =
+export type SyncReconcileRequestMemoryUnion11$Outbound =
   | SyncReconcileRequestMemory11$Outbound
   | string;
 
 /** @internal */
-export const MemoryUnion11$outboundSchema: z.ZodType<
-  MemoryUnion11$Outbound,
-  MemoryUnion11
+export const SyncReconcileRequestMemoryUnion11$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemoryUnion11$Outbound,
+  SyncReconcileRequestMemoryUnion11
 > = z.union([
   z.lazy(() => SyncReconcileRequestMemory11$outboundSchema),
   z.string(),
 ]);
 
-export function memoryUnion11ToJSON(memoryUnion11: MemoryUnion11): string {
-  return JSON.stringify(MemoryUnion11$outboundSchema.parse(memoryUnion11));
+export function syncReconcileRequestMemoryUnion11ToJSON(
+  syncReconcileRequestMemoryUnion11: SyncReconcileRequestMemoryUnion11,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemoryUnion11$outboundSchema.parse(
+      syncReconcileRequestMemoryUnion11,
+    ),
+  );
 }
 
 /** @internal */

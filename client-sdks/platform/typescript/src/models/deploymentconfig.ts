@@ -717,6 +717,20 @@ export type DeploymentConfigMonitoringUnion =
   | string;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type DeploymentConfigContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type DeploymentConfigFailureDomains2 = {
@@ -805,6 +819,10 @@ export type DeploymentConfigPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type DeploymentConfigCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: DeploymentConfigContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -2851,6 +2869,25 @@ export function deploymentConfigMonitoringUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigContainers$inboundSchema: z.ZodType<
+  DeploymentConfigContainers,
+  unknown
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function deploymentConfigContainersFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigContainers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigContainers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigContainers' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentConfigFailureDomains2$inboundSchema: z.ZodType<
   DeploymentConfigFailureDomains2,
   unknown
@@ -3013,6 +3050,10 @@ export const DeploymentConfigCompute$inboundSchema: z.ZodType<
   DeploymentConfigCompute,
   unknown
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => DeploymentConfigContainers$inboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

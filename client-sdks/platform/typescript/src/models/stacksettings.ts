@@ -12,6 +12,20 @@ import {
 } from "./externalbindingunion.js";
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type StackSettingsContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type StackSettingsFailureDomains2 = {
@@ -100,6 +114,10 @@ export type StackSettingsPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type StackSettingsCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: StackSettingsContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1170,6 +1188,29 @@ export type StackSettings = {
 };
 
 /** @internal */
+export type StackSettingsContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const StackSettingsContainers$outboundSchema: z.ZodType<
+  StackSettingsContainers$Outbound,
+  StackSettingsContainers
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function stackSettingsContainersToJSON(
+  stackSettingsContainers: StackSettingsContainers,
+): string {
+  return JSON.stringify(
+    StackSettingsContainers$outboundSchema.parse(stackSettingsContainers),
+  );
+}
+
+/** @internal */
 export type StackSettingsFailureDomains2$Outbound = {
   selectedFailureDomains?: Array<string> | undefined;
   spread: number;
@@ -1375,6 +1416,7 @@ export function stackSettingsPoolsUnionToJSON(
 
 /** @internal */
 export type StackSettingsCompute$Outbound = {
+  containers?: { [k: string]: StackSettingsContainers$Outbound } | undefined;
   pools?: {
     [k: string]:
       | StackSettingsPoolsFixed$Outbound
@@ -1387,6 +1429,10 @@ export const StackSettingsCompute$outboundSchema: z.ZodType<
   StackSettingsCompute$Outbound,
   StackSettingsCompute
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => StackSettingsContainers$outboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

@@ -106,8 +106,77 @@ export type Pool = {
   errors?: Array<string> | undefined;
 };
 
+/**
+ * Allowed deployment-time resource quantities. These are choices, not autoscaling targets.
+ */
+export type CpuChoices = {
+  /**
+   * Allocation used when deployment settings omit a selection.
+   */
+  default: string;
+  /**
+   * Largest permitted allocation.
+   */
+  max: string;
+  /**
+   * Smallest permitted allocation.
+   */
+  min: string;
+};
+
+export type ChoicesCpuUnion = CpuChoices | string;
+
+/**
+ * Allowed deployment-time resource quantities. These are choices, not autoscaling targets.
+ */
+export type MemoryChoices = {
+  /**
+   * Allocation used when deployment settings omit a selection.
+   */
+  default: string;
+  /**
+   * Largest permitted allocation.
+   */
+  max: string;
+  /**
+   * Smallest permitted allocation.
+   */
+  min: string;
+};
+
+export type ChoicesMemoryUnion = MemoryChoices | string;
+
+/**
+ * Release-declared choices for each container resource dimension.
+ */
+export type Choices = {
+  cpu?: CpuChoices | string | null | undefined;
+  memory?: MemoryChoices | string | null | undefined;
+};
+
+export type DeploymentComputePlanCpu = {
+  min: string;
+  desired: string;
+};
+
+export type DeploymentComputePlanMemory = {
+  min: string;
+  desired: string;
+};
+
+export type DeploymentComputePlanContainer = {
+  containerId: string;
+  /**
+   * Release-declared choices for each container resource dimension.
+   */
+  choices: Choices;
+  cpu: DeploymentComputePlanCpu;
+  memory: DeploymentComputePlanMemory;
+};
+
 export type DeploymentComputePlan = {
   pools: Array<Pool>;
+  containers?: Array<DeploymentComputePlanContainer> | undefined;
 };
 
 /** @internal */
@@ -346,11 +415,160 @@ export function poolFromJSON(
 }
 
 /** @internal */
+export const CpuChoices$inboundSchema: z.ZodType<CpuChoices, unknown> = z
+  .object({
+    default: z.string(),
+    max: z.string(),
+    min: z.string(),
+  });
+
+export function cpuChoicesFromJSON(
+  jsonString: string,
+): SafeParseResult<CpuChoices, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuChoices$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuChoices' from JSON`,
+  );
+}
+
+/** @internal */
+export const ChoicesCpuUnion$inboundSchema: z.ZodType<
+  ChoicesCpuUnion,
+  unknown
+> = z.union([z.lazy(() => CpuChoices$inboundSchema), z.string()]);
+
+export function choicesCpuUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ChoicesCpuUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ChoicesCpuUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ChoicesCpuUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryChoices$inboundSchema: z.ZodType<MemoryChoices, unknown> = z
+  .object({
+    default: z.string(),
+    max: z.string(),
+    min: z.string(),
+  });
+
+export function memoryChoicesFromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryChoices, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryChoices$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryChoices' from JSON`,
+  );
+}
+
+/** @internal */
+export const ChoicesMemoryUnion$inboundSchema: z.ZodType<
+  ChoicesMemoryUnion,
+  unknown
+> = z.union([z.lazy(() => MemoryChoices$inboundSchema), z.string()]);
+
+export function choicesMemoryUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ChoicesMemoryUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ChoicesMemoryUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ChoicesMemoryUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const Choices$inboundSchema: z.ZodType<Choices, unknown> = z.object({
+  cpu: z.nullable(z.union([z.lazy(() => CpuChoices$inboundSchema), z.string()]))
+    .optional(),
+  memory: z.nullable(
+    z.union([z.lazy(() => MemoryChoices$inboundSchema), z.string()]),
+  ).optional(),
+});
+
+export function choicesFromJSON(
+  jsonString: string,
+): SafeParseResult<Choices, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Choices$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Choices' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentComputePlanCpu$inboundSchema: z.ZodType<
+  DeploymentComputePlanCpu,
+  unknown
+> = z.object({
+  min: z.string(),
+  desired: z.string(),
+});
+
+export function deploymentComputePlanCpuFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentComputePlanCpu, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentComputePlanCpu$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputePlanCpu' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentComputePlanMemory$inboundSchema: z.ZodType<
+  DeploymentComputePlanMemory,
+  unknown
+> = z.object({
+  min: z.string(),
+  desired: z.string(),
+});
+
+export function deploymentComputePlanMemoryFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentComputePlanMemory, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentComputePlanMemory$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputePlanMemory' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentComputePlanContainer$inboundSchema: z.ZodType<
+  DeploymentComputePlanContainer,
+  unknown
+> = z.object({
+  containerId: z.string(),
+  choices: z.lazy(() => Choices$inboundSchema),
+  cpu: z.lazy(() => DeploymentComputePlanCpu$inboundSchema),
+  memory: z.lazy(() => DeploymentComputePlanMemory$inboundSchema),
+});
+
+export function deploymentComputePlanContainerFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentComputePlanContainer, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentComputePlanContainer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputePlanContainer' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentComputePlan$inboundSchema: z.ZodType<
   DeploymentComputePlan,
   unknown
 > = z.object({
   pools: z.array(z.lazy(() => Pool$inboundSchema)),
+  containers: z.array(
+    z.lazy(() => DeploymentComputePlanContainer$inboundSchema),
+  ).optional(),
 });
 
 export function deploymentComputePlanFromJSON(

@@ -59,6 +59,7 @@ let value: DeploymentComputePlan = {
 
 ## Fields
 
-| Field                              | Type                               | Required                           | Description                        |
-| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
-| `pools`                            | [models.Pool](../models/pool.md)[] | :heavy_check_mark:                 | N/A                                |
+| Field                                                                                  | Type                                                                                   | Required                                                                               | Description                                                                            |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `pools`                                                                                | [models.Pool](../models/pool.md)[]                                                     | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `containers`                                                                           | [models.DeploymentComputePlanContainer](../models/deploymentcomputeplancontainer.md)[] | :heavy_minus_sign:                                                                     | N/A                                                                                    |

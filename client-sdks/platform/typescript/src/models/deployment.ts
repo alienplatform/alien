@@ -26,15 +26,15 @@ import {
   DeploymentStackState$inboundSchema,
   DeploymentStatus,
   DeploymentStatus$inboundSchema,
-} from "./deploymentpendingpreparedstacktypeunion.js";
+} from "./deploymentpendingpreparedstacktypeenvenum.js";
 import {
   DeploymentPendingPreparedStackUnion,
   DeploymentPendingPreparedStackUnion$inboundSchema,
   DeploymentPreparedStackInput,
   DeploymentPreparedStackInput$inboundSchema,
-  DeploymentPreparedStackOperationsUnion,
-  DeploymentPreparedStackOperationsUnion$inboundSchema,
-} from "./deploymentpreparedstackoperationsunion.js";
+  DeploymentPreparedStackOperations,
+  DeploymentPreparedStackOperations$inboundSchema,
+} from "./deploymentpreparedstackoperations.js";
 import {
   DeploymentPurpose,
   DeploymentPurpose$inboundSchema,
@@ -52,6 +52,10 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+export type DeploymentPreparedStackOperationsUnion =
+  | DeploymentPreparedStackOperations
+  | string;
 
 export const DeploymentPreparedStackManagementEnum = {
   Auto: "auto",
@@ -1330,7 +1334,7 @@ export type DeploymentPreparedStack = {
    * Input definitions required before setup or deployment can proceed.
    */
   inputs?: Array<DeploymentPreparedStackInput> | undefined;
-  operations?: DeploymentPreparedStackOperationsUnion | null | undefined;
+  operations?: DeploymentPreparedStackOperations | string | null | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
@@ -1818,6 +1822,23 @@ export type Deployment = {
    */
   workspaceId: string;
 };
+
+/** @internal */
+export const DeploymentPreparedStackOperationsUnion$inboundSchema: z.ZodType<
+  DeploymentPreparedStackOperationsUnion,
+  unknown
+> = z.union([DeploymentPreparedStackOperations$inboundSchema, z.string()]);
+
+export function deploymentPreparedStackOperationsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreparedStackOperationsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPreparedStackOperationsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparedStackOperationsUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentPreparedStackManagementEnum$inboundSchema: z.ZodEnum<
@@ -3667,8 +3688,9 @@ export const DeploymentPreparedStack$inboundSchema: z.ZodType<
   dynamicContainerRepositories: z.array(z.string()).optional(),
   id: z.string(),
   inputs: z.array(DeploymentPreparedStackInput$inboundSchema).optional(),
-  operations: z.nullable(DeploymentPreparedStackOperationsUnion$inboundSchema)
-    .optional(),
+  operations: z.nullable(
+    z.union([DeploymentPreparedStackOperations$inboundSchema, z.string()]),
+  ).optional(),
   permissions: z.lazy(() => DeploymentPreparedStackPermissions$inboundSchema)
     .optional(),
   resources: z.record(

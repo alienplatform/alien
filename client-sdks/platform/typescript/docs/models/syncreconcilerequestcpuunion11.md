@@ -1,0 +1,19 @@
+# SyncReconcileRequestCpuUnion11
+
+
+## Supported Types
+
+### `models.SyncReconcileRequestCpu11`
+
+```typescript
+const value: models.SyncReconcileRequestCpu11 = {
+  unit: "percent",
+  value: 3165.05,
+};
+```
+
+### `string`
+
+```typescript
+const value: string = "<value>";
+```
