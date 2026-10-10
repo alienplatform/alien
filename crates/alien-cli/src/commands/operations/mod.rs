@@ -303,14 +303,7 @@ async fn platform_action_task(args: OperationsArgs, ctx: ExecutionMode) -> Resul
                 }
                 None => None,
             };
-            list_task(
-                &auth,
-                &workspace,
-                &project,
-                deployment_id.as_deref(),
-                args.json,
-            )
-            .await
+            list_task(&auth, &workspace, &project, deployment_id.as_deref(), args.json).await
         }
         OperationsAction::Invoke {
             deployment,

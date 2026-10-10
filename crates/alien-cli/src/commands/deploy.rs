@@ -1225,11 +1225,7 @@ async fn create_standalone_deployment(
                 .platform(platform)
                 .stack_settings(settings)
                 .input_values(
-                    resolved_args
-                        .input_values
-                        .clone()
-                        .into_iter()
-                        .collect::<serde_json::Map<String, serde_json::Value>>(),
+                    resolved_args.input_values.clone().into_iter().collect::<serde_json::Map<String, serde_json::Value>>(),
                 );
             if let Some(prefix) = &args.resource_prefix {
                 body = body.resource_prefix(prefix.clone());
@@ -1528,15 +1524,13 @@ async fn deploy_task_with_environment(
                                     item.api_name().to_string(),
                                 ))
                                 .into_alien_error()
-                                .context(
-                                    ErrorData::ValidationError {
-                                        field: "setup-item".to_string(),
-                                        message: format!(
-                                            "The API does not accept setup item '{}'",
-                                            item.cli_name()
-                                        ),
-                                    },
-                                )?,
+                                .context(ErrorData::ValidationError {
+                                    field: "setup-item".to_string(),
+                                    message: format!(
+                                        "The API does not accept setup item '{}'",
+                                        item.cli_name()
+                                    ),
+                                })?,
                             ),
                             None => None,
                         };
