@@ -942,6 +942,44 @@ fn normalize_tagged_unions_in_openapi(value: &mut Value) {
     }
 }
 
+// Serde encodes an externally tagged enum's unit variants as strings and its data
+// variants as one-key objects, for example `"success"` and `{"failed": {...}}`. When
+// every branch is one of these and no tag repeats, at most one branch matches. The
+// flattened struct Progenitor generates for anyOf cannot decode the string branches.
+fn external_tags(schema: &Value) -> Option<Vec<String>> {
+    let object = schema.as_object()?;
+    if object.get("nullable") == Some(&Value::Bool(true))
+        || ["$ref", "allOf", "anyOf", "oneOf"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+    {
+        return None;
+    }
+    match object.get("type").and_then(Value::as_str)? {
+        "string" => object
+            .get("enum")?
+            .as_array()?
+            .iter()
+            .map(|value| value.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()
+            .filter(|tags| !tags.is_empty()),
+        "object" => {
+            if object
+                .get("additionalProperties")
+                .is_some_and(|additional| additional != &Value::Bool(false))
+            {
+                return None;
+            }
+            let properties = object.get("properties")?.as_object()?;
+            let required = object.get("required")?.as_array()?;
+            let (tag, _) = properties.iter().next()?;
+            (properties.len() == 1 && required.len() == 1 && required[0] == *tag)
+                .then(|| vec![tag.clone()])
+        }
+        _ => None,
+    }
+}
+
 fn normalize_disjoint_tagged_unions(schema: &mut Value) {
     if let Some(object) = schema.as_object_mut() {
         if !object.contains_key("oneOf") && !object.contains_key("$ref") {
@@ -954,13 +992,19 @@ fn normalize_disjoint_tagged_unions(schema: &mut Value) {
                     };
                     let mut fields = BTreeSet::new();
                     candidate_tag_fields(first, &mut fields);
-                    fields.iter().any(|field| {
+                    let tagged_by_field = fields.iter().any(|field| {
                         let mut seen = BTreeSet::new();
                         branches.iter().all(|branch| {
                             required_string_tags(branch, field)
                                 .is_some_and(|tags| tags.into_iter().all(|tag| seen.insert(tag)))
                         })
-                    })
+                    });
+                    let mut seen = BTreeSet::new();
+                    tagged_by_field
+                        || branches.iter().all(|branch| {
+                            external_tags(branch)
+                                .is_some_and(|tags| tags.into_iter().all(|tag| seen.insert(tag)))
+                        })
                 });
             if disjoint {
                 let branches = object.remove("anyOf").expect("union was checked");
