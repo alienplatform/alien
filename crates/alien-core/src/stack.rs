@@ -517,14 +517,7 @@ mod tests {
         let mut settings = insta::Settings::clone_current();
         settings.set_sort_maps(true);
         settings.bind(|| {
-            // Snapshot the JSON wire representation. The generic snapshot serializer
-            // exposes serde_json's private arbitrary-precision Number wrapper.
-            let mut json = serde_json::to_value(&stack).expect("serialize stack as JSON");
-            json.sort_all_objects();
-            insta::assert_snapshot!(
-                "stack_serialization_account_managed",
-                serde_json::to_string_pretty(&json).expect("format stack JSON")
-            );
+            assert_json_snapshot!("stack_serialization_account_managed", stack);
         });
     }
 
