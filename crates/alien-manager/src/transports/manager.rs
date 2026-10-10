@@ -87,8 +87,8 @@ impl DeploymentLoopTransport for ManagerTransport {
         )
         .await;
 
-        // 2. Revoke a deleted deployment's access before persisting the state that hands it to
-        //    setup teardown. A denied revoke comes back as a failed delete to persist instead.
+        // 2. Revoke a deleted AWS deployment's access before persisting the state that hands it
+        //    to setup teardown. A denied revoke comes back as a failed delete to persist instead.
         let updated_state = crate::registry_access::revoke_before_persisting(
             self.deployment_store.as_ref(),
             &self.bindings_provider,
@@ -123,6 +123,17 @@ impl DeploymentLoopTransport for ManagerTransport {
                 },
             )
             .await?;
+
+        crate::registry_access::revoke_after_persisting(
+            self.deployment_store.as_ref(),
+            &self.bindings_provider,
+            &self.target_bindings_providers,
+            deployment_id,
+            &self.project_id,
+            &updated_state,
+        )
+        .await
+        .map_err(|error| error.into_generic())?;
 
         // Only return updated state if something actually changed.
         let state_changed = updated_state.runtime_metadata != state.runtime_metadata

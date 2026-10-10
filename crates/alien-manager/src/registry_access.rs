@@ -575,14 +575,16 @@ pub async fn cleanup_deleted_registry_access(
     Ok(())
 }
 
-/// Revokes a deleted deployment's registry access before the state that ends its runtime cleanup
-/// is persisted, and returns the state to persist instead.
+/// Revokes a deleted AWS deployment's registry access before the state that ends its runtime
+/// cleanup is persisted, and returns the state to persist instead.
 ///
 /// The revoke goes first because a persisted `TeardownRequired` hands the deployment to setup
 /// teardown, which deletes the identity and the record the revoke reads, so a revoke still owed
 /// after that is never made. A registry that denies the revoke fails the delete with that error:
 /// the manager lacks a permission, and a retry of the delete revokes once it is granted. Any other
 /// failure is returned with nothing persisted, for the caller to retry.
+///
+/// Other platforms revoke in [`revoke_after_persisting`].
 pub async fn revoke_before_persisting(
     deployment_store: &dyn DeploymentStore,
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -591,6 +593,9 @@ pub async fn revoke_before_persisting(
     project_id: &str,
     state: DeploymentState,
 ) -> Result<DeploymentState> {
+    if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
+        return Ok(state);
+    }
     match cleanup_deleted_registry_access(
         deployment_store,
         bindings_provider,
@@ -623,6 +628,34 @@ pub async fn revoke_before_persisting(
         }
         Err(error) => Err(error),
     }
+}
+
+/// Revokes a deleted GCP deployment's registry access once its `Deleted` state is persisted.
+///
+/// GCP removes a project's shared grant only when no other deployment in that project is still
+/// saved as active. Each deletion is saved before it asks, so of two deletions finishing together
+/// the one that asks last sees both deleted and removes the grant; asking first, both could see
+/// the other active and both keep it. AWS revokes in [`revoke_before_persisting`].
+pub async fn revoke_after_persisting(
+    deployment_store: &dyn DeploymentStore,
+    bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    deployment_id: &str,
+    project_id: &str,
+    state: &DeploymentState,
+) -> Result<()> {
+    if matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
+        return Ok(());
+    }
+    cleanup_deleted_registry_access(
+        deployment_store,
+        bindings_provider,
+        target_bindings_providers,
+        deployment_id,
+        project_id,
+        state,
+    )
+    .await
 }
 
 fn repository_ids_for_access(
@@ -2388,6 +2421,9 @@ mod tests {
 
         const IMAGE: &str =
             "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:latest";
+        const GCP_PREFIX: &str = "vendor-project/alien-artifacts";
+        const GCP_IMAGE: &str =
+            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts/test-worker:abc123";
 
         #[derive(Debug, Clone, Copy, PartialEq)]
         enum Answer {
@@ -2399,6 +2435,7 @@ mod tests {
         /// A registry that records the deployment's persisted status at each revoke, which is what
         /// setup teardown would have read at that moment.
         struct RecordingRegistry {
+            platform: Platform,
             answer: Mutex<Answer>,
             store: Arc<SqliteDeploymentStore>,
             deployment_id: Mutex<String>,
@@ -2416,11 +2453,17 @@ mod tests {
         #[async_trait]
         impl ArtifactRegistry for RecordingRegistry {
             fn registry_endpoint(&self) -> String {
-                "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+                match self.platform {
+                    Platform::Gcp => "us-central1-docker.pkg.dev".to_string(),
+                    _ => "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string(),
+                }
             }
 
             fn upstream_repository_prefix(&self) -> String {
-                "alien-artifacts".to_string()
+                match self.platform {
+                    Platform::Gcp => GCP_PREFIX.to_string(),
+                    _ => "alien-artifacts".to_string(),
+                }
             }
 
             async fn create_repository(
@@ -2504,6 +2547,10 @@ mod tests {
 
         /// An AWS deployment whose runtime cleanup is under way, as the manager loop holds it.
         async fn deleting_deployment(answer: Answer) -> Harness {
+            deleting_deployment_on(Platform::Aws, answer).await
+        }
+
+        async fn deleting_deployment_on(platform: Platform, answer: Answer) -> Harness {
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.keep().join("manager.db");
             let db = Arc::new(
@@ -2532,7 +2579,7 @@ mod tests {
                             alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                         name: "worker".to_string(),
                         deployment_group_id: group.id,
-                        platform: Platform::Aws,
+                        platform,
                         base_platform: None,
                         stack_settings: Default::default(),
                         stack_state: None,
@@ -2551,6 +2598,7 @@ mod tests {
                 .expect("delete pending");
 
             let registry = Arc::new(RecordingRegistry {
+                platform,
                 answer: Mutex::new(answer),
                 store: store.clone(),
                 deployment_id: Mutex::new(deployment.id.clone()),
@@ -2583,7 +2631,17 @@ mod tests {
 
         impl Harness {
             fn state(&self, status: DeploymentStatus) -> DeploymentState {
-                let mut state = aws_state_with_stack(worker_stack(IMAGE));
+                let mut state = match self.registry.platform {
+                    Platform::Gcp => {
+                        let mut state = gcp_state_with_stack(worker_stack(GCP_IMAGE));
+                        state.runtime_metadata = Some(RuntimeMetadata {
+                            registry_access_granted: true,
+                            ..RuntimeMetadata::default()
+                        });
+                        state
+                    }
+                    _ => aws_state_with_stack(worker_stack(IMAGE)),
+                };
                 state.status = status;
                 state
             }
@@ -2712,6 +2770,24 @@ mod tests {
                 "deleting",
                 "nothing is persisted, so setup teardown cannot take the deployment before the \
                  retried revoke"
+            );
+        }
+
+        #[tokio::test]
+        async fn gcp_revokes_the_shared_grant_only_after_its_deletion_is_saved() {
+            let harness = deleting_deployment_on(Platform::Gcp, Answer::Revoke).await;
+
+            harness
+                .checkpoint(DeploymentStatus::Deleted)
+                .await
+                .expect("the deletion checkpoint should succeed");
+
+            assert_eq!(
+                harness.statuses_at_revoke(),
+                vec!["deleted".to_string()],
+                "the shared grant is removed only when no other deployment in the project is \
+                 saved as active, so each deletion must be saved before it asks: two deletions \
+                 asking first would each see the other active and both keep the grant"
             );
         }
     }

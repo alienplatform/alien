@@ -520,7 +520,7 @@ impl DeploymentLoop {
                 retry_requested: false,
                 ..recorded_state
             };
-            // Revoked before the checkpoint, which hands the deployment to setup teardown.
+            // AWS revokes before the checkpoint, which hands the deployment to setup teardown.
             let state_after = crate::registry_access::revoke_before_persisting(
                 self.deployment_store.as_ref(),
                 &self.server_bindings.bindings_provider,
@@ -531,8 +531,23 @@ impl DeploymentLoop {
             )
             .await
             .map_err(|error| error.into_generic())?;
-            self.checkpoint_without_step(&deployment_id, session, state_after, execution_claim)
-                .await?;
+            self.checkpoint_without_step(
+                &deployment_id,
+                session,
+                state_after.clone(),
+                execution_claim,
+            )
+            .await?;
+            crate::registry_access::revoke_after_persisting(
+                self.deployment_store.as_ref(),
+                &self.server_bindings.bindings_provider,
+                &self.server_bindings.target_bindings_providers,
+                &deployment_id,
+                &deployment.project_id,
+                &state_after,
+            )
+            .await
+            .map_err(|error| error.into_generic())?;
             return Ok(());
         }
 
