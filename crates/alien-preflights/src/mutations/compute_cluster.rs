@@ -2388,7 +2388,7 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build();
-        assert!(!mutation.should_run(&stack, &stack_state, &config));
+        assert!(mutation.should_run(&stack, &stack_state, &config));
     }
 
     #[tokio::test]

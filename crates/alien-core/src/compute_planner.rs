@@ -109,8 +109,14 @@ pub fn plan_compute(
     let mut pools = Vec::new();
     for pool_id in pool_ids {
         let mut group = groups.remove(&pool_id).expect("pool id came from map keys");
-        let requirements = group.requirements;
+        let mut requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
+        if requirements.architecture.is_none() {
+            requirements.architecture = selected
+                .and_then(ComputePoolSelection::machine)
+                .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+                .map(|spec| spec.architecture);
+        }
         if group.generated {
             group.scale = generated_pool_scale_policy(
                 group.scale.default_min_size(),
@@ -945,8 +951,11 @@ mod tests {
             assert_eq!(pool.selected.min_size(), 1);
             assert_eq!(pool.selected.max_size(), 1);
         }
-        assert_eq!(settings.pools["general"].machine(), None,
-            "resolving a plan must preserve automatic machine intent");
+        assert_eq!(
+            settings.pools["general"].machine(),
+            None,
+            "resolving a plan must preserve automatic machine intent"
+        );
         let original = stack.resources["api"]
             .config
             .downcast_ref::<Container>()

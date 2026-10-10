@@ -953,6 +953,7 @@ mod tests {
             (Platform::Azure, "Standard_D2s_v5", "Standard_D4s_v5"),
         ] {
             let mut old = compute_cluster(1);
+            old.capacity_groups[0].nested_virtualization = None;
             old.capacity_groups[0].instance_type = Some(old_machine.into());
             old.capacity_groups[0].profile = Some(
                 find_instance_type(platform, old_machine)
