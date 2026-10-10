@@ -1268,13 +1268,15 @@ pub fn find_instance_type(platform: Platform, name: &str) -> Option<&'static Ins
 /// Whether a capacity group may move from AWS machine `old` to `new` without setup: both are
 /// catalog machines of one CPU architecture, so the stack's images still run on the new one.
 pub fn is_same_architecture_aws_machine(old: &str, new: &str) -> bool {
-    match (
-        find_instance_type(Platform::Aws, old),
-        find_instance_type(Platform::Aws, new),
-    ) {
-        (Some(old), Some(new)) => old.architecture == new.architecture,
-        _ => false,
-    }
+    is_same_architecture_machine(Platform::Aws, old, new)
+}
+
+/// Whether two catalog machines belong to the given cloud and share a CPU architecture.
+pub fn is_same_architecture_machine(platform: Platform, old: &str, new: &str) -> bool {
+    matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+        && find_instance_type(platform, old)
+            .zip(find_instance_type(platform, new))
+            .is_some_and(|(old, new)| old.architecture == new.architecture)
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,8 +1329,8 @@ const STORAGE_OPTIMIZED_THRESHOLD: u64 = 200 * GI;
 /// Maximum number of machines per cluster.
 const MAX_MACHINES_PER_CLUSTER: u32 = 10;
 
-/// Hard cap on vCPUs for non-GPU/non-storage workloads. Equivalent to AWS 2xlarge.
-/// Beyond this, horizontal scaling is always preferred over bigger machines.
+/// Preferred vCPU cap for non-GPU/non-storage workloads. A larger indivisible
+/// allocation or bounded fleet can require a bigger machine.
 const MAX_STANDARD_VCPU: u32 = 8;
 
 /// Runtime CPU reserved for system processes on each managed container machine.
@@ -1342,30 +1344,41 @@ const WORKLOAD_HEADROOM_FACTOR: f64 = 1.15;
 /// The algorithm:
 /// 1. GPU workloads: Match by GPU type, find smallest instance with enough GPUs.
 /// 2. Storage-heavy workloads (>200Gi ephemeral): Use storage-optimized instances.
-/// 3. All other workloads: Size the machine to fit a small HA-friendly baseline,
-///    capped at 8 vCPUs. Use GeneralPurpose family for broad availability and
-///    reasonable cost. Scale horizontally for more capacity.
+/// 3. All other workloads: Fit the allocation with system reserve and headroom,
+///    preferring at most 8 vCPUs unless the allocation requires more. Use the
+///    workload's preferred family, with general-purpose fallback when needed.
 ///
 /// Returns an error if no suitable instance type is found.
 pub fn select_instance_type(
     platform: Platform,
     requirements: &WorkloadRequirements,
 ) -> Result<InstanceSelection, String> {
+    let family = select_family(requirements);
+    let family = if requirements.nested_virt && family == InstanceFamily::Burstable {
+        InstanceFamily::GeneralPurpose
+    } else {
+        family
+    };
+    let selection = select_instance_type_in_family(platform, requirements, family);
+    if selection.is_err() && family == InstanceFamily::Burstable {
+        return select_instance_type_in_family(
+            platform,
+            requirements,
+            InstanceFamily::GeneralPurpose,
+        );
+    }
+    selection
+}
+
+fn select_instance_type_in_family(
+    platform: Platform,
+    requirements: &WorkloadRequirements,
+    family: InstanceFamily,
+) -> Result<InstanceSelection, String> {
     let architecture = requirements
         .architecture
         .or_else(|| default_architecture(platform))
         .ok_or_else(|| format!("platform {platform} has no default compute architecture"))?;
-
-    // Determine which family to use. Nested virt isn't available on
-    // burstable hardware on any cloud, so a workload that classifies as
-    // Burstable but needs nested virt must be upgraded to GeneralPurpose
-    // (the family that actually has nested-virt-capable entries).
-    let raw_family = select_family(requirements);
-    let family = if requirements.nested_virt && raw_family == InstanceFamily::Burstable {
-        InstanceFamily::GeneralPurpose
-    } else {
-        raw_family
-    };
 
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
@@ -1470,6 +1483,19 @@ pub fn select_instance_type(
         ));
     }
 
+    // More machines cannot split one replica. Every candidate must fit its
+    // largest allocation after host reserve and workload headroom.
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|spec| {
+            allocatable_cpu(spec) >= requirements.max_cpu_per_container * WORKLOAD_HEADROOM_FACTOR
+                && allocatable_memory_bytes(spec) as f64
+                    >= requirements.max_memory_per_container as f64 * WORKLOAD_HEADROOM_FACTOR
+        })
+        .collect();
+    let smallest_replica_machine = candidates.iter().map(|spec| spec.vcpu).min()
+        .ok_or_else(|| format!("no {platform} machine can fit one replica with system reserve and workload headroom"))?;
+
     // Apply the policy for the candidates we will actually select from. A
     // storage-heavy request can fall back from fixed-local storage machines to
     // general-purpose machines with provider-backed disks; those machines must
@@ -1480,7 +1506,7 @@ pub fn select_instance_type(
     {
         u32::MAX
     } else {
-        MAX_STANDARD_VCPU
+        MAX_STANDARD_VCPU.max(smallest_replica_machine)
     };
 
     let desired_target_machines = desired_target_machines(requirements);
@@ -1602,11 +1628,11 @@ fn desired_target_machines(requirements: &WorkloadRequirements) -> u32 {
     }
 }
 
-fn allocatable_cpu(instance: &InstanceTypeSpec) -> f64 {
+pub(crate) fn allocatable_cpu(instance: &InstanceTypeSpec) -> f64 {
     (instance.vcpu as f64 - SYSTEM_RESERVE_CPU).max(0.25)
 }
 
-fn allocatable_memory_bytes(instance: &InstanceTypeSpec) -> u64 {
+pub(crate) fn allocatable_memory_bytes(instance: &InstanceTypeSpec) -> u64 {
     instance
         .memory_bytes
         .saturating_sub(system_reserve_memory_bytes(instance.memory_bytes))
@@ -1761,6 +1787,27 @@ mod tests {
     }
 
     // -- Selection algorithm tests --
+
+    #[test]
+    fn small_cpu_with_large_memory_falls_back_from_burstable() {
+        let requirements = WorkloadRequirements {
+            total_cpu_at_desired: 0.5,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 0.5,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 0.5,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 0,
+            gpu: None,
+            architecture: Some(Architecture::X86_64),
+            nested_virt: false,
+        };
+        let selected = select_instance_type(Platform::Gcp, &requirements).unwrap();
+        let machine = find_instance_type(Platform::Gcp, selected.instance_type).unwrap();
+        assert!(
+            allocatable_memory_bytes(machine) as f64 >= 8.0 * GI as f64 * WORKLOAD_HEADROOM_FACTOR
+        );
+    }
 
     #[test]
     fn test_select_burstable_for_small_workload() {
@@ -2051,7 +2098,7 @@ mod tests {
 
     #[test]
     fn test_instance_size_capped_at_8_vcpu() {
-        // Even with very large containers, instance size is capped at 8 vCPUs
+        // Many small replicas prefer more machines over larger instances.
         let req = WorkloadRequirements {
             total_cpu_at_desired: 70.0,
             total_memory_bytes_at_desired: 140 * GI,

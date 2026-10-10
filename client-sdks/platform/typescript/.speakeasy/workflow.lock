@@ -23,6 +23,7 @@ workflow:
             overlays:
                 - location: ../../speakeasy-overlay.yaml
                 - location: ../speakeasy-overlay.yaml
+                - location: ../sdk-compatibility-overlay.json
             registry:
                 location: registry.speakeasyapi.dev/alien-ehq/alien/platform-api
     targets:

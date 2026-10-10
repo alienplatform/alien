@@ -164,6 +164,8 @@ export type { ContainerHeartbeatData } from "./zod/container-heartbeat-data-sche
 export type { ContainerImageIdentity } from "./zod/container-image-identity-schema.js";
 export type { ContainerOutputs } from "./zod/container-outputs-schema.js";
 export type { ContainerPort } from "./zod/container-port-schema.js";
+export type { ContainerResourceChoices } from "./zod/container-resource-choices-schema.js";
+export type { ContainerResourceSelection } from "./zod/container-resource-selection-schema.js";
 export type { Container } from "./zod/container-schema.js";
 export type { ContainerSecurityProfile } from "./zod/container-security-profile-schema.js";
 export type { ContainerSecurity } from "./zod/container-security-schema.js";
@@ -418,6 +420,7 @@ export type { RemoteStackManagementOutputs } from "./zod/remote-stack-management
 export type { RemoteStackManagement } from "./zod/remote-stack-management-schema.js";
 export type { ReplicaStatus } from "./zod/replica-status-schema.js";
 export type { ReportedOperation } from "./zod/reported-operation-schema.js";
+export type { ResourceChoiceRange } from "./zod/resource-choice-range-schema.js";
 export type { ResourceEntry } from "./zod/resource-entry-schema.js";
 export type { ResourceHeartbeatData } from "./zod/resource-heartbeat-data-schema.js";
 export type { ResourceHeartbeat } from "./zod/resource-heartbeat-schema.js";
@@ -670,6 +673,8 @@ export { ContainerHeartbeatDataSchema } from "./zod/container-heartbeat-data-sch
 export { ContainerImageIdentitySchema } from "./zod/container-image-identity-schema.js";
 export { ContainerOutputsSchema } from "./zod/container-outputs-schema.js";
 export { ContainerPortSchema } from "./zod/container-port-schema.js";
+export { ContainerResourceChoicesSchema } from "./zod/container-resource-choices-schema.js";
+export { ContainerResourceSelectionSchema } from "./zod/container-resource-selection-schema.js";
 export { ContainerSchema } from "./zod/container-schema.js";
 export { ContainerSecurityProfileSchema } from "./zod/container-security-profile-schema.js";
 export { ContainerSecuritySchema } from "./zod/container-security-schema.js";
@@ -924,6 +929,7 @@ export { RemoteStackManagementOutputsSchema } from "./zod/remote-stack-managemen
 export { RemoteStackManagementSchema } from "./zod/remote-stack-management-schema.js";
 export { ReplicaStatusSchema } from "./zod/replica-status-schema.js";
 export { ReportedOperationSchema } from "./zod/reported-operation-schema.js";
+export { ResourceChoiceRangeSchema } from "./zod/resource-choice-range-schema.js";
 export { ResourceEntrySchema } from "./zod/resource-entry-schema.js";
 export { ResourceHeartbeatDataSchema } from "./zod/resource-heartbeat-data-schema.js";
 export { ResourceHeartbeatSchema } from "./zod/resource-heartbeat-schema.js";

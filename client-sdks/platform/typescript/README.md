@@ -385,6 +385,10 @@ run();
 * [getAccessRequestActivity](docs/sdks/operations/README.md#getaccessrequestactivity) - The operation commands and debug sessions an access request authorized, with each command's verification outcome. Authorized like getAccessRequest.
 * [revokeAccessRequest](docs/sdks/operations/README.md#revokeaccessrequest) - Revoke a pending, queued or customer-approved access request. The principal that created the request, or any workspace member or administrator who can read its project, may revoke it. Commands the grant authorized that have not been dispatched are failed; dispatched commands finish. Linked debug sessions are stopped and refuse their next request. Revoking an already revoked request returns it unchanged.
 * [getAccessRequest](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
+* [~~setBuiltinPlugins~~](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set. :warning: **Deprecated**
+* [~~setPluginEnabled~~](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it. :warning: **Deprecated**
+* [~~getPolicy~~](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual. :warning: **Deprecated**
+* [~~updatePolicy~~](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual. :warning: **Deprecated**
 
 ### [OperatorManifests](docs/sdks/operatormanifests/README.md)
 
@@ -781,6 +785,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`workspacesUpdate`](docs/sdks/workspaces/README.md#update) - Update a workspace.
 - [`workspacesUpdateMember`](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
 - [`workspacesUpdateSettings`](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+- ~~[`operationsGetPolicy`](docs/sdks/operations/README.md#getpolicy)~~ - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual. :warning: **Deprecated**
+- ~~[`operationsSetBuiltinPlugins`](docs/sdks/operations/README.md#setbuiltinplugins)~~ - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set. :warning: **Deprecated**
+- ~~[`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled)~~ - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it. :warning: **Deprecated**
+- ~~[`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy)~~ - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual. :warning: **Deprecated**
 
 </details>
 <!-- End Standalone functions [standalone-funcs] -->
@@ -1060,6 +1068,10 @@ To learn about this feature and how to get started, check
 - [`useWorkspacesUpdateMemberMutation`](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
 - [`useWorkspacesUpdateMutation`](docs/sdks/workspaces/README.md#update) - Update a workspace.
 - [`useWorkspacesUpdateSettingsMutation`](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+- ~~[`useOperationsGetPolicy`](docs/sdks/operations/README.md#getpolicy)~~ - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual. :warning: **Deprecated**
+- ~~[`useOperationsSetBuiltinPluginsMutation`](docs/sdks/operations/README.md#setbuiltinplugins)~~ - Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set. :warning: **Deprecated**
+- ~~[`useOperationsSetPluginEnabledMutation`](docs/sdks/operations/README.md#setpluginenabled)~~ - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it. :warning: **Deprecated**
+- ~~[`useOperationsUpdatePolicyMutation`](docs/sdks/operations/README.md#updatepolicy)~~ - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual. :warning: **Deprecated**
 
 </details>
 <!-- End React hooks with TanStack Query [react-query] -->

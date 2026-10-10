@@ -5,7 +5,7 @@ import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
-import { CreateAccessRequestMaxRisk } from "../typescript/esm/models/index.js";
+import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -186,13 +186,21 @@ test("legacy publish-plugin deep imports preserve Kubernetes permission exports"
   assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
 });
 
-test("operations plugin responses retain the published identity", () => {
-  const published = { name: "registry", version: "1", tier: "mutating" };
-  assert.deepEqual(PublishOperationsPluginResponse$inboundSchema.parse(published), published);
-});
-
-test("existing access request risk enum imports remain compatible", () => {
-  assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+test("operations plugin responses retain the permission diff", () => {
+  const permissionDiff = {
+    aws: { added: [], removed: [] },
+    gcp: { added: [], removed: [] },
+    kubernetes: { added: [], removed: [] },
+  };
+  const response = PublishOperationsPluginResponse$inboundSchema.parse({
+    name: "registry",
+    version: "1",
+    tier: "mutating",
+    enabled: true,
+    permissionDiff,
+  });
+  assert.deepEqual(response.permissionDiff, permissionDiff);
+  assert.deepEqual(OperationsPermissionDiff$inboundSchema.parse(permissionDiff), permissionDiff);
 });
 
 test("configured server query parameters survive operation globals", async () => {
@@ -398,7 +406,40 @@ for (const [operation, args] of [
 }
 
 
+test("deployment resource selections survive the generated request serializer", async () => {
+  const { updateDeploymentComputeRequestToJSON } = await import("../typescript/esm/models/updatedeploymentcomputerequest.js");
+  const request = { compute: { containers: { api: { cpu: 1.5, memory: "2Gi" } } } };
+  assert.deepEqual(JSON.parse(updateDeploymentComputeRequestToJSON(request)), request);
+});
+
 test("existing access request risk enum deep imports remain compatible", async () => {
   const { CreateAccessRequestMaxRisk } = await import("../typescript/esm/models/createaccessrequest.js");
   assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+});
+
+test("reported resource serializers retain their published imports", async () => {
+  const models = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/syncreconcilerequestdataunion2.js");
+  assert.equal(models.cpuUnion1ToJSON("1"), '"1"');
+  assert.equal(deep.cpuUnion1ToJSON("1"), '"1"');
+  assert.equal(models.memoryUnion1ToJSON("1Gi"), '"1Gi"');
+});
+
+test("existing deployment model paths use the current resource parser", async () => {
+  const { deploymentComputeFromJSON } = await import("../typescript/esm/models/deploymentpendingpreparedstacktypeunion.js");
+  const compute = { containers: { api: { cpu: 1.5, memory: "2Gi" } } };
+  assert.deepEqual(deploymentComputeFromJSON(JSON.stringify(compute)), { ok: true, value: compute });
+});
+
+
+test("published deep imports retain moved enums and response parsers", async () => {
+  const release = await import("../typescript/esm/models/releaseinfotypestringlist.js");
+  assert.equal(release.ReleaseInfoTypeStringList.StringList, "stringList");
+  assert.equal(release.ReleaseInfoTypeStringList$inboundSchema.parse("stringList"), "stringList");
+  const deployment = await import("../typescript/esm/models/deploymentpendingpreparedstacktypeunion.js");
+  assert.equal(deployment.DeploymentPendingPreparedStackTypeUnion$inboundSchema.parse("string"), "string");
+  assert.deepEqual(deployment.deploymentPendingPreparedStackTypeUnionFromJSON('"string"'), { ok: true, value: "string" });
+  const manager = await import("../typescript/esm/models/createmanagerresponseproviderawsalb2.js");
+  const provider = { provider: "awsAlb", scheme: "internet-facing", targetType: "ip" };
+  assert.deepEqual(manager.CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(provider), provider);
 });

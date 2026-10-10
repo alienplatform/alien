@@ -8,14 +8,6 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  CreateManagerResponseSetupConfig,
-  CreateManagerResponseSetupConfig$inboundSchema,
-  CreateManagerResponseSetupStatus,
-  CreateManagerResponseSetupStatus$inboundSchema,
-  CreateManagerResponseSetupTerraform,
-  CreateManagerResponseSetupTerraform$inboundSchema,
-} from "./createmanagerresponsedomainsunion2.js";
-import {
   CreateManagerResponseCertificateUnion1,
   CreateManagerResponseCertificateUnion1$inboundSchema,
   CreateManagerResponseClusterUnion1,
@@ -34,20 +26,61 @@ import {
   CreateManagerResponseHeartbeats1$inboundSchema,
   CreateManagerResponseModeGenerated1,
   CreateManagerResponseModeGenerated1$inboundSchema,
-  CreateManagerResponseProviderAwsAlb2,
-  CreateManagerResponseProviderAwsAlb2$inboundSchema,
   CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
   CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  CreateManagerResponseProviderGkeGateway2,
-  CreateManagerResponseProviderGkeGateway2$inboundSchema,
+  CreateManagerResponseProviderGkeGatewayEnum2,
+  CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema,
   CreateManagerResponseSetupGoogleOauth,
   CreateManagerResponseSetupGoogleOauth$inboundSchema,
-} from "./createmanagerresponseproviderawsalb2.js";
+} from "./createmanagerresponseprovidergkegatewayenum2.js";
+import {
+  CreateManagerResponseSetupConfig,
+  CreateManagerResponseSetupConfig$inboundSchema,
+  CreateManagerResponseSetupStatus,
+  CreateManagerResponseSetupStatus$inboundSchema,
+  CreateManagerResponseSetupTerraform,
+  CreateManagerResponseSetupTerraform$inboundSchema,
+} from "./createmanagerresponsepublicendpointtargetunion2.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ExternalBindingUnion,
   ExternalBindingUnion$inboundSchema,
 } from "./externalbindingunion.js";
+
+export type CreateManagerResponseProviderGkeGateway2 = {
+  provider: CreateManagerResponseProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const CreateManagerResponseProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type CreateManagerResponseProviderAwsAlbEnum2 = ClosedEnum<
+  typeof CreateManagerResponseProviderAwsAlbEnum2
+>;
+
+export type CreateManagerResponseProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: CreateManagerResponseProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
 
 export type CreateManagerResponseProviderUnion2 =
   | CreateManagerResponseProviderAwsAlb2
@@ -514,13 +547,66 @@ export type CreateManagerResponse = {
 };
 
 /** @internal */
+export const CreateManagerResponseProviderGkeGateway2$inboundSchema: z.ZodType<
+  CreateManagerResponseProviderGkeGateway2,
+  unknown
+> = z.object({
+  provider: CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function createManagerResponseProviderGkeGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseProviderGkeGateway2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseProviderGkeGateway2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseProviderGkeGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseProviderAwsAlbEnum2
+> = z.enum(CreateManagerResponseProviderAwsAlbEnum2);
+
+/** @internal */
+export const CreateManagerResponseProviderAwsAlb2$inboundSchema: z.ZodType<
+  CreateManagerResponseProviderAwsAlb2,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: CreateManagerResponseProviderAwsAlbEnum2$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function createManagerResponseProviderAwsAlb2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseProviderAwsAlb2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseProviderAwsAlb2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseProviderUnion2$inboundSchema: z.ZodType<
   CreateManagerResponseProviderUnion2,
   unknown
 > = z.union([
-  CreateManagerResponseProviderAwsAlb2$inboundSchema,
+  z.lazy(() => CreateManagerResponseProviderAwsAlb2$inboundSchema),
   CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  CreateManagerResponseProviderGkeGateway2$inboundSchema,
+  z.lazy(() => CreateManagerResponseProviderGkeGateway2$inboundSchema),
   z.string(),
 ]);
 
@@ -547,9 +633,11 @@ export const CreateManagerResponseRouteGateway1$inboundSchema: z.ZodType<
   listenerPort: z.int(),
   provider: z.nullable(
     z.union([
-      CreateManagerResponseProviderAwsAlb2$inboundSchema,
+      z.lazy(() => CreateManagerResponseProviderAwsAlb2$inboundSchema),
       CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-      CreateManagerResponseProviderGkeGateway2$inboundSchema,
+      z.lazy(() =>
+        CreateManagerResponseProviderGkeGateway2$inboundSchema
+      ),
       z.string(),
     ]),
   ).optional(),

@@ -174,6 +174,20 @@ export type NewDeploymentRequestEnvironmentInfoUnion =
   | string;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type NewDeploymentRequestContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type NewDeploymentRequestFailureDomains2 = {
@@ -270,6 +284,10 @@ export type NewDeploymentRequestPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type NewDeploymentRequestCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: NewDeploymentRequestContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1701,6 +1719,31 @@ export function newDeploymentRequestEnvironmentInfoUnionToJSON(
 }
 
 /** @internal */
+export type NewDeploymentRequestContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestContainers$outboundSchema: z.ZodType<
+  NewDeploymentRequestContainers$Outbound,
+  NewDeploymentRequestContainers
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function newDeploymentRequestContainersToJSON(
+  newDeploymentRequestContainers: NewDeploymentRequestContainers,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestContainers$outboundSchema.parse(
+      newDeploymentRequestContainers,
+    ),
+  );
+}
+
+/** @internal */
 export type NewDeploymentRequestFailureDomains2$Outbound = {
   selectedFailureDomains?: Array<string> | undefined;
   spread: number;
@@ -1912,6 +1955,9 @@ export function newDeploymentRequestPoolsUnionToJSON(
 
 /** @internal */
 export type NewDeploymentRequestCompute$Outbound = {
+  containers?:
+    | { [k: string]: NewDeploymentRequestContainers$Outbound }
+    | undefined;
   pools?: {
     [k: string]:
       | NewDeploymentRequestPoolsFixed$Outbound
@@ -1924,6 +1970,10 @@ export const NewDeploymentRequestCompute$outboundSchema: z.ZodType<
   NewDeploymentRequestCompute$Outbound,
   NewDeploymentRequestCompute
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => NewDeploymentRequestContainers$outboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

@@ -84,7 +84,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleaseChannelsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleaseChannelsList,
@@ -163,7 +163,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleaseChannelsList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleaseChannelsList,
@@ -406,7 +406,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("releaseChannelsDelete failed:", res.error);
   }

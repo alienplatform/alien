@@ -181,6 +181,41 @@ pub struct ComputeSettings {
     /// Selected compute choices keyed by pool ID.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub pools: HashMap<String, ComputePoolSelection>,
+    /// Per-replica resources selected within each container's declared ranges.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub containers: HashMap<String, ContainerResourceSelection>,
+}
+
+/// Deployment-time resource allocation for a container. Omitted fields use release defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainerResourceSelection {
+    /// CPU allocation in vCPUs.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_selected_cpu"
+    )]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<f64>))]
+    pub cpu: Option<serde_json::Number>,
+    /// Memory allocation, using binary units such as Mi or Gi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+}
+
+fn deserialize_selected_cpu<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<serde_json::Number>, D::Error> {
+    // CloudFormation returns Number parameter references as strings.
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(serde_json::Value::Number(number)) => Ok(Some(number)),
+        Some(serde_json::Value::String(number)) => {
+            number.parse().map(Some).map_err(serde::de::Error::custom)
+        }
+        Some(_) => Err(serde::de::Error::custom("CPU must be a number")),
+    }
 }
 
 /// Failure-domain policy selected for a compute pool.
@@ -206,7 +241,11 @@ pub enum ComputePoolSelection {
         /// Number of machines to run.
         machines: u32,
         /// Provider machine type selected for this deployment.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_machine_override"
+        )]
         machine: Option<String>,
         /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,12 +258,23 @@ pub enum ComputePoolSelection {
         /// Maximum machine count.
         max: u32,
         /// Provider machine type selected for this deployment.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_machine_override"
+        )]
         machine: Option<String>,
         /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure_domains: Option<FailureDomainSelection>,
     },
+}
+
+fn deserialize_machine_override<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    // CloudFormation represents its optional String parameters as empty strings.
+    Ok(Option::<String>::deserialize(deserializer)?.filter(|machine| !machine.is_empty()))
 }
 
 impl ComputePoolSelection {

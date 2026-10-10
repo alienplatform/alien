@@ -18,6 +18,7 @@ pub use pending::{
     enforce_frozen_gate_fixity, frozen_gating_inputs, prepare_direct_setup_update,
     resolve_frozen_gate_answers, resolve_frozen_gate_answers_from_presence,
     strip_declined_live_resources, strip_frozen_declines,
+    strip_frozen_declines_with_compute_settings,
 };
 mod provisioning;
 pub mod runner;

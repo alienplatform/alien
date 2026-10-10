@@ -16,6 +16,7 @@ let value: ImportSourceCompute = {};
 
 ## Fields
 
-| Field                                           | Type                                            | Required                                        | Description                                     |
-| ----------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
-| `pools`                                         | Record<string, *models.ImportSourcePoolsUnion*> | :heavy_minus_sign:                              | Selected compute choices keyed by pool ID.      |
+| Field                                                                                | Type                                                                                 | Required                                                                             | Description                                                                          |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `containers`                                                                         | Record<string, [models.ImportSourceContainers](../models/importsourcecontainers.md)> | :heavy_minus_sign:                                                                   | Per-replica resources selected within each container's declared ranges.              |
+| `pools`                                                                              | Record<string, *models.ImportSourcePoolsUnion*>                                      | :heavy_minus_sign:                                                                   | Selected compute choices keyed by pool ID.                                           |

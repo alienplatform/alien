@@ -37,6 +37,7 @@ export type OperationsPlugin = {
    */
   builtin: boolean;
   operations: Array<OperationsPluginOperation>;
+  enabled?: boolean | undefined;
 };
 
 /** @internal */
@@ -54,6 +55,7 @@ export const OperationsPlugin$inboundSchema: z.ZodType<
   tier: OperationsPluginTier$inboundSchema,
   builtin: z.boolean(),
   operations: z.array(OperationsPluginOperation$inboundSchema),
+  enabled: z.boolean().optional(),
 });
 
 export function operationsPluginFromJSON(

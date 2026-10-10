@@ -17,6 +17,13 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export type OperationsBundleDownload = {
   /**
+   * Environment the plugin process runs with: its settings, which may hold
+   *
+   * @remarks
+   * secrets. Store only in encrypted state, and never log the values.
+   */
+  env?: { [k: string]: string } | undefined;
+  /**
    * Plugin name this bundle provides.
    */
   plugin: string;
@@ -35,6 +42,7 @@ export const OperationsBundleDownload$inboundSchema: z.ZodType<
   OperationsBundleDownload,
   unknown
 > = z.object({
+  env: z.record(z.string(), z.string()).optional(),
   plugin: z.string(),
   pluginVersion: z.string(),
   url: z.string(),

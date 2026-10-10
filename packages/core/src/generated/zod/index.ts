@@ -164,6 +164,8 @@ export type { ContainerHeartbeatData } from "./container-heartbeat-data-schema.j
 export type { ContainerImageIdentity } from "./container-image-identity-schema.js";
 export type { ContainerOutputs } from "./container-outputs-schema.js";
 export type { ContainerPort } from "./container-port-schema.js";
+export type { ContainerResourceChoices } from "./container-resource-choices-schema.js";
+export type { ContainerResourceSelection } from "./container-resource-selection-schema.js";
 export type { Container } from "./container-schema.js";
 export type { ContainerSecurityProfile } from "./container-security-profile-schema.js";
 export type { ContainerSecurity } from "./container-security-schema.js";
@@ -418,6 +420,7 @@ export type { RemoteStackManagementOutputs } from "./remote-stack-management-out
 export type { RemoteStackManagement } from "./remote-stack-management-schema.js";
 export type { ReplicaStatus } from "./replica-status-schema.js";
 export type { ReportedOperation } from "./reported-operation-schema.js";
+export type { ResourceChoiceRange } from "./resource-choice-range-schema.js";
 export type { ResourceEntry } from "./resource-entry-schema.js";
 export type { ResourceHeartbeatData } from "./resource-heartbeat-data-schema.js";
 export type { ResourceHeartbeat } from "./resource-heartbeat-schema.js";
@@ -670,6 +673,8 @@ export { ContainerHeartbeatDataSchema } from "./container-heartbeat-data-schema.
 export { ContainerImageIdentitySchema } from "./container-image-identity-schema.js";
 export { ContainerOutputsSchema } from "./container-outputs-schema.js";
 export { ContainerPortSchema } from "./container-port-schema.js";
+export { ContainerResourceChoicesSchema } from "./container-resource-choices-schema.js";
+export { ContainerResourceSelectionSchema } from "./container-resource-selection-schema.js";
 export { ContainerSchema } from "./container-schema.js";
 export { ContainerSecurityProfileSchema } from "./container-security-profile-schema.js";
 export { ContainerSecuritySchema } from "./container-security-schema.js";
@@ -924,6 +929,7 @@ export { RemoteStackManagementOutputsSchema } from "./remote-stack-management-ou
 export { RemoteStackManagementSchema } from "./remote-stack-management-schema.js";
 export { ReplicaStatusSchema } from "./replica-status-schema.js";
 export { ReportedOperationSchema } from "./reported-operation-schema.js";
+export { ResourceChoiceRangeSchema } from "./resource-choice-range-schema.js";
 export { ResourceEntrySchema } from "./resource-entry-schema.js";
 export { ResourceHeartbeatDataSchema } from "./resource-heartbeat-data-schema.js";
 export { ResourceHeartbeatSchema } from "./resource-heartbeat-schema.js";

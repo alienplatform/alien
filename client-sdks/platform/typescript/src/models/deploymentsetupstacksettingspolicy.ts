@@ -16,6 +16,20 @@ import {
 } from "./externalbindingunion.js";
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type DeploymentSetupStackSettingsPolicyContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type DeploymentSetupStackSettingsPolicyFailureDomains2 = {
@@ -112,6 +126,12 @@ export type DeploymentSetupStackSettingsPolicyPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type DeploymentSetupStackSettingsPolicyCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?:
+    | { [k: string]: DeploymentSetupStackSettingsPolicyContainers }
+    | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1303,6 +1323,54 @@ export type DeploymentSetupStackSettingsPolicy = {
 };
 
 /** @internal */
+export const DeploymentSetupStackSettingsPolicyContainers$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyContainers, unknown> = z.object({
+    cpu: z.nullable(z.number()).optional(),
+    memory: z.nullable(z.string()).optional(),
+  });
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyContainers$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyContainers$Outbound,
+    DeploymentSetupStackSettingsPolicyContainers
+  > = z.object({
+    cpu: z.nullable(z.number()).optional(),
+    memory: z.nullable(z.string()).optional(),
+  });
+
+export function deploymentSetupStackSettingsPolicyContainersToJSON(
+  deploymentSetupStackSettingsPolicyContainers:
+    DeploymentSetupStackSettingsPolicyContainers,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyContainers$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyContainers,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyContainersFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyContainers,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyContainers$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyContainers' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentSetupStackSettingsPolicyFailureDomains2$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyFailureDomains2, unknown> = z
     .object({
@@ -1722,6 +1790,10 @@ export const DeploymentSetupStackSettingsPolicyCompute$inboundSchema: z.ZodType<
   DeploymentSetupStackSettingsPolicyCompute,
   unknown
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => DeploymentSetupStackSettingsPolicyContainers$inboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([
@@ -1734,6 +1806,9 @@ export const DeploymentSetupStackSettingsPolicyCompute$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyCompute$Outbound = {
+  containers?: {
+    [k: string]: DeploymentSetupStackSettingsPolicyContainers$Outbound;
+  } | undefined;
   pools?: {
     [k: string]:
       | DeploymentSetupStackSettingsPolicyPoolsFixed$Outbound
@@ -1747,6 +1822,10 @@ export const DeploymentSetupStackSettingsPolicyCompute$outboundSchema:
     DeploymentSetupStackSettingsPolicyCompute$Outbound,
     DeploymentSetupStackSettingsPolicyCompute
   > = z.object({
+    containers: z.record(
+      z.string(),
+      z.lazy(() => DeploymentSetupStackSettingsPolicyContainers$outboundSchema),
+    ).optional(),
     pools: z.record(
       z.string(),
       z.union([

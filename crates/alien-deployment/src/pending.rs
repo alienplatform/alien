@@ -18,16 +18,22 @@ pub async fn prepare_direct_setup_update(
     client_config: &ClientConfig,
     existing_metadata: &alien_core::RuntimeMetadata,
 ) -> Result<alien_core::RuntimeMetadata> {
+    let mut config = config.clone();
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
-    let target_stack = strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
+    let target_stack = strip_frozen_declines_with_compute_settings(
+        target_stack,
+        &persisted_gate_answers,
+        &frozen_gating,
+        config.stack_settings.compute.as_mut(),
+    );
     let runner = alien_preflights::runner::PreflightRunner::new();
     let (mutated_stack, _, _) = runner
         .run_deployment_time_preflights(
             target_stack,
             stack_state,
-            config,
+            &config,
             client_config,
             existing_metadata.prepared_stack.as_ref(),
             None,
@@ -58,7 +64,7 @@ pub async fn prepare_direct_setup_update(
 pub async fn handle_pending(
     current: DeploymentState,
     target_stack: Stack,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
@@ -92,7 +98,12 @@ pub async fn handle_pending(
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
-    let target_stack = strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
+    let target_stack = strip_frozen_declines_with_compute_settings(
+        target_stack,
+        &persisted_gate_answers,
+        &frozen_gating,
+        config.stack_settings.compute.as_mut(),
+    );
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -206,8 +217,39 @@ pub fn strip_frozen_declines(
     answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Stack {
+    strip_frozen_declines_with_compute_settings(stack, answers, still_frozen_gating, None)
+}
+
+/// Strip frozen declines and their deployment-time container allocations together.
+/// Only selections for declared containers actually removed by the gate are discarded;
+/// unknown IDs and selections for other resource kinds still fail normal validation.
+pub fn strip_frozen_declines_with_compute_settings(
+    stack: Stack,
+    answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
+    compute: Option<&mut alien_core::ComputeSettings>,
+) -> Stack {
+    let container_ids: Vec<_> = stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Container>()
+                .is_some()
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
     let stack = strip_declined_frozen_resources(stack, answers);
-    strip_frozen_dominated_live_resources(stack, answers, still_frozen_gating)
+    let stack = strip_frozen_dominated_live_resources(stack, answers, still_frozen_gating);
+    if let Some(compute) = compute {
+        for id in container_ids {
+            if !stack.resources.contains_key(&id) {
+                compute.containers.remove(&id);
+            }
+        }
+    }
+    stack
 }
 
 /// Remove live resources whose gate input carries a frozen answer of false.
@@ -492,6 +534,80 @@ mod tests {
         KubernetesClientConfig, Kv, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
         StackInputDefinition, StackResourceState,
     };
+
+    #[test]
+    fn frozen_declines_remove_only_the_declined_containers_allocations() {
+        let container = |id: &str| {
+            alien_core::Container::new(id.to_string())
+                .code(alien_core::ContainerCode::Image {
+                    image: "api:latest".to_string(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions("execution-sa".to_string())
+                .build()
+        };
+        let declared = Stack::new("gated-resources".to_string())
+            .inputs(gated_stack().inputs)
+            .add_enabled_when(
+                Kv::new("analytics".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "analyticsEnabled",
+            )
+            .add_enabled_when(
+                container("optional-api"),
+                ResourceLifecycle::Live,
+                "analyticsEnabled",
+            )
+            .add(container("api"), ResourceLifecycle::Live)
+            .build();
+        let frozen_gating = frozen_gating_inputs(&declared);
+        let selections: alien_core::ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": { "optional-api": {}, "api": {} }
+        }))
+        .unwrap();
+        for accepted in [false, true] {
+            let mut compute = selections.clone();
+            let mut stack = strip_frozen_declines_with_compute_settings(
+                declared.clone(),
+                &alien_core::GateAnswers::from([("analyticsEnabled".to_string(), accepted)]),
+                &frozen_gating,
+                Some(&mut compute),
+            );
+            assert_eq!(stack.resources.contains_key("optional-api"), accepted);
+            assert_eq!(compute.containers.contains_key("optional-api"), accepted);
+            assert!(compute.containers.contains_key("api"));
+            alien_core::container_resources::resolve_container_resources(
+                &mut stack,
+                Some(&compute),
+            )
+            .expect("resource selections must remain valid after either gate answer");
+        }
+        for invalid_id in ["missing", "analytics"] {
+            let mut compute = selections.clone();
+            compute
+                .containers
+                .insert(invalid_id.to_string(), Default::default());
+            let mut stack = strip_frozen_declines_with_compute_settings(
+                declared.clone(),
+                &alien_core::GateAnswers::from([("analyticsEnabled".to_string(), false)]),
+                &frozen_gating,
+                Some(&mut compute),
+            );
+            let error = alien_core::container_resources::resolve_container_resources(
+                &mut stack,
+                Some(&compute),
+            )
+            .expect_err("unknown IDs and non-container resources must not be silently dropped");
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        }
+    }
 
     fn imported_state_with(resource_id: &str, resource: Resource) -> StackState {
         let mut entry = StackResourceState::new_pending(

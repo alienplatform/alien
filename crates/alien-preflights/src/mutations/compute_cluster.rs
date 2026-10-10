@@ -13,14 +13,14 @@ use crate::{
 use alien_core::{
     compute_planner::{
         capacity_group_requirements, check_pool_capacity, default_persistent_failure_domains,
-        generated_pool_scale_policy, validate_compute_pool_selection,
+        generated_pool_scale_policy, plan_compute_with_state, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
     Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
     ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use tracing::{debug, info};
@@ -58,6 +58,29 @@ impl StackMutation for ComputeClusterMutation {
         }
         if stack_state.platform == Platform::Kubernetes {
             return false;
+        }
+
+        if matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) && stack.resources.values().any(|entry| {
+            entry.config.downcast_ref::<Container>().is_some()
+                || entry.config.downcast_ref::<ComputeCluster>().is_some()
+        }) && config
+            .stack_settings
+            .compute
+            .as_ref()
+            .is_some_and(|settings| {
+                !settings.containers.is_empty()
+                    || settings
+                        .pools
+                        .values()
+                        .any(|selection| selection.machine().is_none())
+            })
+        {
+            // Resource updates must recompute automatic machine choices even
+            // when the previously prepared cluster already has a machine type.
+            return true;
         }
 
         let has_containers = stack
@@ -165,6 +188,58 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let mut resolved_config = config.clone();
+        if matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            let plan = plan_compute_with_state(
+                &stack,
+                stack_state.platform,
+                config.stack_settings.compute.as_ref(),
+                Some(stack_state),
+            )
+            .context(crate::error::ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: "Could not resolve deployment compute choices".to_string(),
+                resource_id: None,
+            })?;
+            let settings = resolved_config
+                .stack_settings
+                .compute
+                .get_or_insert_default();
+            for pool in plan.pools {
+                if !pool.errors.is_empty() {
+                    return Err(AlienError::new(
+                        crate::error::ErrorData::StackMutationFailed {
+                            mutation_name: self.description().to_string(),
+                            message: pool.errors.join("; "),
+                            resource_id: None,
+                        },
+                    ));
+                }
+                let mut selection = pool.selected;
+                // Resolving capacity must not turn an omitted topology choice into
+                // an explicit default. Existing pools retain their installed zones.
+                let domains = config
+                    .stack_settings
+                    .compute
+                    .as_ref()
+                    .and_then(|settings| settings.pools.get(&pool.pool_id))
+                    .and_then(ComputePoolSelection::failure_domains)
+                    .cloned();
+                match &mut selection {
+                    ComputePoolSelection::Fixed { failure_domains, .. }
+                    | ComputePoolSelection::Autoscale { failure_domains, .. } => {
+                        *failure_domains = domains;
+                    }
+                }
+                settings.pools.insert(pool.pool_id, selection);
+            }
+        }
+        // Resolve only for this mutation. Persisted settings retain the absent
+        // machine so the next resource update is planned automatically too.
+        let config = &resolved_config;
         let stack = self
             .materialize_node_permissions(stack, stack_state.platform)
             .await?;
@@ -867,9 +942,11 @@ fn materialize_selection_within(
             resource_id: None,
         })
     })?;
+    if group.instance_type.as_deref() != Some(machine) || group.profile.is_none() {
+        group.profile =
+            Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
+    }
     group.instance_type = Some(machine.to_string());
-    group.profile =
-        Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
     group.min_size = selection.min_size();
     group.max_size = selection.max_size();
     Ok(())
@@ -1017,13 +1094,15 @@ fn build_capacity_group_for_id(
         let scale = generated_pool_scale_policy(group.min_size, group.max_size, selected_max);
         let selection = materialize_group(&mut group, platform, config, &scale)?;
         if !containers.is_empty() {
-            check_pool_capacity(platform, group_id, selection, &requirements).map_err(|message| {
-                AlienError::new(crate::error::ErrorData::StackMutationFailed {
-                    mutation_name: "ComputeClusterMutation".to_string(),
-                    message,
-                    resource_id: None,
-                })
-            })?;
+            check_pool_capacity(platform, group_id, selection, &requirements).map_err(
+                |message| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: "ComputeClusterMutation".to_string(),
+                        message,
+                        resource_id: None,
+                    })
+                },
+            )?;
         }
     } else {
         group.profile = Some(MachineProfile {
@@ -1617,6 +1696,7 @@ mod tests {
             } => *failure_domains = None,
         }
         let installer_settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(pool_id.clone(), installer_selection)]
                 .into_iter()
                 .collect(),
@@ -1635,6 +1715,7 @@ mod tests {
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [(pool_id.clone(), planned_selection)].into_iter().collect(),
                 }),
                 ..StackSettings::default()
@@ -1922,6 +2003,7 @@ mod tests {
             resource_prefix: "test".to_string(),
         };
         let machine_without_domains = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "stateful".to_string(),
                 ComputePoolSelection::Fixed {
@@ -2022,6 +2104,7 @@ mod tests {
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [
                         ("general".to_string(), selection(Vec::new())),
                         (
@@ -2067,6 +2150,7 @@ mod tests {
         DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: selections
                         .iter()
                         .map(|(pool_id, machine, min_size, max_size)| {
@@ -2158,6 +2242,7 @@ mod tests {
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [("general".to_string(), recommendation.clone())]
                         .into_iter()
                         .collect(),
@@ -2323,6 +2408,64 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
         assert!(!mutation.should_run(&stack, &stack_state, &config));
+        let declared_profile = stack.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap()
+            .capacity_groups[0]
+            .profile
+            .clone();
+        let mut prepared = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let cluster = prepared.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        assert_eq!(
+            cluster.capacity_groups[0].instance_type.as_deref(),
+            Some("m7i.large")
+        );
+        assert_eq!(cluster.capacity_groups[0].profile, declared_profile);
+        prepared
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .resource_choices = Some(alien_core::ContainerResourceChoices {
+            cpu: Some(alien_core::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "4".into(),
+                default: "1".into(),
+            }),
+            memory: None,
+        });
+        let mut selected_config = config.clone();
+        selected_config.stack_settings.compute = Some(
+            serde_json::from_value(serde_json::json!({"containers":{"api":{"cpu":1.5}}})).unwrap(),
+        );
+        let resized = mutation
+            .mutate(prepared.clone(), &stack_state, &selected_config)
+            .await
+            .unwrap();
+        assert_eq!(
+            resized.resources["compute"]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap()
+                .capacity_groups[0]
+                .profile,
+            declared_profile
+        );
+        selected_config.stack_settings.compute = Some(
+            serde_json::from_value(serde_json::json!({"containers":{"api":{"cpu":4}}})).unwrap(),
+        );
+        assert!(mutation.should_run(&prepared, &stack_state, &selected_config));
+        let error = mutation
+            .mutate(prepared, &stack_state, &selected_config)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
     }
 
     #[tokio::test]
@@ -2479,6 +2622,7 @@ mod tests {
         DeploymentConfig::builder()
             .stack_settings(StackSettings {
                 compute: Some(ComputeSettings {
+                    containers: Default::default(),
                     pools: [("general".to_string(), selection)].into_iter().collect(),
                 }),
                 ..StackSettings::default()
@@ -2721,13 +2865,13 @@ mod tests {
             machine: Some("m7g.large".to_string()),
             failure_domains: None,
         };
-        // m7g.large has 2 vCPU; five replicas request 2.5.
+        // m7g.large has 1.5 vCPU available after host reserve; five replicas request 2.5.
         let error = prepare_release(gw_release(ContainerReplicas::Fixed(5)), &fixed_one)
             .await
             .expect_err("five replicas cannot fit one machine");
         assert!(
             error.message.contains(
-                "Pool 'general' is too small for its workloads: 1 x m7g.large has 2.00 vCPU"
+                "Pool 'general' is too small for its workloads: 1 x m7g.large has 1.50 vCPU"
             ),
             "{}",
             error.message
@@ -3060,9 +3204,9 @@ mod tests {
             };
 
             let machine = match platform {
-                Platform::Aws => "m7i.large",
-                Platform::Gcp => "n2-standard-2",
-                Platform::Azure => "Standard_D2s_v5",
+                Platform::Aws => "m7i.xlarge",
+                Platform::Gcp => "n2-standard-4",
+                Platform::Azure => "Standard_D4s_v5",
                 _ => unreachable!("test only covers cloud platforms"),
             };
             let mutation = ComputeClusterMutation;

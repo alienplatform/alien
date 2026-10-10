@@ -10,12 +10,16 @@ import { operationsGetAccessRequest } from "../funcs/operationsGetAccessRequest.
 import { operationsGetAccessRequestActivity } from "../funcs/operationsGetAccessRequestActivity.js";
 import { operationsGetAccessRequestCoordinates } from "../funcs/operationsGetAccessRequestCoordinates.js";
 import { operationsGetLiveDebugGrant } from "../funcs/operationsGetLiveDebugGrant.js";
+import { operationsGetPolicy } from "../funcs/operationsGetPolicy.js";
 import { operationsInvoke } from "../funcs/operationsInvoke.js";
 import { operationsListAccessRequests } from "../funcs/operationsListAccessRequests.js";
 import { operationsListPlugins } from "../funcs/operationsListPlugins.js";
 import { operationsPublishPlugin } from "../funcs/operationsPublishPlugin.js";
 import { operationsQueueAccessRequest } from "../funcs/operationsQueueAccessRequest.js";
 import { operationsRevokeAccessRequest } from "../funcs/operationsRevokeAccessRequest.js";
+import { operationsSetBuiltinPlugins } from "../funcs/operationsSetBuiltinPlugins.js";
+import { operationsSetPluginEnabled } from "../funcs/operationsSetPluginEnabled.js";
+import { operationsUpdatePolicy } from "../funcs/operationsUpdatePolicy.js";
 import { operationsVerifyCheck } from "../funcs/operationsVerifyCheck.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -247,6 +251,70 @@ export class Operations extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.GetAccessRequestResponse> {
     return unwrapAsync(operationsGetAccessRequest(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.
+   *
+   * @deprecated method: This will be removed in a future release, please migrate away from it as soon as possible.
+   */
+  async setBuiltinPlugins(
+    request: operations.SetBuiltinOperationsPluginsRequest,
+    options?: RequestOptions,
+  ): Promise<models.SetBuiltinOperationsPluginsResponse> {
+    return unwrapAsync(operationsSetBuiltinPlugins(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.
+   *
+   * @deprecated method: This will be removed in a future release, please migrate away from it as soon as possible.
+   */
+  async setPluginEnabled(
+    request: operations.SetOperationsPluginEnabledRequest,
+    options?: RequestOptions,
+  ): Promise<models.SetOperationsPluginEnabledResponse> {
+    return unwrapAsync(operationsSetPluginEnabled(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
+   *
+   * @deprecated method: This will be removed in a future release, please migrate away from it as soon as possible.
+   */
+  async getPolicy(
+    request: operations.GetOperationsPolicyRequest,
+    options?: RequestOptions,
+  ): Promise<models.OperationsPolicyResponse> {
+    return unwrapAsync(operationsGetPolicy(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
+   *
+   * @deprecated method: This will be removed in a future release, please migrate away from it as soon as possible.
+   */
+  async updatePolicy(
+    request: operations.UpdateOperationsPolicyRequest,
+    options?: RequestOptions,
+  ): Promise<models.OperationsPolicyResponse> {
+    return unwrapAsync(operationsUpdatePolicy(
       this,
       request,
       options,

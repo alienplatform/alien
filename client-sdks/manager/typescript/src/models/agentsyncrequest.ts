@@ -24,6 +24,11 @@ import {
   ObservedInventoryBatch$outboundSchema,
 } from "./observedinventorybatch.js";
 import {
+  OperationsConfig,
+  OperationsConfig$Outbound,
+  OperationsConfig$outboundSchema,
+} from "./operationsconfig.js";
+import {
   OperationsReport,
   OperationsReport$Outbound,
   OperationsReport$outboundSchema,
@@ -77,6 +82,7 @@ export type AgentSyncRequest = {
    * Absent for older Operators. This report has no secret values.
    */
   dynamicContainers?: Array<DynamicContainerReport> | null | undefined;
+  operationsConfig?: OperationsConfig | null | undefined;
   operatorImage?: OperatorImageReport | null | undefined;
 };
 
@@ -95,6 +101,7 @@ export type AgentSyncRequest$Outbound = {
   supportsTunnels?: boolean | undefined;
   application?: ObservedApplicationReport$Outbound | null | undefined;
   dynamicContainers?: Array<DynamicContainerReport$Outbound> | null | undefined;
+  operationsConfig?: OperationsConfig$Outbound | null | undefined;
   operatorImage?: OperatorImageReport$Outbound | null | undefined;
 };
 
@@ -118,6 +125,7 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   application: z.nullable(ObservedApplicationReport$outboundSchema).optional(),
   dynamicContainers: z.nullable(z.array(DynamicContainerReport$outboundSchema))
     .optional(),
+  operationsConfig: z.nullable(OperationsConfig$outboundSchema).optional(),
   operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
 });
 

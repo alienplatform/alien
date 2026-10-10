@@ -207,7 +207,12 @@ fn generate_terraform_module_internal(
     if target.is_kubernetes() {
         // Logical compute pools use the cluster's existing nodes. Cloud fleet
         // selections must not become Kubernetes setup inputs or import data.
-        stack_settings.compute = None;
+        if let Some(compute) = stack_settings.compute.as_mut() {
+            compute.pools.clear();
+            if compute.containers.is_empty() {
+                stack_settings.compute = None;
+            }
+        }
     }
     if target.is_kubernetes()
         && matches!(

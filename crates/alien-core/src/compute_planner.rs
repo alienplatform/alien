@@ -8,7 +8,7 @@ use crate::{
     instance_catalog::{self, Architecture, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, ComputePoolSelection, Container,
     Daemon, ErrorData, FailureDomainSelection, GpuSpec, MachineProfile, Platform, ResourceSpec,
-    Stack,
+    Stack, StackState,
 };
 use alien_error::{AlienError, Result};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,24 @@ use std::collections::HashMap;
 pub struct ComputePlan {
     /// Planned pools in stable pool-id order.
     pub pools: Vec<ComputePoolPlan>,
+    /// Containers whose per-replica allocation can be chosen during setup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub containers: Vec<ContainerResourcePlan>,
+}
+
+/// Deployment-time resource controls and effective allocation for one container.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerResourcePlan {
+    /// Stable container resource ID.
+    pub container_id: String,
+    /// Allowed allocations declared in the release.
+    pub choices: crate::ContainerResourceChoices,
+    /// Effective per-replica CPU reservation and limit.
+    pub cpu: ResourceSpec,
+    /// Effective per-replica memory reservation and limit.
+    pub memory: ResourceSpec,
 }
 
 /// Planner output for one compute pool.
@@ -76,6 +94,23 @@ pub fn plan_compute(
     platform: Platform,
     selected_settings: Option<&crate::ComputeSettings>,
 ) -> Result<ComputePlan, ErrorData> {
+    plan_compute_with_state(stack, platform, selected_settings, None)
+}
+
+/// Plan a configuration update while retaining the installed machine architecture.
+/// Resource changes must not silently require a different workload image target.
+pub fn plan_compute_with_state(
+    stack: &Stack,
+    platform: Platform,
+    selected_settings: Option<&crate::ComputeSettings>,
+    previous_state: Option<&StackState>,
+) -> Result<ComputePlan, ErrorData> {
+    let mut resolved_stack = stack.clone();
+    crate::container_resources::resolve_container_resources(
+        &mut resolved_stack,
+        selected_settings,
+    )?;
+    let stack = &resolved_stack;
     let mut groups = collect_workload_groups(stack)?;
     merge_explicit_compute_groups(stack, &mut groups)?;
 
@@ -85,8 +120,41 @@ pub fn plan_compute(
     let mut pools = Vec::new();
     for pool_id in pool_ids {
         let mut group = groups.remove(&pool_id).expect("pool id came from map keys");
-        let requirements = group.requirements;
+        let mut requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
+        let declared_machine = stack
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<crate::ComputeCluster>())
+            .flat_map(|cluster| &cluster.capacity_groups)
+            .find(|group| group.group_id == pool_id)
+            .and_then(|group| group.instance_type.as_deref());
+        let machine_override = match selected {
+            Some(selection) => selection.machine(),
+            None => declared_machine,
+        };
+        if requirements.architecture.is_none() {
+            requirements.architecture = machine_override
+                .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+                .map(|spec| spec.architecture)
+                .or_else(|| {
+                    previous_state.and_then(|state| {
+                        state
+                            .resources
+                            .values()
+                            .filter_map(|resource| {
+                                resource.config.downcast_ref::<crate::ComputeCluster>()
+                            })
+                            .flat_map(|cluster| &cluster.capacity_groups)
+                            .find(|group| group.group_id == pool_id)
+                            .and_then(|group| group.instance_type.as_deref())
+                            .and_then(|machine| {
+                                instance_catalog::find_instance_type(platform, machine)
+                            })
+                            .map(|spec| spec.architecture)
+                    })
+                });
+        }
         if group.generated {
             group.scale = generated_pool_scale_policy(
                 group.scale.default_min_size(),
@@ -94,14 +162,50 @@ pub fn plan_compute(
                 selected.map(ComputePoolSelection::max_size),
             );
         }
+        let machines = selected
+            .map(ComputePoolSelection::max_size)
+            .unwrap_or(group.scale.default_max_size())
+            .max(1);
+        let mut sizing = requirements.clone();
+        // A bounded fleet must fit total demand as well as its largest replica.
+        sizing.max_cpu_per_container = sizing
+            .max_cpu_per_container
+            .max(sizing.total_cpu_at_desired / f64::from(machines));
+        sizing.max_memory_per_container = sizing.max_memory_per_container.max(
+            sizing
+                .total_memory_bytes_at_desired
+                .div_ceil(u64::from(machines)),
+        );
         let recommended = recommended_selection(
             platform,
-            &requirements,
+            &sizing,
             &group.scale,
             group.requires_failure_domain,
             group.generated,
+            machine_override,
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
+        if selected.is_none() {
+            if let Some(declared_machine) = declared_machine {
+                match &mut selected_choice {
+                    ComputePoolSelection::Fixed { machine, .. }
+                    | ComputePoolSelection::Autoscale { machine, .. } => {
+                        *machine = Some(declared_machine.to_string());
+                    }
+                }
+            }
+        }
+        // An omitted machine is deployment intent: let the planner choose on
+        // every preparation. Only the returned plan contains the concrete type;
+        // never write it back into the caller's settings as an override.
+        match &mut selected_choice {
+            ComputePoolSelection::Fixed { machine, .. }
+            | ComputePoolSelection::Autoscale { machine, .. } => {
+                if machine.is_none() {
+                    *machine = recommended.machine().map(ToString::to_string);
+                }
+            }
+        }
         if selected_choice.failure_domains().is_none() {
             if let Some(default_failure_domains) = recommended.failure_domains().cloned() {
                 match &mut selected_choice {
@@ -123,14 +227,19 @@ pub fn plan_compute(
         );
         // Only workloads assigned to the pool give it real demand; a declared pool without
         // them carries just its machine profile.
-        if !group.workloads.is_empty() {
+        if let Some(workload_requirements) = &group.workload_requirements {
             if let Err(message) =
-                check_pool_capacity(platform, &pool_id, &selected_choice, &requirements)
+                check_pool_capacity(platform, &pool_id, &selected_choice, workload_requirements)
             {
                 errors.push(message);
             }
         }
-        let machines = machine_options(platform, &requirements, selected_choice.machine())?;
+        let machines = machine_options(
+            platform,
+            &requirements,
+            selected_choice.machine(),
+            recommended.machine(),
+        )?;
 
         pools.push(ComputePoolPlan {
             pool_id,
@@ -144,12 +253,29 @@ pub fn plan_compute(
         });
     }
 
-    Ok(ComputePlan { pools })
+    let mut containers: Vec<_> = stack
+        .resources
+        .values()
+        .filter_map(|entry| {
+            let container = entry.config.downcast_ref::<Container>()?;
+            let choices = container.resource_choices.clone()?;
+            Some(ContainerResourcePlan {
+                container_id: container.id.clone(),
+                choices,
+                cpu: container.cpu.clone(),
+                memory: container.memory.clone(),
+            })
+        })
+        .collect();
+    containers.sort_by(|a, b| a.container_id.cmp(&b.container_id));
+    Ok(ComputePlan { pools, containers })
 }
 
 #[derive(Debug, Clone)]
 struct PlannedGroup {
     workloads: Vec<String>,
+    /// Actual allocations, excluding a declaration's minimum machine profile.
+    workload_requirements: Option<WorkloadRequirements>,
     requirements: WorkloadRequirements,
     scale: CapacityGroupScalePolicy,
     requires_failure_domain: bool,
@@ -198,8 +324,8 @@ pub fn generated_pool_scale_policy(
 }
 
 /// Rejects a selection whose largest fleet cannot hold the workloads at their desired replica
-/// counts. Like the per-container machine check, it compares hardware totals and does not model
-/// packing, so passing is necessary but not sufficient.
+/// counts after reserving host resources. It also checks that one replica fits;
+/// arbitrary multi-replica packing can still require runtime validation.
 pub fn check_pool_capacity(
     platform: Platform,
     pool_id: &str,
@@ -214,8 +340,18 @@ pub fn check_pool_capacity(
         return Ok(());
     };
     let machines = selection.max_size();
-    let cpu = f64::from(machines) * f64::from(spec.vcpu);
-    let memory = u64::from(machines) * spec.memory_bytes;
+    let per_machine_cpu = instance_catalog::allocatable_cpu(spec);
+    let per_machine_memory = instance_catalog::allocatable_memory_bytes(spec);
+    if per_machine_cpu + f64::EPSILON < requirements.max_cpu_per_container
+        || per_machine_memory < requirements.max_memory_per_container
+    {
+        return Err(format!(
+            "Pool '{pool_id}' machine '{}' cannot fit one replica after reserving host resources",
+            spec.name,
+        ));
+    }
+    let cpu = f64::from(machines) * per_machine_cpu;
+    let memory = u64::from(machines) * per_machine_memory;
     if cpu + f64::EPSILON >= requirements.total_cpu_at_desired
         && memory >= requirements.total_memory_bytes_at_desired
     {
@@ -268,6 +404,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             pool_id,
             PlannedGroup {
                 workloads: workloads.into_iter().map(|w| w.id).collect(),
+                workload_requirements: Some(requirements.clone()),
                 // Merged with any declared group below; widened in `plan_compute` if none declares it.
                 scale: CapacityGroupScalePolicy::from_selected_bounds(min_size, max_size),
                 requirements,
@@ -318,6 +455,7 @@ fn merge_explicit_compute_groups(
                 })
                 .or_insert_with(|| PlannedGroup {
                     workloads: Vec::new(),
+                    workload_requirements: None,
                     scale,
                     requirements: explicit_requirements,
                     requires_failure_domain: false,
@@ -334,17 +472,32 @@ fn recommended_selection(
     scale: &CapacityGroupScalePolicy,
     requires_failure_domain: bool,
     generated: bool,
+    machine_override: Option<&str>,
 ) -> Result<ComputePoolSelection, ErrorData> {
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
-            instance_catalog::select_instance_type(platform, requirements)
-                .map_err(|message| {
-                    AlienError::new(ErrorData::GenericError {
-                        message: format!("Failed to select {platform} machine: {message}"),
-                    })
-                })?
-                .instance_type
-                .to_string(),
+            match instance_catalog::select_instance_type(platform, requirements) {
+                Ok(selection) => selection.instance_type.to_string(),
+                Err(message) => {
+                    // Automatic recommendations add headroom. A valid explicit
+                    // machine remains usable even when no catalog entry can
+                    // provide that extra headroom.
+                    let fallback = machine_override
+                        .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+                        .filter(|spec| {
+                            instance_satisfies(
+                                spec,
+                                requirements,
+                                requirements.architecture.unwrap_or(spec.architecture),
+                            )
+                        });
+                    fallback.map(|spec| spec.name.to_string()).ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("Failed to select {platform} machine: {message}"),
+                        })
+                    })?
+                }
+            },
         ),
         Platform::Local | Platform::Kubernetes | Platform::Machines | Platform::Test => None,
     };
@@ -432,16 +585,11 @@ fn machine_options(
     platform: Platform,
     requirements: &WorkloadRequirements,
     selected_machine: Option<&str>,
+    recommended_machine: Option<&str>,
 ) -> Result<Vec<ComputeMachineOption>, ErrorData> {
     if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         return Ok(Vec::new());
     }
-    let recommended =
-        instance_catalog::select_instance_type(platform, requirements).map_err(|message| {
-            AlienError::new(ErrorData::GenericError {
-                message: format!("Failed to select {platform} machine: {message}"),
-            })
-        })?;
     let resolved_architecture = requirements
         .architecture
         .or_else(|| {
@@ -450,13 +598,16 @@ fn machine_options(
                     .map(|spec| spec.architecture)
             })
         })
-        .or(recommended.profile.architecture)
+        .or_else(|| {
+            recommended_machine
+                .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+                .map(|spec| spec.architecture)
+        })
         .ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
                 message: format!("Selected {platform} machine has no CPU architecture"),
             })
         })?;
-    let recommended = recommended.instance_type.to_string();
 
     let mut options: Vec<ComputeMachineOption> = instance_catalog::catalog_for_platform(platform)
         .into_iter()
@@ -464,7 +615,8 @@ fn machine_options(
         .map(|spec| ComputeMachineOption {
             machine: spec.name.to_string(),
             profile: spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
-            recommended: spec.name == recommended || Some(spec.name) == selected_machine,
+            recommended: Some(spec.name) == recommended_machine
+                || Some(spec.name) == selected_machine,
         })
         .collect();
     options.sort_by(|a, b| a.machine.cmp(&b.machine));
@@ -852,6 +1004,198 @@ mod tests {
         ResourceEntry, ResourceLifecycle, Stack, Storage, Worker, WorkerCode,
     };
 
+    #[test]
+    fn deployment_resources_drive_machine_planning_on_every_cloud() {
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.resource_choices = Some(crate::ContainerResourceChoices {
+            cpu: Some(crate::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "8".into(),
+                default: "2".into(),
+            }),
+            memory: Some(crate::ResourceChoiceRange {
+                min: "512Mi".into(),
+                max: "16Gi".into(),
+                default: "4Gi".into(),
+            }),
+        });
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": { "general": { "mode": "fixed", "machines": 1 } },
+            "containers": { "api": { "cpu": 8, "memory": "16Gi" } }
+        }))
+        .unwrap();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let default_plan = plan_compute(&stack, platform, None).unwrap();
+            let selected_plan = plan_compute(&stack, platform, Some(&settings)).unwrap();
+            let pool = &selected_plan.pools[0];
+            assert!(pool.errors.is_empty(), "{platform}: {:?}", pool.errors);
+            assert_eq!(pool.requirements.cpu, "8");
+            assert_eq!(pool.requirements.memory_bytes, 16 * 1024 * 1024 * 1024);
+            assert_ne!(
+                pool.selected.machine(),
+                default_plan.pools[0].selected.machine()
+            );
+            assert_eq!(selected_plan.containers[0].cpu.min, "8");
+            assert_eq!(selected_plan.containers[0].memory.desired, "16Gi");
+            assert_eq!(pool.selected.min_size(), 1);
+            assert_eq!(pool.selected.max_size(), 1);
+        }
+        assert_eq!(
+            settings.pools["general"].machine(),
+            None,
+            "resolving a plan must preserve automatic machine intent"
+        );
+        let original = stack.resources["api"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert_eq!(
+            original.cpu.desired, "2",
+            "planning must not mutate release defaults"
+        );
+    }
+
+    #[test]
+    fn explicit_machine_can_fit_a_low_cpu_high_memory_workload() {
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.cpu = ResourceSpec {
+            min: "0.5".into(),
+            desired: "0.5".into(),
+        };
+        container.memory = ResourceSpec {
+            min: "8Gi".into(),
+            desired: "8Gi".into(),
+        };
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {"general":{"mode":"fixed","machines":1,"machine":"n2-standard-4"}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Gcp, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0].errors.is_empty(),
+            "{:?}",
+            plan.pools[0].errors
+        );
+        assert_eq!(plan.pools[0].selected.machine(), Some("n2-standard-4"));
+    }
+
+    #[test]
+    fn pin_must_leave_host_capacity_for_one_replica() {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .cpu = ResourceSpec {
+            min: "4".into(),
+            desired: "4".into(),
+        };
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools":{"general":{"mode":"fixed","machines":1,"machine":"t3.xlarge"}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0]
+                .errors
+                .iter()
+                .any(|error| error.contains("host resources")),
+            "{:?}",
+            plan.pools[0].errors
+        );
+    }
+
+    #[test]
+    fn valid_pin_does_not_require_automatic_recommendation_headroom() {
+        let machine = instance_catalog::catalog_for_platform(Platform::Gcp)
+            .into_iter()
+            .max_by_key(|machine| machine.memory_bytes)
+            .unwrap();
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.cpu = ResourceSpec {
+            min: "0.5".into(),
+            desired: "0.5".into(),
+        };
+        let memory = instance_catalog::allocatable_memory_bytes(machine).to_string();
+        container.memory = ResourceSpec {
+            min: memory.clone(),
+            desired: memory,
+        };
+        assert!(plan_compute(&stack, Platform::Gcp, None).is_err());
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools":{"general":{"mode":"fixed","machines":1,"machine":machine.name}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Gcp, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0].errors.is_empty(),
+            "{:?}",
+            plan.pools[0].errors
+        );
+        assert_eq!(plan.pools[0].selected.machine(), Some(machine.name));
+    }
+
+    #[test]
+    fn invalid_deployment_resources_fail_before_capacity_planning() {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .resource_choices = Some(crate::ContainerResourceChoices {
+            cpu: Some(crate::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "4".into(),
+                default: "2".into(),
+            }),
+            memory: Some(crate::ResourceChoiceRange {
+                min: "512Mi".into(),
+                max: "8Gi".into(),
+                default: "4Gi".into(),
+            }),
+        });
+        for selection in [
+            serde_json::json!({"api":{"cpu": 0}}),
+            serde_json::json!({"api":{"cpu": 5}}),
+            serde_json::json!({"api":{"memory": "16Gi"}}),
+            serde_json::json!({"api":{"memory": "NaNGi"}}),
+            serde_json::json!({"api":{"memory": "-1Gi"}}),
+            serde_json::json!({"missing":{"cpu": 1}}),
+        ] {
+            let settings: ComputeSettings =
+                serde_json::from_value(serde_json::json!({"containers": selection})).unwrap();
+            let error = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap_err();
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        }
+    }
+
     fn stack_with_container() -> Stack {
         let container = Container::new("api".to_string())
             .code(ContainerCode::Image {
@@ -1003,6 +1347,7 @@ mod tests {
     fn selected_machine_is_preserved_as_static_deployment_choice() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1032,6 +1377,7 @@ mod tests {
             .expect("test stack should contain a container");
         container.ephemeral_storage = Some("8000Gi".to_string());
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "storage".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1062,6 +1408,7 @@ mod tests {
     fn selected_machine_defines_architecture_when_workloads_do_not() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1088,6 +1435,7 @@ mod tests {
     fn graviton4_compute_machine_can_be_selected() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1293,6 +1641,7 @@ mod tests {
             .any(|option| option.machine == "m7g.2xlarge"));
 
         let invalid_settings = ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1336,6 +1685,7 @@ mod tests {
             },
         );
         let settings = ComputeSettings {
+            containers: Default::default(),
             pools: [("general".to_string(), selection)].into_iter().collect(),
         };
         plan_compute(&stack, Platform::Aws, Some(&settings))
@@ -1410,6 +1760,7 @@ mod tests {
         // 3 x 2 vCPU / 4 GiB requested at the desired count.
         api.replicas = Some(3);
         let selection = |machines| ComputeSettings {
+            containers: Default::default(),
             pools: [(
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
@@ -1422,7 +1773,7 @@ mod tests {
             .collect(),
         };
 
-        // m7g.xlarge: 4 vCPU and 16 GiB.
+        // m7g.xlarge: 3.5 vCPU available after the host reserve.
         let errors = plan_compute(&stack, Platform::Aws, Some(&selection(1)))
             .expect("plan should build")
             .pools
@@ -1431,7 +1782,7 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].starts_with(
-                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge has 4.00 vCPU"
+                "Pool 'general' is too small for its workloads: 1 x m7g.xlarge has 3.50 vCPU"
             ),
             "{errors:?}"
         );

@@ -88,7 +88,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesList,
@@ -167,7 +167,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesList,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesList,
@@ -390,7 +390,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesListBranches,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesListBranches,
@@ -469,7 +469,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesListBranches,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesListBranches,
@@ -573,7 +573,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesListAuthors,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesListAuthors,
@@ -652,7 +652,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesListAuthors,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesListAuthors,
@@ -756,7 +756,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesGet,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesGet,
@@ -861,7 +861,7 @@ import {
   // Server Components that will be immediately available to client components
   // using the hooks.
   prefetchReleasesListDeployments,
-
+  
   // Utilities to invalidate the query cache for this query in response to
   // mutations and other user actions.
   invalidateReleasesListDeployments,

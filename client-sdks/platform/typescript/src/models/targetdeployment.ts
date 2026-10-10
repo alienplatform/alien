@@ -11,11 +11,16 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  ReleaseInfoTypeStringList,
-  ReleaseInfoTypeStringList$inboundSchema,
   TargetDeploymentConfig,
   TargetDeploymentConfig$inboundSchema,
-} from "./releaseinfotypestringlist.js";
+} from "./targetdeploymentconfig.js";
+
+export const ReleaseInfoTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type ReleaseInfoTypeStringList = ClosedEnum<
+  typeof ReleaseInfoTypeStringList
+>;
 
 export type TargetDeploymentDefaultStringList = {
   type: ReleaseInfoTypeStringList;
@@ -1833,6 +1838,11 @@ export type TargetDeployment = {
    */
   releaseInfo: ReleaseInfo;
 };
+
+/** @internal */
+export const ReleaseInfoTypeStringList$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoTypeStringList
+> = z.enum(ReleaseInfoTypeStringList);
 
 /** @internal */
 export const TargetDeploymentDefaultStringList$inboundSchema: z.ZodType<

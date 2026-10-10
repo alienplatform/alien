@@ -1,0 +1,18 @@
+# PrepareDeploymentStackContainers
+
+Deployment-time resource allocation for a container. Omitted fields use release defaults.
+
+## Example Usage
+
+```typescript
+import { PrepareDeploymentStackContainers } from "@alienplatform/platform-api/models/operations";
+
+let value: PrepareDeploymentStackContainers = {};
+```
+
+## Fields
+
+| Field                                                   | Type                                                    | Required                                                | Description                                             |
+| ------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------- |
+| `cpu`                                                   | *number*                                                | :heavy_minus_sign:                                      | CPU allocation in vCPUs.                                |
+| `memory`                                                | *string*                                                | :heavy_minus_sign:                                      | Memory allocation, using binary units such as Mi or Gi. |

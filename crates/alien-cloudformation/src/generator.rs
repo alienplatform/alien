@@ -275,7 +275,12 @@ pub fn generate_cloudformation_template(
     let mut stack_settings = options.stack_settings.clone();
     if options.target.is_kubernetes() {
         // Kubernetes compute pools use existing nodes, not cloud fleet choices.
-        stack_settings.compute = None;
+        if let Some(compute) = stack_settings.compute.as_mut() {
+            compute.pools.clear();
+            if compute.containers.is_empty() {
+                stack_settings.compute = None;
+            }
+        }
     }
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
@@ -1338,6 +1343,7 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, stack, settings.network.as_ref(), target);
+    add_container_resource_parameters(template, stack, settings.compute.as_ref())?;
     if !target.is_kubernetes() {
         add_compute_parameters(template, stack, settings.compute.as_ref())?;
     }
@@ -1551,24 +1557,40 @@ fn add_compute_parameters(
             continue;
         };
         let machine_parameter = compute_machine_parameter_name(&group.group_id);
-        let allowed_values = plan
-            .pools
-            .iter()
+        // Resource parameters can lower the release defaults, so a machine list
+        // filtered against those defaults would reject valid smaller machines.
+        // Preflight validates the selected machine against the selected resources.
+        let has_resource_choices = stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Container>()
+                .is_some_and(|container| {
+                    container
+                        .resource_choices
+                        .as_ref()
+                        .is_some_and(|choices| choices.cpu.is_some() || choices.memory.is_some())
+                })
+        });
+        let allowed_values = (!has_resource_choices)
+            .then(|| &plan)
+            .into_iter()
+            .flat_map(|plan| &plan.pools)
             .find(|pool| pool.pool_id == group.group_id)
             .map(|pool| {
                 pool.machines
                     .iter()
                     .map(|machine| CfExpression::from(machine.machine.as_str()))
+                    .chain(std::iter::once(CfExpression::from("")))
                     .collect()
             });
         template.parameters.insert(
             machine_parameter,
             string_parameter(
                 &format!(
-                    "Provider machine type for runtime compute pool '{}'.",
+                    "Optional machine override for runtime compute pool '{}'. Leave empty for automatic sizing.",
                     group.group_id
                 ),
-                selection.machine().map(ToString::to_string),
+                Some(selection.machine().unwrap_or_default().to_string()),
                 allowed_values,
                 false,
             ),
@@ -1635,6 +1657,68 @@ fn add_compute_parameters(
                 );
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn add_container_resource_parameters(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Result<()> {
+    let mut resolved = stack.clone();
+    alien_core::container_resources::resolve_container_resources(&mut resolved, compute)?;
+    let mut containers: Vec<_> = resolved
+        .resources
+        .values()
+        .filter_map(|entry| entry.config.downcast_ref::<Container>())
+        .filter(|container| container.resource_choices.is_some())
+        .collect();
+    containers.sort_by(|a, b| a.id.cmp(&b.id));
+    for container in containers {
+        let choices = container.resource_choices.as_ref().expect("filtered above");
+        let prefix = format!("Container{}", pascal_identifier(&container.id));
+        for suffix in ["Cpu", "Memory"] {
+            if template
+                .parameters
+                .contains_key(&format!("{prefix}{suffix}"))
+            {
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "generate container resource parameters".to_string(),
+                    reason: format!("Container '{}' produces a duplicate CloudFormation parameter name; use distinct alphanumeric container names", container.id),
+                }));
+            }
+        }
+        if let Some(range) = choices.cpu.as_ref() {
+            let mut parameter =
+                number_parameter("CPU allocation per container replica, in vCPUs.", 1, None);
+            parameter.default = Some(CfExpression::Number(
+                alien_core::instance_catalog::parse_cpu(&container.cpu.desired)
+                    .expect("resolver validated CPU"),
+            ));
+            parameter.min_value = Some(CfExpression::Number(
+                alien_core::instance_catalog::parse_cpu(&range.min)
+                    .expect("resolver validated CPU"),
+            ));
+            parameter.max_value = Some(CfExpression::Number(
+                alien_core::instance_catalog::parse_cpu(&range.max)
+                    .expect("resolver validated CPU"),
+            ));
+            template
+                .parameters
+                .insert(format!("{prefix}Cpu"), parameter);
+        }
+        if choices.memory.is_some() {
+            template.parameters.insert(
+                format!("{prefix}Memory"),
+                string_parameter(
+                    "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
+                    Some(container.memory.desired.clone()),
+                    None,
+                    false,
+                ),
+            );
         }
     }
     Ok(())
@@ -2084,13 +2168,39 @@ fn compute_settings_expression(
         let expression = CfExpression::object(fields);
         pools.push((group.group_id.as_str(), expression));
     }
-    if pools.is_empty() {
-        return None;
+    let mut fields = Vec::new();
+    if !pools.is_empty() {
+        fields.push(("pools", CfExpression::object(pools)));
     }
-    Some(CfExpression::object([(
-        "pools",
-        CfExpression::object(pools),
-    )]))
+    let mut containers = Vec::new();
+    let mut ids: Vec<_> = stack.resources.keys().collect();
+    ids.sort();
+    for id in ids {
+        let Some(container) = stack.resources[id]
+            .config
+            .downcast_ref::<alien_core::Container>()
+        else {
+            continue;
+        };
+        let Some(choices) = &container.resource_choices else {
+            continue;
+        };
+        let prefix = format!("Container{}", pascal_identifier(id));
+        let mut allocation = Vec::new();
+        if choices.cpu.is_some() {
+            allocation.push(("cpu", CfExpression::ref_(format!("{prefix}Cpu"))));
+        }
+        if choices.memory.is_some() {
+            allocation.push(("memory", CfExpression::ref_(format!("{prefix}Memory"))));
+        }
+        if !allocation.is_empty() {
+            containers.push((id.as_str(), CfExpression::object(allocation)));
+        }
+    }
+    if !containers.is_empty() {
+        fields.push(("containers", CfExpression::object(containers)));
+    }
+    (!fields.is_empty()).then(|| CfExpression::object(fields))
 }
 
 fn compute_machine_parameter_name(pool_id: &str) -> String {
@@ -3020,6 +3130,74 @@ impl DomainParameterDefaults {
 mod tests {
     use super::*;
     use alien_core::{PermissionProfile, Resource, ResourceRef};
+
+    #[test]
+    fn resource_parameters_do_not_require_a_matching_aws_machine() {
+        let container = Container::new("api".into())
+            .code(alien_core::ContainerCode::Image {
+                image: "nginx:alpine".into(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
+            })
+            .ephemeral_storage("60Ti".into())
+            .permissions("app".into())
+            .build();
+        let stack = Stack::new("stack".into())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let mut template = CfTemplate::default();
+        add_container_resource_parameters(&mut template, &stack, None)
+            .expect("Kubernetes workload sizes must not be constrained by AWS machines");
+    }
+
+    #[test]
+    fn conflicting_container_parameter_names_fail_instead_of_sharing_values() {
+        let mut stack = Stack::new("stack".into()).build();
+        for id in ["api-1", "api1"] {
+            let mut container = Container::new(id.into())
+                .code(alien_core::ContainerCode::Image {
+                    image: "nginx:alpine".into(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".into(),
+                    desired: "1".into(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".into(),
+                    desired: "1Gi".into(),
+                })
+                .permissions("app".into())
+                .build();
+            container.resource_choices = Some(alien_core::ContainerResourceChoices {
+                cpu: Some(alien_core::ResourceChoiceRange {
+                    min: "1".into(),
+                    max: "4".into(),
+                    default: "1".into(),
+                }),
+                memory: None,
+            });
+            stack.resources.insert(
+                id.into(),
+                alien_core::ResourceEntry {
+                    config: Resource::new(container),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: vec![],
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+        }
+        let mut template = CfTemplate::default();
+        let error = add_container_resource_parameters(&mut template, &stack, None)
+            .expect_err("ambiguous parameter names cannot be installed");
+        assert!(error.message.contains("duplicate CloudFormation parameter"));
+    }
 
     fn node_dependency_fixture() -> (Stack, IndexMap<String, Vec<String>>, CfTemplate) {
         let mut stack = Stack::new("example".to_string())

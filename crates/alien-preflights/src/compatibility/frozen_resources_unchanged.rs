@@ -1,7 +1,7 @@
 use crate::compatibility::narrowing::service_account_narrowed;
 use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
-use alien_core::instance_catalog::is_same_architecture_aws_machine;
+use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Platform,
     Resource, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
@@ -25,7 +25,7 @@ pub struct FrozenResourcesUnchangedCheck {
 
 /// Setup owns the ComputeCluster identity and network boundary, but its
 /// registered runtime controller deliberately owns the fleet: capacity and, on
-/// AWS, the machine type within one CPU architecture. The compute mutation has
+/// AWS, GCP and Azure, the machine type within one CPU architecture. The compute mutation has
 /// already checked the new machine against the workloads and derived its
 /// profile, so the profile follows the machine. Changing groups, placement, or
 /// networking still requires setup.
@@ -103,7 +103,7 @@ fn machine_change<'a>(
 }
 
 fn runtime_machine_change(platform: Platform, old: &str, new: &str) -> bool {
-    platform == Platform::Aws && is_same_architecture_aws_machine(old, new)
+    is_same_architecture_machine(platform, old, new)
 }
 
 /// Explains machine changes that need setup, so the deployment error names them.
@@ -129,7 +129,7 @@ fn machine_changes_needing_setup(
             let (old_machine, new_machine) = machine_change(old_group, new_group)?;
             (!runtime_machine_change(platform, old_machine, new_machine)).then(|| {
                 format!(
-                    "capacity group '{}' changes machine from '{old_machine}' to '{new_machine}', but without setup a machine can change only to an AWS machine of the same CPU architecture",
+                    "capacity group '{}' changes machine from '{old_machine}' to '{new_machine}', but without setup a machine can change only within the same cloud and with the same CPU architecture",
                     new_group.group_id
                 )
             })
@@ -940,6 +940,45 @@ mod tests {
     async fn aws_machine_change_within_one_architecture_is_runtime_manageable() {
         let result = machine_change(Platform::Aws, "m8i.4xlarge").await;
         assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn managed_cloud_machine_changes_preserve_the_setup_boundary() {
+        for (platform, old_machine, new_machine) in [
+            (Platform::Aws, "m7i.large", "m7i.xlarge"),
+            (Platform::Gcp, "e2-medium", "n2-standard-4"),
+            (Platform::Azure, "Standard_D2s_v5", "Standard_D4s_v5"),
+        ] {
+            let mut old = compute_cluster(1);
+            old.capacity_groups[0].nested_virtualization = None;
+            old.capacity_groups[0].instance_type = Some(old_machine.into());
+            old.capacity_groups[0].profile = Some(
+                find_instance_type(platform, old_machine)
+                    .expect("catalog machine")
+                    .to_machine_profile(),
+            );
+            let mut new = old.clone();
+            new.capacity_groups[0].instance_type = Some(new_machine.into());
+            new.capacity_groups[0].profile = Some(
+                find_instance_type(platform, new_machine)
+                    .expect("catalog machine")
+                    .to_machine_profile(),
+            );
+            let check = FrozenResourcesUnchangedCheck { platform };
+            let result = check
+                .check(&compute_stack(old.clone()), &compute_stack(new.clone()))
+                .await
+                .unwrap();
+            assert!(result.success, "{platform}: {:?}", result.errors);
+            new.capacity_groups[0].nested_virtualization = Some(true);
+            assert!(
+                !check
+                    .check(&compute_stack(old), &compute_stack(new))
+                    .await
+                    .unwrap()
+                    .success
+            );
+        }
     }
 
     #[tokio::test]

@@ -37,6 +37,20 @@ export type PrepareDeploymentStackPlatform = ClosedEnum<
 >;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type PrepareDeploymentStackContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type PrepareDeploymentStackFailureDomains2 = {
@@ -133,6 +147,10 @@ export type PrepareDeploymentStackPoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type PrepareDeploymentStackCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: PrepareDeploymentStackContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1286,6 +1304,31 @@ export const PrepareDeploymentStackPlatform$outboundSchema: z.ZodEnum<
 > = z.enum(PrepareDeploymentStackPlatform);
 
 /** @internal */
+export type PrepareDeploymentStackContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const PrepareDeploymentStackContainers$outboundSchema: z.ZodType<
+  PrepareDeploymentStackContainers$Outbound,
+  PrepareDeploymentStackContainers
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function prepareDeploymentStackContainersToJSON(
+  prepareDeploymentStackContainers: PrepareDeploymentStackContainers,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackContainers$outboundSchema.parse(
+      prepareDeploymentStackContainers,
+    ),
+  );
+}
+
+/** @internal */
 export type PrepareDeploymentStackFailureDomains2$Outbound = {
   selectedFailureDomains?: Array<string> | undefined;
   spread: number;
@@ -1499,6 +1542,9 @@ export function prepareDeploymentStackPoolsUnionToJSON(
 
 /** @internal */
 export type PrepareDeploymentStackCompute$Outbound = {
+  containers?:
+    | { [k: string]: PrepareDeploymentStackContainers$Outbound }
+    | undefined;
   pools?: {
     [k: string]:
       | PrepareDeploymentStackPoolsFixed$Outbound
@@ -1511,6 +1557,10 @@ export const PrepareDeploymentStackCompute$outboundSchema: z.ZodType<
   PrepareDeploymentStackCompute$Outbound,
   PrepareDeploymentStackCompute
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => PrepareDeploymentStackContainers$outboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

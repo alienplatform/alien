@@ -6,6 +6,20 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type UpdateDeploymentComputeRequestContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type UpdateDeploymentComputeRequestFailureDomains2 = {
@@ -103,6 +117,12 @@ export type UpdateDeploymentComputeRequestPoolsUnion =
  */
 export type UpdateDeploymentComputeRequestCompute = {
   /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?:
+    | { [k: string]: UpdateDeploymentComputeRequestContainers }
+    | undefined;
+  /**
    * Selected compute choices keyed by pool ID.
    */
   pools?: {
@@ -119,6 +139,32 @@ export type UpdateDeploymentComputeRequestComputeUnion =
 export type UpdateDeploymentComputeRequest = {
   compute?: UpdateDeploymentComputeRequestCompute | string | null | undefined;
 };
+
+/** @internal */
+export type UpdateDeploymentComputeRequestContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const UpdateDeploymentComputeRequestContainers$outboundSchema: z.ZodType<
+  UpdateDeploymentComputeRequestContainers$Outbound,
+  UpdateDeploymentComputeRequestContainers
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function updateDeploymentComputeRequestContainersToJSON(
+  updateDeploymentComputeRequestContainers:
+    UpdateDeploymentComputeRequestContainers,
+): string {
+  return JSON.stringify(
+    UpdateDeploymentComputeRequestContainers$outboundSchema.parse(
+      updateDeploymentComputeRequestContainers,
+    ),
+  );
+}
 
 /** @internal */
 export type UpdateDeploymentComputeRequestFailureDomains2$Outbound = {
@@ -346,6 +392,9 @@ export function updateDeploymentComputeRequestPoolsUnionToJSON(
 
 /** @internal */
 export type UpdateDeploymentComputeRequestCompute$Outbound = {
+  containers?: {
+    [k: string]: UpdateDeploymentComputeRequestContainers$Outbound;
+  } | undefined;
   pools?: {
     [k: string]:
       | UpdateDeploymentComputeRequestPoolsFixed$Outbound
@@ -358,6 +407,10 @@ export const UpdateDeploymentComputeRequestCompute$outboundSchema: z.ZodType<
   UpdateDeploymentComputeRequestCompute$Outbound,
   UpdateDeploymentComputeRequestCompute
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => UpdateDeploymentComputeRequestContainers$outboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

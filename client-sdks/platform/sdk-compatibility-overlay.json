@@ -1,0 +1,780 @@
+{
+  "overlay": "1.0.0",
+  "info": {
+    "title": "Preserve previously published SDK contracts independently of server API removals",
+    "version": "1.0.0"
+  },
+  "actions": [
+    {
+      "target": "$['components']['schemas']",
+      "update": {
+        "OperatorInstallationsRollup": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total pull-mode installations tracked."
+            },
+            "ready": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "syncing": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "stuck": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "total",
+            "ready",
+            "syncing",
+            "stuck"
+          ],
+          "description": "Rollup of this project's pull-mode installations by operations-bundle sync status, reflecting the currently enabled plugin set."
+        },
+        "SetBuiltinOperationsPluginsResponse": {
+          "type": "object",
+          "properties": {
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "permissionDiff": {
+              "$ref": "#/components/schemas/OperationsPermissionDiff"
+            }
+          },
+          "required": [
+            "names",
+            "permissionDiff"
+          ]
+        },
+        "OperationsPermissionDiff": {
+          "type": "object",
+          "properties": {
+            "aws": {
+              "type": "object",
+              "properties": {
+                "added": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperationsAwsPermissionDiffStatement"
+                  },
+                  "description": "IAM statements this change adds."
+                },
+                "removed": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperationsAwsPermissionDiffStatement"
+                  },
+                  "description": "IAM statements this change removes from the generated cloud configuration."
+                }
+              },
+              "required": [
+                "added",
+                "removed"
+              ]
+            },
+            "gcp": {
+              "type": "object",
+              "properties": {
+                "added": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperationsGcpPermissionDiffGrant"
+                  }
+                },
+                "removed": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperationsGcpPermissionDiffGrant"
+                  }
+                }
+              },
+              "required": [
+                "added",
+                "removed"
+              ]
+            },
+            "kubernetes": {
+              "type": "object",
+              "properties": {
+                "added": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperationsKubernetesPermissionDiffGrant"
+                  }
+                },
+                "removed": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OperationsKubernetesPermissionDiffGrant"
+                  }
+                }
+              },
+              "required": [
+                "added",
+                "removed"
+              ]
+            },
+            "incompleteForPlugins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Previously enabled plugins whose grants could not be read before this change disabled or replaced them. Added and removed grants may be incomplete; inspect existing cloud policies before applying the regenerated configuration."
+            }
+          },
+          "required": [
+            "aws",
+            "gcp",
+            "kubernetes"
+          ],
+          "description": "Cloud permission delta versus the previously enabled set."
+        },
+        "OperationsAwsPermissionDiffStatement": {
+          "type": "object",
+          "properties": {
+            "effect": {
+              "type": "string",
+              "enum": [
+                "Allow",
+                "Deny"
+              ]
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "condition": {
+              "type": "object",
+              "nullable": true,
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OperationsPermissionDiffSource"
+              }
+            }
+          },
+          "required": [
+            "effect",
+            "actions",
+            "resources",
+            "condition",
+            "sources"
+          ]
+        },
+        "OperationsPermissionDiffSource": {
+          "type": "object",
+          "properties": {
+            "plugin": {
+              "type": "string",
+              "description": "Plugin that declared the permission."
+            },
+            "operation": {
+              "type": "string",
+              "description": "Operation that declared the permission."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why the operation needs this permission."
+            }
+          },
+          "required": [
+            "plugin",
+            "operation",
+            "reason"
+          ]
+        },
+        "OperationsGcpPermissionDiffGrant": {
+          "type": "object",
+          "properties": {
+            "permission": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "projects/${projectName}",
+                "projects/${projectName}/buckets/${resourceName}"
+              ],
+              "description": "Where setup grants the permission: the configured project, or each Cloud Storage bucket the installer lists."
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OperationsPermissionDiffSource"
+              }
+            }
+          },
+          "required": [
+            "permission",
+            "scope",
+            "sources"
+          ]
+        },
+        "OperationsKubernetesPermissionDiffGrant": {
+          "type": "object",
+          "properties": {
+            "apiGroup": {
+              "type": "string"
+            },
+            "resource": {
+              "type": "string"
+            },
+            "verbs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "resourceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Empty means every resource name."
+            },
+            "remediationOnly": {
+              "type": "boolean",
+              "description": "True for write verbs. The Helm chart renders them only when Operator permission is set to remediation; diagnostics installs omit them."
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OperationsPermissionDiffSource"
+              }
+            }
+          },
+          "required": [
+            "apiGroup",
+            "resource",
+            "verbs",
+            "resourceNames",
+            "remediationOnly",
+            "sources"
+          ]
+        },
+        "SetBuiltinOperationsPluginsRequest": {
+          "type": "object",
+          "properties": {
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Complete set of built-in plugins to enable."
+            }
+          },
+          "required": [
+            "names"
+          ],
+          "additionalProperties": false
+        },
+        "SetOperationsPluginEnabledResponse": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "builtin": {
+              "type": "boolean"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "permissionDiff": {
+              "$ref": "#/components/schemas/OperationsPermissionDiff"
+            }
+          },
+          "required": [
+            "name",
+            "builtin",
+            "enabled",
+            "permissionDiff"
+          ]
+        },
+        "SetOperationsPluginEnabledRequest": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Whether the plugin is distributed to this project's Operators."
+            },
+            "dryRun": {
+              "type": "boolean",
+              "description": "Validate the change and return its permission delta without saving it. Defaults to false."
+            },
+            "expectedPermissionDiff": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/OperationsPermissionDiff"
+                },
+                {
+                  "description": "The permission delta the caller reviewed, usually from a dry run. When set, the change is rejected with 409 if the current delta differs."
+                }
+              ]
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        },
+        "OperationsPolicyResponse": {
+          "type": "object",
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OperationsPolicyRule"
+              }
+            },
+            "default": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "manual"
+              ],
+              "description": "Decision for commands no rule matches."
+            }
+          },
+          "required": [
+            "rules",
+            "default"
+          ]
+        },
+        "OperationsPolicyRule": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "`plugin/operation`, `plugin/*`, or `*`."
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "manual"
+              ],
+              "description": "auto: run immediately. manual: needs customer approval before running."
+            },
+            "maxRisk": {
+              "type": "string",
+              "nullable": true,
+              "enum": [
+                "read-only",
+                "mutating",
+                "destructive",
+                null
+              ],
+              "description": "For a wildcard pattern (`plugin/*` or `*`) only: the highest risk tier a WILDCARD ACCESS REQUEST against this pattern may cover. Null/absent means no wildcard grant above read-only is allowed for this pattern \u2014 write and destructive wildcards require an explicit rule setting this field. Ignored for exact `plugin/operation` rules (a named operation's risk is already its own declared tier) and for the auto/manual invoke decision itself."
+            }
+          },
+          "required": [
+            "pattern",
+            "decision"
+          ]
+        },
+        "UpdateOperationsPolicyRequest": {
+          "type": "object",
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OperationsPolicyRule"
+              },
+              "description": "The full rule set (replaces the previous one)."
+            }
+          },
+          "required": [
+            "rules"
+          ]
+        }
+      }
+    },
+    {
+      "target": "$['components']['schemas']['ListOperationsPluginsResponse']['properties']",
+      "update": {
+        "installations": {
+          "$ref": "#/components/schemas/OperatorInstallationsRollup"
+        }
+      }
+    },
+    {
+      "target": "$['components']['schemas']['OperationsPlugin']['properties']",
+      "update": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "target": "$['components']['schemas']['PublishOperationsPluginResponse']['properties']",
+      "update": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "permissionDiff": {
+          "$ref": "#/components/schemas/OperationsPermissionDiff"
+        }
+      }
+    },
+    {
+      "target": "$['paths']",
+      "update": {
+        "/v1/operations/plugins/builtin/enabled": {
+          "put": {
+            "operationId": "setBuiltinOperationsPlugins",
+            "description": "Replace the complete set of enabled built-in operations plugins for a project. Returns the cloud permission delta versus the previously enabled set.",
+            "x-speakeasy-group": "operations",
+            "x-speakeasy-name-override": "setBuiltinPlugins",
+            "parameters": [
+              {
+                "schema": {
+                  "type": "string",
+                  "minLength": 4,
+                  "maxLength": 100,
+                  "pattern": "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$",
+                  "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                  "example": "my-workspace"
+                },
+                "required": false,
+                "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                "name": "workspace",
+                "in": "query"
+              },
+              {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectIDOrNameQueryParam"
+                },
+                "required": true,
+                "description": "Filter by project ID or name.",
+                "name": "project",
+                "in": "query",
+                "examples": {
+                  "projectName": {
+                    "value": "my-project"
+                  },
+                  "projectId": {
+                    "value": "prj_mcytp6z3j91f7tn5ryqsfwtr"
+                  }
+                }
+              }
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SetBuiltinOperationsPluginsRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "The enabled built-in plugin set was replaced, with the cloud permission delta.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/SetBuiltinOperationsPluginsResponse"
+                    }
+                  }
+                }
+              },
+              "400": {
+                "description": "One or more plugin names are invalid.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              },
+              "500": {
+                "description": "Internal server error.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecated": true
+          }
+        },
+        "/v1/operations/plugins/{name}/enabled": {
+          "patch": {
+            "operationId": "setOperationsPluginEnabled",
+            "description": "Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked. Returns the cloud permission delta versus the previously enabled set. With `dryRun`, validates the change and returns the delta without saving it.",
+            "x-speakeasy-group": "operations",
+            "x-speakeasy-name-override": "setPluginEnabled",
+            "parameters": [
+              {
+                "schema": {
+                  "type": "string",
+                  "description": "Plugin name."
+                },
+                "required": true,
+                "description": "Plugin name.",
+                "name": "name",
+                "in": "path"
+              },
+              {
+                "schema": {
+                  "type": "string",
+                  "minLength": 4,
+                  "maxLength": 100,
+                  "pattern": "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$",
+                  "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                  "example": "my-workspace"
+                },
+                "required": false,
+                "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                "name": "workspace",
+                "in": "query"
+              },
+              {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectIDOrNameQueryParam"
+                },
+                "required": true,
+                "description": "Filter by project ID or name.",
+                "name": "project",
+                "in": "query",
+                "examples": {
+                  "projectName": {
+                    "value": "my-project"
+                  },
+                  "projectId": {
+                    "value": "prj_mcytp6z3j91f7tn5ryqsfwtr"
+                  }
+                }
+              }
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SetOperationsPluginEnabledRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "The plugin's enabled state was updated, with the cloud permission delta versus the previously enabled set.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/SetOperationsPluginEnabledResponse"
+                    }
+                  }
+                }
+              },
+              "404": {
+                "description": "No such plugin for this project.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              },
+              "409": {
+                "description": "The plugin metadata is invalid for the requested enabled state, or the permission delta differs from `expectedPermissionDiff`.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              },
+              "500": {
+                "description": "Internal server error.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecated": true
+          }
+        },
+        "/v1/operations/policy": {
+          "get": {
+            "operationId": "getOperationsPolicy",
+            "description": "Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns \u2192 auto | manual.",
+            "x-speakeasy-group": "operations",
+            "x-speakeasy-name-override": "getPolicy",
+            "parameters": [
+              {
+                "schema": {
+                  "type": "string",
+                  "minLength": 4,
+                  "maxLength": 100,
+                  "pattern": "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$",
+                  "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                  "example": "my-workspace"
+                },
+                "required": false,
+                "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                "name": "workspace",
+                "in": "query"
+              },
+              {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectIDOrNameQueryParam"
+                },
+                "required": true,
+                "description": "Filter by project ID or name.",
+                "name": "project",
+                "in": "query",
+                "examples": {
+                  "projectName": {
+                    "value": "my-project"
+                  },
+                  "projectId": {
+                    "value": "prj_mcytp6z3j91f7tn5ryqsfwtr"
+                  }
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "The approval policy rules and default.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/OperationsPolicyResponse"
+                    }
+                  }
+                }
+              },
+              "500": {
+                "description": "Internal server error.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecated": true
+          },
+          "put": {
+            "operationId": "updateOperationsPolicy",
+            "description": "Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.",
+            "x-speakeasy-group": "operations",
+            "x-speakeasy-name-override": "updatePolicy",
+            "parameters": [
+              {
+                "schema": {
+                  "type": "string",
+                  "minLength": 4,
+                  "maxLength": 100,
+                  "pattern": "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$",
+                  "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                  "example": "my-workspace"
+                },
+                "required": false,
+                "description": "Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.",
+                "name": "workspace",
+                "in": "query"
+              },
+              {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectIDOrNameQueryParam"
+                },
+                "required": true,
+                "description": "Filter by project ID or name.",
+                "name": "project",
+                "in": "query",
+                "examples": {
+                  "projectName": {
+                    "value": "my-project"
+                  },
+                  "projectId": {
+                    "value": "prj_mcytp6z3j91f7tn5ryqsfwtr"
+                  }
+                }
+              }
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/UpdateOperationsPolicyRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "The updated approval policy.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/OperationsPolicyResponse"
+                    }
+                  }
+                }
+              },
+              "400": {
+                "description": "Invalid request.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              },
+              "500": {
+                "description": "Internal server error.",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/APIError"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecated": true
+          }
+        }
+      }
+    }
+  ]
+}

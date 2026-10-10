@@ -55,6 +55,32 @@ pub struct ResourceSpec {
     pub desired: String,
 }
 
+/// Allowed deployment-time resource quantities. These are choices, not autoscaling targets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceChoiceRange {
+    /// Smallest permitted allocation.
+    pub min: String,
+    /// Largest permitted allocation.
+    pub max: String,
+    /// Allocation used when deployment settings omit a selection.
+    pub default: String,
+}
+
+/// Release-declared choices for each container resource dimension.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainerResourceChoices {
+    /// Allowed CPU allocation in vCPUs or millicores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<ResourceChoiceRange>,
+    /// Allowed memory allocation in binary units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<ResourceChoiceRange>,
+}
+
 /// GPU specification for a container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -397,6 +423,10 @@ pub struct Container {
 
     /// Memory resource requirements (must use Ki/Mi/Gi/Ti suffix)
     pub memory: ResourceSpec,
+
+    /// Optional deployment-time CPU and memory choices. Fixed declarations stay fixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_choices: Option<ContainerResourceChoices>,
 
     /// GPU requirements (optional)
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -36,6 +36,20 @@ export type PlanDeploymentComputePlatform = ClosedEnum<
 >;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type PlanDeploymentComputeContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type PlanDeploymentComputeFailureDomains2 = {
@@ -132,6 +146,10 @@ export type PlanDeploymentComputePoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type PlanDeploymentComputeCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: PlanDeploymentComputeContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1281,6 +1299,31 @@ export const PlanDeploymentComputePlatform$outboundSchema: z.ZodEnum<
 > = z.enum(PlanDeploymentComputePlatform);
 
 /** @internal */
+export type PlanDeploymentComputeContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const PlanDeploymentComputeContainers$outboundSchema: z.ZodType<
+  PlanDeploymentComputeContainers$Outbound,
+  PlanDeploymentComputeContainers
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function planDeploymentComputeContainersToJSON(
+  planDeploymentComputeContainers: PlanDeploymentComputeContainers,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputeContainers$outboundSchema.parse(
+      planDeploymentComputeContainers,
+    ),
+  );
+}
+
+/** @internal */
 export type PlanDeploymentComputeFailureDomains2$Outbound = {
   selectedFailureDomains?: Array<string> | undefined;
   spread: number;
@@ -1494,6 +1537,9 @@ export function planDeploymentComputePoolsUnionToJSON(
 
 /** @internal */
 export type PlanDeploymentComputeCompute$Outbound = {
+  containers?:
+    | { [k: string]: PlanDeploymentComputeContainers$Outbound }
+    | undefined;
   pools?: {
     [k: string]:
       | PlanDeploymentComputePoolsFixed$Outbound
@@ -1506,6 +1552,10 @@ export const PlanDeploymentComputeCompute$outboundSchema: z.ZodType<
   PlanDeploymentComputeCompute$Outbound,
   PlanDeploymentComputeCompute
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => PlanDeploymentComputeContainers$outboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

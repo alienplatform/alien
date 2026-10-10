@@ -42,6 +42,20 @@ export const ImportSourcePlatform = {
 export type ImportSourcePlatform = ClosedEnum<typeof ImportSourcePlatform>;
 
 /**
+ * Deployment-time resource allocation for a container. Omitted fields use release defaults.
+ */
+export type ImportSourceContainers = {
+  /**
+   * CPU allocation in vCPUs.
+   */
+  cpu?: number | null | undefined;
+  /**
+   * Memory allocation, using binary units such as Mi or Gi.
+   */
+  memory?: string | null | undefined;
+};
+
+/**
  * Failure-domain policy selected for a compute pool.
  */
 export type ImportSourceFailureDomains2 = {
@@ -130,6 +144,10 @@ export type ImportSourcePoolsUnion =
  * provider machine type and selected machine counts.
  */
 export type ImportSourceCompute = {
+  /**
+   * Per-replica resources selected within each container's declared ranges.
+   */
+  containers?: { [k: string]: ImportSourceContainers } | undefined;
   /**
    * Selected compute choices keyed by pool ID.
    */
@@ -1353,6 +1371,29 @@ export const ImportSourcePlatform$outboundSchema: z.ZodEnum<
 > = z.enum(ImportSourcePlatform);
 
 /** @internal */
+export type ImportSourceContainers$Outbound = {
+  cpu?: number | null | undefined;
+  memory?: string | null | undefined;
+};
+
+/** @internal */
+export const ImportSourceContainers$outboundSchema: z.ZodType<
+  ImportSourceContainers$Outbound,
+  ImportSourceContainers
+> = z.object({
+  cpu: z.nullable(z.number()).optional(),
+  memory: z.nullable(z.string()).optional(),
+});
+
+export function importSourceContainersToJSON(
+  importSourceContainers: ImportSourceContainers,
+): string {
+  return JSON.stringify(
+    ImportSourceContainers$outboundSchema.parse(importSourceContainers),
+  );
+}
+
+/** @internal */
 export type ImportSourceFailureDomains2$Outbound = {
   selectedFailureDomains?: Array<string> | undefined;
   spread: number;
@@ -1556,6 +1597,7 @@ export function importSourcePoolsUnionToJSON(
 
 /** @internal */
 export type ImportSourceCompute$Outbound = {
+  containers?: { [k: string]: ImportSourceContainers$Outbound } | undefined;
   pools?: {
     [k: string]:
       | ImportSourcePoolsFixed$Outbound
@@ -1568,6 +1610,10 @@ export const ImportSourceCompute$outboundSchema: z.ZodType<
   ImportSourceCompute$Outbound,
   ImportSourceCompute
 > = z.object({
+  containers: z.record(
+    z.string(),
+    z.lazy(() => ImportSourceContainers$outboundSchema),
+  ).optional(),
   pools: z.record(
     z.string(),
     z.union([

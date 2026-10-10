@@ -153,6 +153,7 @@ fn advanced_settings_overlay_preserves_generated_compute_defaults() {
         TerraformTarget::Azure,
         StackSettings {
             compute: Some(ComputeSettings {
+                containers: Default::default(),
                 pools: [(
                     "general".to_string(),
                     ComputePoolSelection::Fixed {
