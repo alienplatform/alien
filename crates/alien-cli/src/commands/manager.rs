@@ -991,16 +991,16 @@ fn project_defaults_from_value(value: serde_json::Value) -> Result<ProjectDefaul
             })
         })?
         .to_string();
-    let default_managers = value
-        .get("defaultManagers")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::JsonError {
-            operation: "parse project default managers".to_string(),
-            reason: "defaultManagers has an unexpected shape".to_string(),
-        })?;
+    // The API returns `defaultManagers: null` for a project without defaults.
+    // Deserializing as `Option` maps both null and a missing field to `None`.
+    let default_managers = serde_json::from_value::<Option<ProjectDefaultManagersJson>>(
+        value.get("defaultManagers").cloned().unwrap_or_default(),
+    )
+    .into_alien_error()
+    .context(ErrorData::JsonError {
+        operation: "parse project default managers".to_string(),
+        reason: "defaultManagers has an unexpected shape".to_string(),
+    })?;
 
     Ok(ProjectDefaultsOutput {
         project_id,
@@ -1447,6 +1447,7 @@ async fn events_manager_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::prelude::*;
 
     #[test]
     fn retry_response_accepts_camel_case_deployment_fields() {
@@ -1533,5 +1534,94 @@ mod tests {
             default_setup_method_for_cloud(PrivateManagerCloudArg::Azure),
             PrivateManagerSetupMethodArg::Terraform
         );
+    }
+
+    #[tokio::test]
+    async fn defaults_commands_work_for_project_without_defaults_over_http() {
+        let project_id = "prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let manager_id = "mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let project = |default_managers: serde_json::Value| {
+            json!({
+                "id": project_id,
+                "name": "sample-project",
+                "createdAt": "2026-10-11T00:00:00Z",
+                "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+                "defaultManagers": default_managers,
+            })
+        };
+        let server = MockServer::start_async().await;
+        let get = server
+            .mock_async(|when, then| {
+                when.method(GET).path(format!("/v1/projects/{project_id}"));
+                then.status(200).json_body(project(serde_json::Value::Null));
+            })
+            .await;
+        let set = server
+            .mock_async(|when, then| {
+                when.method("PATCH")
+                    .path(format!("/v1/projects/{project_id}"))
+                    .json_body(json!({
+                        "defaultManagers": { "aws": manager_id, "gcp": null, "azure": null }
+                    }));
+                then.status(200).json_body(project(
+                    json!({ "aws": manager_id, "gcp": null, "azure": null }),
+                ));
+            })
+            .await;
+        let clear = server
+            .mock_async(|when, then| {
+                when.method("PATCH")
+                    .path(format!("/v1/projects/{project_id}"))
+                    .json_body(json!({ "defaultManagers": null }));
+                then.status(200).json_body(project(serde_json::Value::Null));
+            })
+            .await;
+        let ctx = ExecutionMode::Platform {
+            base_url: server.base_url(),
+            api_key: Some("synthetic-key".to_string()),
+            no_browser: true,
+            workspace: Some("sample-workspace".to_string()),
+            project: None,
+        };
+        let run = |cmd: DefaultsCmd| {
+            managers_task(
+                ManagersArgs {
+                    json: true,
+                    cmd: ManagersCmd::Defaults { cmd },
+                },
+                ctx.clone(),
+            )
+        };
+
+        let auth = ctx.auth_http().await.expect("auth client should build");
+        let defaults = get_project_defaults(&auth, "sample-workspace", project_id)
+            .await
+            .expect("a null defaultManagers must parse as no defaults");
+        assert_eq!(defaults.project_id, project_id);
+        assert!(defaults.default_managers.is_none());
+
+        run(DefaultsCmd::Show {
+            project: Some(project_id.to_string()),
+        })
+        .await
+        .expect("show must succeed on a project without defaults");
+        run(DefaultsCmd::Set {
+            project: Some(project_id.to_string()),
+            cloud: PrivateManagerCloudArg::Aws,
+            manager: manager_id.to_string(),
+        })
+        .await
+        .expect("set must succeed on a project without defaults");
+        run(DefaultsCmd::Clear {
+            project: Some(project_id.to_string()),
+            cloud: DefaultsClearTarget::All,
+        })
+        .await
+        .expect("clear must succeed when the API answers with null defaults");
+
+        // One direct read, then project resolution + defaults read per command.
+        get.assert_hits_async(7).await;
+        set.assert_hits_async(1).await;
+        clear.assert_hits_async(1).await;
     }
 }
