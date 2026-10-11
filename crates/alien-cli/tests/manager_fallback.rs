@@ -1,4 +1,4 @@
-#![cfg(feature = "platform")]
+#![cfg(all(feature = "platform", target_os = "linux"))]
 
 use httpmock::{Method::GET, MockServer};
 use serde_json::json;
@@ -54,6 +54,7 @@ fn manager_discovery_warns_on_system_fallback_without_changing_json_or_routing()
             then.status(200)
                 .json_body(json!({"items": [], "nextCursor": null}));
         });
+        let config = TempDir::new().unwrap();
         let checkout = TempDir::new().unwrap();
         fs::create_dir(checkout.path().join(".alien")).unwrap();
         fs::write(
@@ -78,6 +79,7 @@ fn manager_discovery_warns_on_system_fallback_without_changing_json_or_routing()
                 "rel_test",
                 "--json",
             ])
+            .env("XDG_CONFIG_HOME", config.path())
             .env("ALIEN_API_KEY", "test-key")
             .env_remove("ALIEN_MANAGER_URL")
             .env_remove("ALIEN_PROJECT")
