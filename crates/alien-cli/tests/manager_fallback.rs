@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 #[test]
 fn manager_discovery_warns_on_system_fallback_without_changing_json_or_routing() {
-    for is_system in [true, false] {
+    for is_system in [Some(true), Some(false), None] {
         let discovery = MockServer::start();
         let manager = MockServer::start();
         let project = discovery.mock(|when, then| {
@@ -105,6 +105,10 @@ fn manager_discovery_warns_on_system_fallback_without_changing_json_or_routing()
             .lines()
             .filter(|line| line.contains("system manager"))
             .count();
-        assert_eq!(warnings, usize::from(is_system), "stderr: {stderr}");
+        assert_eq!(
+            warnings,
+            usize::from(is_system == Some(true)),
+            "stderr: {stderr}"
+        );
     }
 }
