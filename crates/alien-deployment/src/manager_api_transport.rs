@@ -736,11 +736,14 @@ pub async fn finalize_step_loop(
                         | LoopStopReason::Handoff
                 ))
     });
-    let finalized = if checkpointed_terminal {
-        release_deployment(client, deployment_id, session, execution_claim).await
-    } else {
-        final_reconcile(client, deployment_id, session, execution_claim, state).await
-    };
+    let finalized =
+        if checkpointed_terminal && state.status == alien_core::DeploymentStatus::Deleted {
+            release_deleted_deployment(client, deployment_id, session, execution_claim).await
+        } else if checkpointed_terminal {
+            release_deployment(client, deployment_id, session, execution_claim).await
+        } else {
+            final_reconcile(client, deployment_id, session, execution_claim, state).await
+        };
     combine_operation_and_finalization(
         crate::runner::preserve_semantic_failure(result, state),
         finalized,
@@ -803,7 +806,12 @@ pub async fn final_reconcile(
         result => result,
     };
 
-    let release_result = release_deployment(client, deployment_id, session, execution_claim).await;
+    let release_result =
+        if state.status == alien_core::DeploymentStatus::Deleted && reconcile_result.is_ok() {
+            release_deleted_deployment(client, deployment_id, session, execution_claim).await
+        } else {
+            release_deployment(client, deployment_id, session, execution_claim).await
+        };
     match (reconcile_result, release_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -1847,6 +1855,131 @@ mod tests {
         release.assert_async().await;
     }
 
+    /// The body a manager returns when it can no longer authenticate the deployment
+    /// credential that the confirmed deletion removed.
+    fn removed_credential_rejection() -> serde_json::Value {
+        serde_json::json!({
+            "code": "UNAUTHORIZED",
+            "message": "Platform API authentication failed with status 401 Unauthorized",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 401
+        })
+    }
+
+    fn deleted_state() -> DeploymentState {
+        let mut state = running_state();
+        state.status = alien_core::DeploymentStatus::Deleted;
+        state
+    }
+
+    fn deleted_result() -> crate::Result<RunnerResult> {
+        Ok(RunnerResult {
+            loop_result: crate::loop_contract::classify_status(
+                &alien_core::DeploymentStatus::Deleted,
+                crate::loop_contract::LoopOperation::Delete,
+            )
+            .expect("deleted is terminal for a delete loop"),
+            steps_executed: 1,
+            state_persisted: true,
+        })
+    }
+
+    /// A confirmed deletion removes the record, its lease and the deployment credential, so
+    /// the release that follows may be refused as unauthenticated. The deletion is complete.
+    #[tokio::test]
+    async fn a_confirmed_deletion_completes_when_the_release_is_refused_as_unauthenticated() {
+        let server = MockServer::start_async().await;
+        let state = deleted_state();
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(200)
+                    .json_body(serde_json::json!({"success": true, "current": state}));
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(401).json_body(removed_credential_rejection());
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+
+        let result = finalize_step_loop(
+            &client,
+            "deployment-1",
+            "session-1",
+            None,
+            &state,
+            deleted_result(),
+        )
+        .await
+        .expect("a deletion the manager confirmed is complete");
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
+        assert_eq!(
+            result.loop_result.final_status,
+            alien_core::DeploymentStatus::Deleted
+        );
+        reconcile.assert_hits_async(0).await;
+        release.assert_hits_async(1).await;
+
+        final_reconcile(&client, "deployment-1", "session-1", None, &state)
+            .await
+            .expect("a final deleted checkpoint followed by a refused release is complete");
+        reconcile.assert_hits_async(1).await;
+        release.assert_hits_async(2).await;
+    }
+
+    /// Only a confirmed deletion removes the credential. Anywhere else an unauthenticated
+    /// release, or a release after a refused deleted checkpoint, still fails.
+    #[tokio::test]
+    async fn an_unauthenticated_release_still_fails_without_a_confirmed_deletion() {
+        let server = MockServer::start_async().await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(401).json_body(removed_credential_rejection());
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(401).json_body(removed_credential_rejection());
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+
+        let running = running_state();
+        let error = finalize_step_loop(
+            &client,
+            "deployment-1",
+            "session-1",
+            None,
+            &running,
+            terminal_result(&running),
+        )
+        .await
+        .expect_err("a running deployment keeps its credential; a refused release is a failure");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(chain.contains("Failed to release sync lock"), "{chain}");
+        assert!(
+            chain.contains("Platform API authentication failed"),
+            "{chain}"
+        );
+
+        let error = final_reconcile(&client, "deployment-1", "session-1", None, &deleted_state())
+            .await
+            .expect_err("an unconfirmed deletion must not be reported complete");
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(
+            chain.contains("Final deployment reconciliation failed and lease release also failed"),
+            "{chain}"
+        );
+        reconcile.assert_hits_async(1).await;
+        release.assert_hits_async(2).await;
+    }
+
     #[test]
     fn setup_run_can_recover_failed_setup_and_provisioning_states() {
         let statuses = setup_run_acquire_statuses();
@@ -2152,20 +2285,7 @@ pub async fn release_deployment(
     session: &str,
     execution_claim: Option<&ExecutionClaim>,
 ) -> Result<(), AlienError> {
-    if let Err(error) = client
-        .release()
-        .body(alien_manager_api::types::ReleaseRequest {
-            deployment_id: deployment_id.to_string(),
-            execution_claim: execution_claim
-                .map(to_manager_api_execution_claim)
-                .transpose()?,
-            session: session.to_string(),
-        })
-        .send()
-        .await
-        .into_sdk_error()
-        .await
-    {
+    if let Err(error) = send_release(client, deployment_id, session, execution_claim).await {
         if is_missing_deployment_response(&error) {
             info!(
                 deployment_id = %deployment_id,
@@ -2178,6 +2298,56 @@ pub async fn release_deployment(
         }));
     }
     Ok(())
+}
+
+/// Release the lease of a deployment whose deletion the manager has confirmed.
+///
+/// Confirming `Deleted` removes the deployment record together with its lease and the
+/// deployment credential this command authenticates with. The manager may then refuse the
+/// release as unauthenticated, or report the deployment missing; either way nothing remains
+/// to release, so neither may turn a completed deletion into a failure.
+async fn release_deleted_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    execution_claim: Option<&ExecutionClaim>,
+) -> Result<(), AlienError> {
+    match send_release(client, deployment_id, session, execution_claim).await {
+        Ok(()) => Ok(()),
+        Err(error) if matches!(error.http_status_code, Some(401) | Some(404)) => {
+            info!(
+                deployment_id = %deployment_id,
+                status = ?error.http_status_code,
+                "Deletion removed the deployment and its credential; no sync lock remains to release"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error.context(alien_error::GenericError {
+            message: "Failed to release sync lock".to_string(),
+        })),
+    }
+}
+
+async fn send_release(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+    execution_claim: Option<&ExecutionClaim>,
+) -> Result<(), AlienError> {
+    client
+        .release()
+        .body(alien_manager_api::types::ReleaseRequest {
+            deployment_id: deployment_id.to_string(),
+            execution_claim: execution_claim
+                .map(to_manager_api_execution_claim)
+                .transpose()?,
+            session: session.to_string(),
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .await
+        .map(|_| ())
 }
 
 fn is_missing_deployment_response(error: &AlienError) -> bool {
