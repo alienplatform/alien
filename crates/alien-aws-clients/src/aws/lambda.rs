@@ -45,6 +45,9 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
         function_name: &str,
         qualifier: Option<String>,
     ) -> Result<FunctionConfiguration>;
+    /// GetFunction: the function's configuration and its tags. Lambda returns the tags only to
+    /// callers allowed `lambda:ListTags`; for others `tags` is `None`.
+    async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse>;
     async fn delete_function_url_config(
         &self,
         function_name: &str,
@@ -546,6 +549,12 @@ impl LambdaApi for LambdaClient {
         Ok(resp.configuration)
     }
 
+    async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse> {
+        let path = format!("/2015-03-31/functions/{}", function_name);
+        self.send_json(Method::GET, &path, None, None, "GetFunction", function_name)
+            .await
+    }
+
     async fn delete_function_url_config(
         &self,
         function_name: &str,
@@ -945,10 +954,13 @@ pub struct FunctionConfiguration {
     pub kms_key_arn: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetFunctionResponse {
     pub configuration: FunctionConfiguration,
+    /// The function's tags; absent when the caller is not allowed `lambda:ListTags`.
+    #[serde(default)]
+    pub tags: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Builder)]

@@ -441,7 +441,7 @@ async fn test_create_function_success(ctx: &mut LambdaTestContext) {
 
     info!("🚀 Testing create function: {}", function_name);
 
-    let _function_config = match ctx
+    let function_config = match ctx
         .create_test_function_with_env(&function_name, {
             let mut vars = HashMap::new();
             vars.insert("TEST_VAR".to_string(), "test_value".to_string());
@@ -460,6 +460,21 @@ async fn test_create_function_success(ctx: &mut LambdaTestContext) {
             panic!("Function creation failed: {:?}. Please ensure you have proper AWS credentials and permissions set up in .env.test", e);
         }
     };
+
+    // GetFunction returns the tags the create set: a worker whose create response was lost
+    // recognizes its function by them.
+    let function = ctx
+        .client
+        .get_function(&function_name)
+        .await
+        .expect("GetFunction should read the created function");
+    assert_eq!(
+        function.configuration.function_arn,
+        function_config.function_arn
+    );
+    let tags = function.tags.expect("GetFunction should return the tags");
+    assert_eq!(tags.get("Environment").map(String::as_str), Some("Test"));
+    assert_eq!(tags.get("Project").map(String::as_str), Some("Alien"));
 
     // Function will be cleaned up automatically via teardown
 }
