@@ -369,6 +369,9 @@
         "description": "Create, update, inspect, and delete Google Cloud HTTPS load-balancer resources used by daemon public endpoints.",
         "grant": {
           "permissions": [
+            // Ingress validation is required even with heartbeats disabled.
+            "compute.networks.get",
+            "compute.subnetworks.get",
             "compute.sslCertificates.create",
             "compute.sslCertificates.delete",
             "compute.sslCertificates.get",
@@ -421,6 +424,10 @@
         "description": "Create, update, inspect, and delete Azure public IPs, identities, role assignments, and Application Gateways for daemon public endpoints.",
         "grant": {
           "actions": [
+            // Ingress validation is required even with heartbeats disabled.
+            "Microsoft.Network/virtualNetworks/read",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/checkIpAddressAvailability/read",
             "Microsoft.Network/applicationGateways/write",
             "Microsoft.Network/applicationGateways/read",
             "Microsoft.Network/applicationGateways/delete",

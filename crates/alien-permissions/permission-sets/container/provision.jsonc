@@ -822,6 +822,9 @@
       {
         "grant": {
           "permissions": [
+            // Ingress validation is required even with heartbeats disabled.
+            "compute.networks.get",
+            "compute.subnetworks.get",
             "compute.sslCertificates.create",
             "compute.sslCertificates.delete",
             "compute.sslCertificates.get",
@@ -929,6 +932,10 @@
       {
         "grant": {
           "actions": [
+            // Ingress validation is required even with heartbeats disabled.
+            "Microsoft.Network/virtualNetworks/read",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/checkIpAddressAvailability/read",
             "Microsoft.Network/applicationGateways/write",
             "Microsoft.Network/applicationGateways/read",
             "Microsoft.Network/applicationGateways/delete",

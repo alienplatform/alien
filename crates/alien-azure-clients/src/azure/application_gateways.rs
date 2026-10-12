@@ -24,6 +24,16 @@ pub trait ApplicationGatewayApi: Send + Sync + std::fmt::Debug {
         application_gateway: &Value,
     ) -> Result<ApplicationGatewayOperationResult>;
 
+    /// Update an existing gateway only if its cloud ETag still matches.
+    /// Read-modify-write callers must use this to preserve concurrent changes.
+    async fn update_application_gateway_if_match(
+        &self,
+        resource_group_name: &str,
+        application_gateway_name: &str,
+        application_gateway: &Value,
+        etag: &str,
+    ) -> Result<ApplicationGatewayOperationResult>;
+
     /// Get an Application Gateway by name.
     async fn get_application_gateway(
         &self,
@@ -80,6 +90,50 @@ impl AzureApplicationGatewayClient {
         )
     }
 
+    async fn put_application_gateway(
+        &self,
+        resource_group_name: &str,
+        application_gateway_name: &str,
+        application_gateway: &Value,
+        etag: Option<&str>,
+    ) -> Result<ApplicationGatewayOperationResult> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.resource_url(resource_group_name, application_gateway_name);
+        let body = serde_json::to_string(application_gateway)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize application gateway: {}",
+                    application_gateway_name
+                ),
+            })?;
+
+        let builder = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let builder = if let Some(etag) = etag {
+            builder.header("If-Match", etag)
+        } else {
+            builder
+        };
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdateApplicationGateway",
+                application_gateway_name,
+            )
+            .await
+    }
+
     async fn get_application_gateway_backend_health(
         &self,
         resource_group_name: &str,
@@ -134,36 +188,29 @@ impl ApplicationGatewayApi for AzureApplicationGatewayClient {
         application_gateway_name: &str,
         application_gateway: &Value,
     ) -> Result<ApplicationGatewayOperationResult> {
-        let bearer_token = self
-            .token_cache
-            .get_bearer_token_with_scope("https://management.azure.com/.default")
-            .await?;
+        self.put_application_gateway(
+            resource_group_name,
+            application_gateway_name,
+            application_gateway,
+            None,
+        )
+        .await
+    }
 
-        let url = self.resource_url(resource_group_name, application_gateway_name);
-        let body = serde_json::to_string(application_gateway)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
-                message: format!(
-                    "Failed to serialize application gateway: {}",
-                    application_gateway_name
-                ),
-            })?;
-
-        let builder = AzureRequestBuilder::new(Method::PUT, url)
-            .content_type_json()
-            .content_length(&body)
-            .body(body);
-
-        let req = builder.build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
-
-        self.base
-            .execute_request_with_long_running_support(
-                signed,
-                "CreateOrUpdateApplicationGateway",
-                application_gateway_name,
-            )
-            .await
+    async fn update_application_gateway_if_match(
+        &self,
+        resource_group_name: &str,
+        application_gateway_name: &str,
+        application_gateway: &Value,
+        etag: &str,
+    ) -> Result<ApplicationGatewayOperationResult> {
+        self.put_application_gateway(
+            resource_group_name,
+            application_gateway_name,
+            application_gateway,
+            Some(etag),
+        )
+        .await
     }
 
     async fn get_application_gateway(
@@ -240,5 +287,54 @@ impl ApplicationGatewayApi for AzureApplicationGatewayClient {
                 application_gateway_name,
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AzureClientConfig, AzureCredentials};
+    use alien_core::AzureServiceOverrides;
+    use httpmock::prelude::*;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn conditional_gateway_update_rejects_a_stale_cloud_snapshot() {
+        let server = MockServer::start_async().await;
+        let body = serde_json::json!({"properties": {"backendAddressPools": [{"name": "backend", "properties": {"backendAddresses": [{"ipAddress": "10.0.0.10"}]}}]}});
+        let write = server.mock_async(|when, then| {
+            when.method(PUT)
+                .path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/applicationGateways/gateway")
+                .query_param("api-version", "2024-05-01")
+                .header("If-Match", "W/\"snapshot\"")
+                .json_body(body.clone());
+            then.status(412).json_body(serde_json::json!({"error": {"code": "PreconditionFailed", "message": "A concurrent gateway update changed the ETag"}}));
+        }).await;
+        let config = AzureClientConfig {
+            subscription_id: "sub".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: Some(AzureServiceOverrides {
+                endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+            }),
+        };
+        let client =
+            AzureApplicationGatewayClient::new(Client::new(), AzureTokenCache::new(config));
+        let error = client
+            .update_application_gateway_if_match("rg", "gateway", &body, "W/\"snapshot\"")
+            .await
+            .expect_err("stale cloud snapshots must fail");
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
+            "conditional conflict must stay visible to the reconciler: {error}"
+        );
+        assert!(
+            !error.retryable,
+            "a stale snapshot must be refreshed before retrying"
+        );
+        write.assert_hits_async(1).await;
     }
 }

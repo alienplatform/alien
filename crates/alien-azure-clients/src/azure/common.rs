@@ -10,7 +10,7 @@ use crate::azure::long_running_operation::{LongRunningOperation, OperationResult
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use http::{header::HeaderName, HeaderValue};
+use http::{HeaderValue, header::HeaderName};
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
@@ -419,7 +419,10 @@ impl AzureClientBase {
                             Ok(OperationResult::LongRunning(long_running_op))
                         } else {
                             Err(AlienError::new(ErrorData::GenericError {
-                                message: format!("Azure {}: got 202 Accepted but no long-running operation headers found", op),
+                                message: format!(
+                                    "Azure {}: got 202 Accepted but no long-running operation headers found",
+                                    op
+                                ),
                             }))
                         }
                     }
@@ -568,7 +571,10 @@ impl AzureClientBase {
                             Ok(OperationResult::LongRunning(long_running_op))
                         } else {
                             Err(AlienError::new(ErrorData::GenericError {
-                                message: format!("Azure {}: got 202 Accepted but no long-running operation headers found", op),
+                                message: format!(
+                                    "Azure {}: got 202 Accepted but no long-running operation headers found",
+                                    op
+                                ),
                             }))
                         }
                     }
@@ -791,7 +797,13 @@ pub fn create_azure_http_error_with_context(
     };
 
     // Add the service-specific context to the HTTP error
-    http_error.context(service_context)
+    let mut error = http_error.context(service_context);
+    // A failed precondition requires a new cloud snapshot. Replaying the same
+    // request cannot repair its stale ETag. Let the caller reconcile again.
+    if status == StatusCode::PRECONDITION_FAILED {
+        error.retryable = false;
+    }
+    error
 }
 
 // -----------------------------------------------------------------------------
@@ -817,7 +829,10 @@ pub fn validate_azure_metadata_key(key: &str) -> Result<()> {
 
     if !is_valid_csharp_identifier {
         return Err(AlienError::new(ErrorData::InvalidInput {
-            message: format!("Invalid metadata key '{}': must be a valid C# identifier (1-64 characters, start with letter/underscore, contain only letters/digits/underscores)", key),
+            message: format!(
+                "Invalid metadata key '{}': must be a valid C# identifier (1-64 characters, start with letter/underscore, contain only letters/digits/underscores)",
+                key
+            ),
             field_name: None,
         }));
     }
@@ -880,9 +895,10 @@ mod tests {
 
         assert_eq!(err.code, "REMOTE_RESOURCE_CONFLICT");
         assert!(err.retryable);
-        assert!(err
-            .message
-            .contains("cannot be updated during provisioning"));
+        assert!(
+            err.message
+                .contains("cannot be updated during provisioning")
+        );
     }
 
     #[test]

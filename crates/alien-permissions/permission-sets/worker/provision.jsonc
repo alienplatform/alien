@@ -595,6 +595,9 @@
         "description": "Create, update, and delete Cloud Run services, jobs, schedulers, Pub/Sub triggers, and HTTPS load-balancer resources owned by this application.",
         "grant": {
           "permissions": [
+            // Ingress validation is required even with heartbeats disabled.
+            "compute.networks.get",
+            "compute.subnetworks.get",
             "run.services.create",
             "run.services.delete",
             "run.jobs.create",
@@ -699,6 +702,10 @@
         "description": "Create, update, and delete Azure Container Apps, queues, identities, and role assignments owned by this application.",
         "grant": {
           "actions": [
+            // Ingress validation is required even with heartbeats disabled.
+            "Microsoft.Network/virtualNetworks/read",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/checkIpAddressAvailability/read",
             "Microsoft.App/containerApps/write",
             "Microsoft.App/containerApps/delete",
             "Microsoft.App/containerApps/authConfigs/write",
