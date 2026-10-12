@@ -374,3 +374,63 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
     assert!(services.lock().unwrap().live.is_none());
     assert_eq!(services.lock().unwrap().deletes, 1);
 }
+
+#[rstest]
+#[case(CloudRunIngress::IngressTrafficAll, true, true)]
+#[case(CloudRunIngress::IngressTrafficAll, false, false)]
+#[case(CloudRunIngress::IngressTrafficInternalOnly, true, false)]
+#[case(CloudRunIngress::IngressTrafficInternalLoadBalancer, true, false)]
+#[tokio::test]
+async fn legacy_native_outputs_refresh_from_actual_service_access(
+    #[case] ingress: CloudRunIngress,
+    #[case] invoker_disabled: bool,
+    #[case] publicly_accessible: bool,
+) {
+    let worker = crate::worker::fixtures::basic_function();
+    let mut checkpoint = serde_json::to_value(GcpWorkerController::mock_ready("test-api")).unwrap();
+    checkpoint
+        .as_object_mut()
+        .unwrap()
+        .remove("nativePublicAccess");
+    let controller: GcpWorkerController = serde_json::from_value(checkpoint).unwrap();
+    assert!(!controller.native_public_access);
+    let mut run = MockCloudRunApi::new();
+    run.expect_get_service().times(1).returning(move |_, name| {
+        let mut service = create_successful_service_response(&name);
+        service.ingress = Some(ingress.clone());
+        service.invoker_iam_disabled = Some(invoker_disabled);
+        Ok(service)
+    });
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(worker)
+        .controller(controller)
+        .platform(Platform::Gcp)
+        .service_provider(setup_mock_service_provider(Arc::new(run), None))
+        .with_test_dependencies()
+        .build()
+        .await
+        .unwrap();
+    executor.step().await.unwrap();
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    let outputs = controller.build_outputs().unwrap();
+    let outputs = outputs.downcast_ref::<alien_core::WorkerOutputs>().unwrap();
+    assert_eq!(!outputs.public_endpoints.is_empty(), publicly_accessible);
+    assert_eq!(!outputs.private_endpoints.is_empty(), !publicly_accessible);
+    let binding: alien_core::bindings::WorkerBinding = serde_json::from_value(
+        crate::core::ResourceController::get_binding_params(controller)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let alien_core::bindings::WorkerBinding::CloudRun(binding) = binding else {
+        panic!("expected Cloud Run binding");
+    };
+    assert_eq!(binding.public_url.is_some(), publicly_accessible);
+    assert_eq!(
+        binding.private_url,
+        alien_core::bindings::BindingValue::Value(
+            "https://test-api-abcd1234-uc.a.run.app".to_string()
+        )
+    );
+}

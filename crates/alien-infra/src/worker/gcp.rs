@@ -315,6 +315,9 @@ pub struct GcpWorkerController {
     /// Canonical provider URI for trigger delivery and OIDC, independent of endpoint URLs.
     #[serde(default)]
     pub(crate) service_uri: Option<String>,
+    /// Whether the last observed native service permits unauthenticated internet access.
+    #[serde(default)]
+    pub(super) native_public_access: bool,
     /// The operation name for long-running operations (for create, update, delete)
     pub(crate) operation_name: Option<String>,
     /// Number of targeted retries after GAR IAM propagation denied an image pull.
@@ -1036,6 +1039,8 @@ impl GcpWorkerController {
             });
         }
 
+        self.native_public_access = service.ingress == Some(CloudRunIngress::IngressTrafficAll)
+            && service.invoker_iam_disabled == Some(true);
         self.service_uri = service.uri.clone();
         let cloud_run_url = service.uri.or_else(|| service.urls.first().cloned());
 
@@ -2389,6 +2394,8 @@ impl GcpWorkerController {
             owner.confirm(&service, ctx.desired_config.id())?;
         }
 
+        self.native_public_access = service.ingress == Some(CloudRunIngress::IngressTrafficAll)
+            && service.invoker_iam_disabled == Some(true);
         self.service_uri = service.uri.clone();
 
         // Verify service is ready. A service can be temporarily not-Ready due to
@@ -2699,6 +2706,9 @@ impl GcpWorkerController {
             }
         }
 
+        self.native_public_access = current_service.ingress
+            == Some(CloudRunIngress::IngressTrafficAll)
+            && current_service.invoker_iam_disabled == Some(true);
         self.service_uri = current_service.uri.clone();
 
         // Build updated service configuration
@@ -2880,6 +2890,9 @@ impl GcpWorkerController {
             });
         }
 
+        self.native_public_access = service.ingress == Some(CloudRunIngress::IngressTrafficAll)
+            && service.invoker_iam_disabled == Some(true);
+        self.service_uri = service.uri.clone();
         info!(name=%service_name, "Cloud Run service updated successfully");
 
         Ok(HandlerAction::Continue {
@@ -4732,25 +4745,37 @@ impl GcpWorkerController {
                 }
             });
 
+            let endpoints = std::collections::HashMap::from([(
+                "default".to_string(),
+                alien_core::PublicEndpointOutput {
+                    host: alien_core::public_url_host(&public_url).unwrap_or_default(),
+                    protocol: alien_core::ExposeProtocol::Http,
+                    port: alien_core::public_url_port(&public_url).unwrap_or(443),
+                    url: public_url,
+                    wildcard_host: None,
+                    load_balancer_endpoint,
+                },
+            )]);
             ResourceOutputs::new(WorkerOutputs {
-                private_endpoints: std::collections::HashMap::new(),
-                // Use the service name if available, otherwise fall back to a placeholder
                 worker_name: self
                     .service_name
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string()),
                 identifier: self.service_name.clone(),
-                public_endpoints: std::collections::HashMap::from([(
-                    "default".to_string(),
-                    alien_core::PublicEndpointOutput {
-                        host: alien_core::public_url_host(&public_url).unwrap_or_default(),
-                        protocol: alien_core::ExposeProtocol::Http,
-                        port: alien_core::public_url_port(&public_url).unwrap_or(443),
-                        url: public_url,
-                        wildcard_host: None,
-                        load_balancer_endpoint,
-                    },
-                )]),
+                public_endpoints: if self.native_public_access
+                    || self.forwarding_rule_name.is_some()
+                {
+                    endpoints.clone()
+                } else {
+                    HashMap::new()
+                },
+                private_endpoints: if self.native_public_access
+                    || self.forwarding_rule_name.is_some()
+                {
+                    HashMap::new()
+                } else {
+                    endpoints
+                },
                 commands_push_target: self.commands_topic_name.clone(),
             })
         })
@@ -4769,8 +4794,10 @@ impl GcpWorkerController {
         };
         let public_url = if self.ingress.active {
             self.ingress.primary_url(&self.ingress.public_endpoints)
-        } else {
+        } else if self.native_public_access || self.forwarding_rule_name.is_some() {
             self.url.as_deref()
+        } else {
+            None
         };
         if let (Some(service_name), Some(url)) = (&self.service_name, private_url) {
             let project_id = self.project_id.clone().ok_or_else(|| {
@@ -6217,6 +6244,7 @@ impl GcpWorkerController {
             service_owner: None,
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
             service_uri: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
+            native_public_access: true,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -8103,7 +8131,8 @@ mod tests {
         // Verify URL is still available for private workers (internal access)
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.public_endpoints.contains_key("default"));
+        assert!(function_outputs.public_endpoints.is_empty());
+        assert!(function_outputs.private_endpoints.contains_key("default"));
     }
 
     /// Test that verifies correct service configuration parameters
@@ -8331,6 +8360,7 @@ mod tests {
             service_owner: None,
             url: None,
             service_uri: None,
+            native_public_access: false,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
