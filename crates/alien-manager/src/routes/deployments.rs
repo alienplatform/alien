@@ -1217,6 +1217,14 @@ mod tests {
         deployment_store: MockDeploymentStore,
         request: Request<Body>,
     ) -> (StatusCode, serde_json::Value) {
+        send_with_transport(deployment_store, request, false).await
+    }
+
+    async fn send_with_transport(
+        deployment_store: MockDeploymentStore,
+        request: Request<Body>,
+        real_http: bool,
+    ) -> (StatusCode, serde_json::Value) {
         let temp = tempfile::tempdir().expect("test directory should be created");
         let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
             LocalKv::new(temp.path().join("kv"))
@@ -1269,11 +1277,36 @@ mod tests {
             bundle_sources: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
-        let response = router()
-            .with_state(state)
-            .oneshot(request)
-            .await
-            .expect("route should respond");
+        let app = router().with_state(state);
+        if real_http {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("HTTP listener should bind");
+            let address = listener
+                .local_addr()
+                .expect("listener should have an address");
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let (parts, body) = request.into_parts();
+            let body = to_bytes(body, 1024 * 1024)
+                .await
+                .expect("request body should load");
+            let response = reqwest::Client::new()
+                .request(parts.method, format!("http://{address}{}", parts.uri))
+                .headers(parts.headers)
+                .body(body)
+                .send()
+                .await
+                .expect("HTTP route should respond");
+            let status = response.status();
+            let json = response
+                .json()
+                .await
+                .expect("HTTP response should contain JSON");
+            server.abort();
+            assert!(server.await.expect_err("server should stop").is_cancelled());
+            return (status, json);
+        }
+        let response = app.oneshot(request).await.expect("route should respond");
         let status = response.status();
         let body = to_bytes(response.into_body(), 1024 * 1024)
             .await
@@ -1355,7 +1388,20 @@ mod tests {
             .header(http::header::AUTHORIZATION, "Bearer test-token")
             .body(Body::empty())
             .expect("request should build");
-        send(deployment_store, request).await
+        send_with_transport(deployment_store, request, true).await
+    }
+
+    #[tokio::test]
+    async fn retry_forwards_update_pending_to_the_store() {
+        let deployment = DeploymentRecord {
+            status: "update-pending".to_string(),
+            current_release_id: Some("rel_installed".to_string()),
+            desired_release_id: Some("rel_target".to_string()),
+            ..deployment_record()
+        };
+        let (status, json) = retry_route_response(deployment, true).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["success"], true);
     }
 
     /// A setup run that handed a running deployment back at `provisioning` with
