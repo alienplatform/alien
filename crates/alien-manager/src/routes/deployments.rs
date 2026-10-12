@@ -1293,7 +1293,10 @@ mod tests {
             let body = to_bytes(body, 1024 * 1024)
                 .await
                 .expect("request body should load");
-            let response = reqwest::Client::new()
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("HTTP client should build")
                 .request(parts.method, format!("http://{address}{}", parts.uri))
                 .headers(parts.headers)
                 .body(body)
