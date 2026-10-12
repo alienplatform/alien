@@ -6,6 +6,10 @@ mod gcp_ingress_operation;
 #[cfg(feature = "gcp")]
 pub use gcp_ingress_operation::*;
 #[cfg(feature = "gcp")]
+mod gcp_ingress_negs;
+#[cfg(feature = "gcp")]
+pub use gcp_ingress_negs::*;
+#[cfg(feature = "gcp")]
 mod gcp_https_ingress;
 #[cfg(feature = "gcp")]
 pub use gcp_https_ingress::*;
