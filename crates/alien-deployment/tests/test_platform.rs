@@ -2,6 +2,7 @@
 //!
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
+use alien_azure_clients::AzureClientConfigExt;
 use alien_bindings::Vault as _;
 use alien_core::{
     ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
