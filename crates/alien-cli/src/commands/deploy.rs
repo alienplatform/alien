@@ -190,6 +190,7 @@ struct ResolvedDeployArgs {
     name: String,
     platform: String,
     platform_enum: Platform,
+    setup_management: alien_core::SetupManagement,
     network_settings: Option<NetworkSettings>,
     compute_settings: Option<ComputeSettings>,
     domain_settings: Option<alien_core::DomainSettings>,
@@ -202,6 +203,7 @@ struct ResolvedDeployArgs {
 struct DeployConfigFile {
     name: Option<String>,
     platform: Option<String>,
+    setup_management: Option<alien_core::SetupManagement>,
     network: Option<DeployConfigNetwork>,
     compute: Option<ComputeSettings>,
     domains: Option<alien_core::DomainSettings>,
@@ -314,7 +316,15 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
             message: e,
         })
     })?;
-    if args.automatic_setup
+    let setup_management = if args.automatic_setup {
+        alien_core::SetupManagement::Automatic
+    } else {
+        config
+            .as_ref()
+            .and_then(|config| config.setup_management)
+            .unwrap_or_default()
+    };
+    if setup_management == alien_core::SetupManagement::Automatic
         && !matches!(
             platform_enum,
             Platform::Aws | Platform::Gcp | Platform::Azure
@@ -370,6 +380,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         name,
         platform,
         platform_enum,
+        setup_management,
         network_settings,
         compute_settings,
         domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
@@ -984,7 +995,7 @@ fn deployment_stack_settings_json(
             MonitoringMode::Auto => "auto",
         },
         "updates": "auto",
-        "setupManagement": if args.automatic_setup { "automatic" } else { "manual" },
+        "setupManagement": resolved_args.setup_management,
     });
 
     if let Some(access) = args.network.endpoint_access {
@@ -1335,7 +1346,7 @@ async fn deploy_task_with_environment(
     }
 
     info!("Starting deploy command");
-    if args.automatic_setup {
+    if resolved_args.setup_management == alien_core::SetupManagement::Automatic {
         println!("Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.");
     }
     println!(
@@ -4020,6 +4031,7 @@ mod tests {
                 name: "test".to_string(),
                 platform: "aws".to_string(),
                 platform_enum: Platform::Aws,
+                setup_management: alien_core::SetupManagement::Manual,
                 network_settings: None,
                 compute_settings: None,
                 domain_settings: None,
@@ -4074,6 +4086,7 @@ machine = "m8i.2xlarge"
             name: config.name.expect("name"),
             platform: config.platform.expect("platform"),
             platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
             network_settings: None,
             compute_settings: config.compute,
             domain_settings: config.domains,
@@ -4176,6 +4189,7 @@ max = 1
             name: "test".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
             network_settings: None,
             compute_settings: None,
             domain_settings: None,
@@ -4261,6 +4275,7 @@ max = 1
             name: "preview".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
             network_settings: None,
             compute_settings: None,
             domain_settings: None,
