@@ -29,6 +29,7 @@ fn run_cli(server: &MockServer, args: &[&str], explicit_workspace: bool) -> Outp
         "ALIEN_BASE_URL",
         "ALIEN_WORKSPACE",
         "ALIEN_LOG",
+        "ALIEN_LOG_FILE",
         "RUST_LOG",
     ] {
         command.env_remove(name);
