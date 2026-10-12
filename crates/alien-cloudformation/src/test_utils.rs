@@ -146,11 +146,46 @@ fn suppress_known_cfn_lint_false_positives(mut result: LinterRun) -> LinterRun {
     if matches!(result.status, LinterStatus::Failed(_))
         && (is_apigateway_tagresource_false_positive_only(&result.stdout)
             || is_bedrock_mantle_service_prefix_false_positive_only(&result.stdout)
-            || is_nextgen_opensearch_schema_lag_only(&result.stdout))
+            || is_nextgen_opensearch_schema_lag_only(&result.stdout)
+            || is_lambda_microvm_schema_lag_only(&result.stdout))
     {
         result.status = LinterStatus::Passed;
     }
     result
+}
+
+// cfn-lint's IAM catalogue predates these documented Lambda actions. Additional
+// template conditions can cause it to inspect statements it previously skipped.
+// Keep this exception exact: unrelated W3037 diagnostics and all errors still fail.
+// https://docs.aws.amazon.com/lambda/latest/dg/microvms-launching.html
+fn is_lambda_microvm_schema_lag_only(stdout: &str) -> bool {
+    let blocks: Vec<_> = stdout
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    !blocks.is_empty()
+        && blocks.iter().all(|block| {
+            let mut lines = block.lines();
+            let Some(warning) = lines.next() else {
+                return false;
+            };
+            let known_action = [
+                "runmicrovm",
+                "suspendmicrovm",
+                "resumemicrovm",
+                "terminatemicrovm",
+                "createmicrovmauthtoken",
+                "getmicrovm",
+                "getmicrovmimage",
+                "passnetworkconnector",
+            ]
+            .iter()
+            .any(|action| warning.starts_with(&format!("W3037 '{action}' is not one of ")));
+            known_action
+                && matches!(lines.next(), Some(line) if line.contains("template.yaml:"))
+                && lines.next().is_none()
+        })
 }
 
 fn is_bedrock_mantle_service_prefix_false_positive_only(stdout: &str) -> bool {
@@ -216,6 +251,19 @@ fn is_nextgen_opensearch_schema_lag_only(stdout: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn microvm_catalogue_exception_never_hides_unknown_actions_or_other_errors() {
+        let known = "W3037 'runmicrovm' is not one of ['invoke']\n/tmp/template.yaml:10:1\n\n";
+        assert!(is_lambda_microvm_schema_lag_only(known));
+        assert!(!is_lambda_microvm_schema_lag_only(""));
+        assert!(!is_lambda_microvm_schema_lag_only(
+            &known.replace("runmicrovm", "typo")
+        ));
+        assert!(!is_lambda_microvm_schema_lag_only(&format!(
+            "{known}E3032 empty list\n/tmp/template.yaml:11:1\n\n"
+        )));
+    }
 
     #[test]
     fn suppresses_only_apigateway_tagresource_false_positive() {

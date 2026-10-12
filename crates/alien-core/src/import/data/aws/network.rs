@@ -10,9 +10,11 @@ use serde::{Deserialize, Serialize};
 pub struct AwsFailureDomainSubnets {
     /// Public subnet IDs in this availability zone.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,
     /// Private subnet IDs in this availability zone.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub private_subnet_ids: Vec<String>,
 }
 
@@ -33,14 +35,21 @@ pub struct AwsNetworkImportData {
     /// Elastic IP allocation ID backing the NAT gateway.
     pub eip_allocation_id: Option<String>,
     /// Public subnet IDs.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,
     /// Private subnet IDs.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub private_subnet_ids: Vec<String>,
     /// Public route table ID.
     pub public_route_table_id: Option<String>,
     /// Private route table ID.
     pub private_route_table_id: Option<String>,
     /// Security group ID for private workloads.
+    #[cfg_attr(feature = "jsonschema", schemars(skip_serializing_if = "Option::is_none"))]
+    #[serde(
+        default,
+        deserialize_with = "crate::network_ids::deserialize_optional_id"
+    )]
     pub security_group_id: Option<String>,
     /// Availability zone names used by created or BYO subnets.
     pub availability_zones: Vec<String>,

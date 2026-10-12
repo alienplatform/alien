@@ -135,3 +135,5 @@ pub use import::*;
 pub use alien_macros::alien_event;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod network_ids;
