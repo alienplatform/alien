@@ -485,7 +485,7 @@ impl GcpHttpsIngressState {
     }
 
     pub fn backend_name(&self) -> String {
-        self.name()
+        self.child_name("backend")
     }
 
     fn record_operation(

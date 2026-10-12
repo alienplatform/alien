@@ -603,6 +603,11 @@ async fn checkpoint_without_scope_resumes_as_regional_private() {
     let mut checkpoint = serde_json::to_value(&private).unwrap();
     checkpoint.as_object_mut().unwrap().remove("scope");
     checkpoint.as_object_mut().unwrap().remove("providerIds");
+    checkpoint.as_object_mut().unwrap().remove("legacyNames");
+    checkpoint
+        .as_object_mut()
+        .unwrap()
+        .remove("legacyDescriptions");
     let mut restored: GcpHttpsIngressState = serde_json::from_value(checkpoint).unwrap();
     let before = store.lock().unwrap().mutations;
     ready(&mut restored, &client, &store, "certificate").await;
@@ -704,6 +709,7 @@ async fn recorded_global_graph_handoff_preserves_frontend_rotates_and_cleans_up(
     let mut state = GcpHttpsIngressState::from_recorded_global(&client, &desired, recorded())
         .await
         .unwrap();
+    assert_eq!(state.backend_name(), "legacy-backend");
     assert_eq!(store.lock().unwrap().mutations, before);
     state = checkpoint(&state);
     ready(&mut state, &client, &store, "renewed-certificate").await;
