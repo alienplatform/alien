@@ -27,7 +27,7 @@ impl TfEmitter for GcpNetworkEmitter {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        match &network.settings {
+        let mut fragment = match &network.settings {
             NetworkSettings::UseDefault => {
                 let mut fragment = TfFragment::default();
                 fragment.data_blocks.push(data_block(
@@ -83,7 +83,10 @@ impl TfEmitter for GcpNetworkEmitter {
                         .to_string(),
                 }))
             }
-        }
+        }?;
+        let network_link = network_self_link(label, &network.settings);
+        add_proxy_subnet(&mut fragment, label, network_link);
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -119,6 +122,14 @@ impl TfEmitter for GcpNetworkEmitter {
                             &subnet_label,
                             "ip_cidr_range",
                         ]),
+                    ),
+                    (
+                        "proxySubnetSelfLink",
+                        proxy_subnet_attribute(label, "self_link"),
+                    ),
+                    (
+                        "proxySubnetCidr",
+                        proxy_subnet_attribute(label, "ip_cidr_range"),
                     ),
                     ("routerSelfLink", Expression::Null),
                     ("natName", Expression::Null),
@@ -156,6 +167,8 @@ impl TfEmitter for GcpNetworkEmitter {
                             "var.network_mode == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range"
                         )),
                     ),
+                    ("proxySubnetSelfLink", proxy_subnet_attribute(label, "self_link")),
+                    ("proxySubnetCidr", proxy_subnet_attribute(label, "ip_cidr_range")),
                     (
                         "routerSelfLink",
                         expr::raw(format!(
@@ -337,4 +350,71 @@ fn gcp_network_name(label: &str, suffix: &str) -> Expression {
     expr::raw(format!(
         "trim(substr(\"${{local.resource_prefix}}-{segment}{suffix}\", 0, 63), \"-\")"
     ))
+}
+
+fn network_self_link(label: &str, settings: &NetworkSettings) -> String {
+    match settings {
+        NetworkSettings::Create { .. } => format!(
+            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : data.google_compute_network.{label}[0].self_link"
+        ),
+        _ => format!("data.google_compute_network.{label}.self_link"),
+    }
+}
+
+fn proxy_subnet_attribute(label: &str, attribute: &str) -> Expression {
+    expr::raw(format!(
+        "var.gcp_proxy_subnet_name != \"\" ? data.google_compute_subnetwork.{label}_proxy[0].{attribute} : var.gcp_proxy_subnet_cidr != \"\" ? google_compute_subnetwork.{label}_proxy[0].{attribute} : null"
+    ))
+}
+
+/// Proxy subnet ownership stays with setup. An existing VPC must explicitly
+/// provide a free CIDR or an existing active proxy subnet; never guess a range.
+fn add_proxy_subnet(fragment: &mut TfFragment, label: &str, network: String) {
+    let proxy_label = format!("{label}_proxy");
+    fragment.resource_blocks.push(resource_block(
+        "google_compute_subnetwork",
+        &proxy_label,
+        [
+            attr("count", expr::raw("var.gcp_proxy_subnet_cidr != \"\" && var.gcp_proxy_subnet_name == \"\" ? 1 : 0")),
+            attr("name", gcp_network_name(label, "-proxy")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr("region", expr::raw("var.gcp_region")),
+            attr("network", expr::raw(network.clone())),
+            attr("ip_cidr_range", expr::raw("var.gcp_proxy_subnet_cidr")),
+            attr("purpose", Expression::String("REGIONAL_MANAGED_PROXY".to_string())),
+            attr("role", Expression::String("ACTIVE".to_string())),
+        ],
+    ));
+    fragment.data_blocks.push(data_block(
+        "google_compute_subnetwork",
+        &proxy_label,
+        [
+            attr(
+                "count",
+                expr::raw("var.gcp_proxy_subnet_name != \"\" ? 1 : 0"),
+            ),
+            attr("name", expr::raw("var.gcp_proxy_subnet_name")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr("region", expr::raw("var.gcp_region")),
+            nested(block(
+                "lifecycle",
+                [nested(block(
+                    "postcondition",
+                    [
+                        attr(
+                            "condition",
+                            expr::raw(format!("self.network == ({})", network)),
+                        ),
+                        attr(
+                            "error_message",
+                            Expression::String(
+                                "The proxy subnet must belong to the workload VPC and gcp_region."
+                                    .to_string(),
+                            ),
+                        ),
+                    ],
+                ))],
+            )),
+        ],
+    ));
 }

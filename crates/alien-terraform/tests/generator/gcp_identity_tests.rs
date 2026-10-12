@@ -1,7 +1,10 @@
 //! GCP identity & network — service-account / management /
 //! network (Create + ByoVpcGcp + UseDefault).
 
-use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
+use super::helpers::{
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
+    snapshot_module,
+};
 use alien_core::{
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
     ResourceLifecycle, ServiceAccount, Stack, StackSettings, Worker, WorkerCode,
@@ -246,4 +249,38 @@ fn gcp_emits_no_ungated_management_grant_for_a_gated_worker() {
     );
 
     assert_terraform_valid(&module, "gcp_gated_worker_management_grants");
+}
+
+#[test]
+fn gcp_proxy_subnet_inputs_reject_invalid_ranges_and_ambiguous_ownership() {
+    let module = render(
+        &Stack::new("proxy-inputs".to_string()).build(),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    for cidr in ["invalid", "10.45.0.0/27", "2001:db8::/64"] {
+        assert_terraform_variable_plan_invalid_contains(
+            &module,
+            "invalid managed proxy subnet range",
+            &[
+                ("name", "example"),
+                ("token", "example-token"),
+                ("gcp_project", "example-project"),
+                ("gcp_proxy_subnet_cidr", cidr),
+            ],
+            "must be empty or an IPv4 CIDR",
+        );
+    }
+    assert_terraform_variable_plan_invalid_contains(
+        &module,
+        "ambiguous managed proxy subnet ownership",
+        &[
+            ("name", "example"),
+            ("token", "example-token"),
+            ("gcp_project", "example-project"),
+            ("gcp_proxy_subnet_cidr", "10.45.0.0/23"),
+            ("gcp_proxy_subnet_name", "existing-proxy"),
+        ],
+        "Specify a proxy subnet name or a new proxy subnet CIDR",
+    );
 }

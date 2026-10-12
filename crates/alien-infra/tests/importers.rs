@@ -693,6 +693,8 @@ fn gcp_network_import_derives_subnetwork_name() {
                 .to_string(),
         ],
         cidr_block: Some("10.0.0.0/20".to_string()),
+        proxy_subnet_self_link: Some("https://www.googleapis.com/compute/v1/projects/my-project/regions/us-central1/subnetworks/managed-proxy".to_string()),
+        proxy_subnet_cidr: Some("10.1.0.0/23".to_string()),
         router_self_link: None,
         nat_name: None,
         is_byo_vpc: false,
@@ -709,6 +711,11 @@ fn gcp_network_import_derives_subnetwork_name() {
     assert_eq!(
         internal_state(&state)["subnetworkName"], "alien-stack-workload",
         "importer must derive subnetwork_name from the subnet self-link, else the worker gets no VPC egress"
+    );
+    assert_eq!(internal_state(&state)["proxySubnetCidr"], "10.1.0.0/23");
+    assert_eq!(
+        internal_state(&state)["proxySubnetSelfLink"],
+        data.proxy_subnet_self_link.unwrap()
     );
 }
 

@@ -47,6 +47,8 @@ impl ResourceImporter for GcpNetworkImporter {
             network_self_link: data.vpc_self_link,
             subnetwork_name,
             subnetwork_self_link,
+            proxy_subnet_self_link: data.proxy_subnet_self_link,
+            proxy_subnet_cidr: data.proxy_subnet_cidr,
             router_name: None,
             cloud_nat_name: data.nat_name,
             firewall_name: None,

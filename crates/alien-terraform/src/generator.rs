@@ -1898,6 +1898,41 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
+        blocks.push(nested(variable_block(
+            "gcp_proxy_subnet_name",
+            "Existing ACTIVE REGIONAL_MANAGED_PROXY subnet in the workload VPC and gcp_region. Leave empty to create one using gcp_proxy_subnet_cidr.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        let mut proxy_cidr = variable_block(
+            "gcp_proxy_subnet_cidr",
+            "Free IPv4 CIDR (/23 recommended, /26 minimum) for a setup-owned regional proxy subnet. Required for private load balancers unless gcp_proxy_subnet_name is supplied. Leave both empty when private ingress is not needed.",
+            Some(Expression::String(String::new())),
+            false,
+        );
+        proxy_cidr.body.0.push(nested(block("validation", [
+            attr("condition", expr::raw("var.gcp_proxy_subnet_cidr == \"\" || (can(cidrnetmask(var.gcp_proxy_subnet_cidr)) && try(tonumber(split(\"/\", var.gcp_proxy_subnet_cidr)[1]) <= 26, false))")),
+            attr("error_message", Expression::String("gcp_proxy_subnet_cidr must be empty or an IPv4 CIDR with a prefix length no greater than 26.".to_string())),
+        ])));
+        proxy_cidr.body.0.push(nested(block(
+            "validation",
+            [
+                attr(
+                    "condition",
+                    expr::raw(
+                        "var.gcp_proxy_subnet_cidr == \"\" || var.gcp_proxy_subnet_name == \"\"",
+                    ),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(
+                        "Specify a proxy subnet name or a new proxy subnet CIDR, not both."
+                            .to_string(),
+                    ),
+                ),
+            ],
+        )));
+        blocks.push(nested(proxy_cidr));
         if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
             blocks.push(nested(variable_block(
                 "network_mode",
@@ -4270,7 +4305,7 @@ fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> 
     match target.cloud_platform() {
         alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Private resources require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
-        alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
+        alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.\n- Private ingress requires an ACTIVE regional managed proxy subnet in the workload VPC and `gcp_region`: provide `gcp_proxy_subnet_name` to reuse one or `gcp_proxy_subnet_cidr` to create one. Supply a free, non-overlapping IPv4 range (/23 recommended, /26 minimum). These resources remain owned by setup; update setup before enabling private ingress later.".to_string(),
         _ => String::new(),
     }
 }

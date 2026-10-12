@@ -17,6 +17,12 @@ pub struct GcpNetworkImportData {
     pub subnet_self_links: Vec<String>,
     /// Primary subnetwork CIDR block used for internal firewall rules.
     pub cidr_block: Option<String>,
+    /// Setup-owned regional managed proxy subnet for internal load balancers.
+    #[serde(default)]
+    pub proxy_subnet_self_link: Option<String>,
+    /// Proxy source range used to allow load balancer traffic to workload backends.
+    #[serde(default)]
+    pub proxy_subnet_cidr: Option<String>,
     /// Cloud Router self-link backing Cloud NAT (when created).
     pub router_self_link: Option<String>,
     /// Cloud NAT name (when created).

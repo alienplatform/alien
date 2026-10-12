@@ -13,6 +13,8 @@ export const GcpNetworkImportDataSchema = z.object({
 "isByoVpc": z.boolean().describe("True when the VPC is owned outside this stack."),
 "natName": z.string().describe("Cloud NAT name (when created).").nullish(),
 "projectId": z.string().describe("Project ID owning the network."),
+"proxySubnetCidr": z.string().describe("Proxy source range used to allow load balancer traffic to workload backends.").nullish(),
+"proxySubnetSelfLink": z.string().describe("Setup-owned regional managed proxy subnet for internal load balancers.").nullish(),
 "routerSelfLink": z.string().describe("Cloud Router self-link backing Cloud NAT (when created).").nullish(),
 "subnetSelfLinks": z.array(z.string()).describe("Subnetwork self-links across the configured regions."),
 "vpcName": z.string().describe("VPC short name.").nullish(),

@@ -19,6 +19,7 @@ use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::compute::{
     Firewall, FirewallAllowed, FirewallDirection, Network as GcpNetwork, NetworkRoutingConfig,
     Router, RouterNat, RouterNatSubnetworkToNat, RoutingMode, SourceIpRangesToNat, Subnetwork,
+    SubnetworkPurpose, SubnetworkRole,
 };
 use alien_macros::controller;
 use chrono::Utc;
@@ -39,6 +40,8 @@ pub struct GcpNetworkController {
     pub network_self_link: Option<String>,
     pub(crate) subnetwork_name: Option<String>,
     pub subnetwork_self_link: Option<String>,
+    pub proxy_subnet_self_link: Option<String>,
+    pub proxy_subnet_cidr: Option<String>,
     pub(crate) router_name: Option<String>,
     pub(crate) cloud_nat_name: Option<String>,
     pub(crate) firewall_name: Option<String>,
@@ -93,6 +96,56 @@ fn emit_gcp_network_heartbeat(
 }
 
 impl GcpNetworkController {
+    /// Verify setup's private ingress boundary against the cloud before creating
+    /// regional load balancers. Frozen setup data alone cannot prove purpose/role.
+    pub async fn require_proxy_subnet(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<Subnetwork> {
+        let invalid = |message: &str| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: message.to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })
+        };
+        let link = self.proxy_subnet_self_link.as_deref().ok_or_else(|| invalid(
+            "Private ingress requires a setup-owned regional proxy subnet. Update setup with gcp_proxy_subnet_name or gcp_proxy_subnet_cidr before changing endpoint access."
+        ))?;
+        let config = ctx.get_gcp_config()?;
+        let expected_prefix = format!(
+            "https://www.googleapis.com/compute/v1/projects/{}/regions/{}/subnetworks/",
+            config.project_id, config.region
+        );
+        let name = link
+            .strip_prefix(&expected_prefix)
+            .filter(|name| !name.is_empty() && !name.contains('/'))
+            .ok_or_else(|| {
+                invalid(
+                    "The registered proxy subnet must belong to the deployment project and region.",
+                )
+            })?;
+        let client = ctx.service_provider.get_gcp_compute_client(config)?;
+        let subnet = client
+            .get_subnetwork(config.region.clone(), name.to_string())
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: "Could not verify the registered private ingress proxy subnet".to_string(),
+                operation: Some("verify_private_ingress_network".to_string()),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        if subnet.purpose != Some(SubnetworkPurpose::RegionalManagedProxy)
+            || subnet.role != Some(SubnetworkRole::Active)
+            || self.network_self_link.is_none()
+            || subnet.network != self.network_self_link
+            || self.proxy_subnet_cidr.is_none()
+            || subnet.ip_cidr_range != self.proxy_subnet_cidr
+        {
+            return Err(invalid("The registered proxy subnet must be ACTIVE, have purpose REGIONAL_MANAGED_PROXY, and match the setup VPC and proxy CIDR. Update setup registration before enabling private ingress."));
+        }
+        Ok(subnet)
+    }
+
     /// Generate a deterministic CIDR block from the stack/network ID.
     /// Uses RFC 6598 (100.64.0.0/10) or RFC 1918 ranges to minimize conflicts.
     fn generate_cidr_from_id(network_id: &str) -> String {
@@ -174,6 +227,8 @@ impl GcpNetworkController {
                 "https://www.googleapis.com/compute/v1/projects/test/regions/{}/subnetworks/{}",
                 region, subnetwork_name
             )),
+            proxy_subnet_self_link: None,
+            proxy_subnet_cidr: None,
             router_name: Some(format!("test-{}-router", network_id)),
             cloud_nat_name: Some(format!("test-{}-nat", network_id)),
             firewall_name: Some(format!("test-{}-fw", network_id)),
