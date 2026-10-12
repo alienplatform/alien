@@ -1149,8 +1149,8 @@ mod tests {
             let end = Utc::now();
             let error = fetch_logs(&client, "db_test", "count:[10,100]", &target,
                 end - Duration::hours(1), end, 10).await.expect_err("query is refused over HTTP");
-            splits.assert_calls_async(1).await;
-            search.assert_calls_async(1).await;
+            splits.assert_hits_async(1).await;
+            search.assert_hits_async(1).await;
             assert_eq!(error.http_status_code, Some(400));
             assert_eq!(error.code, "INVALID_REQUEST");
             assert_eq!(error.message, "Log search rejected: Numeric ranges require TO between bounds");
