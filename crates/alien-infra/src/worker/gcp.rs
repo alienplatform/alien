@@ -725,36 +725,11 @@ impl GcpWorkerController {
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
 
-        // Branch based on ingress type
-        // If public, resolve domain and proceed to certificate/load balancer flow
-        // If private, skip directly to push subscriptions
-        if !config.public_endpoints.is_empty() {
-            match Self::resolve_domain_info(ctx, &config.id) {
-                Ok(domain_info) => {
-                    info!(fqdn=%domain_info.fqdn, "Resolved domain for public worker");
-                    self.fqdn = Some(domain_info.fqdn);
-                    self.certificate_id = domain_info.certificate_id;
-                    self.ssl_certificate_name = domain_info.ssl_certificate_name;
-                    self.uses_custom_domain = domain_info.uses_custom_domain;
-
-                    // Proceed to certificate flow
-                    return Ok(HandlerAction::Continue {
-                        state: WaitingForCertificate,
-                        suggested_delay: None,
-                    });
-                }
-                Err(_) => {
-                    // Standalone mode: no domain metadata available.
-                    // The Cloud Run service URL is already set from the service
-                    // creation response and is publicly accessible. Skip the
-                    // custom domain / certificate / load balancer flow.
-                    info!(
-                        worker=%config.id,
-                        url=?self.url,
-                        "No domain metadata — skipping custom domain setup (standalone mode)"
-                    );
-                }
-            }
+        if !config.public_endpoints.is_empty() && self.ensure_domain_info(ctx, config)? {
+            return Ok(HandlerAction::Continue {
+                state: WaitingForCertificate,
+                suggested_delay: None,
+            });
         }
 
         // Always go to CreatingPushSubscriptions next (linear flow)
@@ -4401,23 +4376,30 @@ impl GcpWorkerController {
             return Ok(true);
         }
 
-        match Self::resolve_domain_info(ctx, resource_id) {
-            Ok(domain_info) => {
-                self.fqdn = Some(domain_info.fqdn.clone());
-                self.certificate_id = domain_info.certificate_id;
-                self.ssl_certificate_name = domain_info.ssl_certificate_name;
-                self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
-                    self.url = config
-                        .configured_primary_public_url(
-                            ctx.deployment_config.public_endpoints.as_ref(),
-                        )
-                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
-                }
-                Ok(true)
-            }
-            Err(_) => Ok(false),
+        // Standalone workers may use the provider URL when no domain was
+        // configured. Once configured, invalid or missing certificate metadata
+        // must fail instead of quietly exposing the native URL.
+        let custom_domain_configured = ctx
+            .deployment_config
+            .stack_settings
+            .domains
+            .as_ref()
+            .and_then(|domains| domains.custom_domains.as_ref())
+            .is_some_and(|domains| domains.contains_key(resource_id));
+        if !custom_domain_configured && ctx.deployment_config.domain_metadata.is_none() {
+            return Ok(false);
         }
+        let domain_info = Self::resolve_domain_info(ctx, resource_id)?;
+        self.fqdn = Some(domain_info.fqdn.clone());
+        self.certificate_id = domain_info.certificate_id;
+        self.ssl_certificate_name = domain_info.ssl_certificate_name;
+        self.uses_custom_domain = domain_info.uses_custom_domain;
+        if self.url.is_none() {
+            self.url = config
+                .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
+                .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+        }
+        Ok(true)
     }
 
     fn unexpected_update_wrapper_state(
@@ -5685,6 +5667,81 @@ mod tests {
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
+
+    #[rstest]
+    #[case::create(false)]
+    #[case::update(true)]
+    #[tokio::test]
+    async fn configured_domain_without_resource_metadata_fails_instead_of_using_native_url(
+        #[case] updating: bool,
+    ) {
+        let worker = function_public_ingress();
+        let mut metadata = create_test_domain_metadata(&worker.id);
+        metadata.resources.clear();
+        let mut cloudrun = MockCloudRunApi::new();
+        if !updating {
+            cloudrun
+                .expect_get_service()
+                .times(1)
+                .returning(|_, _| Ok(create_successful_service_response("test-service")));
+        }
+        // No provider mutations are permitted at either resumed entry point.
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), None);
+        let mut controller = GcpWorkerController::mock_ready("test-service");
+        controller.state = if updating {
+            GcpWorkerState::UpdateEnsuringPublicExposure
+        } else {
+            GcpWorkerState::WaitingForServiceCreation
+        };
+        let controller: GcpWorkerController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(provider)
+            .domain_metadata(metadata)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("Domain metadata missing for resource"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_worker_without_domain_configuration_keeps_native_url() {
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_service()
+            .times(1)
+            .returning(|_, _| Ok(create_successful_service_response("test-service")));
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), None);
+        let mut controller = GcpWorkerController::mock_ready("test-service");
+        controller.state = GcpWorkerState::WaitingForServiceCreation;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+        assert!(matches!(
+            controller.state,
+            GcpWorkerState::CreatingPushSubscriptions
+        ));
+        assert!(controller.url.as_ref().unwrap().contains("run.app"));
+        assert!(controller.fqdn.is_none());
+    }
 
     #[test]
     fn cloudrun_service_name_preserves_valid_short_names() {
