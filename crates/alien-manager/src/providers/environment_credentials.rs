@@ -31,7 +31,13 @@ impl EnvironmentCredentialResolver {
         };
 
         let status = super::impersonation_credentials::parse_status(&deployment.status);
-        if super::impersonation_credentials::uses_direct_management_credentials(status) {
+        let automatic_setup = deployment
+            .runtime_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.automatic_setup);
+        if super::impersonation_credentials::uses_direct_management_credentials(status)
+            && !automatic_setup
+        {
             return Ok(base_config);
         }
 
@@ -44,12 +50,18 @@ impl EnvironmentCredentialResolver {
         }
 
         let Some(stack_state) = deployment.stack_state.as_ref() else {
+            if automatic_setup {
+                return Err(AlienError::new(GenericError {
+                    message: "Automatic management requires the installed identity state"
+                        .to_string(),
+                }));
+            }
             return Ok(base_config);
         };
         let has_remote_management = stack_state.resources.values().any(|resource| {
             resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
         });
-        if !has_remote_management {
+        if !has_remote_management && !automatic_setup {
             return Ok(base_config);
         }
 
@@ -196,6 +208,36 @@ pub(super) mod tests {
             AzureCredentials::WorkloadIdentity { client_id, .. }
                 if client_id == "management-client"
         ));
+    }
+
+    #[tokio::test]
+    async fn automatic_azure_setup_phases_keep_the_installed_identity_and_fail_closed() {
+        for status in ["initial-setup", "initial-setup-failed", "preflights-failed"] {
+            let mut deployment = azure_deployment(status);
+            deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+                automatic_setup: true,
+                initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            });
+            let resolved = EnvironmentCredentialResolver::new()
+                .resolve_from_env(&deployment, azure_env())
+                .await
+                .unwrap();
+            assert!(matches!(
+                &resolved.azure_config().unwrap().credentials,
+                AzureCredentials::WorkloadIdentity { client_id, .. } if client_id == "target-uami-client"
+            ));
+            deployment.stack_state.as_mut().unwrap().resources.clear();
+            assert!(EnvironmentCredentialResolver::new()
+                .resolve_from_env(&deployment, azure_env())
+                .await
+                .is_err());
+            deployment.stack_state = None;
+            assert!(EnvironmentCredentialResolver::new()
+                .resolve_from_env(&deployment, azure_env())
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]
