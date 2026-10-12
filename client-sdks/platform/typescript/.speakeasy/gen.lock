@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.32
 persistentEdits:
-  generation_id: 7a55bf47-e827-4933-b6f3-a423798bd32c
-  pristine_commit_hash: d4dd5ec30aa05d3f8bd71d3b39c3b2036e36b179
-  pristine_tree_hash: 405f9c1bf9be03e18e2138893ef93a2eb0186153
+  generation_id: 82a0410f-4b18-4758-9eea-88af7704e36c
+  pristine_commit_hash: eafc88f3cb8529575ce24aec9ac66cd385cf7f23
+  pristine_tree_hash: f340746e7d7b773e23b72f5b4ed372ad76936e28
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -26948,8 +26948,8 @@ trackedFiles:
     pristine_git_object: b70677b4fcf459658bddbf6b39a1a911170384c1
   docs/models/projectrole.md:
     id: e7b537c5e59b
-    last_write_checksum: sha1:0dcea15e3215b8a35b46cb5a94c1abfea57d9e3f
-    pristine_git_object: 35f75a4cf3b4fcfc8fff61b655a3d3eeb78ea751
+    last_write_checksum: sha1:602386ca23338f15cfd3139fbcd193d8dcf4a094
+    pristine_git_object: d5728e0fa41ae236cbced6d8cd2d0dac0c3a2320
   docs/models/projectrule.md:
     id: 8c6489ade350
     last_write_checksum: sha1:9ef2f02000839ce14eb37d11fcdd2eda17168479
@@ -35144,8 +35144,8 @@ trackedFiles:
     pristine_git_object: de7f80869719f6205a4468958ea0b618e85a4aef
   docs/sdks/apikeys/README.md:
     id: e2bd25998427
-    last_write_checksum: sha1:8f34e30cca76bb7e7b30116655b60aeb3c8100a8
-    pristine_git_object: 3a32ea35c26de80d694444fd3b6129137f0b1642
+    last_write_checksum: sha1:1b84b6cdb7cfff201df1d4c8ef1afb6ccc23a395
+    pristine_git_object: 19608098d8f661fce2864169ae8e63373a12ff9e
   docs/sdks/auth/README.md:
     id: e9724f17945f
     last_write_checksum: sha1:9111987878c3d34247f3c16bec0ca0da1478ce91
@@ -35288,12 +35288,12 @@ trackedFiles:
     pristine_git_object: 91b9336926d9e04ff3216ceb7f6e1d29f96c3a19
   jsr.json:
     id: 7f6ab7767282
-    last_write_checksum: sha1:ebae1b3f5680ba258fa2f3cd92a3a231a945c3e4
-    pristine_git_object: 57c0e8d2d72b0a638084aa585413079b4e52835b
+    last_write_checksum: sha1:794c59cf79224d90bf7180df9c1dddcccbfa5f64
+    pristine_git_object: 1e9c9536854a059090bc5454139913108a7e1e5b
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:3327eab48b97c3c70aef67c6b7a88d556f45fe20
-    pristine_git_object: 9a8e776af7b402a7c331d816fd4e3888cbc6a61c
+    last_write_checksum: sha1:de27acb4900908d7be5ce4c5f92956f916cc7c76
+    pristine_git_object: 79229d9b112806a2587fdbbc2217f5fd4d40f2f0
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:c634ddf4882f77c6dba4422d8b4ba7cb5a3a23d4
@@ -35336,8 +35336,8 @@ trackedFiles:
     pristine_git_object: accf9d604cf84819e3aa2ac27680f34a03781cb1
   src/funcs/apiKeysRevoke.ts:
     id: ac927d1fb580
-    last_write_checksum: sha1:90f0f9cbf62c26d793fca260dc049961b495af50
-    pristine_git_object: b6235e35574ca3c4169fb66e02d58b9f67efdc67
+    last_write_checksum: sha1:05bab0fd4abf80fa4ef80970b1f30ea33788b02d
+    pristine_git_object: 41e197fd42df95d59bc629c2e46bf481239bb835
   src/funcs/apiKeysUpdate.ts:
     id: 05700884934b
     last_write_checksum: sha1:b3ab93273e08ccb6cc14953114296723e443723b
@@ -36348,8 +36348,8 @@ trackedFiles:
     pristine_git_object: 962ea486e17eabe13bcf068493a556110c944df8
   src/lib/config.ts:
     id: 320761608fb3
-    last_write_checksum: sha1:874956ae28b7c0c0028c3af218b059332885cd18
-    pristine_git_object: e01601e0896ea45ab822cde416618c09aa2164a0
+    last_write_checksum: sha1:2c27bce0d751ec83f4e33860363afa4cbc7ab111
+    pristine_git_object: 7b3d1101579768ffedf727c7fd86b09644288506
   src/lib/encodings.ts:
     id: 3bd8ead98afd
     last_write_checksum: sha1:a257d6f6108693db2197617c579400bc8f0da914
@@ -38476,8 +38476,8 @@ trackedFiles:
     pristine_git_object: c004015f4761ab8cc5181c47da02882c5d12e877
   src/models/projectrole.ts:
     id: b93b1b667b4f
-    last_write_checksum: sha1:59785a8795aa6725c4e3181a9d5fed28ced85ba6
-    pristine_git_object: 9139126000bb48acced97948f17d0988ae359607
+    last_write_checksum: sha1:efaaf982ef294de95403aadb13cb9e2bbb5b4f0c
+    pristine_git_object: b2f7f817853aeef47ea6b05a90e7bd86ad867108
   src/models/projectscope.ts:
     id: 94b9ced20495
     last_write_checksum: sha1:585bd5c77dc2a91da7d1f34239d89c4f52bd186f
@@ -45215,6 +45215,8 @@ examples:
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "403":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   revokeAccessRequest:
     speakeasy-default-revoke-access-request:
