@@ -12,6 +12,7 @@ import { ExternalBindingsSchema } from "./external-bindings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
+import { SetupManagementSchema } from "./setup-management-schema.js";
 import { TelemetryModeSchema } from "./telemetry-mode-schema.js";
 import { UpdatesModeSchema } from "./updates-mode-schema.js";
 
@@ -48,6 +49,9 @@ get "network"(){
     }).catchall(z.object({
     
     }).catchall(z.string())).describe("Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.\n\nThis is intended for adopted Machines deployments whose DNS and certificates remain\ncustomer-owned. The platform passes these URLs to the runtime without creating or\nreplacing DNS records or certificates.").nullish(),
+get "setupManagement"(){
+                return SetupManagementSchema.describe("Whether setup remains a separate administrator operation.").optional()
+              },
 get "telemetry"(){
                 return TelemetryModeSchema.describe("How telemetry (logs, metrics, traces) is handled.").optional()
               },
