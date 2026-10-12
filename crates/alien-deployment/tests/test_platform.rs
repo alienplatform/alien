@@ -4189,3 +4189,36 @@ async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_install
         Some("rel_v1")
     );
 }
+
+#[tokio::test]
+async fn automatic_setup_can_decline_and_reenable_a_frozen_gate_after_checkpoint_reload() {
+    let _vault = test_vault_env().await;
+    let mut stack = Stack::new("automatic-gate".into())
+        .add(Storage::new("archive".into()).build(), ResourceLifecycle::Frozen)
+        .build();
+    stack.resources.get_mut("archive").unwrap().enabled_when = Some("archiveEnabled".into());
+    stack.inputs = vec![boolean_gate_input("archiveEnabled", "Archive", "Create archive storage.")];
+    let mut config = create_test_config("automatic-gate", false);
+    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    config.setup_run = true;
+    config.input_values.insert("archiveEnabled".into(), serde_json::json!(true));
+    let mut state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    config.setup_run = false;
+
+    for (release, enabled) in [("declined", false), ("reenabled", true)] {
+        state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        config.input_values.insert("archiveEnabled".into(), serde_json::json!(enabled));
+        start_update(&mut state, release_of(release, stack.clone()));
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+        assert_eq!(state.current_release.as_ref().unwrap().release_id.as_deref(), Some(release));
+        assert_eq!(state.runtime_metadata.as_ref().unwrap().persisted_gate_answers.get("archiveEnabled"), Some(&enabled));
+        let resource = state.stack_state.as_ref().unwrap().resources.get("archive");
+        if enabled {
+            assert_eq!(resource.unwrap().status, alien_core::ResourceStatus::Running);
+        } else {
+            assert!(resource.is_none_or(|resource| resource.status == alien_core::ResourceStatus::Deleted));
+        }
+    }
+}
