@@ -915,7 +915,15 @@ impl KubernetesContainerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
         let previous = ctx.previous_resource_config::<Container>()?;
-        if previous.persistent_storage != config.persistent_storage {
+        if previous
+            .persistent_storage
+            .as_ref()
+            .map(|storage| (&storage.size, &storage.mount_path))
+            != config
+                .persistent_storage
+                .as_ref()
+                .map(|storage| (&storage.size, &storage.mount_path))
+        {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Changing persistent storage on Kubernetes requires an explicit PVC expansion and StatefulSet migration; volumeClaimTemplates are immutable".into(),
                 resource_id: Some(config.id.clone()),

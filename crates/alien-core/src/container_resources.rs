@@ -57,15 +57,6 @@ pub fn resolve_container_resources(
                     "capacity must be between 1 and 65536 GiB",
                 ));
             }
-            let minimum = parse_volume_size_gib(&storage.size)
-                .map_err(|reason| invalid(&id, "volumeSizeGib", &reason))?;
-            if size < minimum {
-                return Err(invalid(
-                    &id,
-                    "volumeSizeGib",
-                    &format!("capacity must be at least the release's declared {minimum} GiB"),
-                ));
-            }
             storage.size = format!("{size}Gi");
         }
         let choices = container.resource_choices.as_ref();

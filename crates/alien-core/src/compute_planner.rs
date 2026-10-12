@@ -111,7 +111,6 @@ pub fn plan_compute_with_state(
     selected_settings: Option<&crate::ComputeSettings>,
     previous_state: Option<&StackState>,
 ) -> Result<ComputePlan, ErrorData> {
-    let release_stack = stack;
     let mut resolved_stack = stack.clone();
     crate::container_resources::resolve_container_resources(
         &mut resolved_stack,
@@ -297,14 +296,16 @@ pub fn plan_compute_with_state(
             let volume_size_gib = container.persistent_storage.as_ref().and_then(|storage| {
                 crate::container_resources::parse_volume_size_gib(&storage.size).ok()
             });
-            let minimum_volume_size_gib = release_stack
-                .resources
-                .get(&container.id)
-                .and_then(|entry| entry.config.downcast_ref::<Container>())
-                .and_then(|container| container.persistent_storage.as_ref())
-                .and_then(|storage| {
-                    crate::container_resources::parse_volume_size_gib(&storage.size).ok()
-                });
+            let minimum_volume_size_gib = volume_size_gib.map(|_| {
+                previous_state
+                    .and_then(|state| state.resources.get(&container.id))
+                    .and_then(|resource| resource.config.downcast_ref::<Container>())
+                    .and_then(|container| container.persistent_storage.as_ref())
+                    .and_then(|storage| {
+                        crate::container_resources::parse_volume_size_gib(&storage.size).ok()
+                    })
+                    .unwrap_or(if platform == Platform::Gcp { 10 } else { 1 })
+            });
             Some(ContainerResourcePlan {
                 container_id: container.id.clone(),
                 choices,
@@ -1282,7 +1283,52 @@ mod tests {
         crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings))
             .unwrap();
         assert_eq!(volume(&deployment), "40Gi");
-        for size in [0, 19, 65537] {
+        let smaller_initial: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 10}}
+        }))
+        .unwrap();
+        crate::container_resources::resolve_container_resources(
+            &mut release.clone(),
+            Some(&smaller_initial),
+        )
+        .unwrap();
+        let mut installed = StackState::new(Platform::Aws);
+        installed.resources.insert(
+            "api".into(),
+            crate::StackResourceState::new_pending(
+                "Container".into(),
+                deployment.resources["api"].config.clone(),
+                None,
+                vec![],
+            ),
+        );
+        let shrinking: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 30}}
+        }))
+        .unwrap();
+        let error =
+            plan_compute_with_state(&release, Platform::Aws, Some(&shrinking), Some(&installed))
+                .unwrap_err();
+        assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        assert!(error.to_string().contains("cannot shrink from 40 to 30"));
+        let imported: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": "40"}}
+        }))
+        .unwrap();
+        assert_eq!(imported.containers["api"].volume_size_gib, Some(40));
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("4294967296"),
+        ] {
+            assert!(
+                serde_json::from_value::<ComputeSettings>(serde_json::json!({
+                    "containers": {"api": {"volumeSizeGib": value}}
+                }))
+                .is_err()
+            );
+        }
+        for size in [0, 65537] {
             let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
                 "containers": {"api": {"volumeSizeGib": size}}
             }))
