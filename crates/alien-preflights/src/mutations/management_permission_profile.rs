@@ -204,6 +204,7 @@ fn generate_auto_management_profile(
             };
             if matches!(operation, "provision" | "management" | "heartbeat")
                 && resource_type != "remote-stack-management"
+                && supports_stack_grant(id, platform)
             {
                 permission_set_ids.insert(id.to_string());
             }
@@ -374,6 +375,26 @@ fn generate_auto_management_profile(
     Ok(Some(PermissionProfile(management_permissions)))
 }
 
+/// Future resources can only be covered by grants whose binding exists before the resource.
+/// Resource-only permissions keep their explicit resource scope below.
+fn supports_stack_grant(id: &str, platform: Platform) -> bool {
+    let Some(permission_set) = get_permission_set(id) else {
+        return false;
+    };
+    match platform {
+        Platform::Aws => permission_set.platforms.aws.as_ref().is_some_and(|entries| {
+            !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+        }),
+        Platform::Gcp => permission_set.platforms.gcp.as_ref().is_some_and(|entries| {
+            !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+        }),
+        Platform::Azure => permission_set.platforms.azure.as_ref().is_some_and(|entries| {
+            !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+        }),
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => false,
+    }
+}
+
 fn add_storage_trigger_source_management_permissions(
     stack: &Stack,
     platform: Platform,
@@ -511,6 +532,54 @@ pub(crate) fn permission_resource_type(resource_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_stack_grants_render_on_each_cloud() {
+        use alien_permissions::generators::{
+            AwsRuntimePermissionsGenerator, AzureRuntimePermissionsGenerator,
+            GcpRuntimePermissionsGenerator,
+        };
+        use alien_permissions::{BindingTarget, PermissionContext};
+
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_project_name("automatic-management-test")
+            .with_project_number("123456789012")
+            .with_region("us-central1")
+            .with_subscription_id("00000000-0000-0000-0000-000000000001")
+            .with_resource_group("automatic-management-test")
+            .with_stack_prefix("automatic-management-test")
+            .with_principal_id("00000000-0000-0000-0000-000000000002");
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for id in list_permission_set_ids() {
+                let Some((resource_type, operation)) = id.split_once('/') else {
+                    continue;
+                };
+                if !matches!(operation, "provision" | "management" | "heartbeat")
+                    || resource_type == "remote-stack-management"
+                    || !supports_stack_grant(id, platform)
+                {
+                    continue;
+                }
+                let permission_set = get_permission_set(id).unwrap();
+                let result = match platform {
+                    Platform::Aws => AwsRuntimePermissionsGenerator::new()
+                        .generate_policy(&permission_set, BindingTarget::Stack, &context)
+                        .map(|_| ()),
+                    Platform::Gcp => GcpRuntimePermissionsGenerator::new()
+                        .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
+                        .map(|_| ()),
+                    Platform::Azure => AzureRuntimePermissionsGenerator::new()
+                        .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
+                        .map(|_| ()),
+                    _ => unreachable!(),
+                };
+                result.unwrap_or_else(|error| panic!("{platform} {id}: {error}"));
+            }
+        }
+    }
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
