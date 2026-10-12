@@ -30,7 +30,8 @@ use alien_core::{
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment_with_payload, acquire_setup_run_deployment,
-    combine_operation_and_finalization, final_reconcile, finalize_step_loop, ManagerApiTransport,
+    combine_operation_and_finalization, finalize_step_loop, release_deployment,
+    ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -2147,16 +2148,15 @@ async fn deploy_task_with_environment(
 
     // A setup update re-runs setup on an installed deployment: prepare the
     // target release's setup-owned resources, then hand off like initial setup.
-    // A failed preparation releases the lock with the state as it was read.
+    // Preparation has not applied changes; on refusal, release without checkpointing.
     if matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }) {
         let mut prepared = current.clone();
         if let Err(error) = prepare_setup_update(&mut prepared, &config, &client_config).await {
-            let finalized = final_reconcile(
+            let finalized = release_deployment(
                 lock_client,
                 &tracked_deployment.deployment_id,
                 &session,
                 acquired_deployment.execution_claim.as_ref(),
-                &current,
             )
             .await;
             return combine_operation_and_finalization(Err::<(), _>(error), finalized).context(
