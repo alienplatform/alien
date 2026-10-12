@@ -237,7 +237,7 @@ pub async fn handle_provisioning(
             .as_ref()
             .and_then(|release| release.release_id.clone());
         if converged_release_id.is_some() && converged_release_id != target_release_id {
-            next.current_release = Some(crate::ReleaseInfo {
+            next.current_release = Some(alien_core::ReleaseInfo {
                 release_id: converged_release_id,
                 version: None,
                 description: None,
