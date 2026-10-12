@@ -26,10 +26,15 @@ pub async fn prepare_direct_setup_update(
     if !existing_metadata.automatic_setup {
         let mut recorded = existing_metadata.persisted_gate_answers.clone();
         if let Some(previous_stack) = existing_metadata.prepared_stack.as_ref() {
-            let previous_answers =
-                resolve_frozen_gate_answers(previous_stack, stack_state, &config.input_values)?;
-            for (input, answer) in previous_answers {
-                recorded.entry(input).or_insert(answer);
+            if frozen_gating_inputs(previous_stack)
+                .iter()
+                .any(|input| !recorded.contains_key(input))
+            {
+                let previous_answers =
+                    resolve_frozen_gate_answers(previous_stack, stack_state, &config.input_values)?;
+                for (input, answer) in previous_answers {
+                    recorded.entry(input).or_insert(answer);
+                }
             }
         }
         for (input, answer) in recorded {
