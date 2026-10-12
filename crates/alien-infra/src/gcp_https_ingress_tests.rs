@@ -608,3 +608,142 @@ async fn checkpoint_without_scope_resumes_as_regional_private() {
     ready(&mut restored, &client, &store, "certificate").await;
     assert_eq!(before, store.lock().unwrap().mutations);
 }
+
+#[tokio::test]
+async fn recorded_global_graph_handoff_preserves_frontend_rotates_and_cleans_up() {
+    let store = Arc::new(Mutex::new(Provider::default()));
+    let client = provider(&store);
+    let mut desired = plan("old-certificate");
+    desired.scope = GcpHttpsIngressScope::GlobalPublic;
+    let mut original = GcpHttpsIngressState::new(&desired);
+    ready(&mut original, &client, &store, "old-certificate").await;
+    // Model an older controller's independently named children, descriptions
+    // and saved IDs, rather than reusing the new controller's UUID ownership.
+    let collections = [
+        ("backend", "backendServices"),
+        ("url", "urlMaps"),
+        ("certificate", "sslCertificates"),
+        ("proxy", "targetHttpsProxies"),
+        ("address", "addresses"),
+        ("frontend", "forwardingRules"),
+    ];
+    let replacements: Vec<_> = {
+        let provider = store.lock().unwrap();
+        collections
+            .iter()
+            .map(|(kind, collection)| {
+                let key = provider
+                    .objects
+                    .keys()
+                    .find(|key| key.starts_with(&format!("{kind}/")))
+                    .unwrap();
+                (
+                    original.url(collection, key.split_once('/').unwrap().1),
+                    original.url(collection, &format!("legacy-{kind}")),
+                )
+            })
+            .collect()
+    };
+    {
+        let mut provider = store.lock().unwrap();
+        for (key, object) in std::mem::take(&mut provider.objects) {
+            let kind = key.split_once('/').unwrap().0;
+            let mut text = object.to_string();
+            for (old, new) in &replacements {
+                text = text.replace(old, new);
+            }
+            let mut object: Value = serde_json::from_str(&text).unwrap();
+            object["name"] = json!(format!("legacy-{kind}"));
+            object["description"] = json!(format!("recorded {kind}"));
+            provider
+                .objects
+                .insert(format!("{kind}/legacy-{kind}"), object);
+        }
+    }
+    let records = store.lock().unwrap().objects.clone();
+    let record = |kind: &str| {
+        let object = &records[&format!("{kind}/legacy-{kind}")];
+        GcpRecordedIngressChild {
+            name: object["name"].as_str().unwrap(),
+            description: object["description"].as_str().unwrap(),
+            provider_id: object["id"].as_str(),
+        }
+    };
+    let references = vec![original.url("sslCertificates", "legacy-certificate")];
+    let recorded = || GcpRecordedHttpsIngress {
+        health_check: None,
+        backend: record("backend"),
+        url_map: record("url"),
+        proxy: record("proxy"),
+        address: record("address"),
+        frontend: record("frontend"),
+        managed_certificate: Some(record("certificate")),
+        certificate_references: &references,
+    };
+    let before = store.lock().unwrap().mutations;
+    let frontend = records["frontend/legacy-frontend"].clone();
+    let mut desired = plan("renewed-certificate");
+    desired.scope = GcpHttpsIngressScope::GlobalPublic;
+    // A name, description and matching ID cannot authorize a graph wired to
+    // an unrelated backend. Failed migration must have no external effects.
+    store
+        .lock()
+        .unwrap()
+        .objects
+        .get_mut("url/legacy-url")
+        .unwrap()["defaultService"] = json!("projects/example/global/backendServices/foreign");
+    let error = GcpHttpsIngressState::from_recorded_global(&client, &desired, recorded())
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("inconsistent references"));
+    assert_eq!(store.lock().unwrap().mutations, before);
+    store.lock().unwrap().objects.insert(
+        "url/legacy-url".to_string(),
+        records["url/legacy-url"].clone(),
+    );
+    let mut state = GcpHttpsIngressState::from_recorded_global(&client, &desired, recorded())
+        .await
+        .unwrap();
+    assert_eq!(store.lock().unwrap().mutations, before);
+    state = checkpoint(&state);
+    ready(&mut state, &client, &store, "renewed-certificate").await;
+    {
+        let provider = store.lock().unwrap();
+        assert_eq!(provider.objects["frontend/legacy-frontend"], frontend);
+        assert!(!provider
+            .objects
+            .contains_key("certificate/legacy-certificate"));
+        assert_eq!(
+            provider
+                .objects
+                .keys()
+                .filter(|key| key.starts_with("certificate/"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            provider.objects["proxy/legacy-proxy"]["sslCertificates"],
+            json!([state.url(
+                "sslCertificates",
+                state
+                    .children
+                    .iter()
+                    .find_map(|child| match child {
+                        Child::Certificate(name) => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .unwrap()
+            )])
+        );
+    }
+    for _ in 0..60 {
+        state = checkpoint(&state);
+        if state.delete(&client, "api").await.unwrap() {
+            break;
+        }
+    }
+    assert!(state.children.is_empty());
+    assert!(state.provider_ids.is_empty());
+    assert!(state.legacy_descriptions.is_empty());
+    assert!(store.lock().unwrap().objects.is_empty());
+}

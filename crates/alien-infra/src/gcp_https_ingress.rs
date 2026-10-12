@@ -61,6 +61,30 @@ pub struct GcpHttpsIngressPlan<'a> {
     pub certificate: GcpIngressCertificate<'a>,
 }
 
+/// A child recorded by the previous controller, never a name discovered by a
+/// broad listing. A saved provider ID, when available, must still match.
+pub struct GcpRecordedIngressChild<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub provider_id: Option<&'a str>,
+}
+
+/// Explicit handoff of a previously recorded global HTTPS graph. The graph's
+/// references, ownership descriptions and immutable IDs are verified before
+/// this controller can change or delete any of its children.
+pub struct GcpRecordedHttpsIngress<'a> {
+    pub health_check: Option<GcpRecordedIngressChild<'a>>,
+    pub backend: GcpRecordedIngressChild<'a>,
+    pub url_map: GcpRecordedIngressChild<'a>,
+    pub proxy: GcpRecordedIngressChild<'a>,
+    pub address: GcpRecordedIngressChild<'a>,
+    pub frontend: GcpRecordedIngressChild<'a>,
+    /// Only owned imports belong here. Customer certificate references remain
+    /// external and are checked against the desired custom certificate list.
+    pub managed_certificate: Option<GcpRecordedIngressChild<'a>>,
+    pub certificate_references: &'a [String],
+}
+
 /// Saved intent covers partial creates and lost responses. A random lifetime
 /// token distinguishes this instance from same-named leftovers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +101,12 @@ pub struct GcpHttpsIngressState {
     children: BTreeSet<Child>,
     #[serde(default)]
     provider_ids: BTreeMap<String, String>,
+    /// Recorded children from an older controller retain their original names
+    /// and ownership descriptions after a verified handoff.
+    #[serde(default)]
+    legacy_names: BTreeMap<String, String>,
+    #[serde(default)]
+    legacy_descriptions: BTreeMap<String, String>,
     #[serde(default)]
     operation: Option<GcpIngressOperation>,
     #[serde(default, rename = "privateIp")]
@@ -98,8 +128,8 @@ enum Child {
 }
 
 impl Child {
-    fn identity(&self) -> String {
-        let kind = match self {
+    fn kind(&self) -> &'static str {
+        match self {
             Self::Firewall(_) => "firewall",
             Self::HealthCheck(_) => "healthCheck",
             Self::Backend(_) => "backend",
@@ -108,8 +138,11 @@ impl Child {
             Self::HttpsProxy(_) => "httpsProxy",
             Self::Address(_) => "address",
             Self::Frontend(_) => "frontend",
-        };
-        format!("{kind}/{}", self.name())
+        }
+    }
+
+    fn identity(&self) -> String {
+        format!("{}/{}", self.kind(), self.name())
     }
 
     fn name(&self) -> &str {
@@ -250,9 +283,171 @@ impl GcpHttpsIngressState {
             token: Uuid::new_v4(),
             children: BTreeSet::new(),
             provider_ids: BTreeMap::new(),
+            legacy_names: BTreeMap::new(),
+            legacy_descriptions: BTreeMap::new(),
             operation: None,
             address: None,
         }
+    }
+
+    /// Read-only migration from explicit saved child names. Callers must save
+    /// the returned state before retiring their old ownership fields. A failed
+    /// proof performs no provider mutation and leaves the old owner intact.
+    pub async fn from_recorded_global(
+        client: &dyn ComputeApi,
+        plan: &GcpHttpsIngressPlan<'_>,
+        recorded: GcpRecordedHttpsIngress<'_>,
+    ) -> Result<Self> {
+        let mut state = Self::new(plan);
+        if plan.scope != GcpHttpsIngressScope::GlobalPublic
+            || plan.firewall.is_some()
+            || plan.health_check.is_some() != recorded.health_check.is_some()
+            || recorded.certificate_references.is_empty()
+        {
+            return Err(AlienError::new(
+                state.error(plan.resource_id, "Invalid recorded global HTTPS graph"),
+            ));
+        }
+        let references = recorded.certificate_references;
+        let mut children = vec![
+            (
+                Child::Backend(recorded.backend.name.to_string()),
+                recorded.backend,
+            ),
+            (
+                Child::UrlMap(recorded.url_map.name.to_string()),
+                recorded.url_map,
+            ),
+            (
+                Child::HttpsProxy(recorded.proxy.name.to_string()),
+                recorded.proxy,
+            ),
+            (
+                Child::Address(recorded.address.name.to_string()),
+                recorded.address,
+            ),
+            (
+                Child::Frontend(recorded.frontend.name.to_string()),
+                recorded.frontend,
+            ),
+        ];
+        if let Some(child) = recorded.health_check {
+            children.push((Child::HealthCheck(child.name.to_string()), child));
+        }
+        if let Some(child) = recorded.managed_certificate {
+            if !contains_desired(
+                &serde_json::json!(references),
+                &serde_json::json!([state.url("sslCertificates", child.name)]),
+            ) {
+                return Err(AlienError::new(state.error(
+                    plan.resource_id,
+                    "Recorded certificate is not the proxy's sole certificate",
+                )));
+            }
+            children.push((Child::Certificate(child.name.to_string()), child));
+        }
+        let mut live = BTreeMap::new();
+        for (child, recorded) in children {
+            if recorded.name.is_empty() || recorded.description.is_empty() {
+                return Err(AlienError::new(state.error(
+                    plan.resource_id,
+                    "Recorded ingress child requires a name and ownership description",
+                )));
+            }
+            if !matches!(child, Child::Certificate(_)) {
+                state
+                    .legacy_names
+                    .insert(child.kind().to_string(), recorded.name.to_string());
+            }
+            state
+                .legacy_descriptions
+                .insert(child.identity(), recorded.description.to_string());
+            if let Some(id) = recorded.provider_id {
+                state.provider_ids.insert(child.identity(), id.to_string());
+            }
+            let object = child.read(client, &state).await.context(state.error(
+                plan.resource_id,
+                format!("Read recorded ingress child '{}'", child.name()),
+            ))?;
+            state.check_owner(&object, plan.resource_id, &child)?;
+            live.insert(child.kind().to_string(), object);
+            state.children.insert(child);
+        }
+        let expected_backend = state.url("backendServices", &state.child_name("backend"));
+        let health_checks = if plan.health_check.is_some() {
+            vec![state.url("healthChecks", &state.child_name("healthCheck"))]
+        } else {
+            Vec::new()
+        };
+        let address = live["address"]
+            .get("address")
+            .and_then(Value::as_str)
+            .filter(|address| !address.is_empty())
+            .ok_or_else(|| {
+                AlienError::new(state.error(plan.resource_id, "Recorded global address has no IP"))
+            })?;
+        let groups = live["backend"]
+            .get("backends")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                AlienError::new(
+                    state.error(plan.resource_id, "Recorded backend has no NEG membership"),
+                )
+            })?;
+        let mut seen = BTreeSet::new();
+        let known_groups =
+            groups.iter().all(|backend| {
+                let Some(group) = backend
+                    .get("group")
+                    .and_then(Value::as_str)
+                    .and_then(resource_path)
+                else {
+                    return false;
+                };
+                seen.insert(group)
+                    && plan.backend.backends.iter().any(|desired| {
+                        desired.group.as_deref().and_then(resource_path) == Some(group)
+                    })
+            });
+        if !known_groups
+            || groups.is_empty()
+            || !contains_desired(
+                &live["backend"],
+                &serde_json::json!({"protocol":"HTTP", "loadBalancingScheme":"EXTERNAL"}),
+            )
+            || !live["backend"]
+                .get("healthChecks")
+                .map(|live| contains_desired(live, &serde_json::json!(health_checks)))
+                .unwrap_or(health_checks.is_empty())
+            || !contains_desired(
+                &live["urlMap"],
+                &serde_json::json!({"defaultService":expected_backend}),
+            )
+            || !only_recorded_backend(&live["urlMap"], &expected_backend)
+            || !contains_desired(
+                &live["httpsProxy"],
+                &serde_json::json!({"urlMap":state.url("urlMaps", &state.child_name("urlMap")), "sslCertificates":references}),
+            )
+            || !contains_desired(
+                &live["address"],
+                &serde_json::json!({"addressType":"EXTERNAL"}),
+            )
+            || !contains_desired(
+                &live["frontend"],
+                &serde_json::json!({"target":state.url("targetHttpsProxies", &state.child_name("httpsProxy")), "IPAddress":address, "IPProtocol":"TCP", "loadBalancingScheme":"EXTERNAL"}),
+            )
+            || !matches!(
+                live["frontend"].get("portRange").and_then(Value::as_str),
+                Some("443" | "443-443")
+            )
+        {
+            return Err(AlienError::new(state.error(
+                plan.resource_id,
+                "Recorded HTTPS graph has foreign or inconsistent references",
+            )));
+        }
+        state.address = Some(address.to_string());
+        Ok(state)
     }
 
     fn name(&self) -> String {
@@ -319,7 +514,8 @@ impl GcpHttpsIngressState {
     }
 
     fn check_owner(&mut self, live: &Value, resource_id: &str, child: &Child) -> Result<()> {
-        if live.get("description").and_then(Value::as_str) != Some(self.owner().as_str()) {
+        if live.get("description").and_then(Value::as_str) != Some(self.child_owner(child).as_str())
+        {
             return Err(AlienError::new(self.error(
                 resource_id,
                 format!("Refusing foreign private ingress child '{}'", child.name()),
@@ -348,6 +544,20 @@ impl GcpHttpsIngressState {
         }
         self.provider_ids.insert(identity, id.to_string());
         Ok(())
+    }
+
+    fn child_name(&self, kind: &str) -> String {
+        self.legacy_names
+            .get(kind)
+            .cloned()
+            .unwrap_or_else(|| self.name())
+    }
+
+    fn child_owner(&self, child: &Child) -> String {
+        self.legacy_descriptions
+            .get(&child.identity())
+            .cloned()
+            .unwrap_or_else(|| self.owner())
     }
 
     async fn poll(&mut self, client: &dyn ComputeApi, resource_id: &str) -> Result<bool> {
@@ -408,7 +618,6 @@ impl GcpHttpsIngressState {
             return Ok(false);
         }
         let name = self.name();
-        let description = self.owner();
         let certificate_name = match &plan.certificate {
             GcpIngressCertificate::Managed {
                 certificate_pem, ..
@@ -433,22 +642,27 @@ impl GcpHttpsIngressState {
         };
         let mut children = Vec::new();
         if plan.firewall.is_some() {
-            children.push(Child::Firewall(name.clone()));
+            children.push(Child::Firewall(self.child_name("firewall")));
         }
         if plan.health_check.is_some() {
-            children.push(Child::HealthCheck(name.clone()));
+            children.push(Child::HealthCheck(self.child_name("healthCheck")));
         }
-        children.extend([Child::Backend(name.clone()), Child::UrlMap(name.clone())]);
+        children.extend([
+            Child::Backend(self.child_name("backend")),
+            Child::UrlMap(self.child_name("urlMap")),
+        ]);
         if let Some(certificate_name) = &certificate_name {
             children.push(Child::Certificate(certificate_name.clone()));
         }
         children.extend([
-            Child::HttpsProxy(name.clone()),
-            Child::Address(name.clone()),
-            Child::Frontend(name.clone()),
+            Child::HttpsProxy(self.child_name("httpsProxy")),
+            Child::Address(self.child_name("address")),
+            Child::Frontend(self.child_name("frontend")),
         ]);
 
         for child in &children {
+            let name = child.name().to_string();
+            let description = self.child_owner(child);
             // Save intent before a create can succeed with a lost response.
             self.children.insert(child.clone());
             let live = match child.read(client, self).await {
@@ -516,7 +730,7 @@ impl GcpHttpsIngressState {
                     desired.protocol = Some(BackendServiceProtocol::Http);
                     desired.load_balancing_scheme = Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External });
                     desired.health_checks = if plan.health_check.is_some() {
-                        vec![self.url("healthChecks", &name)]
+                        vec![self.url("healthChecks", &self.child_name("healthCheck"))]
                     } else {
                         Vec::new()
                     };
@@ -536,7 +750,7 @@ impl GcpHttpsIngressState {
                 }
                 Child::UrlMap(_) => {
                     if let Some(live) = &live {
-                        if !contains_desired(live, &serde_json::json!({"defaultService": self.url("backendServices", &name)})) {
+                        if !contains_desired(live, &serde_json::json!({"defaultService": self.url("backendServices", &self.child_name("backend"))})) {
                             return Err(AlienError::new(self.error(plan.resource_id, "Private URL map points to an unexpected backend")));
                         }
                         continue;
@@ -544,7 +758,7 @@ impl GcpHttpsIngressState {
                     scoped!(self, client, insert_region_url_map, insert_url_map, UrlMap {
                                 name: Some(name.clone()),
                                 description: Some(description.clone()),
-                                default_service: Some(self.url("backendServices", &name)),
+                                default_service: Some(self.url("backendServices", &self.child_name("backend"))),
                                 ..Default::default()
                             })
                 }
@@ -572,7 +786,7 @@ impl GcpHttpsIngressState {
                 }
                 Child::HttpsProxy(_) => {
                     if let Some(live) = &live {
-                        if !contains_desired(live, &serde_json::json!({"urlMap": self.url("urlMaps", &name)})) {
+                        if !contains_desired(live, &serde_json::json!({"urlMap": self.url("urlMaps", &self.child_name("urlMap"))})) {
                             return Err(AlienError::new(self.error(plan.resource_id, "Private HTTPS proxy points to an unexpected URL map")));
                         }
                         if live.get("sslCertificates").is_some_and(|live| contains_desired(live, &serde_json::json!(certificates))) {
@@ -584,7 +798,7 @@ impl GcpHttpsIngressState {
                         scoped!(self, client, insert_region_target_https_proxy, insert_target_https_proxy, TargetHttpsProxy {
                                     name: Some(name.clone()),
                                     description: Some(description.clone()),
-                                    url_map: Some(self.url("urlMaps", &name)),
+                                    url_map: Some(self.url("urlMaps", &self.child_name("urlMap"))),
                                     ssl_certificates: Some(certificates.clone()),
                                     ..Default::default()
                                 })
@@ -622,11 +836,11 @@ impl GcpHttpsIngressState {
                         description: Some(description.clone()),
                         ip_address: self.address.clone(),
                         ip_protocol: Some(ForwardingRuleProtocol::Tcp),
-                        port_range: Some("443".to_string()),
+                        port_range: Some(live.as_ref().and_then(|live| live.get("portRange")).and_then(Value::as_str).filter(|range| matches!(*range, "443" | "443-443")).unwrap_or("443").to_string()),
                         load_balancing_scheme: Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External }),
                         network: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.network.clone()),
                         subnetwork: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.subnetwork.clone()),
-                        target: Some(self.url("targetHttpsProxies", &name)),
+                        target: Some(self.url("targetHttpsProxies", &self.child_name("httpsProxy"))),
                         allow_global_access: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then_some(true),
                         ..Default::default()
                     };
@@ -680,6 +894,7 @@ impl GcpHttpsIngressState {
             {
                 self.children.remove(child);
                 self.provider_ids.remove(&child.identity());
+                self.legacy_descriptions.remove(&child.identity());
                 return Ok(());
             }
             Err(error) => {
@@ -701,6 +916,7 @@ impl GcpHttpsIngressState {
             {
                 self.children.remove(child);
                 self.provider_ids.remove(&child.identity());
+                self.legacy_descriptions.remove(&child.identity());
             }
             Err(error) => {
                 return Err(error.context(self.error(
@@ -786,6 +1002,26 @@ fn contains_desired(live: &Value, desired: &Value) -> bool {
 
 fn resource_path(value: &str) -> Option<&str> {
     value.find("projects/").map(|index| &value[index..])
+}
+
+fn only_recorded_backend(value: &Value, backend: &str) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().all(|(key, value)| {
+            if matches!(key.as_str(), "service" | "defaultService") && !value.is_null() {
+                value.as_str().and_then(resource_path) == resource_path(backend)
+            } else if matches!(key.as_str(), "urlRedirect" | "defaultUrlRedirect")
+                && !value.is_null()
+            {
+                false
+            } else {
+                only_recorded_backend(value, backend)
+            }
+        }),
+        Value::Array(values) => values
+            .iter()
+            .all(|value| only_recorded_backend(value, backend)),
+        _ => true,
+    }
 }
 
 #[cfg(test)]
