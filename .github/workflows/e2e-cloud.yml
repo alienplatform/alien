@@ -63,6 +63,7 @@ on:
           - All
           - comprehensive-rust
           - comprehensive-ts
+          - automatic-setup
           - full-stack-microservices
           - enabled-demo
           - byo-ai
@@ -274,6 +275,9 @@ jobs:
           # Build push matrix
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-automatic-setup","test_filter":"push_aws_automatic_setup","needs_oidc":false,"resource_suffix":"autoaws","timeout_minutes":60}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr","timeout_minutes":60}]')
             fi
@@ -282,6 +286,9 @@ jobs:
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-automatic-setup","test_filter":"push_gcp_automatic_setup","needs_oidc":false,"resource_suffix":"autogcp","timeout_minutes":60}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr","timeout_minutes":60}]')
             fi
@@ -290,6 +297,9 @@ jobs:
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-automatic-setup","test_filter":"push_azure_automatic_setup","needs_oidc":true,"resource_suffix":"autoaz","timeout_minutes":60}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr","timeout_minutes":75}]')
             fi

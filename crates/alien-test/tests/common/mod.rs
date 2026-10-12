@@ -1,3 +1,4 @@
+pub mod automatic_setup;
 pub mod bindings;
 pub mod commands;
 pub mod container;

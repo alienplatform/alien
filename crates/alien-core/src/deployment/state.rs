@@ -55,7 +55,7 @@ pub struct RuntimeMetadata {
     #[serde(default)]
     pub initial_setup_authority: InitialSetupAuthority,
 
-    /// Setup-owned grant to keep using the direct setup executor for updates and teardown.
+    /// Setup-owned grant to keep using the direct setup executor for updates.
     /// Runtime settings and release contents must never create or change this grant.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub automatic_setup: bool,

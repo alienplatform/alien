@@ -60,6 +60,16 @@ impl StackMutation for ManagementPermissionProfileMutation {
             }));
         }
 
+        if config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+            && matches!(current_management, ManagementPermissions::Override(_))
+        {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: "Automatic infrastructure management requires auto or extended management permissions; an override cannot guarantee future resource provisioning".to_string(),
+                resource_id: None,
+            }));
+        }
+
         match current_management {
             ManagementPermissions::Auto => {
                 // Auto-generate management permissions based on resource lifecycles
