@@ -1121,39 +1121,71 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_search_keeps_bad_request_status_and_plain_message() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .unwrap_or_else(|_| {
+                assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+            });
         for body in [
-            json!({ "error": "INVALID_REQUEST", "message": "Numeric ranges require TO between bounds" }).to_string(),
+            json!({
+                "error": "INVALID_REQUEST",
+                "message": "Numeric ranges require TO between bounds"
+            })
+            .to_string(),
             "Numeric ranges require TO between bounds".to_string(),
         ] {
             let server = MockServer::start_async().await;
-            let splits = server.mock_async(|when, then| {
-                when.method(GET).path("/v1/databases/db_test/splits")
-                    .header("authorization", "Bearer test-query-token");
-                then.status(200).json_body(json!({"splits": []}));
-            }).await;
-            let search = server.mock_async(|when, then| {
-                when.method(POST).path("/v1/logs/search")
-                    .header("authorization", "Bearer test-query-token");
-                then.status(400).body(body.clone());
-            }).await;
+            let splits = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/databases/db_test/splits")
+                        .header("authorization", "Bearer test-query-token");
+                    then.status(200).json_body(json!({"splits": []}));
+                })
+                .await;
+            let search = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/logs/search")
+                        .header("authorization", "Bearer test-query-token");
+                    then.status(400).body(body.clone());
+                })
+                .await;
             let client = DeepstoreClient::builder()
                 .control_plane_url(server.url("/v1"))
                 .auth_proxy_url(server.base_url())
                 .query_token_provider(|| async { Ok("test-query-token".to_string()) })
-                .build().expect("local search client");
+                .build()
+                .expect("local search client");
             let target = LogsTarget {
-                manager_id: "mgr_test".to_string(), project_id: Some("prj_test".to_string()),
-                project_name: None, deployment_id: None, deployment_name: None,
-                deployment_group_name: None, database_id: "db_test".to_string(),
+                manager_id: "mgr_test".to_string(),
+                project_id: Some("prj_test".to_string()),
+                project_name: None,
+                deployment_id: None,
+                deployment_name: None,
+                deployment_group_name: None,
+                database_id: "db_test".to_string(),
             };
             let end = Utc::now();
-            let error = fetch_logs(&client, "db_test", "count:[10,100]", &target,
-                end - Duration::hours(1), end, 10).await.expect_err("query is refused over HTTP");
+            let error = fetch_logs(
+                &client,
+                "db_test",
+                "count:[10,100]",
+                &target,
+                end - Duration::hours(1),
+                end,
+                10,
+            )
+            .await
+            .expect_err("query is refused over HTTP");
             splits.assert_hits_async(1).await;
             search.assert_hits_async(1).await;
             assert_eq!(error.http_status_code, Some(400));
             assert_eq!(error.code, "INVALID_REQUEST");
-            assert_eq!(error.message, "Log search rejected: Numeric ranges require TO between bounds");
+            assert_eq!(
+                error.message,
+                "Log search rejected: Numeric ranges require TO between bounds"
+            );
             assert!(!error.retryable);
             assert!(!error.internal);
         }
