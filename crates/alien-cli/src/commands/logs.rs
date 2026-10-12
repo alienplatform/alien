@@ -1114,6 +1114,22 @@ fn parse_std_duration_arg(value: &str) -> std::result::Result<StdDuration, Strin
 mod tests {
     use super::*;
 
+    #[test]
+    fn invalid_log_limits_are_client_validation_errors() {
+        for limit in [0, 2000] {
+            let args = LogsArgs::try_parse_from(["logs", "--limit", &limit.to_string()])
+                .expect("numeric limit parses before semantic validation");
+            let error = validate_args(&args).expect_err("limit outside supported range");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert_eq!(error.http_status_code, Some(400));
+            assert!(!error.retryable);
+            assert!(!error.internal);
+        }
+        let args = LogsArgs::try_parse_from(["logs", "--limit", "1000"])
+            .expect("maximum limit parses");
+        validate_args(&args).expect("maximum supported limit remains valid");
+    }
+
     fn test_query<'a>(
         user_query: &'a str,
         levels: &'a [LogLevel],
