@@ -219,6 +219,8 @@ struct DeployConfigFile {
     base_platform: Option<String>,
     /// Network settings for cloud deployments.
     network: Option<DeployConfigNetwork>,
+    /// Ongoing setup authority requested at installation.
+    setup_management: Option<alien_core::SetupManagement>,
     /// Update delivery mode.
     updates: Option<UpdatesMode>,
     /// Telemetry delivery mode.
@@ -3915,6 +3917,17 @@ fn load_stack_settings(
     }
 
     if let Some(config) = deploy_config {
+        if let Some(mode) = config.setup_management {
+            if mode == alien_core::SetupManagement::Automatic
+                && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+            {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "setupManagement".to_string(),
+                    message: "Automatic infrastructure management supports AWS, GCP, and Azure CLI installations".to_string(),
+                }));
+            }
+            settings.setup_management = mode;
+        }
         if let Some(network) = config.network.clone() {
             settings.network = Some(network.into());
         }

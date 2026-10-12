@@ -8,7 +8,7 @@ use alien_core::{
     Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
-use alien_permissions::{get_permission_set, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
+use alien_permissions::{get_permission_set, list_permission_set_ids, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -99,7 +99,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
-        add_role_guards(&mut stack, stack_state.platform);
+        add_role_guards(&mut stack, stack_state.platform, config.stack_settings.setup_management);
 
         Ok(stack)
     }
@@ -108,7 +108,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
 /// Whatever else management is granted on `role/<prefix>-*`, it may not change its own role, nor
 /// the roles setup creates for AWS sandboxes. A Deny can only narrow the identity, so an Override
 /// profile gets them too.
-fn add_role_guards(stack: &mut Stack, platform: Platform) {
+fn add_role_guards(stack: &mut Stack, platform: Platform, setup_management: alien_core::SetupManagement) {
     if platform != Platform::Aws {
         return;
     }
@@ -116,7 +116,7 @@ fn add_role_guards(stack: &mut Stack, platform: Platform) {
         .resources()
         .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some());
     let guards: Vec<PermissionSetReference> = [
-        declares_a_sandbox.then_some(SANDBOX_SETUP_ROLES_GUARD),
+        (declares_a_sandbox && setup_management != alien_core::SetupManagement::Automatic).then_some(SANDBOX_SETUP_ROLES_GUARD),
         Some(MANAGEMENT_ROLE_GUARD),
     ]
     .into_iter()
@@ -171,6 +171,21 @@ fn generate_auto_management_profile(
     let mut permission_set_ids = BTreeSet::new();
     let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
+
+    if config.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+        // A direct setup explicitly grants ongoing infrastructure control for all supported
+        // resource types, including ones a later release adds. Reuse the permission registry
+        // rather than keeping a second cloud-specific administrator-policy implementation.
+        // Data payload permissions remain explicit, resource-scoped grants.
+        for id in list_permission_set_ids() {
+            let Some((resource_type, operation)) = id.split_once('/') else { continue; };
+            if matches!(operation, "provision" | "management" | "heartbeat")
+                && resource_type != "remote-stack-management"
+            {
+                permission_set_ids.insert(id.to_string());
+            }
+        }
+    }
 
     // Iterate through all resources in the stack to determine required management permissions
     for (resource_id, resource_entry) in stack.resources() {

@@ -55,6 +55,11 @@ pub struct RuntimeMetadata {
     #[serde(default)]
     pub initial_setup_authority: InitialSetupAuthority,
 
+    /// Setup-owned grant to keep using the direct setup executor for updates and teardown.
+    /// Runtime settings and release contents must never create or change this grant.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub automatic_setup: bool,
+
     /// Hash of the environment variables snapshot that was last synced to the vault
     /// Used to avoid redundant sync operations during incremental deployment
     #[serde(skip_serializing_if = "Option::is_none")]

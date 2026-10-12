@@ -137,6 +137,11 @@ pub struct DeployArgs {
     #[arg(long)]
     pub no_heartbeat: bool,
 
+    /// Grant ongoing setup permissions for a new deployment in your own AWS, GCP or Azure environment.
+    /// Alien can then add and change infrastructure without a separate setup run.
+    #[arg(long)]
+    pub automatic_setup: bool,
+
     /// Telemetry / monitoring mode.
     /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
     /// "off" disables all monitoring.
@@ -309,6 +314,12 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
             message: e,
         })
     })?;
+    if args.automatic_setup && !matches!(platform_enum, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "automatic-setup".to_string(),
+            message: "Automatic setup is supported for CLI-installed AWS, GCP and Azure deployments.".to_string(),
+        }));
+    }
 
     let name = args
         .name
@@ -985,6 +996,7 @@ fn deployment_stack_settings_json(
             MonitoringMode::Auto => "auto",
         },
         "updates": "auto",
+        "setupManagement": if args.automatic_setup { "automatic" } else { "manual" },
     });
 
     if let Some(access) = args.network.endpoint_access {

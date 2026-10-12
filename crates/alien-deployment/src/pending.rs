@@ -136,6 +136,7 @@ pub async fn handle_pending(
     // Step 4: Store prepared stack and inject environment variables
     let mut runtime_metadata = alien_core::RuntimeMetadata {
         initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+        automatic_setup: config.stack_settings.setup_management == alien_core::SetupManagement::Automatic,
         ..alien_core::RuntimeMetadata::default()
     };
     runtime_metadata.prepared_stack = Some(mutated_stack.clone());

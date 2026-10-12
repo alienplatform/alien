@@ -108,6 +108,28 @@ pub async fn handle_update_pending(
         })
     })?;
 
+    // This grant is written by direct setup and retained by the store as setup-owned
+    // metadata. A release or a mutable runtime setting cannot confer setup authority.
+    if let Some(metadata) = current.runtime_metadata.as_ref().filter(|metadata| metadata.automatic_setup) {
+        let metadata = crate::pending::prepare_direct_setup_update(
+            target_stack,
+            &stack_state,
+            &config,
+            &client_config,
+            metadata,
+        ).await?;
+        next.status = DeploymentStatus::InitialSetup;
+        next.runtime_metadata = Some(metadata);
+        next.error = None;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     // A frozen gate is answered once: the answers recorded at creation are
     // what every later input value is held against. A gate with no recorded
     // answer was never asked, which leaves its resource in the stack for the
