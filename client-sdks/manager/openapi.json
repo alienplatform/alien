@@ -19992,6 +19992,14 @@
           }
         }
       },
+      "SetupManagement": {
+        "type": "string",
+        "description": "Whether setup remains a separate administrator operation.",
+        "enum": [
+          "manual",
+          "automatic"
+        ]
+      },
       "SourceCredentials": {
         "type": "string",
         "enum": [
@@ -20365,6 +20373,10 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "setupManagement": {
+            "$ref": "#/components/schemas/SetupManagement",
+            "description": "Ongoing authority over infrastructure normally owned by setup. Automatic requires\nan explicit CLI setup grant; changing this setting alone never grants that authority."
           },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
