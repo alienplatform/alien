@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: 749d9df1de3dd573986090eef488d800
+  docChecksum: b2b14908abc6c5a155d3ff71538b344f
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: 76a3d507-35c4-4a0e-a3e9-229d7b82ff37
-  pristine_commit_hash: 217d0883fda90c70e5bb099b91dccfc3ac7143c2
-  pristine_tree_hash: e4df4e8a5d24b4c612b267bed9f18a119efe6d83
+  generation_id: b07c6763-8dc6-4560-8df1-ec78483d72c1
+  pristine_commit_hash: 3c291076d929598f9c7c805f3af0439e3b546b14
+  pristine_tree_hash: 74fe02ce1b63b377bfb6ef788424c6db329d7f1c
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -593,8 +593,8 @@ trackedFiles:
     pristine_git_object: 1867a685920d5a10f71affbd86876c14b3ffd92b
   docs/models/containerresourceselection.md:
     id: e79a65faa8d4
-    last_write_checksum: sha1:96d85d93b090f51843b9eca854302f28dbd64dee
-    pristine_git_object: 7682240626ed742dc08a37ac589b04daa689667b
+    last_write_checksum: sha1:20bc5abeae13a76c2046a4ae0cf9f1f4fdaaca5f
+    pristine_git_object: 4624dc4df617ae75e65aad5fb07a4b6e017d16ab
   docs/models/creatabletokentype.md:
     id: ab1f68ba6c0f
     last_write_checksum: sha1:4947be77d62d739f592583480962ff8c62d31f91
@@ -2573,8 +2573,8 @@ trackedFiles:
     pristine_git_object: 49aa468a58bf1adb7a53b747b265b6064717625f
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:684a8d8fd75ee181a5912ce2901d5438aea1e3f2
-    pristine_git_object: 31867b8d41fc32789e1f0ae2ef5b56bace2e970a
+    last_write_checksum: sha1:b1d256b786c7511d608fa9a06040fcbf66ce5d3d
+    pristine_git_object: 146a4dd77199862be31f0f58ec310eb81d1ac6ce
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
@@ -3157,8 +3157,8 @@ trackedFiles:
     pristine_git_object: 512e18ec6efd5bf6cd306eb41c9ff33d75d30545
   src/models/containerresourceselection.ts:
     id: ddd9aec342e2
-    last_write_checksum: sha1:c19f151b95338c180d8521ede2f5330cddece98e
-    pristine_git_object: f18557cc0d75c4e57ba6b0856e50038c55e37d0d
+    last_write_checksum: sha1:33facf02c06f31472b98ec0e6f218cb76a295ab8
+    pristine_git_object: 3c12c36dc1aa245b4ec4a18bbfa3af5e1a676622
   src/models/creatabletokentype.ts:
     id: b4261989d8fd
     last_write_checksum: sha1:fdb17ea6c0e047129dd7caa706eb2047ba82c887
