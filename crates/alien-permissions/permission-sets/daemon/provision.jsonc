@@ -414,6 +414,7 @@
             "compute.firewalls.delete",
             "compute.globalOperations.get",
             "compute.regionOperations.get",
+            "compute.zoneOperations.get",
             "compute.sslCertificates.create",
             "compute.sslCertificates.delete",
             "compute.sslCertificates.get",
