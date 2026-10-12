@@ -28,6 +28,9 @@ const TEST_LOCATION: &str = "us-central1";
 // Simple hello world container image that responds to HTTP requests
 const TEST_CONTAINER_IMAGE: &str = "gcr.io/cloudrun/hello";
 
+#[path = "cloudrun/identity_ingress.rs"]
+mod identity_ingress;
+
 struct CloudRunTestContext {
     client: CloudRunClient,
     compute_client: ComputeClient,

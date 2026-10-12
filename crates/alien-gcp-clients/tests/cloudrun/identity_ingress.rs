@@ -1,0 +1,220 @@
+use super::CloudRunTestContext;
+use alien_client_core::ErrorData;
+use alien_gcp_clients::cloudrun::{CloudRunApi, Ingress, Service};
+use alien_gcp_clients::longrunning::{Operation, OperationResult};
+use reqwest::Client;
+use std::{collections::HashMap, env, time::Duration};
+use test_context::test_context;
+use tokio::time::{sleep, Instant};
+use uuid::Uuid;
+
+const TOKEN_LABEL: &str = "test-create-token";
+
+fn required(value: Option<&str>, field: &str) -> Result<String, String> {
+    value
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("Cloud Run response has no {field}"))
+}
+
+fn concurrency_conflict(error: &alien_client_core::Error) -> bool {
+    matches!(
+        error.error.as_ref(),
+        Some(ErrorData::RemoteResourceConflict { .. })
+            | Some(ErrorData::HttpResponseError {
+                http_status: 409 | 412,
+                ..
+            })
+    )
+}
+
+async fn wait(ctx: &CloudRunTestContext, operation: Operation) -> Result<(), String> {
+    let name = required(operation.name.as_deref(), "operation name")?;
+    let id = name.rsplit('/').next().ok_or("invalid operation name")?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        let operation = ctx
+            .client
+            .get_operation(ctx.location.clone(), id.to_string())
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(OperationResult::Error { error }) = operation.result {
+            return Err(format!("Cloud Run operation failed: {error:?}"));
+        }
+        if operation.done == Some(true) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("Timed out waiting for {name}"));
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+}
+
+async fn observe_native_access(client: &Client, uri: &str, public: bool) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let status = client
+            .get(uri)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?
+            .status();
+        if (public && status.is_success()) || (!public && matches!(status.as_u16(), 403 | 404)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Native URL access public={public} remained HTTP {status}"
+            ));
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Real-provider prerequisite for access-only worker updates. This proves native
+/// URL denial, ETag fencing and revision preservation, not private ALB traffic
+/// or the controller's restricted runtime permission boundary.
+#[test_context(CloudRunTestContext)]
+#[tokio::test]
+async fn access_only_updates_preserve_identity_revision_and_fence_stale_writes(
+    ctx: &mut CloudRunTestContext,
+) {
+    let name = env::var("ALIEN_TEST_CLOUDRUN_IDENTITY_NAME")
+        .unwrap_or_else(|_| ctx.generate_unique_service_name());
+    let token = env::var("ALIEN_TEST_CLOUDRUN_IDENTITY_TOKEN")
+        .map(|value| Uuid::parse_str(&value).expect("probe token must be a UUID"))
+        .unwrap_or_else(|_| Uuid::new_v4())
+        .to_string();
+    println!("Cloud Run identity probe: service={name}; attempt={token}");
+    let mut confirmed_uid = None;
+    // Do not use the context's unconditional name-based fallback cleanup. A
+    // replacement must never be deleted after this test's identity check fails.
+    let observed: Result<(), String> = async {
+        let mut service = ctx.create_basic_service(name.clone());
+        service.ingress = Some(Ingress::IngressTrafficAll);
+        service.invoker_iam_disabled = Some(true);
+        service.labels = Some(HashMap::from([
+            (TOKEN_LABEL.to_string(), token.clone()),
+            ("test-purpose".to_string(), "endpoint-identity".to_string()),
+        ]));
+        let operation = ctx.client.create_service(ctx.location.clone(), name.clone(), service, None)
+            .await.map_err(|error| error.to_string())?;
+        wait(ctx, operation).await?;
+        let original = ctx.client.get_service(ctx.location.clone(), name.clone())
+            .await.map_err(|error| error.to_string())?;
+        let uid = required(original.uid.as_deref(), "UID")?;
+        confirmed_uid = Some(uid.clone());
+        let revision = required(original.latest_created_revision.as_deref(), "created revision")?;
+        let uri = required(original.uri.as_deref(), "canonical URI")?;
+        let client = Client::builder().timeout(Duration::from_secs(10)).build()
+            .map_err(|error| error.to_string())?;
+        observe_native_access(&client, &uri, true).await?;
+        let template = serde_json::to_value(&original.template).map_err(|error| error.to_string())?;
+        let mut current = original;
+        for (index, ingress) in [Ingress::IngressTrafficInternalLoadBalancer,
+            Ingress::IngressTrafficInternalOnly, Ingress::IngressTrafficAll].into_iter().enumerate() {
+            let previous_etag = required(current.etag.as_deref(), "ETag")?;
+            let patch = Service::builder().etag(previous_etag.clone())
+                .ingress(ingress.clone()).invoker_iam_disabled(true).build();
+            let operation = ctx.client.patch_service(ctx.location.clone(), name.clone(), patch,
+                Some("ingress,invokerIamDisabled".to_string()), None, Some(false))
+                .await.map_err(|error| error.to_string())?;
+            wait(ctx, operation).await?;
+            current = ctx.client.get_service(ctx.location.clone(), name.clone())
+                .await.map_err(|error| error.to_string())?;
+            if current.uid.as_deref() != Some(uid.as_str())
+                || current.latest_created_revision.as_deref() != Some(revision.as_str())
+                || current.latest_ready_revision.as_deref() != Some(revision.as_str())
+                || current.uri.as_deref() != Some(uri.as_str()) || current.ingress != Some(ingress)
+                || serde_json::to_value(&current.template).map_err(|error| error.to_string())? != template {
+                return Err("Access-only update changed identity, revision, URI, template or failed to apply ingress".to_string());
+            }
+            if required(current.etag.as_deref(), "updated ETag")? == previous_etag {
+                return Err("Access-only mutation did not advance its ETag".to_string());
+            }
+            observe_native_access(&client, &uri, index == 2).await?;
+            if index == 0 {
+                let stale_patch = Service::builder().etag(previous_etag.clone())
+                    .ingress(Ingress::IngressTrafficAll).build();
+                let error = ctx.client.patch_service(ctx.location.clone(), name.clone(), stale_patch,
+                    Some("ingress".to_string()), None, Some(false)).await
+                    .err().ok_or("Provider accepted a stale patch ETag")?;
+                if !concurrency_conflict(&error) {
+                    return Err(format!("Stale patch failed for an unexpected reason: {error}"));
+                }
+                let error = ctx.client.delete_service(ctx.location.clone(), name.clone(), None,
+                    Some(previous_etag)).await.err().ok_or("Provider accepted a stale delete ETag")?;
+                if !concurrency_conflict(&error) {
+                    return Err(format!("Stale delete failed for an unexpected reason: {error}"));
+                }
+            }
+            println!("Verified access phase {index}: same service UID, revision and URI");
+        }
+        Ok(())
+    }.await;
+    let cleanup: Result<(), String> = async {
+        let service = match ctx
+            .client
+            .get_service(ctx.location.clone(), name.clone())
+            .await
+        {
+            Ok(service) => service,
+            Err(error) if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {
+                return Ok(())
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if service
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(TOKEN_LABEL))
+            != Some(&token)
+            || confirmed_uid
+                .as_ref()
+                .is_some_and(|uid| service.uid.as_ref() != Some(uid))
+        {
+            return Err("Refusing cleanup of a foreign or replaced probe service".to_string());
+        }
+        let etag = required(service.etag.as_deref(), "cleanup ETag")?;
+        let operation = ctx
+            .client
+            .delete_service(ctx.location.clone(), name.clone(), None, Some(etag))
+            .await
+            .map_err(|error| error.to_string())?;
+        wait(ctx, operation).await?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match ctx
+                .client
+                .get_service(ctx.location.clone(), name.clone())
+                .await
+            {
+                Err(error)
+                    if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) =>
+                {
+                    return Ok(())
+                }
+                Err(error) => return Err(error.to_string()),
+                Ok(service) if service.uid != confirmed_uid && confirmed_uid.is_some() => {
+                    return Err("Probe service was replaced during cleanup".to_string())
+                }
+                Ok(_) => {}
+            }
+            if Instant::now() >= deadline {
+                return Err("Probe service remains after deletion".to_string());
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+    .await;
+    assert!(
+        cleanup.is_ok(),
+        "probe cleanup failed: {cleanup:?}; observation: {observed:?}"
+    );
+    println!("Probe service absence confirmed: {name}");
+    assert!(
+        observed.is_ok(),
+        "identity/ingress qualification failed: {observed:?}"
+    );
+}
