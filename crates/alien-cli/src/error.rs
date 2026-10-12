@@ -75,6 +75,19 @@ pub enum ErrorData {
         url: Option<String>,
     },
 
+    /// The log search backend rejected the request.
+    #[error(
+        code = "INVALID_REQUEST",
+        message = "Log search rejected: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    LogSearchRejected {
+        /// The backend's human-readable rejection reason.
+        message: String,
+    },
+
     /// Network or connectivity issue.
     #[error(
         code = "NETWORK_ERROR",
