@@ -137,24 +137,36 @@ impl AutomaticSetup {
                         "Automatic updates must retain the installed management identity"
                     );
                     if name == "remove" {
-                        let resource = &state["resources"]["archive"];
-                        anyhow::ensure!(
-                            resource.is_null() || resource["status"] == "deleted",
-                            "Removed storage must finish deletion before release promotion"
-                        );
+                        for id in ["archive", "archive-next"] {
+                            let resource = &state["resources"][id];
+                            anyhow::ensure!(
+                                resource.is_null() || resource["status"] == "deleted",
+                                "Removed storage must finish deletion before release promotion"
+                            );
+                        }
                     } else {
+                        let storage_id = if self.platform == Platform::Azure && name == "change" {
+                            let previous = &state["resources"]["archive"];
+                            anyhow::ensure!(
+                                previous.is_null() || previous["status"] == "deleted",
+                                "Azure replacement must delete the previous container"
+                            );
+                            "archive-next"
+                        } else {
+                            "archive"
+                        };
                         anyhow::ensure!(
-                            state["resources"]["archive"]["status"] == "running",
+                            state["resources"][storage_id]["status"] == "running",
                             "Storage must reach running"
                         );
                         anyhow::ensure!(
-                            state["resources"]["archive"]["config"][if self.platform
+                            state["resources"][storage_id]["config"][if self.platform
                                 == Platform::Gcp
                             {
                                 "versioning"
                             } else {
                                 "publicRead"
-                            }] == (name == "change"),
+                            }] == (name == "change" && self.platform != Platform::Azure),
                             "The installed configuration must converge"
                         );
                     }
@@ -190,14 +202,16 @@ impl AutomaticSetup {
 }
 
 fn storage_stack(platform: Platform, changed: bool) -> Stack {
-    // Domain-restricted GCP projects reject public principals by policy. Change
-    // bucket versioning there so this exercises a real supported update without
-    // weakening the organization's access restrictions. Azure uses per-container
-    // public access because versioning is an account-level setting there.
-    let storage = if platform == Platform::Gcp {
-        Storage::new("archive".into()).versioning(changed).build()
-    } else {
-        Storage::new("archive".into()).public_read(changed).build()
+    // Exercise a real supported change without relaxing provider restrictions.
+    // GCP changes bucket versioning under domain-restricted IAM policy. Azure
+    // replaces a private container because its storage account disallows public
+    // access; ignored versioning/lifecycle fields would not prove a cloud change.
+    let storage = match platform {
+        Platform::Gcp => Storage::new("archive".into()).versioning(changed).build(),
+        Platform::Azure => {
+            Storage::new(if changed { "archive-next" } else { "archive" }.into()).build()
+        }
+        _ => Storage::new("archive".into()).public_read(changed).build(),
     };
     Stack::new("automatic-setup".into())
         .add(storage, ResourceLifecycle::Frozen)
