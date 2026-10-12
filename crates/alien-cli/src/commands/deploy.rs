@@ -386,25 +386,6 @@ fn validate_compute_settings(compute: Option<&ComputeSettings>) -> Result<()> {
     Ok(())
 }
 
-fn to_sdk_compute_settings(
-    compute: Option<ComputeSettings>,
-) -> Result<Option<alien_platform_api::types::NewDeploymentRequestStackSettingsCompute>> {
-    compute
-        .map(|compute_settings| {
-            let json = serde_json::to_value(&compute_settings)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to serialize compute settings".to_string(),
-                })?;
-            serde_json::from_value(json)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to convert compute settings to SDK type".to_string(),
-                })
-        })
-        .transpose()
-}
-
 fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
     let resolved_path = resolved_config_path(path);
     let contents = std::fs::read_to_string(path).into_alien_error().context(
@@ -1470,65 +1451,13 @@ async fn deploy_task_with_environment(
 
                         let sdk_client = create_platform_client(token, &base_url)?;
 
-                        let sdk_network = resolved_args
-                            .network_settings
-                            .clone()
-                            .map(|network_settings| {
-                                let json = serde_json::to_value(&network_settings)
-                                    .into_alien_error()
-                                    .context(ErrorData::ConfigurationError {
-                                        message: "Failed to serialize network settings".to_string(),
-                                    })?;
-                                serde_json::from_value(json).into_alien_error().context(
-                                    ErrorData::ConfigurationError {
-                                        message: "Failed to convert network settings to SDK type"
-                                            .to_string(),
-                                    },
-                                )
-                            })
-                            .transpose()?;
-
-                        let sdk_compute =
-                            to_sdk_compute_settings(resolved_args.compute_settings.clone())?;
-
-                        let deployment_model = if uses_push_deployment_model(
-                            resolved_args.platform_enum,
-                        ) {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
-                        } else {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
-                        };
-                        let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
-                        endpoint_access: args.network.endpoint_access
-                            .map(|access| serde_json::from_value(serde_json::json!(access)))
-                            .transpose()
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to convert endpoint access to SDK type".to_string(),
-                            })?,
-                        compute: sdk_compute,
-                        deployment_model: Some(deployment_model),
-                        heartbeats: Some(if args.no_heartbeat {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
-                        } else {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::On
-                        }),
-                        telemetry: Some(match args.monitoring {
-                            MonitoringMode::Off => alien_platform_api::types::NewDeploymentRequestStackSettingsTelemetry::Off,
-                            MonitoringMode::Auto => alien_platform_api::types::NewDeploymentRequestStackSettingsTelemetry::Auto,
-                        }),
-                        updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
-                        network: sdk_network,
-                        domains: resolved_args.domain_settings.clone().map(|domains| {
-                            let value = serde_json::to_value(domains).into_alien_error()
-                                .context(ErrorData::ConfigurationError { message: "Failed to serialize domain settings".to_string() })?;
-                            serde_json::from_value(value).into_alien_error()
-                                .context(ErrorData::ConfigurationError { message: "Failed to convert domain settings to SDK type".to_string() })
-                        }).transpose()?,
-                        external_bindings: None,
-                        kubernetes: None,
-                        public_endpoints: None,
-                    };
+                        let stack_settings = serde_json::from_value(
+                            deployment_stack_settings_json(resolved_args, args)?,
+                        )
+                        .into_alien_error()
+                        .context(ErrorData::ConfigurationError {
+                            message: "Failed to convert deployment settings to SDK type".to_string(),
+                        })?;
 
                         let parsed_setup_item = match args.setup_item {
                             Some(item) => Some(
@@ -4201,35 +4130,6 @@ max = 1
             .expect_err("invalid bounds must fail locally");
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("minimum"));
-    }
-
-    #[test]
-    fn fixed_and_autoscale_compute_convert_to_generated_sdk_contract() {
-        let compute: ComputeSettings = serde_json::from_value(serde_json::json!({
-            "pools": {
-                "fixed": {
-                    "mode": "fixed",
-                    "machines": 2,
-                    "machine": "m8i.2xlarge"
-                },
-                "elastic": {
-                    "mode": "autoscale",
-                    "min": 1,
-                    "max": 4,
-                    "machine": "n2-standard-8"
-                }
-            }
-        }))
-        .expect("core compute settings should parse");
-
-        let sdk = to_sdk_compute_settings(Some(compute))
-            .expect("core settings must match the generated SDK schema")
-            .expect("compute should be present");
-        let json = serde_json::to_value(sdk).expect("SDK compute should serialize");
-
-        assert_eq!(json["pools"]["fixed"]["machines"], 2);
-        assert_eq!(json["pools"]["elastic"]["min"], 1);
-        assert_eq!(json["pools"]["elastic"]["max"], 4);
     }
 
     #[tokio::test]
