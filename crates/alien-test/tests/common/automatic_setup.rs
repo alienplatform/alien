@@ -130,7 +130,7 @@ impl AutomaticSetup {
                     && state.current_release_id.as_deref() == Some(&release)
                 {
                     let state =
-                        serde_json::to_value(state.stack_state.context("Stack state required")?)?;
+                        serde_json::to_value(state.stack_state.as_ref().context("Stack state required")?)?;
                     if name == "remove" {
                         let resource = &state["resources"]["archive"];
                         anyhow::ensure!(
