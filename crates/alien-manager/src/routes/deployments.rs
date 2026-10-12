@@ -992,13 +992,14 @@ async fn retry_deployment(
     Json(serde_json::json!({ "success": true })).into_response()
 }
 
-/// Whether a retry can move this deployment back to work.
+/// Whether a retry may reach the deployment store.
 ///
 /// Failed statuses retry their last operation. A deployment can also sit in
 /// `provisioning` with an installed release and no desired release: a setup
 /// run handed it back with no update to apply. A manager that runs only
 /// pending updates never takes that deployment, so a retry must reach the
-/// store, which repeats the installed release.
+/// store, which repeats the installed release. `update-pending` retries also
+/// reach the store, which decides whether pending work can safely recover.
 fn retry_accepted(deployment: &DeploymentRecord) -> bool {
     const RETRYABLE_FAILED_STATUSES: [&str; 6] = [
         "preflights-failed",
@@ -1011,7 +1012,9 @@ fn retry_accepted(deployment: &DeploymentRecord) -> bool {
     let handed_off_without_update = deployment.status == "provisioning"
         && deployment.current_release_id.is_some()
         && deployment.desired_release_id.is_none();
-    RETRYABLE_FAILED_STATUSES.contains(&deployment.status.as_str()) || handed_off_without_update
+    RETRYABLE_FAILED_STATUSES.contains(&deployment.status.as_str())
+        || handed_off_without_update
+        || deployment.status == "update-pending"
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -1371,6 +1374,14 @@ mod tests {
         deployment: DeploymentRecord,
         store_receives_retry: bool,
     ) -> (StatusCode, serde_json::Value) {
+        retry_route_response_with_result(deployment, store_receives_retry, Ok(())).await
+    }
+
+    async fn retry_route_response_with_result(
+        deployment: DeploymentRecord,
+        store_receives_retry: bool,
+        store_result: Result<(), AlienError>,
+    ) -> (StatusCode, serde_json::Value) {
         let mut deployment_store = MockDeploymentStore::new();
         deployment_store
             .expect_get_deployment()
@@ -1378,9 +1389,9 @@ mod tests {
             .return_once(move |_, _| Ok(Some(deployment)));
         deployment_store
             .expect_set_retry_requested()
-            .withf(|_, id| id == "deployment-1")
+            .withf(|caller, id| caller.bearer_token == "test-token" && id == "deployment-1")
             .times(usize::from(store_receives_retry))
-            .returning(|_, _| Ok(()));
+            .return_once(move |_, _| store_result);
 
         let request = Request::builder()
             .method("POST")
@@ -1402,6 +1413,59 @@ mod tests {
         let (status, json) = retry_route_response(deployment, true).await;
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["success"], true);
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_the_store_refusal_for_update_pending() {
+        let deployment = DeploymentRecord {
+            status: "update-pending".to_string(),
+            current_release_id: Some("rel_installed".to_string()),
+            desired_release_id: Some("rel_target".to_string()),
+            ..deployment_record()
+        };
+        let refusal = ErrorData::bad_request("Pending work cannot safely recover").into_generic();
+        let (status, json) = retry_route_response_with_result(deployment, true, Err(refusal)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["code"], "BAD_REQUEST");
+        assert_eq!(json["message"], "Pending work cannot safely recover");
+        assert_eq!(json["httpStatusCode"], 400);
+        assert!(json.get("success").is_none(), "{json}");
+    }
+
+    #[tokio::test]
+    async fn retry_keeps_failed_statuses_and_other_active_status_guards() {
+        for (deployment_status, accepted) in [
+            ("preflights-failed", true),
+            ("initial-setup-failed", true),
+            ("provisioning-failed", true),
+            ("refresh-failed", true),
+            ("update-failed", true),
+            ("delete-failed", true),
+            ("running", false),
+            ("updating", false),
+            ("refreshing", false),
+            ("deleting", false),
+        ] {
+            let deployment = DeploymentRecord {
+                status: deployment_status.to_string(),
+                ..deployment_record()
+            };
+            let (status, json) = retry_route_response(deployment, accepted).await;
+            assert_eq!(
+                status,
+                if accepted {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                "{deployment_status}: {json}"
+            );
+            if accepted {
+                assert_eq!(json["success"], true);
+            } else {
+                assert_eq!(json["code"], "BAD_REQUEST");
+            }
+        }
     }
 
     /// A setup run that handed a running deployment back at `provisioning` with
