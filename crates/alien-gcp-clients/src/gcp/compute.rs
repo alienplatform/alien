@@ -5107,6 +5107,11 @@ pub struct ForwardingRule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_balancing_scheme: Option<LoadBalancingScheme>,
 
+    /// Let clients in other regions reach a regional internal load balancer.
+    /// Set on creation: INTERNAL_MANAGED rules cannot change this afterward.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_global_access: Option<bool>,
+
     /// Network tier for this forwarding rule.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_tier: Option<NetworkTier>,

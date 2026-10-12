@@ -3259,3 +3259,416 @@ async fn regional_health_check_lifecycle(ctx: &mut ComputeTestContext) {
         Some("updated regional check")
     );
 }
+
+/// Qualifies regional HTTPS resource scopes, shared backend wiring, private
+/// frontend allocation and certificate replacement against the real provider.
+/// Reachability and workload continuity require separate workload-level tests.
+#[test_context(ComputeTestContext)]
+#[tokio::test]
+async fn regional_private_https_lifecycle(ctx: &mut ComputeTestContext) {
+    let name = ctx.generate_unique_name("private-https");
+    let clients = format!("{name}-clients");
+    let proxy_subnet = format!("{name}-proxy");
+    let replacement = format!("{name}-renewed");
+    let network_url = format!("projects/{}/global/networks/{name}", ctx.project_id);
+    let regional_url = |collection: &str, resource: &str| {
+        format!(
+            "projects/{}/regions/{}/{collection}/{resource}",
+            ctx.project_id, ctx.region
+        )
+    };
+    let subnet_url = regional_url("subnetworks", &clients);
+    let observed: std::result::Result<_, String> = async {
+        let operation = ctx
+            .client
+            .insert_network(
+                Network::builder()
+                    .name(name.clone())
+                    .auto_create_subnetworks(false)
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_global_operation(
+            operation
+                .name
+                .as_deref()
+                .ok_or("network operation name missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        for (subnet_name, cidr, managed) in [
+            (&clients, "10.46.0.0/24", false),
+            (&proxy_subnet, "10.46.2.0/23", true),
+        ] {
+            let mut subnet = Subnetwork::builder()
+                .name(subnet_name.clone())
+                .network(network_url.clone())
+                .ip_cidr_range(cidr.to_string())
+                .build();
+            if managed {
+                subnet.purpose =
+                    Some(alien_gcp_clients::compute::SubnetworkPurpose::RegionalManagedProxy);
+                subnet.role = Some(alien_gcp_clients::compute::SubnetworkRole::Active);
+            }
+            let operation = ctx
+                .client
+                .insert_subnetwork(ctx.region.clone(), subnet)
+                .await
+                .map_err(|error| error.to_string())?;
+            ctx.wait_for_region_operation(
+                &ctx.region,
+                operation
+                    .name
+                    .as_deref()
+                    .ok_or("subnet operation name missing")?,
+                180,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        let operation = ctx
+            .client
+            .insert_region_health_check(
+                ctx.region.clone(),
+                HealthCheck::builder()
+                    .name(name.clone())
+                    .r#type(HealthCheckType::Http)
+                    .http_health_check(HttpHealthCheck::builder().port(8080).build())
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("health check operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let operation = ctx
+            .client
+            .insert_region_backend_service(
+                ctx.region.clone(),
+                BackendService::builder()
+                    .name(name.clone())
+                    .protocol(BackendServiceProtocol::Http)
+                    .load_balancing_scheme(LoadBalancingScheme::InternalManaged)
+                    .health_checks(vec![regional_url("healthChecks", &name)])
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("backend operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let operation = ctx
+            .client
+            .insert_region_url_map(
+                ctx.region.clone(),
+                UrlMap::builder()
+                    .name(name.clone())
+                    .default_service(regional_url("backendServices", &name))
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("URL map operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        for certificate_name in [&name, &replacement] {
+            let key = rcgen::KeyPair::generate().map_err(|error| error.to_string())?;
+            let certificate =
+                rcgen::CertificateParams::new(vec!["private-api.example.test".to_string()])
+                    .map_err(|error| error.to_string())?
+                    .self_signed(&key)
+                    .map_err(|error| error.to_string())?;
+            let operation = ctx
+                .client
+                .insert_region_ssl_certificate(
+                    ctx.region.clone(),
+                    SslCertificate::builder()
+                        .name(certificate_name.clone())
+                        .r#type("SELF_MANAGED".to_string())
+                        .self_managed(
+                            SslCertificateSelfManaged::builder()
+                                .certificate(certificate.pem())
+                                .private_key(key.serialize_pem())
+                                .build(),
+                        )
+                        .build(),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            ctx.wait_for_region_operation(
+                &ctx.region,
+                operation
+                    .name
+                    .as_deref()
+                    .ok_or("certificate operation missing")?,
+                180,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        let operation = ctx
+            .client
+            .insert_region_target_https_proxy(
+                ctx.region.clone(),
+                TargetHttpsProxy::builder()
+                    .name(name.clone())
+                    .url_map(regional_url("urlMaps", &name))
+                    .ssl_certificates(vec![regional_url("sslCertificates", &name)])
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("HTTPS proxy operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let operation = ctx
+            .client
+            .insert_address(
+                ctx.region.clone(),
+                Address::builder()
+                    .name(name.clone())
+                    .address_type(alien_gcp_clients::compute::AddressType::Internal)
+                    .subnetwork(subnet_url.clone())
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("address operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let address = ctx
+            .client
+            .get_address(ctx.region.clone(), name.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let ip = address.address.ok_or("reserved private address missing")?;
+        let operation = ctx
+            .client
+            .insert_forwarding_rule(
+                ctx.region.clone(),
+                ForwardingRule::builder()
+                    .name(name.clone())
+                    .ip_address(ip.clone())
+                    .ip_protocol(ForwardingRuleProtocol::Tcp)
+                    .port_range("443".to_string())
+                    .load_balancing_scheme(LoadBalancingScheme::InternalManaged)
+                    .network(network_url.clone())
+                    .subnetwork(subnet_url.clone())
+                    .target(regional_url("targetHttpsProxies", &name))
+                    .allow_global_access(true)
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("forwarding rule operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let before = ctx
+            .client
+            .get_forwarding_rule(ctx.region.clone(), name.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let operation = ctx
+            .client
+            .set_region_target_https_proxy_ssl_certificates(
+                ctx.region.clone(),
+                name.clone(),
+                vec![regional_url("sslCertificates", &replacement)],
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("certificate switch operation missing")?,
+            180,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let after = ctx
+            .client
+            .get_forwarding_rule(ctx.region.clone(), name.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let proxy = ctx
+            .client
+            .get_region_target_https_proxy(ctx.region.clone(), name.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let global = ctx.client.get_global_forwarding_rule(name.clone()).await;
+        Ok((ip, before, after, proxy, global))
+    }
+    .await;
+
+    // Every deterministic resource name is known before creation. Attempt all
+    // cleanup steps even if provisioning or an earlier deletion failed.
+    let mut cleanup_errors = Vec::new();
+    for kind in [
+        "forwardingRule",
+        "address",
+        "httpsProxy",
+        "certificate",
+        "replacementCertificate",
+        "urlMap",
+        "backend",
+        "healthCheck",
+        "proxySubnet",
+        "clientSubnet",
+        "network",
+    ] {
+        let operation = match kind {
+            "forwardingRule" => {
+                ctx.client
+                    .delete_forwarding_rule(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "address" => {
+                ctx.client
+                    .delete_address(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "httpsProxy" => {
+                ctx.client
+                    .delete_region_target_https_proxy(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "certificate" => {
+                ctx.client
+                    .delete_region_ssl_certificate(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "replacementCertificate" => {
+                ctx.client
+                    .delete_region_ssl_certificate(ctx.region.clone(), replacement.clone())
+                    .await
+            }
+            "urlMap" => {
+                ctx.client
+                    .delete_region_url_map(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "backend" => {
+                ctx.client
+                    .delete_region_backend_service(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "healthCheck" => {
+                ctx.client
+                    .delete_region_health_check(ctx.region.clone(), name.clone())
+                    .await
+            }
+            "proxySubnet" => {
+                ctx.client
+                    .delete_subnetwork(ctx.region.clone(), proxy_subnet.clone())
+                    .await
+            }
+            "clientSubnet" => {
+                ctx.client
+                    .delete_subnetwork(ctx.region.clone(), clients.clone())
+                    .await
+            }
+            _ => ctx.client.delete_network(name.clone()).await,
+        };
+        match operation {
+            Ok(operation) => {
+                let result = if let Some(operation_name) = operation.name.as_deref() {
+                    if kind == "network" {
+                        ctx.wait_for_global_operation(operation_name, 180).await
+                    } else {
+                        ctx.wait_for_region_operation(&ctx.region, operation_name, 180)
+                            .await
+                    }
+                } else {
+                    Err("delete operation name missing".into())
+                };
+                if let Err(error) = result {
+                    cleanup_errors.push(format!("{kind}: {error}"));
+                }
+            }
+            Err(error) if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {
+            }
+            Err(error) => cleanup_errors.push(format!("{kind}: {error}")),
+        }
+    }
+    assert!(
+        cleanup_errors.is_empty(),
+        "temporary resources {name}: {cleanup_errors:?}"
+    );
+    let absent = ctx
+        .client
+        .get_network(name.clone())
+        .await
+        .expect_err("temporary VPC must be absent after cleanup");
+    assert!(matches!(
+        absent.error,
+        Some(ErrorData::RemoteResourceNotFound { .. })
+    ));
+    let (ip, before, after, proxy, global) = observed.expect("regional private HTTPS lifecycle");
+    assert!(ip
+        .parse::<std::net::Ipv4Addr>()
+        .expect("private IPv4 address")
+        .is_private());
+    assert_eq!(
+        before.id, after.id,
+        "certificate replacement must preserve frontend identity"
+    );
+    assert_eq!(after.ip_address.as_deref(), Some(ip.as_str()));
+    assert_eq!(after.allow_global_access, Some(true));
+    assert!(proxy
+        .ssl_certificates
+        .as_ref()
+        .is_some_and(|certificates| certificates.len() == 1
+            && certificates[0].ends_with(&format!("/sslCertificates/{replacement}"))));
+    let error =
+        global.expect_err("private frontend must not exist in the global public collection");
+    assert!(matches!(
+        error.error,
+        Some(ErrorData::RemoteResourceNotFound { .. })
+    ));
+}
