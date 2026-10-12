@@ -1113,6 +1113,51 @@ fn parse_std_duration_arg(value: &str) -> std::result::Result<StdDuration, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn rejected_search_keeps_bad_request_status_and_plain_message() {
+        for body in [
+            json!({ "error": "INVALID_REQUEST", "message": "Numeric ranges require TO between bounds" }).to_string(),
+            "Numeric ranges require TO between bounds".to_string(),
+        ] {
+            let server = MockServer::start_async().await;
+            let splits = server.mock_async(|when, then| {
+                when.method(GET).path("/v1/databases/db_test/splits")
+                    .header("authorization", "Bearer test-query-token");
+                then.status(200).json_body(json!({"splits": []}));
+            }).await;
+            let search = server.mock_async(|when, then| {
+                when.method(POST).path("/v1/logs/search")
+                    .header("authorization", "Bearer test-query-token");
+                then.status(400).body(body.clone());
+            }).await;
+            let client = DeepstoreClient::builder()
+                .control_plane_url(server.url("/v1"))
+                .auth_proxy_url(server.base_url())
+                .query_token_provider(|| async { Ok("test-query-token".to_string()) })
+                .build().expect("local search client");
+            let target = LogsTarget {
+                manager_id: "mgr_test".to_string(), project_id: Some("prj_test".to_string()),
+                project_name: None, deployment_id: None, deployment_name: None,
+                deployment_group_name: None, database_id: "db_test".to_string(),
+            };
+            let end = Utc::now();
+            let error = fetch_logs(&client, "db_test", "count:[10,100]", &target,
+                end - Duration::hours(1), end, 10).await.expect_err("query is refused over HTTP");
+            splits.assert_calls_async(1).await;
+            search.assert_calls_async(1).await;
+            assert_eq!(error.http_status_code, Some(400));
+            assert_eq!(error.code, "INVALID_REQUEST");
+            assert_eq!(error.message, "Log search rejected: Numeric ranges require TO between bounds");
+            assert!(!error.retryable);
+            assert!(!error.internal);
+        }
+    }
 
     #[test]
     fn invalid_log_limits_are_client_validation_errors() {
@@ -1125,8 +1170,8 @@ mod tests {
             assert!(!error.retryable);
             assert!(!error.internal);
         }
-        let args = LogsArgs::try_parse_from(["logs", "--limit", "1000"])
-            .expect("maximum limit parses");
+        let args =
+            LogsArgs::try_parse_from(["logs", "--limit", "1000"]).expect("maximum limit parses");
         validate_args(&args).expect("maximum supported limit remains valid");
     }
 
