@@ -30,7 +30,8 @@ use alien_core::{
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment_with_payload, acquire_setup_run_deployment,
-    combine_operation_and_finalization, final_reconcile, finalize_step_loop, ManagerApiTransport,
+    combine_operation_and_finalization, finalize_step_loop, release_deployment,
+    ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -2147,25 +2148,18 @@ async fn deploy_task_with_environment(
 
     // A setup update re-runs setup on an installed deployment: prepare the
     // target release's setup-owned resources, then hand off like initial setup.
-    // A failed preparation releases the lock with the state as it was read.
+    // Preparation has not applied changes; on refusal, release without checkpointing.
     if matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. }) {
-        let mut prepared = current.clone();
-        if let Err(error) = prepare_setup_update(&mut prepared, &config, &client_config).await {
-            let finalized = final_reconcile(
-                lock_client,
-                &tracked_deployment.deployment_id,
-                &session,
-                acquired_deployment.execution_claim.as_ref(),
-                &current,
-            )
-            .await;
-            return combine_operation_and_finalization(Err::<(), _>(error), finalized).context(
-                ErrorData::GenericError {
-                    message: "setup update failed".to_string(),
-                },
-            );
-        }
-        current = prepared;
+        current = prepare_setup_update_with_lease()
+            .current(&current)
+            .config(&config)
+            .client_config(&client_config)
+            .lock_client(lock_client)
+            .deployment_id(&tracked_deployment.deployment_id)
+            .session(&session)
+            .maybe_execution_claim(acquired_deployment.execution_claim.as_ref())
+            .call()
+            .await?;
     }
 
     steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
@@ -2968,6 +2962,29 @@ async fn completed_after_acquisition_miss(
                 .as_ref()
                 .is_some_and(|state| state.active.0.is_none() && state.next.0.is_none()),
     )
+}
+
+/// Preparation owns no cloud progress; only a successful result enters setup.
+#[bon::builder]
+async fn prepare_setup_update_with_lease<'a>(
+    current: &'a DeploymentState,
+    config: &'a alien_core::DeploymentConfig,
+    client_config: &'a ClientConfig,
+    lock_client: &'a alien_manager_api::Client,
+    deployment_id: &'a str,
+    session: &'a str,
+    execution_claim: Option<&'a alien_deployment::manager_api_transport::ExecutionClaim>,
+) -> Result<DeploymentState> {
+    let mut prepared = current.clone();
+    if let Err(error) = prepare_setup_update(&mut prepared, config, client_config).await {
+        let finalized =
+            release_deployment(lock_client, deployment_id, session, execution_claim).await;
+        return combine_operation_and_finalization(Err::<DeploymentState, _>(error), finalized)
+            .context(ErrorData::GenericError {
+                message: "setup update failed".to_string(),
+            });
+    }
+    Ok(prepared)
 }
 
 /// Prepares an installed deployment for a setup run: the target release's
@@ -4530,5 +4547,97 @@ max = 1
             "unexpected error: {}",
             error.message
         );
+    }
+    #[tokio::test]
+    async fn refused_setup_preparation_releases_exact_claim_without_checkpointing() {
+        for release_status in [200, 500] {
+            let server = MockServer::start_async().await;
+            let reconcile = server
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/reconcile");
+                    then.status(200)
+                        .json_body(serde_json::json!({"success": true}));
+                })
+                .await;
+            let release = server.mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release")
+                    .json_body(serde_json::json!({
+                        "deploymentId": "deployment-1", "session": "session-1",
+                        "executionClaim": {"operationId": "operation-1", "attemptId": "attempt-1"}
+                    }));
+                then.status(release_status).json_body(if release_status == 200 {
+                    serde_json::json!({"success": true})
+                } else {
+                    serde_json::json!({"code": "RELEASE_FAILED", "message": "Lease release refused", "retryable": false, "internal": false})
+                });
+            }).await;
+            let current = DeploymentState {
+                status: DeploymentStatus::UpdatePending,
+                platform: Platform::Aws,
+                current_release: Some(alien_core::ReleaseInfo {
+                    release_id: Some("installed-release".into()),
+                    version: None,
+                    description: None,
+                    stack: serde_json::from_value(
+                        serde_json::json!({"id": "installed-stack", "resources": {}}),
+                    )
+                    .unwrap(),
+                }),
+                // The real preparation refuses an installed state with no target.
+                target_release: None,
+                stack_state: None,
+                error: None,
+                environment_info: None,
+                runtime_metadata: None,
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            let config = alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let client_config = ClientConfig::Test;
+            let original = prepare_setup_update(&mut current.clone(), &config, &client_config)
+                .await
+                .expect_err("missing target refuses preparation before setup");
+            let claim = alien_deployment::manager_api_transport::ExecutionClaim {
+                operation_id: "operation-1".into(),
+                attempt_id: "attempt-1".into(),
+            };
+            let client = alien_manager_api::Client::new(&server.base_url());
+            let error = prepare_setup_update_with_lease()
+                .current(&current)
+                .config(&config)
+                .client_config(&client_config)
+                .lock_client(&client)
+                .deployment_id("deployment-1")
+                .session("session-1")
+                .execution_claim(&claim)
+                .call()
+                .await
+                .expect_err("preparation remains refused");
+            reconcile.assert_hits_async(0).await;
+            release.assert_hits_async(1).await;
+            let preparation = error.source.as_ref().expect("original preparation error");
+            assert_eq!(preparation.code, original.code);
+            assert_eq!(preparation.message, original.message);
+            if release_status == 500 {
+                let secondary = preparation
+                    .source
+                    .as_ref()
+                    .expect("release failure retained");
+                assert_eq!(secondary.code, "GENERIC_ERROR");
+                assert_eq!(secondary.message, "Failed to release sync lock");
+            } else {
+                assert!(preparation.source.is_none());
+            }
+            assert_eq!(current.status, DeploymentStatus::UpdatePending);
+        }
     }
 }
