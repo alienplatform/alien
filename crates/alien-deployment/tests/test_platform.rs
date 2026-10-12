@@ -4253,3 +4253,55 @@ async fn automatic_setup_can_decline_and_reenable_a_frozen_gate_after_checkpoint
         }
     }
 }
+
+#[tokio::test]
+async fn automatic_setup_applies_a_superseding_release_before_promoting_it() {
+    let _vault = test_vault_env().await;
+    for superseded_during in [
+        DeploymentStatus::InitialSetup,
+        DeploymentStatus::Provisioning,
+    ] {
+        let mut config = create_test_config("automatic-supersession", false);
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        config.setup_run = true;
+        let empty = Stack::new("automatic-supersession".into()).build();
+        let mut state =
+            run_to_completion(create_initial_state(empty.clone()), config.clone()).await;
+        config.setup_run = false;
+        start_update(&mut state, release_of("release-a", empty));
+        for _ in 0..20 {
+            if state.status == superseded_during {
+                break;
+            }
+            state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+                .await
+                .unwrap()
+                .state;
+        }
+        assert_eq!(state.status, superseded_during);
+        let newer = Stack::new("automatic-supersession".into())
+            .add(
+                Storage::new("newer-archive".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        state.target_release = Some(release_of("release-b", newer));
+        state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+        assert_eq!(
+            state
+                .current_release
+                .as_ref()
+                .unwrap()
+                .release_id
+                .as_deref(),
+            Some("release-b")
+        );
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["newer-archive"].status,
+            alien_core::ResourceStatus::Running
+        );
+        assert!(state.target_release.is_none());
+    }
+}

@@ -1451,8 +1451,34 @@ impl DeploymentStore for SqliteDeploymentStore {
     async fn reconcile(
         &self,
         caller: &crate::auth::Subject,
-        data: ReconcileData,
+        mut data: ReconcileData,
     ) -> Result<ReconcileOutcome, AlienError> {
+        let deployment = self.get_deployment(caller, &data.deployment_id).await?;
+        let installed_grant = deployment
+            .as_ref()
+            .and_then(|deployment| deployment.runtime_metadata.as_ref())
+            .is_some_and(|metadata| metadata.automatic_setup);
+        let may_install_grant = matches!(
+            caller.role,
+            crate::auth::Role::WorkspaceAdmin
+                | crate::auth::Role::ProjectDeveloper
+                | crate::auth::Role::DeploymentGroupDeployer
+        ) && deployment.as_ref().is_some_and(|deployment| {
+            deployment.stack_settings.as_ref().is_some_and(|settings| {
+                settings.setup_management == alien_core::SetupManagement::Automatic
+            }) && matches!(
+                deployment.platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure
+            )
+        });
+        if !may_install_grant {
+            if installed_grant || data.state.runtime_metadata.is_some() {
+                data.state
+                    .runtime_metadata
+                    .get_or_insert_default()
+                    .automatic_setup = installed_grant;
+            }
+        }
         let now = Utc::now();
         let state = &data.state;
         let next_step_after = data.suggested_delay_ms.map(|delay_ms| {
@@ -1500,7 +1526,6 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_then(|v| Ok(v.as_str().unwrap_or("pending").to_string()))
             .unwrap_or_else(|_| "pending".to_string());
         // Check if deployment completed (current matches desired)
-        let deployment = self.get_deployment(caller, &data.deployment_id).await?;
         let status_update: sea_query::SimpleExpr = if Self::is_delete_progress(state.status) {
             status_str.clone().into()
         } else {

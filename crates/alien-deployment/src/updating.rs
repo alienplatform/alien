@@ -115,7 +115,7 @@ pub async fn handle_update_pending(
         .as_ref()
         .filter(|metadata| metadata.automatic_setup)
     {
-        let metadata = crate::pending::prepare_direct_setup_update(
+        let mut metadata = crate::pending::prepare_direct_setup_update(
             target_stack,
             &stack_state,
             &config,
@@ -123,6 +123,10 @@ pub async fn handle_update_pending(
             metadata,
         )
         .await?;
+        metadata.pending_prepared_release_id = current
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
         next.status = DeploymentStatus::InitialSetup;
         next.runtime_metadata = Some(metadata);
         next.error = None;

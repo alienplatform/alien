@@ -2430,3 +2430,57 @@ async fn initialize_cannot_supply_trusted_stored_secret_presence() {
     assert!(deployment.input_values.is_empty());
     assert!(deployment.desired_release_id.is_none());
 }
+
+#[tokio::test]
+async fn runtime_reports_cannot_grant_automatic_setup_to_an_imported_installation() {
+    let stack = stack_with_storage("assets");
+    let fixture = make_fixture(Some(stack.clone())).await;
+    let body = aws_s3_import_request("manual-installation", "us-east-1", "assets", "test-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let imported: StackImportResponse = serde_json::from_value(json).unwrap();
+    let token = imported.deployment_token.unwrap();
+    let stored = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let mut metadata = stored.runtime_metadata.clone().unwrap();
+    metadata.automatic_setup = true;
+    let reported = DeploymentState {
+        status: DeploymentStatus::Running,
+        platform: stored.platform,
+        current_release: Some(ReleaseInfo {
+            release_id: fixture.release_id.clone(),
+            version: None,
+            description: None,
+            stack,
+        }),
+        target_release: None,
+        stack_state: stored.stack_state,
+        error: None,
+        environment_info: stored.environment_info,
+        runtime_metadata: Some(metadata),
+        retry_requested: false,
+        protocol_version: stored.deployment_protocol_version,
+    };
+    let (status, json) = post_sync(&fixture, &token, "/v1/sync/reconcile", serde_json::json!({
+        "deploymentId": imported.deployment_id, "session": "runtime-grant-attempt", "state": reported,
+        "updateHeartbeat": false
+    })).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!persisted.runtime_metadata.unwrap().automatic_setup);
+}

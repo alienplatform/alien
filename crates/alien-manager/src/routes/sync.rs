@@ -2417,6 +2417,15 @@ fn validate_initialize_base_platform(
 /// through these routes so an actor that predates the field, omits its
 /// metadata, or holds a stale copy cannot shrink or flip the record.
 fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+    // An installed ongoing-management grant permits setup choices to change.
+    // Only the stored grant counts: a runtime report cannot confer authority.
+    if stored
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.automatic_setup)
+    {
+        return;
+    }
     let Some(recorded) = stored
         .runtime_metadata
         .as_ref()

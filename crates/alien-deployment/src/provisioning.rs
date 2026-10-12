@@ -231,11 +231,24 @@ pub async fn handle_provisioning(
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
+        let converged_release_id = runtime_metadata.pending_prepared_release_id.take();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+        if converged_release_id.is_some() && converged_release_id != target_release_id {
+            next.current_release = Some(crate::ReleaseInfo {
+                release_id: converged_release_id,
+                version: None,
+                description: None,
+                stack: target_stack,
+            });
+            next.status = DeploymentStatus::UpdatePending;
+        } else {
+            next.current_release = next.target_release.clone();
+            next.target_release = None;
+        }
         next.runtime_metadata = Some(runtime_metadata);
-
-        // Promote target to current: deployment successful
-        next.current_release = next.target_release.clone();
-        next.target_release = None;
 
         DeploymentStepResult {
             state: next,
