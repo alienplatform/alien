@@ -324,6 +324,7 @@ impl LocalDaemonController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.daemon_name.as_ref().map(|daemon_name| {
             ResourceOutputs::new(DaemonOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 daemon_name: daemon_name.clone(),
                 running: true,
                 public_endpoints: self

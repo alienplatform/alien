@@ -391,6 +391,7 @@ impl LocalWorkerController {
     fn build_outputs(&self) -> Option<CoreResourceOutputs> {
         self.worker_url.as_ref().map(|url| {
             CoreResourceOutputs::new(WorkerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 worker_name: String::new(), // Not applicable for local
                 identifier: None,
                 public_endpoints: std::collections::HashMap::from([(

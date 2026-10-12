@@ -4192,6 +4192,7 @@ impl GcpWorkerController {
             });
 
             ResourceOutputs::new(WorkerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 // Use the service name if available, otherwise fall back to a placeholder
                 worker_name: self
                     .service_name

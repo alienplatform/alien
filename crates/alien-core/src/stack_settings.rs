@@ -442,7 +442,7 @@ impl HeartbeatsMode {
     }
 }
 
-/// Reachability of the deployment's public endpoints, fixed at setup.
+/// Network paths through which the deployment's workload endpoints are reachable.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -450,16 +450,29 @@ pub enum EndpointAccess {
     /// Endpoints are reachable from the internet.
     #[default]
     Internet,
-    /// Endpoints are reachable only through the deployment network (AWS only).
+    /// Endpoints are reachable only through the deployment network.
     Private,
+    /// Endpoints have independent internet and deployment-network connections.
+    Both,
 }
 
 impl EndpointAccess {
+    /// Whether the deployment exposes an internet connection.
+    pub fn internet_enabled(self) -> bool {
+        matches!(self, Self::Internet | Self::Both)
+    }
+
+    /// Whether the deployment exposes a private connection.
+    pub fn private_enabled(self) -> bool {
+        matches!(self, Self::Private | Self::Both)
+    }
+
     /// Serialized setup parameter value.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Internet => "internet",
             Self::Private => "private",
+            Self::Both => "both",
         }
     }
 }
@@ -994,4 +1007,20 @@ mod failure_domain_tests {
             "https://shares.compute.example.com"
         );
     }
+    #[test]
+    fn endpoint_access_serialization_preserves_independent_connections() {
+        for (access, wire, internet, private) in [
+            (EndpointAccess::Internet, "internet", true, false),
+            (EndpointAccess::Private, "private", false, true),
+            (EndpointAccess::Both, "both", true, true),
+        ] {
+            assert_eq!(serde_json::to_value(access).unwrap(), wire);
+            assert_eq!(serde_json::from_value::<EndpointAccess>(serde_json::json!(wire)).unwrap(), access);
+            assert_eq!(access.as_str(), wire);
+            assert_eq!(access.internet_enabled(), internet);
+            assert_eq!(access.private_enabled(), private);
+        }
+        assert_eq!(StackSettings::default().endpoint_access, EndpointAccess::Internet);
+    }
+
 }

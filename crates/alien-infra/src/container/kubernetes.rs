@@ -1683,6 +1683,7 @@ impl KubernetesContainerController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let Some(workload_name) = &self.workload_name {
             Some(ResourceOutputs::new(ContainerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 name: workload_name.clone(),
                 status: ContainerStatus::Running,
                 current_replicas: 0, // Will be updated by runtime

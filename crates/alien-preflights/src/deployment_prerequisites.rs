@@ -30,7 +30,7 @@ impl DeploymentPrerequisiteCheck for PrivateEndpointAccessCheck {
     }
 
     fn should_run(&self, _stack: &Stack, _state: &StackState, config: &DeploymentConfig) -> bool {
-        config.stack_settings.endpoint_access == EndpointAccess::Private
+        config.stack_settings.endpoint_access.private_enabled()
     }
 
     async fn check(

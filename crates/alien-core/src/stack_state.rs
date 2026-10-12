@@ -417,6 +417,7 @@ mod tests {
 
         // Create a worker with outputs
         let worker_outputs = WorkerOutputs {
+            private_endpoints: std::collections::HashMap::new(),
             worker_name: "test-worker".to_string(),
             public_endpoints: HashMap::from([(
                 "api".to_string(),
@@ -604,6 +605,7 @@ mod tests {
 
         // Create a worker with outputs (similar to your original sketch)
         let worker_outputs = WorkerOutputs {
+            private_endpoints: std::collections::HashMap::new(),
             worker_name: "test-alien-worker".to_string(),
             public_endpoints: HashMap::from([(
                 "api".to_string(),

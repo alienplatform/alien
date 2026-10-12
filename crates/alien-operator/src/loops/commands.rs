@@ -512,6 +512,7 @@ mod tests {
             .build();
 
         let outputs = WorkerOutputs {
+            private_endpoints: std::collections::HashMap::new(),
             worker_name: name.to_string(),
             public_endpoints: HashMap::new(),
             identifier: None,
@@ -744,6 +745,7 @@ mod tests {
             .expect("literal Worker timeout is within supported range")
             .build();
         let outputs = WorkerOutputs {
+            private_endpoints: std::collections::HashMap::new(),
             worker_name: "long-worker".to_string(),
             public_endpoints: HashMap::new(),
             identifier: None,

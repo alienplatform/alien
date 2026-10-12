@@ -361,6 +361,9 @@ pub struct DaemonOutputs {
     pub running: bool,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub public_endpoints: HashMap<String, PublicEndpointOutput>,
+    /// Private connections, keyed by the same endpoint names as public connections.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_endpoints: HashMap<String, PublicEndpointOutput>,
 }
 
 impl ResourceOutputsDefinition for DaemonOutputs {

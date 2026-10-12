@@ -492,6 +492,9 @@ pub struct WorkerOutputs {
     /// Public endpoints resolved for this worker.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub public_endpoints: HashMap<String, PublicEndpointOutput>,
+    /// Private connections, keyed by the same endpoint names as public connections.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_endpoints: HashMap<String, PublicEndpointOutput>,
     /// The ARN or platform-specific identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,

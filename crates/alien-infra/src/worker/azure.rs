@@ -3493,6 +3493,7 @@ impl AzureWorkerController {
                     });
 
             ResourceOutputs::new(WorkerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 worker_name: self
                     .container_app_name
                     .clone()

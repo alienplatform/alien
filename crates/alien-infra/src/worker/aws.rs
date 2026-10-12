@@ -4862,6 +4862,7 @@ impl AwsWorkerController {
                 });
 
             ResourceOutputs::new(WorkerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 worker_name: self
                     .worker_name
                     .clone()

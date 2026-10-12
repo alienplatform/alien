@@ -689,6 +689,7 @@ impl LocalContainerController {
     fn build_outputs(&self) -> Option<CoreResourceOutputs> {
         self.container_info.as_ref().map(|info| {
             CoreResourceOutputs::new(ContainerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 name: info.container_id.clone(),
                 status: ContainerStatus::Running,
                 current_replicas: 1,

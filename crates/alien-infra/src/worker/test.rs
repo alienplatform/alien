@@ -928,6 +928,7 @@ impl TestWorkerController {
         if let Some(identifier) = &self.identifier {
             let url = self.url.as_ref().filter(|u| !u.is_empty());
             Some(ResourceOutputs::new(WorkerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 worker_name: identifier.clone(),
                 identifier: Some(identifier.clone()),
                 public_endpoints: url

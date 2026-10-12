@@ -584,6 +584,7 @@ wait "$child_pid"
     #[test]
     fn resource_output_url_uses_explicit_container_url_first() {
         let outputs = alien_core::ResourceOutputs::new(alien_core::ContainerOutputs {
+            private_endpoints: std::collections::HashMap::new(),
             name: "api".to_string(),
             status: alien_core::ContainerStatus::Running,
             current_replicas: 1,
@@ -617,6 +618,7 @@ wait "$child_pid"
     #[test]
     fn resource_output_url_does_not_derive_from_load_balancer_endpoint() {
         let outputs = alien_core::ResourceOutputs::new(alien_core::ContainerOutputs {
+            private_endpoints: std::collections::HashMap::new(),
             name: "api".to_string(),
             status: alien_core::ContainerStatus::Running,
             current_replicas: 1,

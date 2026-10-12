@@ -869,6 +869,7 @@ impl KubernetesDaemonController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.daemon_set_name.as_ref().map(|daemon_set_name| {
             ResourceOutputs::new(DaemonOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 daemon_name: daemon_set_name.clone(),
                 running: true,
                 public_endpoints: self

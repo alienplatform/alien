@@ -1056,6 +1056,7 @@ impl KubernetesWorkerController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
+                private_endpoints: std::collections::HashMap::new(),
                 worker_name: deployment_name.clone(),
                 identifier: Some(format!("deployment/{}", deployment_name)),
                 public_endpoints: self
