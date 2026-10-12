@@ -4191,6 +4191,63 @@ async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_install
 }
 
 #[tokio::test]
+async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource() {
+    let _vault = test_vault_env().await;
+    let mut stack = Stack::new("manual-new-gate".into())
+        .add(
+            Storage::new("oldArchive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("oldArchive").unwrap().enabled_when = Some("oldEnabled".into());
+    stack.inputs = vec![boolean_gate_input(
+        "oldEnabled",
+        "Old archive",
+        "Create old archive.",
+    )];
+    let mut config = create_test_config("manual-new-gate", false);
+    config.setup_run = true;
+    config
+        .input_values
+        .insert("oldEnabled".into(), serde_json::json!(false));
+    let state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let mut state: DeploymentState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    let mut new_resource = stack.resources.get("oldArchive").unwrap().clone();
+    new_resource.enabled_when = Some("newEnabled".into());
+    stack.resources.insert("newArchive".into(), new_resource);
+    stack.inputs.push(boolean_gate_input(
+        "newEnabled",
+        "New archive",
+        "Create new archive.",
+    ));
+    config
+        .input_values
+        .insert("oldEnabled".into(), serde_json::json!(true));
+    config
+        .input_values
+        .insert("newEnabled".into(), serde_json::json!(true));
+    start_update(&mut state, release_of("new-optional", stack));
+    let state = rerun_setup(state, &config).await;
+    let state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert!(!resources.contains_key("oldArchive"));
+    assert_eq!(
+        resources.get("newArchive").unwrap().status,
+        alien_core::ResourceStatus::Running
+    );
+    let answers = &state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .persisted_gate_answers;
+    assert_eq!(answers.get("oldEnabled"), Some(&false));
+    assert_eq!(answers.get("newEnabled"), Some(&true));
+}
+
+#[tokio::test]
 async fn automatic_setup_can_decline_and_reenable_a_frozen_gate_after_checkpoint_reload() {
     let _vault = test_vault_env().await;
     let mut stack = Stack::new("automatic-gate".into())

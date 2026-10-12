@@ -19,18 +19,28 @@ pub async fn prepare_direct_setup_update(
     existing_metadata: &alien_core::RuntimeMetadata,
 ) -> Result<alien_core::RuntimeMetadata> {
     let mut config = config.clone();
-    // Ongoing management answers gates from requested inputs. Resource presence
-    // describes the previous release. Manual installations retain their original
-    // setup choices, including those inferred from an imported installation.
-    let persisted_gate_answers = if existing_metadata.automatic_setup {
-        resolve_frozen_gate_answers_from_presence(
-            &target_stack,
-            &std::collections::HashSet::new(),
-            &config.input_values,
-        )?
-    } else {
-        resolve_frozen_gate_answers(&target_stack, stack_state, &config.input_values)?
-    };
+    // Automatic installations answer from the requested inputs. Manual setup
+    // preserves recorded choices, but a new gate must use the setup inputs:
+    // absence from the old state says nothing about a newly introduced resource.
+    let mut gate_inputs = config.input_values.clone();
+    if !existing_metadata.automatic_setup {
+        let mut recorded = existing_metadata.persisted_gate_answers.clone();
+        if let Some(previous_stack) = existing_metadata.prepared_stack.as_ref() {
+            let previous_answers =
+                resolve_frozen_gate_answers(previous_stack, stack_state, &config.input_values)?;
+            for (input, answer) in previous_answers {
+                recorded.entry(input).or_insert(answer);
+            }
+        }
+        for (input, answer) in recorded {
+            gate_inputs.insert(input, serde_json::Value::Bool(answer));
+        }
+    }
+    let persisted_gate_answers = resolve_frozen_gate_answers_from_presence(
+        &target_stack,
+        &std::collections::HashSet::new(),
+        &gate_inputs,
+    )?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack = strip_frozen_declines_with_compute_settings(
         target_stack,
