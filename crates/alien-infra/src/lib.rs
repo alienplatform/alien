@@ -6,9 +6,13 @@ mod gcp_ingress_operation;
 #[cfg(feature = "gcp")]
 pub use gcp_ingress_operation::*;
 #[cfg(feature = "gcp")]
-mod gcp_private_ingress;
+mod gcp_https_ingress;
 #[cfg(feature = "gcp")]
-pub use gcp_private_ingress::*;
+pub use gcp_https_ingress::*;
+#[cfg(feature = "gcp")]
+mod gcp_private_domains;
+#[cfg(feature = "gcp")]
+pub use gcp_private_domains::*;
 
 mod error;
 pub use error::*;

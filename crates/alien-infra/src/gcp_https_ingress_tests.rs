@@ -52,7 +52,11 @@ fn insert(
     let mut value = serde_json::to_value(value).unwrap();
     let name = value["name"].as_str().unwrap().to_string();
     if kind == "address" {
-        value["address"] = json!("10.20.0.10");
+        value["address"] = if name.starts_with("private-") {
+            json!("10.20.0.10")
+        } else {
+            json!("203.0.113.10")
+        };
     }
     if kind == "backend" {
         value["fingerprint"] = json!("fresh");
@@ -144,6 +148,77 @@ fn provider(store: &Store) -> MockComputeApi {
         expect_insert_forwarding_rule,
         expect_delete_forwarding_rule
     );
+    macro_rules! global {
+        ($kind:literal, $get:ident, $create:ident, $delete:ident) => {
+            let state = store.clone();
+            client
+                .$get()
+                .returning(move |name| read(&state, $kind, &name));
+            let state = store.clone();
+            client
+                .$create()
+                .returning(move |object| insert(&state, $kind, &object));
+            let state = store.clone();
+            client
+                .$delete()
+                .returning(move |name| remove(&state, $kind, &name));
+        };
+    }
+    global!(
+        "health",
+        expect_get_health_check,
+        expect_insert_health_check,
+        expect_delete_health_check
+    );
+    global!(
+        "backend",
+        expect_get_backend_service,
+        expect_insert_backend_service,
+        expect_delete_backend_service
+    );
+    global!(
+        "url",
+        expect_get_url_map,
+        expect_insert_url_map,
+        expect_delete_url_map
+    );
+    global!(
+        "certificate",
+        expect_get_ssl_certificate,
+        expect_insert_ssl_certificate,
+        expect_delete_ssl_certificate
+    );
+    global!(
+        "proxy",
+        expect_get_target_https_proxy,
+        expect_insert_target_https_proxy,
+        expect_delete_target_https_proxy
+    );
+    global!(
+        "address",
+        expect_get_global_address,
+        expect_insert_global_address,
+        expect_delete_global_address
+    );
+    global!(
+        "frontend",
+        expect_get_global_forwarding_rule,
+        expect_insert_global_forwarding_rule,
+        expect_delete_global_forwarding_rule
+    );
+    client
+        .expect_get_global_operation()
+        .returning(|_| Ok(done()));
+    let state = store.clone();
+    client
+        .expect_set_target_https_proxy_ssl_certificates()
+        .returning(move |name, certificates| {
+            let mut state = state.lock().unwrap();
+            state.objects.get_mut(&format!("proxy/{name}")).unwrap()["sslCertificates"] =
+                json!(certificates);
+            state.mutations += 1;
+            Ok(done())
+        });
     client
         .expect_get_region_operation()
         .returning(|_, _| Ok(done()));
@@ -182,8 +257,9 @@ fn provider(store: &Store) -> MockComputeApi {
     client
 }
 
-fn plan(certificate: &str) -> GcpPrivateHttpsPlan<'_> {
-    GcpPrivateHttpsPlan {
+fn plan(certificate: &str) -> GcpHttpsIngressPlan<'_> {
+    GcpHttpsIngressPlan {
+        scope: GcpHttpsIngressScope::RegionalPrivate,
         resource_id: "api",
         project: "example",
         region: "us-central1",
@@ -200,21 +276,21 @@ fn plan(certificate: &str) -> GcpPrivateHttpsPlan<'_> {
             }],
             ..Default::default()
         },
-        certificate: GcpPrivateIngressCertificate::Managed {
+        certificate: GcpIngressCertificate::Managed {
             certificate_pem: certificate,
             private_key_pem: "runtime-only-private-key",
         },
     }
 }
 
-fn checkpoint(state: &GcpPrivateIngressState) -> GcpPrivateIngressState {
+fn checkpoint(state: &GcpHttpsIngressState) -> GcpHttpsIngressState {
     let json = serde_json::to_string(state).unwrap();
     assert!(!json.contains("runtime-only-private-key"));
     serde_json::from_str(&json).unwrap()
 }
 
 async fn ready(
-    state: &mut GcpPrivateIngressState,
+    state: &mut GcpHttpsIngressState,
     client: &MockComputeApi,
     store: &Store,
     certificate: &str,
@@ -238,7 +314,7 @@ async fn lost_response_checkpoint_rotation_and_failed_cleanup_preserve_frontend(
         ..Default::default()
     }));
     let client = provider(&store);
-    let mut state = GcpPrivateIngressState::new(&plan("certificate-one"));
+    let mut state = GcpHttpsIngressState::new(&plan("certificate-one"));
     assert!(state
         .reconcile(&client, plan("certificate-one"))
         .await
@@ -289,14 +365,14 @@ async fn lost_response_checkpoint_rotation_and_failed_cleanup_preserve_frontend(
     assert!(saw_failure);
     assert!(state.children.is_empty());
     assert!(store.lock().unwrap().objects.is_empty());
-    assert_eq!(state.private_ip, None);
+    assert_eq!(state.address, None);
 }
 
 #[tokio::test]
 async fn foreign_child_is_refused_on_retry_and_delete() {
     let store = Arc::new(Mutex::new(Provider::default()));
     let client = provider(&store);
-    let mut state = GcpPrivateIngressState::new(&plan("certificate"));
+    let mut state = GcpHttpsIngressState::new(&plan("certificate"));
     store.lock().unwrap().objects.insert(
         format!("backend/{}", state.name()),
         json!({"name": state.name(), "description": "someone else"}),
@@ -312,7 +388,7 @@ async fn foreign_child_is_refused_on_retry_and_delete() {
 async fn backend_patch_preserves_unmanaged_fields_and_does_not_replace_frontend() {
     let store = Arc::new(Mutex::new(Provider::default()));
     let client = provider(&store);
-    let mut state = GcpPrivateIngressState::new(&plan("certificate"));
+    let mut state = GcpHttpsIngressState::new(&plan("certificate"));
     ready(&mut state, &client, &store, "certificate").await;
     let key = format!("backend/{}", state.name());
     store.lock().unwrap().objects.get_mut(&key).unwrap()["timeoutSec"] = json!(20);
@@ -339,7 +415,7 @@ async fn backend_patch_preserves_unmanaged_fields_and_does_not_replace_frontend(
 
 #[tokio::test]
 async fn denied_delete_retains_children_without_signaling_deleted_to_executor() {
-    let mut state = GcpPrivateIngressState::new(&plan("certificate"));
+    let mut state = GcpHttpsIngressState::new(&plan("certificate"));
     state.children.insert(Child::Backend(state.name()));
     let mut client = MockComputeApi::new();
     client
@@ -361,7 +437,7 @@ async fn denied_delete_retains_children_without_signaling_deleted_to_executor() 
 async fn switching_to_custom_certificate_retires_only_owned_imports() {
     let store = Arc::new(Mutex::new(Provider::default()));
     let client = provider(&store);
-    let mut state = GcpPrivateIngressState::new(&plan("certificate"));
+    let mut state = GcpHttpsIngressState::new(&plan("certificate"));
     ready(&mut state, &client, &store, "certificate").await;
     let references =
         vec!["projects/example/regions/us-central1/sslCertificates/customer".to_string()];
@@ -369,7 +445,7 @@ async fn switching_to_custom_certificate_retires_only_owned_imports() {
     for _ in 0..30 {
         state = checkpoint(&state);
         let mut desired = plan("unused");
-        desired.certificate = GcpPrivateIngressCertificate::Custom {
+        desired.certificate = GcpIngressCertificate::Custom {
             references: &references,
         };
         if state.reconcile(&client, desired).await.unwrap() {
@@ -397,4 +473,77 @@ async fn switching_to_custom_certificate_retires_only_owned_imports() {
     }
     assert!(state.children.is_empty());
     assert!(store.lock().unwrap().objects.is_empty());
+}
+
+#[tokio::test]
+async fn adding_public_frontend_and_removing_private_preserves_shared_backend_registration() {
+    let store = Arc::new(Mutex::new(Provider::default()));
+    let client = provider(&store);
+    let mut private = GcpHttpsIngressState::new(&plan("certificate"));
+    ready(&mut private, &client, &store, "certificate").await;
+    let private_frontend =
+        store.lock().unwrap().objects[&format!("frontend/{}", private.name())].clone();
+    let mut public_plan = plan("certificate");
+    public_plan.scope = GcpHttpsIngressScope::GlobalPublic;
+    let mut public = GcpHttpsIngressState::new(&public_plan);
+    let mut complete = false;
+    for _ in 0..40 {
+        public = checkpoint(&public);
+        let mut desired = plan("certificate");
+        desired.scope = GcpHttpsIngressScope::GlobalPublic;
+        if public.reconcile(&client, desired).await.unwrap() {
+            complete = true;
+            break;
+        }
+    }
+    assert!(complete);
+    {
+        let provider = store.lock().unwrap();
+        assert_eq!(
+            provider.objects[&format!("frontend/{}", private.name())],
+            private_frontend
+        );
+        let frontend = &provider.objects[&format!("frontend/{}", public.name())];
+        assert_eq!(frontend["loadBalancingScheme"], json!("EXTERNAL"));
+        assert_eq!(frontend["IPAddress"], json!("203.0.113.10"));
+        assert!(frontend.get("network").is_none());
+        assert!(frontend.get("subnetwork").is_none());
+        assert!(frontend.get("allowGlobalAccess").is_none());
+        assert_eq!(
+            provider.objects[&format!("backend/{}", private.name())]["backends"],
+            provider.objects[&format!("backend/{}", public.name())]["backends"]
+        );
+    }
+    for _ in 0..40 {
+        if private.delete(&client, "api").await.unwrap() {
+            break;
+        }
+    }
+    assert!(private.children.is_empty());
+    assert!(store
+        .lock()
+        .unwrap()
+        .objects
+        .contains_key(&format!("frontend/{}", public.name())));
+    for _ in 0..40 {
+        if public.delete(&client, "api").await.unwrap() {
+            break;
+        }
+    }
+    assert!(public.children.is_empty());
+    assert!(store.lock().unwrap().objects.is_empty());
+}
+
+#[tokio::test]
+async fn checkpoint_without_scope_resumes_as_regional_private() {
+    let store = Arc::new(Mutex::new(Provider::default()));
+    let client = provider(&store);
+    let mut private = GcpHttpsIngressState::new(&plan("certificate"));
+    ready(&mut private, &client, &store, "certificate").await;
+    let mut checkpoint = serde_json::to_value(&private).unwrap();
+    checkpoint.as_object_mut().unwrap().remove("scope");
+    let mut restored: GcpHttpsIngressState = serde_json::from_value(checkpoint).unwrap();
+    let before = store.lock().unwrap().mutations;
+    ready(&mut restored, &client, &store, "certificate").await;
+    assert_eq!(before, store.lock().unwrap().mutations);
 }

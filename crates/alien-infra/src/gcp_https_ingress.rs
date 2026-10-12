@@ -1,4 +1,4 @@
-//! Regional HTTPS ingress. Public ingress and workload replica registration are
+//! Global public and regional private HTTPS ingress. Public ingress and workload replica registration are
 //! independent: both frontends can reference the same zonal NEGs.
 
 use alien_client_core::ErrorData as ClientErrorData;
@@ -16,9 +16,27 @@ use uuid::Uuid;
 
 use crate::{ErrorData, GcpIngressOperation, GcpIngressOperationProgress, Result};
 
+/// Compute uses identical HTTPS resources in two different API collections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GcpHttpsIngressScope {
+    #[default]
+    RegionalPrivate,
+    GlobalPublic,
+}
+
+macro_rules! scoped {
+    ($state:expr, $client:expr, $regional:ident, $global:ident, $($argument:expr),+ $(,)?) => {
+        match $state.scope {
+            GcpHttpsIngressScope::RegionalPrivate => $client.$regional($state.region.clone(), $($argument),+).await,
+            GcpHttpsIngressScope::GlobalPublic => $client.$global($($argument),+).await,
+        }
+    };
+}
+
 /// The caller obtains certificate material at runtime; it is never saved in
 /// controller state. Customer certificate references are never deleted.
-pub enum GcpPrivateIngressCertificate<'a> {
+pub enum GcpIngressCertificate<'a> {
     Managed {
         certificate_pem: &'a str,
         private_key_pem: &'a str,
@@ -30,7 +48,8 @@ pub enum GcpPrivateIngressCertificate<'a> {
 
 /// Health checks and a proxy-subnet firewall are needed by VM NEGs, but not by
 /// serverless NEGs. Backend membership stays with the workload controller.
-pub struct GcpPrivateHttpsPlan<'a> {
+pub struct GcpHttpsIngressPlan<'a> {
+    pub scope: GcpHttpsIngressScope,
     pub resource_id: &'a str,
     pub project: &'a str,
     pub region: &'a str,
@@ -39,14 +58,16 @@ pub struct GcpPrivateHttpsPlan<'a> {
     pub firewall: Option<Firewall>,
     pub health_check: Option<HealthCheck>,
     pub backend: BackendService,
-    pub certificate: GcpPrivateIngressCertificate<'a>,
+    pub certificate: GcpIngressCertificate<'a>,
 }
 
 /// Saved intent covers partial creates and lost responses. A random lifetime
 /// token distinguishes this instance from same-named leftovers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GcpPrivateIngressState {
+pub struct GcpHttpsIngressState {
+    #[serde(default)]
+    scope: GcpHttpsIngressScope,
     project: String,
     region: String,
     network: String,
@@ -56,8 +77,8 @@ pub struct GcpPrivateIngressState {
     children: BTreeSet<Child>,
     #[serde(default)]
     operation: Option<GcpIngressOperation>,
-    #[serde(default)]
-    pub private_ip: Option<String>,
+    #[serde(default, rename = "privateIp")]
+    pub address: Option<String>,
 }
 
 /// Declaration order is dependency order; reverse order is safe teardown.
@@ -91,56 +112,121 @@ impl Child {
     async fn read(
         &self,
         client: &dyn ComputeApi,
-        region: &str,
+        state: &GcpHttpsIngressState,
     ) -> alien_client_core::Result<Value> {
-        // Provider models contain only JSON values. Serialization is infallible
-        // for these types; keep failures structured if that contract changes.
-        macro_rules! read {
-            ($request:expr) => {
-                serde_json::to_value($request.await?)
-                    .into_alien_error()
-                    .context(ClientErrorData::SerializationError {
-                        message: "serialize ingress metadata".to_string(),
-                    })
-            };
-        }
         let name = self.name().to_string();
-        let region = region.to_string();
-        match self {
-            Self::Firewall(_) => read!(client.get_firewall(name)),
-            Self::HealthCheck(_) => read!(client.get_region_health_check(region, name)),
-            Self::Backend(_) => read!(client.get_region_backend_service(region, name)),
-            Self::UrlMap(_) => read!(client.get_region_url_map(region, name)),
-            Self::Certificate(_) => read!(client.get_region_ssl_certificate(region, name)),
-            Self::HttpsProxy(_) => read!(client.get_region_target_https_proxy(region, name)),
-            Self::Address(_) => read!(client.get_address(region, name)),
-            Self::Frontend(_) => read!(client.get_forwarding_rule(region, name)),
-        }
+        let value = match self {
+            Self::Firewall(_) => serde_json::to_value(client.get_firewall(name).await?),
+            Self::HealthCheck(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_region_health_check,
+                get_health_check,
+                name
+            )?),
+            Self::Backend(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_region_backend_service,
+                get_backend_service,
+                name
+            )?),
+            Self::UrlMap(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_region_url_map,
+                get_url_map,
+                name
+            )?),
+            Self::Certificate(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_region_ssl_certificate,
+                get_ssl_certificate,
+                name
+            )?),
+            Self::HttpsProxy(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_region_target_https_proxy,
+                get_target_https_proxy,
+                name
+            )?),
+            Self::Address(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_address,
+                get_global_address,
+                name
+            )?),
+            Self::Frontend(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_forwarding_rule,
+                get_global_forwarding_rule,
+                name
+            )?),
+        };
+        value
+            .into_alien_error()
+            .context(ClientErrorData::SerializationError {
+                message: "Serialize ingress metadata".to_string(),
+            })
     }
 
     async fn delete(
         &self,
         client: &dyn ComputeApi,
-        region: &str,
+        state: &GcpHttpsIngressState,
     ) -> alien_client_core::Result<Operation> {
         let name = self.name().to_string();
-        let region = region.to_string();
         match self {
             Self::Firewall(_) => client.delete_firewall(name).await,
-            Self::HealthCheck(_) => client.delete_region_health_check(region, name).await,
-            Self::Backend(_) => client.delete_region_backend_service(region, name).await,
-            Self::UrlMap(_) => client.delete_region_url_map(region, name).await,
-            Self::Certificate(_) => client.delete_region_ssl_certificate(region, name).await,
-            Self::HttpsProxy(_) => client.delete_region_target_https_proxy(region, name).await,
-            Self::Address(_) => client.delete_address(region, name).await,
-            Self::Frontend(_) => client.delete_forwarding_rule(region, name).await,
+            Self::HealthCheck(_) => scoped!(
+                state,
+                client,
+                delete_region_health_check,
+                delete_health_check,
+                name
+            ),
+            Self::Backend(_) => scoped!(
+                state,
+                client,
+                delete_region_backend_service,
+                delete_backend_service,
+                name
+            ),
+            Self::UrlMap(_) => scoped!(state, client, delete_region_url_map, delete_url_map, name),
+            Self::Certificate(_) => scoped!(
+                state,
+                client,
+                delete_region_ssl_certificate,
+                delete_ssl_certificate,
+                name
+            ),
+            Self::HttpsProxy(_) => scoped!(
+                state,
+                client,
+                delete_region_target_https_proxy,
+                delete_target_https_proxy,
+                name
+            ),
+            Self::Address(_) => scoped!(state, client, delete_address, delete_global_address, name),
+            Self::Frontend(_) => scoped!(
+                state,
+                client,
+                delete_forwarding_rule,
+                delete_global_forwarding_rule,
+                name
+            ),
         }
     }
 }
 
-impl GcpPrivateIngressState {
-    pub fn new(plan: &GcpPrivateHttpsPlan<'_>) -> Self {
+impl GcpHttpsIngressState {
+    pub fn new(plan: &GcpHttpsIngressPlan<'_>) -> Self {
         Self {
+            scope: plan.scope,
             project: plan.project.to_string(),
             region: plan.region.to_string(),
             network: plan.network.to_string(),
@@ -148,21 +234,60 @@ impl GcpPrivateIngressState {
             token: Uuid::new_v4(),
             children: BTreeSet::new(),
             operation: None,
-            private_ip: None,
+            address: None,
         }
     }
 
     fn name(&self) -> String {
-        format!("private-{}", self.token.simple())
+        format!(
+            "{}-{}",
+            if self.scope == GcpHttpsIngressScope::RegionalPrivate {
+                "private"
+            } else {
+                "public"
+            },
+            self.token.simple()
+        )
     }
     fn owner(&self) -> String {
-        format!("Alien private ingress {}", self.token)
+        match self.scope {
+            GcpHttpsIngressScope::RegionalPrivate => {
+                format!("Alien private ingress {}", self.token)
+            }
+            GcpHttpsIngressScope::GlobalPublic => format!("Alien public ingress {}", self.token),
+        }
     }
     fn url(&self, collection: &str, name: &str) -> String {
+        let scope = match self.scope {
+            GcpHttpsIngressScope::RegionalPrivate => format!("regions/{}", self.region),
+            GcpHttpsIngressScope::GlobalPublic => "global".to_string(),
+        };
         format!(
-            "https://www.googleapis.com/compute/v1/projects/{}/regions/{}/{collection}/{name}",
-            self.project, self.region
+            "https://www.googleapis.com/compute/v1/projects/{}/{scope}/{collection}/{name}",
+            self.project
         )
+    }
+
+    pub fn project_id(&self) -> &str {
+        &self.project
+    }
+
+    fn record_operation(
+        &mut self,
+        operation: Operation,
+        resource_id: &str,
+        child: &Child,
+    ) -> Result<()> {
+        let mut operation = GcpIngressOperation::from_command(operation, resource_id)?;
+        operation.region = if self.scope == GcpHttpsIngressScope::RegionalPrivate
+            && !matches!(child, Child::Firewall(_))
+        {
+            Some(self.region.clone())
+        } else {
+            None
+        };
+        self.operation = Some(operation);
+        Ok(())
     }
 
     fn error(&self, resource_id: &str, message: impl Into<String>) -> ErrorData {
@@ -211,15 +336,22 @@ impl GcpPrivateIngressState {
     pub async fn reconcile(
         &mut self,
         client: &dyn ComputeApi,
-        plan: GcpPrivateHttpsPlan<'_>,
+        plan: GcpHttpsIngressPlan<'_>,
     ) -> Result<bool> {
+        if self.scope == GcpHttpsIngressScope::GlobalPublic && plan.firewall.is_some() {
+            return Err(AlienError::new(self.error(
+                plan.resource_id,
+                "A proxy subnet firewall belongs to regional private ingress",
+            )));
+        }
         if plan.backend.backends.is_empty() {
             return Err(AlienError::new(self.error(
                 plan.resource_id,
-                "Private ingress requires at least one NEG",
+                "HTTPS ingress requires at least one NEG",
             )));
         }
-        if self.project != plan.project
+        if self.scope != plan.scope
+            || self.project != plan.project
             || self.region != plan.region
             || self.network != plan.network
             || self.subnetwork != plan.subnetwork
@@ -235,13 +367,13 @@ impl GcpPrivateIngressState {
         let name = self.name();
         let description = self.owner();
         let certificate_name = match &plan.certificate {
-            GcpPrivateIngressCertificate::Managed {
+            GcpIngressCertificate::Managed {
                 certificate_pem, ..
             } => {
                 let hash = format!("{:x}", Sha256::digest(certificate_pem.as_bytes()));
                 Some(format!("{name}-{}", &hash[..12]))
             }
-            GcpPrivateIngressCertificate::Custom { references } => {
+            GcpIngressCertificate::Custom { references } => {
                 if references.is_empty() {
                     return Err(AlienError::new(
                         self.error(plan.resource_id, "Private ingress requires a certificate"),
@@ -251,8 +383,8 @@ impl GcpPrivateIngressState {
             }
         };
         let certificates = match &plan.certificate {
-            GcpPrivateIngressCertificate::Custom { references } => references.to_vec(),
-            GcpPrivateIngressCertificate::Managed { .. } => {
+            GcpIngressCertificate::Custom { references } => references.to_vec(),
+            GcpIngressCertificate::Managed { .. } => {
                 vec![self.url("sslCertificates", certificate_name.as_ref().unwrap())]
             }
         };
@@ -276,7 +408,7 @@ impl GcpPrivateIngressState {
         for child in &children {
             // Save intent before a create can succeed with a lost response.
             self.children.insert(child.clone());
-            let live = match child.read(client, &self.region).await {
+            let live = match child.read(client, self).await {
                 Ok(live) => {
                     self.check_owner(&live, plan.resource_id, child)?;
                     Some(live)
@@ -320,13 +452,9 @@ impl GcpPrivateIngressState {
                         if contains_desired(live, &as_json(&desired, plan.resource_id)?) {
                             continue;
                         }
-                        client
-                            .patch_region_health_check(self.region.clone(), name.clone(), desired)
-                            .await
+                        scoped!(self, client, patch_region_health_check, patch_health_check, name.clone(), desired)
                     } else {
-                        client
-                            .insert_region_health_check(self.region.clone(), desired)
-                            .await
+                        scoped!(self, client, insert_region_health_check, insert_health_check, desired)
                     }
                 }
                 Child::Backend(_) => {
@@ -334,7 +462,7 @@ impl GcpPrivateIngressState {
                     desired.name = Some(name.clone());
                     desired.description = Some(description.clone());
                     desired.protocol = Some(BackendServiceProtocol::Http);
-                    desired.load_balancing_scheme = Some(LoadBalancingScheme::InternalManaged);
+                    desired.load_balancing_scheme = Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External });
                     desired.health_checks = if plan.health_check.is_some() {
                         vec![self.url("healthChecks", &name)]
                     } else {
@@ -348,17 +476,10 @@ impl GcpPrivateIngressState {
                             .get("fingerprint")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        client
-                            .patch_region_backend_service(
-                                self.region.clone(),
-                                name.clone(),
-                                desired,
-                            )
-                            .await
+                        scoped!(self, client, patch_region_backend_service, patch_backend_service, name.clone(),
+                                desired)
                     } else {
-                        client
-                            .insert_region_backend_service(self.region.clone(), desired)
-                            .await
+                        scoped!(self, client, insert_region_backend_service, insert_backend_service, desired)
                     }
                 }
                 Child::UrlMap(_) => {
@@ -368,33 +489,25 @@ impl GcpPrivateIngressState {
                         }
                         continue;
                     }
-                    client
-                        .insert_region_url_map(
-                            self.region.clone(),
-                            UrlMap {
+                    scoped!(self, client, insert_region_url_map, insert_url_map, UrlMap {
                                 name: Some(name.clone()),
                                 description: Some(description.clone()),
                                 default_service: Some(self.url("backendServices", &name)),
                                 ..Default::default()
-                            },
-                        )
-                        .await
+                            })
                 }
                 Child::Certificate(certificate_name) => {
                     if live.is_some() {
                         continue;
                     }
-                    let GcpPrivateIngressCertificate::Managed {
+                    let GcpIngressCertificate::Managed {
                         certificate_pem,
                         private_key_pem,
                     } = &plan.certificate
                     else {
                         unreachable!()
                     };
-                    client
-                        .insert_region_ssl_certificate(
-                            self.region.clone(),
-                            SslCertificate {
+                    scoped!(self, client, insert_region_ssl_certificate, insert_ssl_certificate, SslCertificate {
                                 name: Some(certificate_name.clone()),
                                 description: Some(description.clone()),
                                 r#type: Some("SELF_MANAGED".to_string()),
@@ -403,9 +516,7 @@ impl GcpPrivateIngressState {
                                     private_key: Some(private_key_pem.to_string()),
                                 }),
                                 ..Default::default()
-                            },
-                        )
-                        .await
+                            })
                 }
                 Child::HttpsProxy(_) => {
                     if let Some(live) = &live {
@@ -415,34 +526,24 @@ impl GcpPrivateIngressState {
                         if live.get("sslCertificates").is_some_and(|live| contains_desired(live, &serde_json::json!(certificates))) {
                             continue;
                         }
-                        client
-                            .set_region_target_https_proxy_ssl_certificates(
-                                self.region.clone(),
-                                name.clone(),
-                                certificates.clone(),
-                            )
-                            .await
+                        scoped!(self, client, set_region_target_https_proxy_ssl_certificates, set_target_https_proxy_ssl_certificates, name.clone(),
+                                certificates.clone())
                     } else {
-                        client
-                            .insert_region_target_https_proxy(
-                                self.region.clone(),
-                                TargetHttpsProxy {
+                        scoped!(self, client, insert_region_target_https_proxy, insert_target_https_proxy, TargetHttpsProxy {
                                     name: Some(name.clone()),
                                     description: Some(description.clone()),
                                     url_map: Some(self.url("urlMaps", &name)),
                                     ssl_certificates: Some(certificates.clone()),
                                     ..Default::default()
-                                },
-                            )
-                            .await
+                                })
                     }
                 }
                 Child::Address(_) => {
                     if let Some(live) = &live {
-                        if !contains_desired(live, &serde_json::json!({"addressType": "INTERNAL", "subnetwork": self.subnetwork})) {
+                        if self.scope == GcpHttpsIngressScope::RegionalPrivate && !contains_desired(live, &serde_json::json!({"addressType": "INTERNAL", "subnetwork": self.subnetwork})) {
                             return Err(AlienError::new(self.error(plan.resource_id, "Private address is outside its reserved subnet")));
                         }
-                        self.private_ip = Some(
+                        self.address = Some(
                             live.get("address")
                                 .and_then(Value::as_str)
                                 .ok_or_else(|| {
@@ -455,55 +556,45 @@ impl GcpPrivateIngressState {
                         );
                         continue;
                     }
-                    client
-                        .insert_address(
-                            self.region.clone(),
-                            Address {
+                    scoped!(self, client, insert_address, insert_global_address, Address {
                                 name: Some(name.clone()),
                                 description: Some(description.clone()),
-                                address_type: Some(AddressType::Internal),
-                                subnetwork: Some(self.subnetwork.clone()),
+                                address_type: Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { AddressType::Internal } else { AddressType::External }),
+                                subnetwork: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.subnetwork.clone()),
                                 ..Default::default()
-                            },
-                        )
-                        .await
+                            })
                 }
                 Child::Frontend(_) => {
                     let desired = ForwardingRule {
                         name: Some(name.clone()),
                         description: Some(description.clone()),
-                        ip_address: self.private_ip.clone(),
+                        ip_address: self.address.clone(),
                         ip_protocol: Some(ForwardingRuleProtocol::Tcp),
                         port_range: Some("443".to_string()),
-                        load_balancing_scheme: Some(LoadBalancingScheme::InternalManaged),
-                        network: Some(self.network.clone()),
-                        subnetwork: Some(self.subnetwork.clone()),
+                        load_balancing_scheme: Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External }),
+                        network: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.network.clone()),
+                        subnetwork: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.subnetwork.clone()),
                         target: Some(self.url("targetHttpsProxies", &name)),
-                        allow_global_access: Some(true),
+                        allow_global_access: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then_some(true),
                         ..Default::default()
                     };
                     if let Some(live) = &live {
                         if !contains_desired(live, &as_json(&desired, plan.resource_id)?) {
                             return Err(AlienError::new(self.error(
                                 plan.resource_id,
-                                "Private forwarding rule differs from its reserved configuration",
+                                "HTTPS forwarding rule differs from its reserved configuration",
                             )));
                         }
                         continue;
                     }
-                    client
-                        .insert_forwarding_rule(self.region.clone(), desired)
-                        .await
+                    scoped!(self, client, insert_forwarding_rule, insert_global_forwarding_rule, desired)
                 }
             }
             .context(self.error(
                 plan.resource_id,
-                format!("Reconcile private ingress '{}'", child.name()),
+                format!("Reconcile HTTPS ingress '{}'", child.name()),
             ))?;
-            self.operation = Some(GcpIngressOperation::from_command(
-                operation,
-                plan.resource_id,
-            )?);
+            self.record_operation(operation, plan.resource_id, child)?;
             return Ok(false);
         }
         // Certificate switching was confirmed by GET above. Only now retire
@@ -527,7 +618,7 @@ impl GcpPrivateIngressState {
         resource_id: &str,
         child: &Child,
     ) -> Result<()> {
-        match child.read(client, &self.region).await {
+        match child.read(client, self).await {
             Ok(live) => self.check_owner(&live, resource_id, child)?,
             Err(error)
                 if matches!(
@@ -545,9 +636,9 @@ impl GcpPrivateIngressState {
                 )))
             }
         }
-        match child.delete(client, &self.region).await {
+        match child.delete(client, self).await {
             Ok(operation) => {
-                self.operation = Some(GcpIngressOperation::from_command(operation, resource_id)?);
+                self.record_operation(operation, resource_id, child)?;
             }
             Err(error)
                 if matches!(
@@ -600,7 +691,7 @@ impl GcpPrivateIngressState {
             self.delete_child(client, resource_id, &child).await?;
             return Ok(false);
         }
-        self.private_ip = None;
+        self.address = None;
         Ok(true)
     }
 }
@@ -644,5 +735,5 @@ fn resource_path(value: &str) -> Option<&str> {
 }
 
 #[cfg(test)]
-#[path = "gcp_private_ingress_tests.rs"]
+#[path = "gcp_https_ingress_tests.rs"]
 mod tests;
