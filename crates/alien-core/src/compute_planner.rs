@@ -39,6 +39,12 @@ pub struct ContainerResourcePlan {
     pub cpu: ResourceSpec,
     /// Effective per-replica memory reservation and limit.
     pub memory: ResourceSpec,
+    /// Effective persistent capacity per replica, in GiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_size_gib: Option<u32>,
+    /// Minimum capacity declared by the release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_volume_size_gib: Option<u32>,
 }
 
 /// Planner output for one compute pool.
@@ -105,11 +111,37 @@ pub fn plan_compute_with_state(
     selected_settings: Option<&crate::ComputeSettings>,
     previous_state: Option<&StackState>,
 ) -> Result<ComputePlan, ErrorData> {
+    let release_stack = stack;
     let mut resolved_stack = stack.clone();
     crate::container_resources::resolve_container_resources(
         &mut resolved_stack,
         selected_settings,
     )?;
+    if let Some(previous_state) = previous_state {
+        for (id, entry) in &resolved_stack.resources {
+            let desired = entry
+                .config
+                .downcast_ref::<Container>()
+                .and_then(|container| container.persistent_storage.as_ref());
+            let previous = previous_state
+                .resources
+                .get(id)
+                .and_then(|resource| resource.config.downcast_ref::<Container>())
+                .and_then(|container| container.persistent_storage.as_ref());
+            if let (Some(desired), Some(previous)) = (desired, previous) {
+                let target = crate::container_resources::parse_volume_size_gib(&desired.size);
+                let installed = crate::container_resources::parse_volume_size_gib(&previous.size);
+                if let (Ok(target), Ok(installed)) = (target, installed) {
+                    if target < installed {
+                        return Err(AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
+                            resource_id: id.clone(), dimension: "volumeSizeGib".into(),
+                            reason: format!("existing volumes cannot shrink from {installed} to {target} GiB"),
+                        }));
+                    }
+                }
+            }
+        }
+    }
     let stack = &resolved_stack;
     let mut groups = collect_workload_groups(stack)?;
     merge_explicit_compute_groups(stack, &mut groups)?;
@@ -258,12 +290,28 @@ pub fn plan_compute_with_state(
         .values()
         .filter_map(|entry| {
             let container = entry.config.downcast_ref::<Container>()?;
-            let choices = container.resource_choices.clone()?;
+            if container.resource_choices.is_none() && container.persistent_storage.is_none() {
+                return None;
+            }
+            let choices = container.resource_choices.clone().unwrap_or_default();
+            let volume_size_gib = container.persistent_storage.as_ref().and_then(|storage| {
+                crate::container_resources::parse_volume_size_gib(&storage.size).ok()
+            });
+            let minimum_volume_size_gib = release_stack
+                .resources
+                .get(&container.id)
+                .and_then(|entry| entry.config.downcast_ref::<Container>())
+                .and_then(|container| container.persistent_storage.as_ref())
+                .and_then(|storage| {
+                    crate::container_resources::parse_volume_size_gib(&storage.size).ok()
+                });
             Some(ContainerResourcePlan {
                 container_id: container.id.clone(),
                 choices,
                 cpu: container.cpu.clone(),
                 memory: container.memory.clone(),
+                volume_size_gib,
+                minimum_volume_size_gib,
             })
         })
         .collect();
@@ -1199,39 +1247,88 @@ mod tests {
     #[test]
     fn deployment_volume_selection_is_applied_without_changing_release_defaults() {
         let mut release = stack_with_container();
-        release.resources.get_mut("api").unwrap().config.downcast_mut::<Container>().unwrap()
+        release
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
             .persistent_storage = Some(crate::PersistentStorage {
-                size: "20Gi".into(), mount_path: "/data".into(), backups: crate::VolumeBackups::default(),
-            });
+            size: "20Gi".into(),
+            mount_path: "/data".into(),
+            backups: crate::VolumeBackups::default(),
+        });
         let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
             "containers": {"api": {"volumeSizeGib": 40}}
-        })).unwrap();
+        }))
+        .unwrap();
         let mut deployment = release.clone();
-        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings)).unwrap();
-        let volume = |stack: &Stack| stack.resources["api"].config.downcast_ref::<Container>().unwrap()
-            .persistent_storage.as_ref().unwrap().size.clone();
+        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings))
+            .unwrap();
+        let volume = |stack: &Stack| {
+            stack.resources["api"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap()
+                .persistent_storage
+                .as_ref()
+                .unwrap()
+                .size
+                .clone()
+        };
         assert_eq!(volume(&deployment), "40Gi");
         assert_eq!(volume(&release), "20Gi");
-        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings)).unwrap();
+        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings))
+            .unwrap();
         assert_eq!(volume(&deployment), "40Gi");
         for size in [0, 19, 65537] {
             let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
                 "containers": {"api": {"volumeSizeGib": size}}
-            })).unwrap();
-            assert_eq!(crate::container_resources::resolve_container_resources(&mut release.clone(), Some(&invalid))
-                .unwrap_err().code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+            }))
+            .unwrap();
+            assert_eq!(
+                crate::container_resources::resolve_container_resources(
+                    &mut release.clone(),
+                    Some(&invalid)
+                )
+                .unwrap_err()
+                .code,
+                "CONTAINER_RESOURCE_SELECTION_INVALID"
+            );
         }
-        assert_eq!(crate::container_resources::resolve_container_resources(&mut stack_with_container(), Some(&settings))
-            .unwrap_err().code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        assert_eq!(
+            crate::container_resources::resolve_container_resources(
+                &mut stack_with_container(),
+                Some(&settings)
+            )
+            .unwrap_err()
+            .code,
+            "CONTAINER_RESOURCE_SELECTION_INVALID"
+        );
     }
 
     #[test]
     fn volume_capacity_parsing_rejects_overflow_and_preserves_legacy_units() {
         use crate::container_resources::parse_volume_size_gib;
-        for (value, size) in [("20Gi", 20), ("20GiB", 20), ("20GB", 20), ("1Ti", 1024), ("1TB", 1000)] {
+        for (value, size) in [
+            ("20Gi", 20),
+            ("20GiB", 20),
+            ("20GB", 20),
+            ("1Ti", 1024),
+            ("1TB", 1000),
+        ] {
             assert_eq!(parse_volume_size_gib(value).unwrap(), size);
         }
-        for value in ["0Gi", "-1Gi", "NaNGi", "0.5Gi", "4294967295Ti", "65537Gi", "20"] {
+        for value in [
+            "0Gi",
+            "-1Gi",
+            "NaNGi",
+            "0.5Gi",
+            "4294967295Ti",
+            "65537Gi",
+            "20",
+        ] {
             assert!(parse_volume_size_gib(value).is_err(), "{value}");
         }
     }

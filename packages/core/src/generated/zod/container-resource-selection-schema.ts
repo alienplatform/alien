@@ -10,7 +10,8 @@ import * as z from "zod";
  */
 export const ContainerResourceSelectionSchema = z.object({
     "cpu": z.number().describe("CPU allocation in vCPUs.").nullish(),
-"memory": z.string().describe("Memory allocation, using binary units such as Mi or Gi.").nullish()
+"memory": z.string().describe("Memory allocation, using binary units such as Mi or Gi.").nullish(),
+"volumeSizeGib": z.int().min(0).describe("Persistent volume capacity per replica, in whole GiB. Must be at least\nthe release's declared capacity. Existing volumes can only grow.").nullish()
     }).describe("Deployment-time resource allocation for a container. Omitted fields use release defaults.")
 
 export type ContainerResourceSelection = z.infer<typeof ContainerResourceSelectionSchema>

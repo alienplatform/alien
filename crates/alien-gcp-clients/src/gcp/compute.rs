@@ -591,7 +591,12 @@ pub trait ComputeApi: Send + Sync + Debug {
 
     /// Expands a disk without detaching it. Capacity is in GiB.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/resize
-    async fn resize_disk(&self, zone: String, disk_name: String, size_gib: u32) -> Result<Operation>;
+    async fn resize_disk(
+        &self,
+        zone: String,
+        disk_name: String,
+        size_gib: u32,
+    ) -> Result<Operation>;
 
     /// Deletes a disk.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/delete
@@ -2017,10 +2022,25 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
-    async fn resize_disk(&self, zone: String, disk_name: String, size_gib: u32) -> Result<Operation> {
-        let path = format!("projects/{}/zones/{}/disks/{}/resize", self.project_id, zone, disk_name);
-        self.base.execute_request(Method::POST, &path, None,
-            Some(serde_json::json!({"sizeGb": size_gib.to_string()})), &disk_name).await
+    async fn resize_disk(
+        &self,
+        zone: String,
+        disk_name: String,
+        size_gib: u32,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/disks/{}/resize",
+            self.project_id, zone, disk_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({"sizeGb": size_gib.to_string()})),
+                &disk_name,
+            )
+            .await
     }
 
     async fn delete_disk(&self, zone: String, disk_name: String) -> Result<Operation> {
