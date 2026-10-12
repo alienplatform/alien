@@ -5368,6 +5368,7 @@ mod tests {
         resources.insert(
             resource_id.to_string(),
             ResourceDomainInfo {
+                private_endpoints: std::collections::HashMap::new(),
                 fqdn: format!("{}.test.example.com", resource_id),
                 certificate_id: "test-cert-id".to_string(),
                 certificate_status: CertificateStatus::Issued,

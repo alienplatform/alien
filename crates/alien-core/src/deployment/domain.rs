@@ -95,6 +95,9 @@ pub struct ResourceDomainInfo {
     /// Endpoint-scoped metadata keyed by endpoint name.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub endpoints: HashMap<String, PublicEndpointDomainInfo>,
+    /// Private endpoint metadata keyed by the same workload endpoint names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_endpoints: HashMap<String, PublicEndpointDomainInfo>,
     /// Additional managed hostnames for the resource.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<ManagedDomainInfo>,
