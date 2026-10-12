@@ -4195,11 +4195,11 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     let _vault = test_vault_env().await;
     let mut stack = Stack::new("manual-new-gate".into())
         .add(
-            Storage::new("oldArchive".into()).build(),
+            Storage::new("old-archive".into()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
-    stack.resources.get_mut("oldArchive").unwrap().enabled_when = Some("oldEnabled".into());
+    stack.resources.get_mut("old-archive").unwrap().enabled_when = Some("oldEnabled".into());
     stack.inputs = vec![boolean_gate_input(
         "oldEnabled",
         "Old archive",
@@ -4214,9 +4214,17 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     assert_eq!(state.status, DeploymentStatus::Running);
     let mut state: DeploymentState =
         serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
-    let mut new_resource = stack.resources.get("oldArchive").unwrap().clone();
+    let mut new_resource = Stack::new("manual-new-gate".into())
+        .add(
+            Storage::new("new-archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build()
+        .resources
+        .remove("new-archive")
+        .unwrap();
     new_resource.enabled_when = Some("newEnabled".into());
-    stack.resources.insert("newArchive".into(), new_resource);
+    stack.resources.insert("new-archive".into(), new_resource);
     stack.inputs.push(boolean_gate_input(
         "newEnabled",
         "New archive",
@@ -4233,9 +4241,9 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     let state = run_to_completion(state, config).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
     let resources = &state.stack_state.as_ref().unwrap().resources;
-    assert!(!resources.contains_key("oldArchive"));
+    assert!(!resources.contains_key("old-archive"));
     assert_eq!(
-        resources.get("newArchive").unwrap().status,
+        resources.get("new-archive").unwrap().status,
         alien_core::ResourceStatus::Running
     );
     let answers = &state
