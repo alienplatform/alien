@@ -4,13 +4,14 @@ use crate::azure::models::{
     nat_gateway::NatGateway,
     network_security_group::NetworkSecurityGroup,
     public_ip_address::PublicIpAddress,
-    virtual_network::{Subnet, VirtualNetwork},
+    virtual_network::{IpAddressAvailabilityResult, Subnet, VirtualNetwork},
 };
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
 use reqwest::{Client, Method};
+use std::net::Ipv4Addr;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -62,6 +63,15 @@ pub trait NetworkApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         virtual_network_name: &str,
     ) -> Result<VirtualNetwork>;
+
+    /// Check an IPv4 candidate before assigning a static private frontend.
+    /// Availability is advisory; the eventual create/update must handle races.
+    async fn check_ip_address_availability(
+        &self,
+        resource_group_name: &str,
+        virtual_network_name: &str,
+        ip_address: Ipv4Addr,
+    ) -> Result<IpAddressAvailabilityResult>;
 
     /// Delete a virtual network
     ///
@@ -329,6 +339,39 @@ impl NetworkApi for AzureNetworkClient {
             })?;
 
         Ok(virtual_network)
+    }
+
+    async fn check_ip_address_availability(
+        &self,
+        resource_group_name: &str,
+        virtual_network_name: &str,
+        ip_address: Ipv4Addr,
+    ) -> Result<IpAddressAvailabilityResult> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/checkIPAddressAvailability", self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
+            Some(vec![("api-version", Self::API_VERSION.into()), ("ipAddress", ip_address.to_string())]),
+        );
+        let request = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        self.base
+            .execute_request(signed, "CheckIpAddressAvailability", virtual_network_name)
+            .await?
+            .json::<IpAddressAvailabilityResult>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: "Could not decode private IP availability response".to_string(),
+                url,
+                http_status: 200,
+                http_response_text: None,
+                http_request_text: None,
+            })
     }
 
     async fn delete_virtual_network(

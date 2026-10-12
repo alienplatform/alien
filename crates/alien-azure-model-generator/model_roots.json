@@ -441,6 +441,7 @@
     "Subnet",
     "SubnetPropertiesFormat",
     "TransportProtocol",
+    "IPAddressAvailabilityResult",
     "VirtualNetwork",
     "VirtualNetworkPropertiesFormat"
   ]

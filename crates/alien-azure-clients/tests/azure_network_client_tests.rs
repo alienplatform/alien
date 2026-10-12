@@ -1349,3 +1349,98 @@ async fn test_get_network_security_group_not_found(ctx: &mut NetworkTestContext)
         other => panic!("Expected RemoteResourceNotFound, got: {:?}", other),
     }
 }
+
+/// Exercise the address-selection prerequisite for private gateway frontends on
+/// an isolated real VNet. Cleanup runs before assertions, including API failures.
+#[test_context(NetworkTestContext)]
+#[tokio::test]
+async fn private_frontend_ip_availability(ctx: &mut NetworkTestContext) {
+    let name = ctx.generate_unique_vnet_name();
+    let network: VirtualNetwork = serde_json::from_value(serde_json::json!({
+        "location": ctx.location,
+        "tags": { "Purpose": "AlienIntegrationTest", "TestType": "PrivateFrontendAddress" },
+        "properties": {
+            "addressSpace": { "addressPrefixes": ["10.46.0.0/16"] },
+            "subnets": [{ "name": "gateway", "properties": { "addressPrefix": "10.46.0.0/24" } }]
+        }
+    }))
+    .expect("isolated virtual network configuration");
+    ctx.track_virtual_network(&name);
+    let observed: std::result::Result<_, String> = async {
+        let operation = ctx
+            .client
+            .create_or_update_virtual_network(&ctx.resource_group_name, &name, &network)
+            .await
+            .map_err(|error| error.to_string())?;
+        operation
+            .wait_for_operation_completion(
+                &ctx.long_running_operation_client,
+                "CreateVirtualNetwork",
+                &name,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let free = ctx
+            .client
+            .check_ip_address_availability(
+                &ctx.resource_group_name,
+                &name,
+                std::net::Ipv4Addr::new(10, 46, 0, 10),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let reserved = ctx
+            .client
+            .check_ip_address_availability(
+                &ctx.resource_group_name,
+                &name,
+                std::net::Ipv4Addr::new(10, 46, 0, 1),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok((free, reserved))
+    }
+    .await;
+    match ctx
+        .client
+        .delete_virtual_network(&ctx.resource_group_name, &name)
+        .await
+    {
+        Ok(operation) => {
+            operation
+                .wait_for_operation_completion(
+                    &ctx.long_running_operation_client,
+                    "DeleteVirtualNetwork",
+                    &name,
+                )
+                .await
+                .expect("temporary VNet cleanup");
+        }
+        Err(error) if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {}
+        Err(error) => panic!("temporary VNet cleanup failed for {name}: {error}"),
+    }
+    let deleted = ctx
+        .client
+        .get_virtual_network(&ctx.resource_group_name, &name)
+        .await
+        .expect_err("deleted VNet must be absent");
+    assert!(
+        matches!(
+            deleted.error,
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ),
+        "expected provider 404 after deletion: {deleted}"
+    );
+    ctx.untrack_virtual_network(&name);
+    let (free, reserved) = observed.expect("private frontend address availability checks");
+    assert_eq!(
+        free.available,
+        Some(true),
+        "unused address must be available"
+    );
+    assert_eq!(
+        reserved.available,
+        Some(false),
+        "Azure-reserved address must not be available"
+    );
+}
