@@ -36,6 +36,7 @@ enum Fault {
     LostNegResponse,
     LostBackendRetry,
     LostNegRetry,
+    LegacyServiceHandoff,
 }
 
 #[rstest]
@@ -83,6 +84,16 @@ enum Fault {
     Fault::LostNegRetry
 )]
 #[case::retry_private_neg(EndpointAccess::Private, EndpointAccess::Private, Fault::LostNegRetry)]
+#[case::legacy_public_service_adds_private(
+    EndpointAccess::Internet,
+    EndpointAccess::Both,
+    Fault::LegacyServiceHandoff
+)]
+#[case::legacy_private_service_adds_public(
+    EndpointAccess::Private,
+    EndpointAccess::Both,
+    Fault::LegacyServiceHandoff
+)]
 #[tokio::test]
 async fn access_changes_preserve_service_revision_and_retained_frontends(
     #[case] initial: EndpointAccess,
@@ -208,6 +219,23 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
     let mut previous_worker = worker.clone();
     for (index, access) in [initial, desired].into_iter().enumerate() {
         if index == 1 {
+            if fault == Fault::LegacyServiceHandoff {
+                // Previous-version Cloud Run checkpoints and setup imports have
+                // no create token. Preserve their actual service identity on upgrade.
+                controller.service_owner = None;
+                services
+                    .lock()
+                    .unwrap()
+                    .live
+                    .as_mut()
+                    .unwrap()
+                    .labels
+                    .as_mut()
+                    .unwrap()
+                    .remove("alien-create-token");
+                controller =
+                    serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            }
             controller.state = GcpWorkerState::UpdateStart;
             if pending_dns {
                 let domain = metadata.resources.get_mut(&worker.id).unwrap();
@@ -488,7 +516,8 @@ async fn legacy_native_outputs_refresh_from_actual_service_access(
     #[case] invoker_disabled: bool,
     #[case] publicly_accessible: bool,
 ) {
-    let worker = crate::worker::fixtures::basic_function();
+    let mut worker = crate::worker::fixtures::basic_function();
+    worker.id = "api".to_string();
     let mut checkpoint = serde_json::to_value(GcpWorkerController::mock_ready("test-api")).unwrap();
     checkpoint
         .as_object_mut()
@@ -534,5 +563,70 @@ async fn legacy_native_outputs_refresh_from_actual_service_access(
         alien_core::bindings::BindingValue::Value(
             "https://test-api-abcd1234-uc.a.run.app".to_string()
         )
+    );
+}
+
+#[rstest]
+#[case(GcpWorkerState::SettingIamPolicy)]
+#[case(GcpWorkerState::DeletingService)]
+#[case(GcpWorkerState::WaitingForServiceDeletion)]
+#[case(GcpWorkerState::RetryingImagePull)]
+#[case(GcpWorkerState::WaitingForServiceUpdate)]
+#[case(GcpWorkerState::ReconcilingWorkerIngress)]
+#[case(GcpWorkerState::UpdateStart)]
+#[tokio::test]
+async fn handed_off_legacy_service_refuses_replacement_at_resumed_handlers(
+    #[case] resumed: GcpWorkerState,
+) {
+    let mut worker = crate::worker::fixtures::basic_function();
+    worker.id = "api".to_string();
+    let mut run = MockCloudRunApi::new();
+    run.expect_get_service()
+        .times(1)
+        .returning(|_, name| Ok(create_successful_service_response(&name)));
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(worker)
+        .controller(GcpWorkerController::mock_ready("test-api"))
+        .platform(Platform::Gcp)
+        .service_provider(setup_mock_service_provider(Arc::new(run), None))
+        .build()
+        .await
+        .unwrap();
+    executor.step().await.unwrap();
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    let mut controller: GcpWorkerController = serde_json::from_value(
+        serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        controller.service_owner.is_some(),
+        "heartbeat did not checkpoint legacy UID"
+    );
+    controller.state = resumed;
+    let mut worker = function_public_ingress();
+    worker.id = "api".to_string();
+    let metadata = create_test_domain_metadata(&worker.id);
+    let mut run = MockCloudRunApi::new();
+    run.expect_get_service().times(1).returning(|_, name| {
+        let mut replacement = create_successful_service_response(&name);
+        replacement.uid = Some("replacement-uid".to_string());
+        Ok(replacement)
+    });
+    // No mutation or Compute API expectations: replacement must fail before
+    // changing service IAM, revisions, exposure or deleting either service.
+    let mut executor = SingleControllerExecutor::builder()
+        .previous_resource(worker.clone())
+        .resource(worker)
+        .controller(controller)
+        .platform(Platform::Gcp)
+        .domain_metadata(metadata)
+        .service_provider(setup_mock_service_provider(Arc::new(run), None))
+        .build()
+        .await
+        .unwrap();
+    let error = executor.step().await.unwrap_err();
+    assert!(
+        error.message.contains("replaced"),
+        "unexpected error: {error}"
     );
 }

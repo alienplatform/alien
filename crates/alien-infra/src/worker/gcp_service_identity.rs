@@ -14,7 +14,8 @@ const OWNER_LABEL: &str = "alien-create-token";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct GcpCloudRunOwner {
-    token: Uuid,
+    /// None identifies an explicitly verified legacy service, fenced by its UID.
+    token: Option<Uuid>,
     #[serde(default)]
     uid: Option<String>,
 }
@@ -22,7 +23,7 @@ pub(super) struct GcpCloudRunOwner {
 impl Default for GcpCloudRunOwner {
     fn default() -> Self {
         Self {
-            token: Uuid::new_v4(),
+            token: Some(Uuid::new_v4()),
             uid: None,
         }
     }
@@ -43,19 +44,21 @@ pub(super) enum CloudRunCreation {
 
 impl GcpCloudRunOwner {
     pub fn stamp(&self, service: &mut Service) {
-        service
-            .labels
-            .get_or_insert_with(Default::default)
-            .insert(OWNER_LABEL.to_string(), self.token.to_string());
+        if let Some(token) = self.token {
+            service
+                .labels
+                .get_or_insert_with(Default::default)
+                .insert(OWNER_LABEL.to_string(), token.to_string());
+        }
     }
 
     pub fn confirm(&mut self, service: &Service, resource_id: &str) -> Result<()> {
-        let token = self.token.to_string();
+        let token = self.token.map(|token| token.to_string());
         if service
             .labels
             .as_ref()
             .and_then(|labels| labels.get(OWNER_LABEL))
-            != Some(&token)
+            != token.as_ref()
         {
             return Err(invalid(resource_id, "Refusing a foreign Cloud Run service"));
         }
@@ -64,6 +67,12 @@ impl GcpCloudRunOwner {
             .as_ref()
             .filter(|uid| !uid.is_empty())
             .ok_or_else(|| invalid(resource_id, "Cloud Run service has no provider UID"))?;
+        if self.token.is_none() && self.uid.is_none() {
+            return Err(invalid(
+                resource_id,
+                "Legacy Cloud Run identity has no recorded UID",
+            ));
+        }
         if self.uid.as_ref().is_some_and(|previous| previous != uid) {
             return Err(invalid(
                 resource_id,
@@ -74,6 +83,57 @@ impl GcpCloudRunOwner {
         Ok(())
     }
 
+    /// Read-only handoff of a service whose exact name was recorded by an older
+    /// controller or explicit setup import. The caller reads that name in its
+    /// original project/region; this must never be used to recover a new create.
+    pub fn from_recorded(
+        service: &Service,
+        recorded_name: &str,
+        resource_id: &str,
+        deployment: &str,
+    ) -> Result<Self> {
+        let labels = service.labels.as_ref().ok_or_else(|| {
+            invalid(
+                resource_id,
+                "Recorded legacy Cloud Run service has no ownership labels",
+            )
+        })?;
+        // Setup emitters normalize resource labels, while older runtime creates
+        // used the resource ID directly. Both still require the recorded service name.
+        let resource_label: String = resource_id
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .take(63)
+            .collect();
+        if service
+            .name
+            .as_deref()
+            .and_then(|name| name.rsplit('/').next())
+            != Some(recorded_name)
+            || labels.get("deployment").map(String::as_str) != Some(deployment)
+            || !matches!(labels.get("resource").map(String::as_str), Some(value) if value == resource_id || value == resource_label)
+            || labels.get("resource-type").map(String::as_str) != Some("worker")
+            || labels.contains_key(OWNER_LABEL)
+        {
+            return Err(invalid(
+                resource_id,
+                "Refusing a foreign recorded legacy Cloud Run service",
+            ));
+        }
+        let mut owner = Self {
+            token: None,
+            uid: service.uid.clone(),
+        };
+        owner.confirm(service, resource_id)?;
+        Ok(owner)
+    }
+
     /// One create at most; a retry only adopts the exact persisted lifetime
     /// token, and a previously confirmed service is never silently recreated.
     pub async fn create_or_recover(
@@ -81,6 +141,12 @@ impl GcpCloudRunOwner {
         client: &dyn CloudRunApi,
         mut plan: CloudRunCreatePlan<'_>,
     ) -> Result<CloudRunCreation> {
+        if self.token.is_none() {
+            return Err(invalid(
+                plan.resource_id,
+                "A handed-off legacy Cloud Run service cannot be recreated",
+            ));
+        }
         match client
             .get_service(plan.region.to_string(), plan.name.to_string())
             .await
@@ -219,5 +285,60 @@ mod tests {
             .message
             .contains("missing"));
         assert_eq!(cloud.lock().unwrap().creates, 1);
+    }
+
+    #[tokio::test]
+    async fn recorded_legacy_handoff_preserves_uid_without_permission_writes() {
+        let service = Service {
+            name: Some("projects/test-project/locations/us-central1/services/test-api".to_string()),
+            uid: Some("original-uid".to_string()),
+            labels: Some(std::collections::HashMap::from([
+                ("deployment".to_string(), "test".to_string()),
+                ("resource".to_string(), "api".to_string()),
+                ("resource-type".to_string(), "worker".to_string()),
+            ])),
+            ..Default::default()
+        };
+        let mut owner =
+            GcpCloudRunOwner::from_recorded(&service, "test-api", "api", "test").unwrap();
+        owner = serde_json::from_value(serde_json::to_value(owner).unwrap()).unwrap();
+        owner.confirm(&service, "api").unwrap();
+        let mut stamped = service.clone();
+        owner.stamp(&mut stamped);
+        assert_eq!(
+            stamped.labels, service.labels,
+            "handoff must not alter provider labels"
+        );
+        let mut replaced = service.clone();
+        replaced.uid = Some("replacement".to_string());
+        assert!(owner
+            .confirm(&replaced, "api")
+            .unwrap_err()
+            .message
+            .contains("replaced"));
+        assert!(owner
+            .create_or_recover(&MockCloudRunApi::new(), plan())
+            .await
+            .is_err());
+        for label in ["deployment", "resource", "resource-type"] {
+            let mut foreign = service.clone();
+            foreign
+                .labels
+                .as_mut()
+                .unwrap()
+                .insert(label.to_string(), "foreign".to_string());
+            assert!(GcpCloudRunOwner::from_recorded(&foreign, "test-api", "api", "test").is_err());
+        }
+        let mut foreign = service.clone();
+        foreign
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert(OWNER_LABEL.to_string(), Uuid::new_v4().to_string());
+        assert!(GcpCloudRunOwner::from_recorded(&foreign, "test-api", "api", "test").is_err());
+        assert!(GcpCloudRunOwner::from_recorded(&service, "other-api", "api", "test").is_err());
+        let mut missing_uid = service;
+        missing_uid.uid = None;
+        assert!(GcpCloudRunOwner::from_recorded(&missing_uid, "test-api", "api", "test").is_err());
     }
 }
