@@ -47,7 +47,7 @@ impl std::fmt::Display for NetworkMode {
 #[derive(Args, Debug, Clone)]
 #[command(next_help_heading = "Network options")]
 pub struct NetworkArgs {
-    /// Who can reach public endpoints: internet or private (AWS managed containers only).
+    /// Endpoint access: internet, private, or both.
     #[arg(long, value_parser = parse_endpoint_access)]
     pub endpoint_access: Option<EndpointAccess>,
 
@@ -117,7 +117,8 @@ fn parse_endpoint_access(value: &str) -> std::result::Result<EndpointAccess, Str
     match value {
         "internet" => Ok(EndpointAccess::Internet),
         "private" => Ok(EndpointAccess::Private),
-        _ => Err("expected internet or private".to_string()),
+        "both" => Ok(EndpointAccess::Both),
+        _ => Err("expected internet, private, or both".to_string()),
     }
 }
 
