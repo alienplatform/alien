@@ -3149,3 +3149,113 @@ async fn test_error_instance_template_not_found(ctx: &mut ComputeTestContext) {
     assert_eq!(err.code, "REMOTE_RESOURCE_NOT_FOUND");
     println!("✅ Correctly mapped 404 to REMOTE_RESOURCE_NOT_FOUND for instance template");
 }
+
+/// Exercise region-scoped health checks against Compute Engine, including isolation
+/// from the global collection and verified deletion after a failed assertion path.
+#[test_context(ComputeTestContext)]
+#[tokio::test]
+async fn regional_health_check_lifecycle(ctx: &mut ComputeTestContext) {
+    let name = ctx.generate_unique_name("regional-hc");
+    info!(resource = %name, region = %ctx.region, "Testing regional load balancing prerequisites");
+    let observed: std::result::Result<_, String> = async {
+        let operation = ctx
+            .client
+            .insert_region_health_check(
+                ctx.region.clone(),
+                HealthCheck::builder()
+                    .name(name.clone())
+                    .r#type(HealthCheckType::Http)
+                    .check_interval_sec(10)
+                    .timeout_sec(5)
+                    .http_health_check(HttpHealthCheck::builder().port(8080).build())
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation
+                .name
+                .as_deref()
+                .ok_or("missing create operation")?,
+            120,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let created = ctx
+            .client
+            .get_region_health_check(ctx.region.clone(), name.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let global = ctx.client.get_health_check(name.clone()).await;
+        let operation = ctx
+            .client
+            .patch_region_health_check(
+                ctx.region.clone(),
+                name.clone(),
+                HealthCheck::builder()
+                    .description("updated regional check".to_string())
+                    .build(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        ctx.wait_for_region_operation(
+            &ctx.region,
+            operation.name.as_deref().ok_or("missing patch operation")?,
+            120,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let updated = ctx
+            .client
+            .get_region_health_check(ctx.region.clone(), name.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok((created, global, updated))
+    }
+    .await;
+
+    // Cleanup also runs when any awaited operation above fails. The generated name
+    // belongs solely to this test, including a timed-out create that applied remotely.
+    match ctx
+        .client
+        .delete_region_health_check(ctx.region.clone(), name.clone())
+        .await
+    {
+        Ok(operation) => ctx
+            .wait_for_region_operation(
+                &ctx.region,
+                operation.name.as_deref().expect("delete operation name"),
+                120,
+            )
+            .await
+            .expect("regional health check deletion"),
+        Err(error) if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })) => {}
+        Err(error) => panic!("regional health check cleanup failed for {name}: {error}"),
+    }
+    let deleted = ctx
+        .client
+        .get_region_health_check(ctx.region.clone(), name.clone())
+        .await
+        .expect_err("deleted check must be absent");
+    assert!(matches!(
+        deleted.error,
+        Some(ErrorData::RemoteResourceNotFound { .. })
+    ));
+    let (created, global, updated) = observed.expect("regional health check operations");
+    assert_eq!(created.name.as_deref(), Some(name.as_str()));
+    assert!(created
+        .self_link
+        .as_deref()
+        .is_some_and(|url| url.contains(&format!("/regions/{}/", ctx.region))));
+    assert!(matches!(
+        global
+            .expect_err("regional check must not exist globally")
+            .error,
+        Some(ErrorData::RemoteResourceNotFound { .. })
+    ));
+    assert_eq!(
+        updated.description.as_deref(),
+        Some("updated regional check")
+    );
+}

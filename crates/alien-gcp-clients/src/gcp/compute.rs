@@ -184,6 +184,172 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/zoneOperations/wait
     async fn wait_zone_operation(&self, zone: String, operation_name: String) -> Result<Operation>;
 
+    // --- Regional Load Balancing Operations ---
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<HealthCheck>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_health_check(
+        &self,
+        region: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn patch_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<BackendService>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_backend_service(
+        &self,
+        region: String,
+        backend_service: BackendService,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn patch_region_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+        backend_service: BackendService,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_url_map(&self, region: String, url_map_name: String) -> Result<UrlMap>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_url_map(&self, region: String, url_map: UrlMap) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_url_map(
+        &self,
+        region: String,
+        url_map_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_target_http_proxy(
+        &self,
+        region: String,
+        target_http_proxy_name: String,
+    ) -> Result<TargetHttpProxy>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_target_http_proxy(
+        &self,
+        region: String,
+        target_http_proxy: TargetHttpProxy,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_target_http_proxy(
+        &self,
+        region: String,
+        target_http_proxy_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_target_https_proxy(
+        &self,
+        region: String,
+        target_https_proxy_name: String,
+    ) -> Result<TargetHttpsProxy>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_target_https_proxy(
+        &self,
+        region: String,
+        target_https_proxy: TargetHttpsProxy,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_target_https_proxy(
+        &self,
+        region: String,
+        target_https_proxy_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_target_tcp_proxy(
+        &self,
+        region: String,
+        target_tcp_proxy: TargetTcpProxy,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_target_tcp_proxy(
+        &self,
+        region: String,
+        target_tcp_proxy_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_ssl_certificate(
+        &self,
+        region: String,
+        ssl_certificate_name: String,
+    ) -> Result<SslCertificate>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn insert_region_ssl_certificate(
+        &self,
+        region: String,
+        ssl_certificate: SslCertificate,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn delete_region_ssl_certificate(
+        &self,
+        region: String,
+        ssl_certificate_name: String,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn get_region_backend_service_health(
+        &self,
+        region: String,
+        backend_service_name: String,
+        group: String,
+    ) -> Result<BackendServiceGroupHealth>;
+
+    /// Regional counterpart; uses region-scoped resources and operations.
+    async fn set_region_target_https_proxy_ssl_certificates(
+        &self,
+        region: String,
+        target_https_proxy_name: String,
+        ssl_certificates: Vec<String>,
+    ) -> Result<Operation>;
+
     // --- Health Check Operations ---
 
     /// Gets a health check.
@@ -616,8 +782,11 @@ pub trait ComputeApi: Send + Sync + Debug {
 
     /// Gets a regional resource policy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/get
-    async fn get_resource_policy(&self, region: String, policy_name: String)
-        -> Result<ResourcePolicy>;
+    async fn get_resource_policy(
+        &self,
+        region: String,
+        policy_name: String,
+    ) -> Result<ResourcePolicy>;
 
     /// Creates a regional resource policy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/insert
@@ -1009,6 +1178,465 @@ impl ComputeApi for ComputeClient {
                 None,
                 Option::<()>::None,
                 &operation_name,
+            )
+            .await
+    }
+
+    // --- Regional Load Balancing Operations ---
+
+    async fn get_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<HealthCheck> {
+        let path = format!(
+            "projects/{}/regions/{region}/healthChecks/{}",
+            self.project_id, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &health_check_name,
+            )
+            .await
+    }
+
+    async fn insert_region_health_check(
+        &self,
+        region: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation> {
+        let path = format!("projects/{}/regions/{region}/healthChecks", self.project_id);
+        let resource_name = health_check.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(health_check),
+                &resource_name,
+            )
+            .await
+    }
+
+    async fn delete_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/healthChecks/{}",
+            self.project_id, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &health_check_name,
+            )
+            .await
+    }
+
+    async fn patch_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/healthChecks/{}",
+            self.project_id, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::PATCH,
+                &path,
+                None,
+                Some(health_check),
+                &health_check_name,
+            )
+            .await
+    }
+
+    async fn get_region_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<BackendService> {
+        let path = format!(
+            "projects/{}/regions/{region}/backendServices/{}",
+            self.project_id, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &backend_service_name,
+            )
+            .await
+    }
+
+    async fn insert_region_backend_service(
+        &self,
+        region: String,
+        backend_service: BackendService,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/backendServices",
+            self.project_id
+        );
+        let resource_name = backend_service.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(backend_service),
+                &resource_name,
+            )
+            .await
+    }
+
+    async fn delete_region_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/backendServices/{}",
+            self.project_id, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &backend_service_name,
+            )
+            .await
+    }
+
+    async fn patch_region_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+        backend_service: BackendService,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/backendServices/{}",
+            self.project_id, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::PATCH,
+                &path,
+                None,
+                Some(backend_service),
+                &backend_service_name,
+            )
+            .await
+    }
+
+    async fn get_region_url_map(&self, region: String, url_map_name: String) -> Result<UrlMap> {
+        let path = format!(
+            "projects/{}/regions/{region}/urlMaps/{}",
+            self.project_id, url_map_name
+        );
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, &url_map_name)
+            .await
+    }
+
+    async fn insert_region_url_map(&self, region: String, url_map: UrlMap) -> Result<Operation> {
+        let path = format!("projects/{}/regions/{region}/urlMaps", self.project_id);
+        let resource_name = url_map.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(Method::POST, &path, None, Some(url_map), &resource_name)
+            .await
+    }
+
+    async fn delete_region_url_map(
+        &self,
+        region: String,
+        url_map_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/urlMaps/{}",
+            self.project_id, url_map_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &url_map_name,
+            )
+            .await
+    }
+
+    async fn get_region_target_http_proxy(
+        &self,
+        region: String,
+        target_http_proxy_name: String,
+    ) -> Result<TargetHttpProxy> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpProxies/{}",
+            self.project_id, target_http_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_http_proxy_name,
+            )
+            .await
+    }
+
+    async fn insert_region_target_http_proxy(
+        &self,
+        region: String,
+        target_http_proxy: TargetHttpProxy,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpProxies",
+            self.project_id
+        );
+        let resource_name = target_http_proxy.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(target_http_proxy),
+                &resource_name,
+            )
+            .await
+    }
+
+    async fn delete_region_target_http_proxy(
+        &self,
+        region: String,
+        target_http_proxy_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpProxies/{}",
+            self.project_id, target_http_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_http_proxy_name,
+            )
+            .await
+    }
+
+    async fn get_region_target_https_proxy(
+        &self,
+        region: String,
+        target_https_proxy_name: String,
+    ) -> Result<TargetHttpsProxy> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpsProxies/{}",
+            self.project_id, target_https_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_https_proxy_name,
+            )
+            .await
+    }
+
+    async fn insert_region_target_https_proxy(
+        &self,
+        region: String,
+        target_https_proxy: TargetHttpsProxy,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpsProxies",
+            self.project_id
+        );
+        let name = target_https_proxy
+            .name
+            .clone()
+            .unwrap_or_else(|| "targetHttpsProxy".to_string());
+        self.base
+            .execute_request(Method::POST, &path, None, Some(target_https_proxy), &name)
+            .await
+    }
+
+    async fn delete_region_target_https_proxy(
+        &self,
+        region: String,
+        target_https_proxy_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpsProxies/{}",
+            self.project_id, target_https_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_https_proxy_name,
+            )
+            .await
+    }
+
+    async fn insert_region_target_tcp_proxy(
+        &self,
+        region: String,
+        target_tcp_proxy: TargetTcpProxy,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetTcpProxies",
+            self.project_id
+        );
+        let name = target_tcp_proxy
+            .name
+            .clone()
+            .unwrap_or_else(|| "targetTcpProxy".to_string());
+        self.base
+            .execute_request(Method::POST, &path, None, Some(target_tcp_proxy), &name)
+            .await
+    }
+
+    async fn delete_region_target_tcp_proxy(
+        &self,
+        region: String,
+        target_tcp_proxy_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetTcpProxies/{}",
+            self.project_id, target_tcp_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_tcp_proxy_name,
+            )
+            .await
+    }
+
+    async fn get_region_ssl_certificate(
+        &self,
+        region: String,
+        ssl_certificate_name: String,
+    ) -> Result<SslCertificate> {
+        let path = format!(
+            "projects/{}/regions/{region}/sslCertificates/{}",
+            self.project_id, ssl_certificate_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &ssl_certificate_name,
+            )
+            .await
+    }
+
+    async fn insert_region_ssl_certificate(
+        &self,
+        region: String,
+        ssl_certificate: SslCertificate,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/sslCertificates",
+            self.project_id
+        );
+        let name = ssl_certificate
+            .name
+            .clone()
+            .unwrap_or_else(|| "sslCertificate".to_string());
+        self.base
+            .execute_request(Method::POST, &path, None, Some(ssl_certificate), &name)
+            .await
+    }
+
+    async fn delete_region_ssl_certificate(
+        &self,
+        region: String,
+        ssl_certificate_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/sslCertificates/{}",
+            self.project_id, ssl_certificate_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &ssl_certificate_name,
+            )
+            .await
+    }
+
+    async fn get_region_backend_service_health(
+        &self,
+        region: String,
+        backend_service_name: String,
+        group: String,
+    ) -> Result<BackendServiceGroupHealth> {
+        let path = format!(
+            "projects/{}/regions/{region}/backendServices/{}/getHealth",
+            self.project_id, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(ResourceGroupReference { group }),
+                &backend_service_name,
+            )
+            .await
+    }
+
+    async fn set_region_target_https_proxy_ssl_certificates(
+        &self,
+        region: String,
+        target_https_proxy_name: String,
+        ssl_certificates: Vec<String>,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetHttpsProxies/{}/setSslCertificates",
+            self.project_id, target_https_proxy_name
+        );
+        let request = SetSslCertificatesRequest { ssl_certificates };
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(request),
+                &target_https_proxy_name,
             )
             .await
     }
@@ -6539,10 +7167,7 @@ mod tests {
                     token: "test-token".to_string(),
                 },
                 service_overrides: Some(GcpServiceOverrides {
-                    endpoints: std::collections::HashMap::from([(
-                        "compute".to_string(),
-                        endpoint,
-                    )]),
+                    endpoints: std::collections::HashMap::from([("compute".to_string(), endpoint)]),
                 }),
                 project_number: None,
             },
