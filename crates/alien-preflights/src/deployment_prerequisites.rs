@@ -1234,6 +1234,7 @@ mod tests {
 
     fn custom_domain_settings(resource_ids: &[&str]) -> DomainSettings {
         DomainSettings {
+            private_custom_domains: None,
             custom_domains: Some(
                 resource_ids
                     .iter()

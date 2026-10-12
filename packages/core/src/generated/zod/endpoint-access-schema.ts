@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description Reachability of the deployment\'s public endpoints, fixed at setup.
+ * @description Network paths through which the deployment\'s workload endpoints are reachable.
  */
-export const EndpointAccessSchema = z.enum(["internet", "private"]).describe("Reachability of the deployment's public endpoints, fixed at setup.")
+export const EndpointAccessSchema = z.enum(["internet", "private", "both"]).describe("Network paths through which the deployment's workload endpoints are reachable.")
 
 export type EndpointAccess = z.infer<typeof EndpointAccessSchema>

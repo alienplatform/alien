@@ -488,6 +488,12 @@ pub struct DomainSettings {
     /// Custom domain configuration per resource ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_domains: Option<HashMap<String, CustomDomainConfig>>,
+    /// Private custom domain configuration per resource ID.
+    ///
+    /// Public custom domains remain unchanged when private access is added.
+    /// A certificate reference may be reused when it covers both hostnames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_custom_domains: Option<HashMap<String, CustomDomainConfig>>,
     /// Public endpoint DNS target selection for machines deployments.
     ///
     /// When omitted, machines deployments publish healthy machine public
@@ -1015,12 +1021,17 @@ mod failure_domain_tests {
             (EndpointAccess::Both, "both", true, true),
         ] {
             assert_eq!(serde_json::to_value(access).unwrap(), wire);
-            assert_eq!(serde_json::from_value::<EndpointAccess>(serde_json::json!(wire)).unwrap(), access);
+            assert_eq!(
+                serde_json::from_value::<EndpointAccess>(serde_json::json!(wire)).unwrap(),
+                access
+            );
             assert_eq!(access.as_str(), wire);
             assert_eq!(access.internet_enabled(), internet);
             assert_eq!(access.private_enabled(), private);
         }
-        assert_eq!(StackSettings::default().endpoint_access, EndpointAccess::Internet);
+        assert_eq!(
+            StackSettings::default().endpoint_access,
+            EndpointAccess::Internet
+        );
     }
-
 }

@@ -29,7 +29,7 @@ get "domains"(){
                 return z.union([DomainSettingsSchema, z.null()]).optional()
               },
 get "endpointAccess"(){
-                return EndpointAccessSchema.describe("Reachability of the deployment's public endpoints, fixed at setup.").optional()
+                return EndpointAccessSchema.describe("Network paths through which the deployment's workload endpoints are reachable.").optional()
               },
 get "externalBindings"(){
                 return z.union([ExternalBindingsSchema, z.null()]).optional()
