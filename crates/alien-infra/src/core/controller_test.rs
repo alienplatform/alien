@@ -701,6 +701,11 @@ impl SingleControllerExecutor {
         self.volume_restores = requests;
     }
 
+    /// Replaces asynchronous certificate/DNS observations for the next step.
+    pub fn set_domain_metadata(&mut self, metadata: DomainMetadata) {
+        self.domain_metadata = Some(metadata);
+    }
+
     pub fn status(&self) -> ResourceStatus {
         self.controller.get_status()
     }

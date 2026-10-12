@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use super::gcp_ingress::{GcpWorkerIngress, RecordedWorkerIngress};
 use super::gcp_service_identity::{CloudRunCreatePlan, CloudRunCreation, GcpCloudRunOwner};
 use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
@@ -350,6 +351,9 @@ pub struct GcpWorkerController {
     /// Durable regional NEG identity, operation and ownership for new ingress.
     #[serde(default)]
     pub(crate) ingress_negs: GcpIngressNegs,
+    /// Shared public/private HTTPS graph ownership and confirmed endpoints.
+    #[serde(default)]
+    pub(super) ingress: GcpWorkerIngress,
     /// The backend service name
     pub(crate) backend_service_name: Option<String>,
     /// The URL map name
@@ -395,6 +399,177 @@ impl GcpWorkerController {
             }));
         }
         Ok(())
+    }
+
+    fn uses_shared_worker_ingress(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+    ) -> bool {
+        self.ingress.active
+            || self.ingress.public.is_some()
+            || self.ingress.private.is_some()
+            || self.ingress.applied_access.is_some()
+            || (!worker.public_endpoints.is_empty()
+                && (ctx
+                    .deployment_config
+                    .stack_settings
+                    .endpoint_access
+                    .private_enabled()
+                    || ctx.deployment_config.domain_metadata.is_some()
+                    || ctx
+                        .deployment_config
+                        .stack_settings
+                        .domains
+                        .as_ref()
+                        .and_then(|domains| domains.custom_domains.as_ref())
+                        .is_some_and(|domains| domains.contains_key(&worker.id))))
+    }
+
+    fn desired_service_ingress(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+    ) -> CloudRunIngress {
+        if worker.public_endpoints.is_empty()
+            || !ctx
+                .deployment_config
+                .stack_settings
+                .endpoint_access
+                .internet_enabled()
+        {
+            CloudRunIngress::IngressTrafficInternalOnly
+        } else if self.uses_shared_worker_ingress(ctx, worker) {
+            CloudRunIngress::IngressTrafficInternalLoadBalancer
+        } else {
+            CloudRunIngress::IngressTrafficAll
+        }
+    }
+
+    async fn reconcile_worker_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+        retire: bool,
+    ) -> Result<bool> {
+        self.validate_service_scope(ctx)?;
+        if !GcpWorkerIngress::domains_ready(ctx, worker)? {
+            return Ok(false);
+        }
+        if !self.ingress_negs.initialized() {
+            GcpWorkerIngress::validate_setup(ctx, worker).await?;
+        }
+        let config = ctx.get_gcp_config()?;
+        let client = ctx.service_provider.get_gcp_compute_client(config)?;
+        if self._internal_stay_count.is_none() {
+            self.ingress_negs.reset_poll_count();
+            self.ingress.reset_poll_count();
+        }
+        if worker.public_endpoints.is_empty() {
+            if !retire {
+                return Ok(true);
+            }
+            if !self.ingress.reconcile(ctx, worker, "", true).await? {
+                return Ok(false);
+            }
+            if !self
+                .ingress_negs
+                .delete(client.as_ref(), &config.project_id, &worker.id)
+                .await?
+            {
+                return Ok(false);
+            }
+            self.serverless_neg_name = None;
+            self.ingress_negs = Default::default();
+            return Ok(true);
+        }
+        let service = self.service_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(worker.id.clone()),
+                message: "Worker ingress service name is missing".to_string(),
+            })
+        })?;
+        let name = get_gcp_worker_resource_name(ctx.resource_prefix, &worker.id, "neg");
+        let legacy_description = format!("Serverless NEG for worker {}", worker.id);
+        if !self
+            .ingress_negs
+            .reconcile_serverless(
+                client.as_ref(),
+                GcpServerlessNegPlan {
+                    resource_id: &worker.id,
+                    project: &config.project_id,
+                    region: &config.region,
+                    service,
+                    name: &name,
+                    legacy_name: (!self.ingress_negs.initialized())
+                        .then_some(self.serverless_neg_name.as_deref())
+                        .flatten(),
+                    legacy_description: &legacy_description,
+                },
+            )
+            .await?
+        {
+            return Ok(false);
+        }
+        let neg_name = self
+            .ingress_negs
+            .names
+            .get(&config.region)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(worker.id.clone()),
+                    message: "Confirmed worker NEG name is missing".to_string(),
+                })
+            })?;
+        self.serverless_neg_name = Some(neg_name.clone());
+        if self.forwarding_rule_name.is_some() {
+            if !self
+                .compute_operation_done(ctx, &worker.id, "recorded worker ingress")
+                .await?
+            {
+                return Ok(false);
+            }
+            let required = |value: &Option<String>| {
+                value.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        resource_id: Some(worker.id.clone()),
+                        message: "Recorded worker HTTPS graph is incomplete".to_string(),
+                    })
+                })
+            };
+            let backend = required(&self.backend_service_name)?;
+            let url_map = required(&self.url_map_name)?;
+            let proxy = required(&self.target_https_proxy_name)?;
+            let address = required(&self.global_address_name)?;
+            let frontend = required(&self.forwarding_rule_name)?;
+            let certificate = required(&self.ssl_certificate_name)?;
+            self.ingress
+                .handoff(
+                    ctx,
+                    worker,
+                    &neg_name,
+                    RecordedWorkerIngress {
+                        backend: &backend,
+                        url_map: &url_map,
+                        proxy: &proxy,
+                        address: &address,
+                        frontend: &frontend,
+                        certificate: &certificate,
+                        custom_certificate: self.uses_custom_domain,
+                    },
+                )
+                .await?;
+            self.backend_service_name = None;
+            self.url_map_name = None;
+            self.target_https_proxy_name = None;
+            self.global_address_name = None;
+            self.global_address_ip = None;
+            self.forwarding_rule_name = None;
+            self.ssl_certificate_name = None;
+            return Ok(false);
+        }
+        self.ingress.reconcile(ctx, worker, &neg_name, retire).await
     }
 
     fn retry_image_pull_failure(
@@ -520,6 +695,10 @@ impl GcpWorkerController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
+        self.ingress.active = self.uses_shared_worker_ingress(ctx, cfg);
+        if self.ingress.active {
+            GcpWorkerIngress::validate_setup(ctx, cfg).await?;
+        }
         info!(name=%cfg.id, "Initiating Cloud Run service creation");
 
         // Product limitation: Only allow at most one queue trigger per worker
@@ -868,6 +1047,13 @@ impl GcpWorkerController {
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
 
+        if self.uses_shared_worker_ingress(ctx, config) {
+            GcpWorkerIngress::domains_ready(ctx, config)?;
+            return Ok(HandlerAction::Continue {
+                state: ReconcilingWorkerIngress,
+                suggested_delay: None,
+            });
+        }
         if !config.public_endpoints.is_empty() && self.ensure_domain_info(ctx, config)? {
             return Ok(HandlerAction::Continue {
                 state: WaitingForCertificate,
@@ -876,6 +1062,24 @@ impl GcpWorkerController {
         }
 
         // Always go to CreatingPushSubscriptions next (linear flow)
+        Ok(HandlerAction::Continue {
+            state: CreatingPushSubscriptions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ReconcilingWorkerIngress, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn reconciling_worker_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        if !self.reconcile_worker_ingress(ctx, worker, true).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(720),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
         Ok(HandlerAction::Continue {
             state: CreatingPushSubscriptions,
             suggested_delay: None,
@@ -2239,7 +2443,10 @@ impl GcpWorkerController {
         }
 
         // Check for certificate renewal on auto-managed public domains.
-        if !worker_config.public_endpoints.is_empty() && !self.uses_custom_domain {
+        if !self.ingress.active
+            && !worker_config.public_endpoints.is_empty()
+            && !self.uses_custom_domain
+        {
             let metadata = ctx
                 .deployment_config
                 .domain_metadata
@@ -2287,7 +2494,10 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
 
-        if cfg.public_endpoints.is_empty() || self.uses_custom_domain {
+        if self.uses_shared_worker_ingress(ctx, cfg)
+            || cfg.public_endpoints.is_empty()
+            || self.uses_custom_domain
+        {
             return Ok(HandlerAction::Continue {
                 state: UpdateStart,
                 suggested_delay: None,
@@ -2442,7 +2652,15 @@ impl GcpWorkerController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
-        if cfg == previous_cfg {
+        let shared_ingress = self.uses_shared_worker_ingress(ctx, cfg);
+        self.ingress.active = shared_ingress;
+        if shared_ingress && !self.reconcile_worker_ingress(ctx, cfg, false).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(720),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        if cfg == previous_cfg && !shared_ingress {
             return Ok(HandlerAction::Continue {
                 state: UpdateEnsuringPublicExposure,
                 suggested_delay: None,
@@ -2484,7 +2702,24 @@ impl GcpWorkerController {
         self.service_uri = current_service.uri.clone();
 
         // Build updated service configuration
-        let mut updated_service = self.build_cloud_run_service(service_name, cfg, ctx).await?;
+        let access_only = cfg == previous_cfg;
+        if access_only
+            && current_service.ingress == Some(self.desired_service_ingress(ctx, cfg))
+            && current_service.invoker_iam_disabled == Some(!cfg.public_endpoints.is_empty())
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateEnsuringPublicExposure,
+                suggested_delay: None,
+            });
+        }
+        let mut updated_service = if access_only {
+            Service::builder()
+                .ingress(self.desired_service_ingress(ctx, cfg))
+                .invoker_iam_disabled(!cfg.public_endpoints.is_empty())
+                .build()
+        } else {
+            self.build_cloud_run_service(service_name, cfg, ctx).await?
+        };
 
         // Preserve important fields from current service
         updated_service.name = current_service.name;
@@ -2498,7 +2733,7 @@ impl GcpWorkerController {
                 gcp_config.region.clone(),
                 service_name.clone(),
                 updated_service,
-                None, // update_mask - let the API figure it out
+                access_only.then(|| "ingress,invokerIamDisabled".to_string()),
                 None, // validate_only
                 None, // allow_missing
             )
@@ -2663,6 +2898,21 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Worker>()?;
+        if self.uses_shared_worker_ingress(ctx, current_config) {
+            if !self
+                .reconcile_worker_ingress(ctx, current_config, true)
+                .await?
+            {
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(720),
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
+            return Ok(HandlerAction::Continue {
+                state: UpdatePushSubscriptions,
+                suggested_delay: None,
+            });
+        }
 
         if current_config.public_endpoints.is_empty() {
             return Ok(HandlerAction::Continue {
@@ -3533,9 +3783,26 @@ impl GcpWorkerController {
 
         // If we have load balancer resources, delete them first
         // Otherwise, skip directly to deleting push subscriptions
-        if self.forwarding_rule_name.is_some() {
+        if self.ingress.public.is_some() || self.ingress.private.is_some() {
+            Ok(HandlerAction::Continue {
+                state: DeletingWorkerIngress,
+                suggested_delay: None,
+            })
+        } else if self.forwarding_rule_name.is_some()
+            || self.target_https_proxy_name.is_some()
+            || self.url_map_name.is_some()
+            || self.backend_service_name.is_some()
+            || self.global_address_name.is_some()
+            || self.ssl_certificate_name.is_some()
+        {
             Ok(HandlerAction::Continue {
                 state: DeletingForwardingRule,
+                suggested_delay: None,
+            })
+        } else if self.ingress_negs.initialized() || self.serverless_neg_name.is_some() {
+            // A NEG create can commit before the frontend owner exists.
+            Ok(HandlerAction::Continue {
+                state: DeletingServerlessNeg,
                 suggested_delay: None,
             })
         } else {
@@ -3544,6 +3811,27 @@ impl GcpWorkerController {
                 suggested_delay: None,
             })
         }
+    }
+
+    #[handler(state = DeletingWorkerIngress, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_worker_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.validate_service_scope(ctx)?;
+        if self._internal_stay_count.is_none() {
+            self.ingress.reset_poll_count();
+        }
+        if !self.ingress.delete(ctx, ctx.desired_config.id()).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(720),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        Ok(HandlerAction::Continue {
+            state: DeletingServerlessNeg,
+            suggested_delay: None,
+        })
     }
 
     // ─────────────── LB DELETION STATES ───────────────────────────
@@ -4409,7 +4697,27 @@ impl GcpWorkerController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        if self.uses_shared_worker_ingress(ctx, worker) {
+            self.ingress.needs_update(ctx, worker)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
+        if self.ingress.active {
+            return self.service_name.as_ref().map(|name| {
+                ResourceOutputs::new(WorkerOutputs {
+                    worker_name: name.clone(),
+                    identifier: Some(name.clone()),
+                    public_endpoints: self.ingress.public_endpoints.clone(),
+                    private_endpoints: self.ingress.private_endpoints.clone(),
+                    commands_push_target: self.commands_topic_name.clone(),
+                })
+            });
+        }
         self.url.as_ref().map(|url| {
             let public_url = self
                 .fqdn
@@ -4451,7 +4759,20 @@ impl GcpWorkerController {
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, CloudRunWorkerBinding, WorkerBinding};
 
-        if let (Some(service_name), Some(url)) = (&self.service_name, &self.url) {
+        let private_url = if self.ingress.active {
+            self.ingress
+                .primary_url(&self.ingress.private_endpoints)
+                .or_else(|| self.ingress.primary_url(&self.ingress.public_endpoints))
+                .or(self.service_uri.as_deref())
+        } else {
+            self.url.as_deref()
+        };
+        let public_url = if self.ingress.active {
+            self.ingress.primary_url(&self.ingress.public_endpoints)
+        } else {
+            self.url.as_deref()
+        };
+        if let (Some(service_name), Some(url)) = (&self.service_name, private_url) {
             let project_id = self.project_id.clone().ok_or_else(|| {
                 AlienError::new(ErrorData::InfrastructureError {
                     message: "GCP project_id missing when building binding params".to_string(),
@@ -4471,8 +4792,8 @@ impl GcpWorkerController {
                 project_id: BindingValue::Value(project_id),
                 service_name: BindingValue::Value(service_name.clone()),
                 location: BindingValue::Value(location),
-                private_url: BindingValue::Value(url.clone()),
-                public_url: Some(BindingValue::Value(url.clone())),
+                private_url: BindingValue::Value(url.to_string()),
+                public_url: public_url.map(|url| BindingValue::Value(url.to_string())),
             });
             Ok(Some(
                 serde_json::to_value(binding).into_alien_error().context(
@@ -4803,11 +5124,7 @@ impl GcpWorkerController {
             .ports(ports)
             .build();
 
-        let ingress = if cfg.public_endpoints.is_empty() {
-            CloudRunIngress::IngressTrafficInternalOnly
-        } else {
-            CloudRunIngress::IngressTrafficAll
-        };
+        let ingress = self.desired_service_ingress(ctx, cfg);
 
         // Get VPC access configuration if a Network resource exists
         let vpc_access = self.get_vpc_access(ctx)?;
@@ -5915,6 +6232,7 @@ impl GcpWorkerController {
             certificate_issued_at: None,
             serverless_neg_name: None,
             ingress_negs: GcpIngressNegs::default(),
+            ingress: Default::default(),
             backend_service_name: None,
             url_map_name: None,
             target_https_proxy_name: None,
@@ -6020,7 +6338,7 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("Domain metadata missing for resource"),
+                .contains("endpoint domain metadata is missing"),
             "{error}"
         );
     }
@@ -6136,7 +6454,7 @@ mod tests {
         );
     }
 
-    fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
+    pub(super) fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
         let mut resources = HashMap::new();
         resources.insert(
             resource_id.to_string(),
@@ -6301,14 +6619,14 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct NegCloud {
-        objects: HashMap<(String, String), NetworkEndpointGroup>,
-        mutations: usize,
-        lose_create: bool,
+    pub(super) struct NegCloud {
+        pub(super) objects: HashMap<(String, String), NetworkEndpointGroup>,
+        pub(super) mutations: usize,
+        pub(super) lose_create: bool,
         deny_delete: bool,
     }
 
-    fn mock_negs(mock: &mut MockComputeApi, cloud: Arc<std::sync::Mutex<NegCloud>>) {
+    pub(super) fn mock_negs(mock: &mut MockComputeApi, cloud: Arc<std::sync::Mutex<NegCloud>>) {
         let store = cloud.clone();
         mock.expect_get_region_network_endpoint_group()
             .returning(move |region, name| {
@@ -6469,49 +6787,14 @@ mod tests {
     }
 
     fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockComputeApi> {
-        fn completed_compute_operation() -> Operation {
-            Operation {
-                name: Some("test-compute-operation".to_string()),
-                status: Some(OperationStatus::Done),
-                ..Default::default()
-            }
-        }
-
-        let mut mock = MockComputeApi::new();
-        mock.expect_insert_ssl_certificate()
-            .returning(|_| Ok(completed_compute_operation()));
+        let store = Arc::new(std::sync::Mutex::new(
+            crate::gcp_https_ingress::tests::Provider::default(),
+        ));
+        let mut mock = crate::gcp_https_ingress::tests::provider(&store);
         mock_negs(
             &mut mock,
             Arc::new(std::sync::Mutex::new(NegCloud::default())),
         );
-        mock.expect_insert_backend_service()
-            .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_insert_url_map()
-            .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_insert_target_https_proxy()
-            .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_insert_global_address()
-            .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_get_global_address().returning(|_| {
-            Ok(Address {
-                address: Some("203.0.113.1".to_string()),
-                ..Default::default()
-            })
-        });
-        mock.expect_insert_global_forwarding_rule()
-            .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_delete_global_forwarding_rule()
-            .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_target_https_proxy()
-            .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_url_map()
-            .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_backend_service()
-            .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_ssl_certificate()
-            .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_global_address()
-            .returning(|_| Ok(Operation::default()));
         Arc::new(mock)
     }
 
@@ -6541,7 +6824,7 @@ mod tests {
         Ok(service)
     }
 
-    fn create_successful_service_response(service_name: &str) -> Service {
+    pub(super) fn create_successful_service_response(service_name: &str) -> Service {
         use alien_gcp_clients::cloudrun::Service;
 
         Service::builder()
@@ -6571,7 +6854,9 @@ mod tests {
             .build()
     }
 
-    fn create_completed_operation_response(operation_name: &str) -> LongRunningOperation {
+    pub(super) fn create_completed_operation_response(
+        operation_name: &str,
+    ) -> LongRunningOperation {
         LongRunningOperation::builder()
             .name(format!("projects/test-project/locations/us-central1/operations/{}", operation_name))
             .done(true)
@@ -6603,7 +6888,7 @@ mod tests {
             .build()
     }
 
-    fn create_empty_iam_policy() -> IamPolicy {
+    pub(super) fn create_empty_iam_policy() -> IamPolicy {
         IamPolicy::builder().version(1).bindings(vec![]).build()
     }
 
@@ -6794,7 +7079,7 @@ mod tests {
         Arc::new(MockIamApi::new())
     }
 
-    fn setup_mock_service_provider(
+    pub(super) fn setup_mock_service_provider(
         mock_cloudrun: Arc<MockCloudRunApi>,
         mock_compute: Option<Arc<MockComputeApi>>,
     ) -> Arc<MockPlatformServiceProvider> {
@@ -7090,7 +7375,7 @@ mod tests {
             let expected_url = format!("https://{}.test.example.com", worker_id);
             let endpoint = function_outputs
                 .public_endpoints
-                .get("default")
+                .get("api")
                 .expect("public endpoint output should exist");
             assert_eq!(endpoint.url, expected_url);
             assert_eq!(
@@ -7098,7 +7383,7 @@ mod tests {
                     .load_balancer_endpoint
                     .as_ref()
                     .map(|endpoint| endpoint.dns_name.as_str()),
-                Some("203.0.113.1")
+                Some("203.0.113.10")
             );
         }
 
@@ -7278,7 +7563,7 @@ mod tests {
             assert_eq!(
                 function_outputs
                     .public_endpoints
-                    .get("default")
+                    .get("api")
                     .map(|endpoint| endpoint.url.as_str()),
                 Some(expected_url.as_str())
             );
@@ -7713,7 +7998,7 @@ mod tests {
         // Verify URL is in outputs
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
-        assert!(function_outputs.public_endpoints.contains_key("default"));
+        assert!(function_outputs.public_endpoints.contains_key("api"));
     }
 
     /// Private workers authenticate Pub/Sub and Scheduler delivery as their execution SA.
@@ -8058,6 +8343,7 @@ mod tests {
             certificate_issued_at: None,
             serverless_neg_name: None,
             ingress_negs: GcpIngressNegs::default(),
+            ingress: Default::default(),
             backend_service_name: None,
             url_map_name: None,
             target_https_proxy_name: None,
@@ -8101,3 +8387,7 @@ mod tests {
         assert!(executor.outputs().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "gcp_ingress_controller_tests.rs"]
+mod ingress_controller_tests;

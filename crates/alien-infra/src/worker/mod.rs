@@ -6,6 +6,7 @@ pub use aws_import::AwsWorkerImporter;
 
 mod gcp;
 pub use gcp::*;
+mod gcp_ingress;
 mod gcp_service_identity;
 
 mod gcp_import;

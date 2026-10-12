@@ -6,14 +6,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
-struct Provider {
-    objects: BTreeMap<String, Value>,
-    mutations: usize,
-    lose_backend_response: bool,
+pub(crate) struct Provider {
+    pub(crate) objects: BTreeMap<String, Value>,
+    pub(crate) mutations: usize,
+    pub(crate) lose_backend_response: bool,
     fail_certificate_delete: bool,
 }
 
-type Store = Arc<Mutex<Provider>>;
+pub(crate) type Store = Arc<Mutex<Provider>>;
 
 fn missing(name: &str) -> alien_client_core::Error {
     AlienError::new(ClientErrorData::RemoteResourceNotFound {
@@ -89,7 +89,7 @@ fn remove(store: &Store, kind: &str, name: &str) -> alien_client_core::Result<Op
     Ok(done())
 }
 
-fn provider(store: &Store) -> MockComputeApi {
+pub(crate) fn provider(store: &Store) -> MockComputeApi {
     let mut client = MockComputeApi::new();
     macro_rules! regional {
         ($kind:literal, $get:ident, $create:ident, $delete:ident) => {

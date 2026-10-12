@@ -413,7 +413,10 @@ impl GcpHttpsIngressState {
             || groups.is_empty()
             || !contains_desired(
                 &live["backend"],
-                &serde_json::json!({"protocol":"HTTP", "loadBalancingScheme":"EXTERNAL"}),
+                &serde_json::json!({
+                    "protocol": plan.backend.protocol.as_ref().unwrap_or(&BackendServiceProtocol::Http),
+                    "loadBalancingScheme":"EXTERNAL"
+                }),
             )
             || !live["backend"]
                 .get("healthChecks")
@@ -1026,4 +1029,4 @@ fn only_recorded_backend(value: &Value, backend: &str) -> bool {
 
 #[cfg(test)]
 #[path = "gcp_https_ingress_tests.rs"]
-mod tests;
+pub(crate) mod tests;
