@@ -311,6 +311,9 @@ pub struct GcpWorkerController {
     pub(super) service_owner: Option<GcpCloudRunOwner>,
     /// The invocation URL of the worker, available after creation.
     pub(crate) url: Option<String>,
+    /// Canonical provider URI for trigger delivery and OIDC, independent of endpoint URLs.
+    #[serde(default)]
+    pub(crate) service_uri: Option<String>,
     /// The operation name for long-running operations (for create, update, delete)
     pub(crate) operation_name: Option<String>,
     /// Number of targeted retries after GAR IAM propagation denied an image pull.
@@ -854,6 +857,7 @@ impl GcpWorkerController {
             });
         }
 
+        self.service_uri = service.uri.clone();
         let cloud_run_url = service.uri.or_else(|| service.urls.first().cloned());
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
@@ -1800,12 +1804,7 @@ impl GcpWorkerController {
             .service_provider
             .get_gcp_cloud_scheduler_client(gcp_config)?;
 
-        let service_url = self.url.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: cfg.id.clone(),
-                message: "Service URL not available for scheduler job".to_string(),
-            })
-        })?;
+        let service_url = self.delivery_service_uri(ctx).await?;
 
         // Get service account email for OIDC authentication
         let service_account_email = self.get_service_account_email(ctx, &cfg)?;
@@ -1958,12 +1957,7 @@ impl GcpWorkerController {
 
         // Create push subscription that delivers to the Cloud Run service
         let subscription_name = format!("{}-rq-sub", service_name);
-        let service_url = self.url.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: cfg.id.clone(),
-                message: "Service URL not available for commands push subscription".to_string(),
-            })
-        })?;
+        let service_url = self.delivery_service_uri(ctx).await?;
 
         let oidc_audience = service_url.trim_end_matches('/').to_string();
         let push_endpoint = format!("{oidc_audience}/");
@@ -2190,6 +2184,8 @@ impl GcpWorkerController {
         if let Some(owner) = &mut self.service_owner {
             owner.confirm(&service, ctx.desired_config.id())?;
         }
+
+        self.service_uri = service.uri.clone();
 
         // Verify service is ready. A service can be temporarily not-Ready due to
         // scaling events, GCP maintenance, or revision transitions. Use a retryable
@@ -2477,7 +2473,15 @@ impl GcpWorkerController {
 
         if let Some(owner) = &mut self.service_owner {
             owner.confirm(&current_service, ctx.desired_config.id())?;
+            if current_service.etag.as_ref().is_none_or(String::is_empty) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(cfg.id.clone()),
+                    message: "Owned Cloud Run service has no ETag for update".to_string(),
+                }));
+            }
         }
+
+        self.service_uri = current_service.uri.clone();
 
         // Build updated service configuration
         let mut updated_service = self.build_cloud_run_service(service_name, cfg, ctx).await?;
@@ -3337,12 +3341,7 @@ impl GcpWorkerController {
             }
 
             // Recreate scheduler jobs
-            let service_url = self.url.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: current_config.id.clone(),
-                    message: "Service URL not available for scheduler job".to_string(),
-                })
-            })?;
+            let service_url = self.delivery_service_uri(ctx).await?;
             let service_account_email = self.get_service_account_email(ctx, &current_config)?;
             let scheduler_client = ctx
                 .service_provider
@@ -3515,6 +3514,7 @@ impl GcpWorkerController {
 
                 // Clear any remaining state and mark as deleted
                 self.service_name = None;
+                self.service_uri = None;
                 self.url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
@@ -4183,6 +4183,7 @@ impl GcpWorkerController {
                     ) =>
                 {
                     self.service_name = None;
+                    self.service_uri = None;
                     self.url = None;
                     self.operation_name = None;
                     return Ok(HandlerAction::Continue {
@@ -4244,6 +4245,7 @@ impl GcpWorkerController {
                 info!(name=%service_name, "Cloud Run service was already deleted");
 
                 self.service_name = None;
+                self.service_uri = None;
                 self.url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
@@ -4363,6 +4365,7 @@ impl GcpWorkerController {
                 info!(name=%service_name, "Cloud Run service successfully deleted");
 
                 self.service_name = None;
+                self.service_uri = None;
                 self.url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
@@ -4376,7 +4379,10 @@ impl GcpWorkerController {
                 message: "Failed to check Cloud Run service deletion status".to_string(),
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })),
-            Ok(_) => {
+            Ok(service) => {
+                if let Some(owner) = &mut self.service_owner {
+                    owner.confirm(&service, ctx.desired_config.id())?;
+                }
                 debug!(name=%service_name, "Service still exists, waiting for deletion");
                 Ok(HandlerAction::Stay {
                     max_times: Some(20),
@@ -4933,6 +4939,45 @@ impl GcpWorkerController {
         Ok(env_vars)
     }
 
+    /// Older checkpoints and imports have no canonical URI. Read the recorded
+    /// service instead of treating a customer hostname as an OIDC audience.
+    async fn delivery_service_uri(&self, ctx: &ResourceControllerContext<'_>) -> Result<String> {
+        self.validate_service_scope(ctx)?;
+        if let Some(uri) = self.service_uri.as_ref().filter(|uri| !uri.is_empty()) {
+            return Ok(uri.trim_end_matches('/').to_string());
+        }
+        let service_name = self.service_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(ctx.desired_config.id().to_string()),
+                message: "Cloud Run service name is missing for trigger delivery".to_string(),
+            })
+        })?;
+        let config = ctx.get_gcp_config()?;
+        let service = ctx
+            .service_provider
+            .get_gcp_cloudrun_client(config)?
+            .get_service(config.region.clone(), service_name.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                resource_id: Some(ctx.desired_config.id().to_string()),
+                message: "Read canonical Cloud Run service URI for trigger delivery".to_string(),
+            })?;
+        if let Some(owner) = &self.service_owner {
+            owner.clone().confirm(&service, ctx.desired_config.id())?;
+        }
+        service
+            .uri
+            .filter(|uri| !uri.is_empty())
+            .map(|uri| uri.trim_end_matches('/').to_string())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(ctx.desired_config.id().to_string()),
+                    message: "Cloud Run service has no canonical URI for trigger delivery"
+                        .to_string(),
+                })
+            })
+    }
+
     /// Applies the worker's resource-scoped IAM policy in a single operation.
     async fn apply_consolidated_iam_policy(
         &self,
@@ -4945,6 +4990,19 @@ impl GcpWorkerController {
         self.validate_service_scope(ctx)?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+
+        // This handler may resume directly from a saved checkpoint, without
+        // revisiting the create/update entry point.
+        if let Some(owner) = &self.service_owner {
+            let service = client
+                .get_service(gcp_config.region.clone(), service_name.to_string())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Read Cloud Run service before applying IAM policy".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            owner.clone().confirm(&service, &config.id)?;
+        }
 
         // Get existing IAM policy to preserve any existing bindings
         let mut policy = client
@@ -5257,12 +5315,7 @@ impl GcpWorkerController {
         );
 
         // Get the service URL for push endpoint
-        let service_url = self.url.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: worker_config.id.clone(),
-                message: "Service URL not available for push subscription".to_string(),
-            })
-        })?;
+        let service_url = self.delivery_service_uri(ctx).await?;
 
         // The push endpoint is slash-terminated, but Cloud Run validates the OIDC
         // audience against its exact canonical service URI.
@@ -5626,13 +5679,7 @@ impl GcpWorkerController {
         }
 
         // 4. Create a push subscription to the Cloud Run URL
-        let service_url = self.url.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: worker_config.id.clone(),
-                message: "Service URL not available for storage trigger push subscription"
-                    .to_string(),
-            })
-        })?;
+        let service_url = self.delivery_service_uri(ctx).await?;
 
         let oidc_audience = service_url.trim_end_matches('/').to_string();
         let push_endpoint = format!("{oidc_audience}/");
@@ -5852,6 +5899,7 @@ impl GcpWorkerController {
             service_name: Some(function_name.to_string()),
             service_owner: None,
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
+            service_uri: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -6217,15 +6265,21 @@ mod tests {
             }
             let original = cloud.lock().unwrap().service.clone().unwrap();
             cloud.lock().unwrap().service.as_mut().unwrap().uid = Some("replacement".to_string());
-            let mut checking = controller.clone();
-            checking.state = GcpWorkerState::DeletingService;
-            executor = neg_executor(checking, provider.clone()).await;
-            assert!(executor
-                .step()
-                .await
-                .unwrap_err()
-                .message
-                .contains("replaced"));
+            for state in [
+                GcpWorkerState::DeletingService,
+                GcpWorkerState::WaitingForServiceDeletion,
+                GcpWorkerState::SettingIamPolicy,
+            ] {
+                let mut checking = controller.clone();
+                checking.state = state;
+                executor = neg_executor(checking, provider.clone()).await;
+                assert!(executor
+                    .step()
+                    .await
+                    .unwrap_err()
+                    .message
+                    .contains("replaced"));
+            }
             assert_eq!(cloud.lock().unwrap().deletes, 0);
             cloud.lock().unwrap().service = Some(original);
         }
@@ -6648,7 +6702,7 @@ mod tests {
                     &get_labels,
                 )
             })
-            .times(if creating { 3 } else { 0 }); // Only for creation flow
+            .times(if creating { 4 } else { 0 }); // Only for creation flow
 
         // Mock IAM policy operations for all workers (resource-scoped permissions + optional public access)
         mock_cloudrun
@@ -6936,7 +6990,7 @@ mod tests {
                 service.urls = vec![mock_url.clone()];
                 owned_service_response(service, &get_labels)
             })
-            .times(3); // Only for creation flow
+            .times(4); // Only for creation flow
 
         // Mock IAM policy operations for all workers (resource-scoped permissions + optional public access)
         mock_cloudrun
@@ -7406,13 +7460,21 @@ mod tests {
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
 
+    #[rstest]
+    #[case::initial_creation(false, false)]
+    #[case::customer_url_checkpoint(true, false)]
+    #[case::legacy_customer_url_checkpoint(true, true)]
     #[tokio::test]
-    async fn queue_push_subscription_uses_canonical_cloud_run_oidc_audience() {
+    async fn queue_push_subscription_uses_canonical_cloud_run_oidc_audience(
+        #[case] resumed: bool,
+        #[case] legacy: bool,
+    ) {
         use crate::queue::gcp::{GcpQueueController, GcpQueueState};
 
         let worker = function_with_queue_trigger();
         let function_name = format!("test-{}", worker.id);
-        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false, false);
+        let mock_cloudrun =
+            setup_mock_client_for_creation_and_update(&function_name, false, resumed);
 
         let mut mock_pubsub = MockPubSubApi::new();
         mock_pubsub
@@ -7441,9 +7503,25 @@ mod tests {
             _internal_stay_count: None,
         };
 
+        let mut controller = if resumed {
+            let mut controller = GcpWorkerController::mock_ready(&function_name);
+            controller.state = GcpWorkerState::CreatingPushSubscriptions;
+            controller.url = Some("https://private-api.example.com".to_string());
+            if legacy {
+                controller.service_uri = None;
+            }
+            controller
+        } else {
+            GcpWorkerController::default()
+        };
+        let mut saved = serde_json::to_value(&controller).unwrap();
+        if legacy {
+            saved.as_object_mut().unwrap().remove("serviceUri");
+        }
+        controller = serde_json::from_value(saved).unwrap();
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
-            .controller(GcpWorkerController::default())
+            .controller(controller)
             .platform(Platform::Gcp)
             .service_provider(mock_provider)
             .with_test_dependencies()
@@ -7456,12 +7534,20 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
+    #[rstest]
+    #[case::initial_creation(false, false)]
+    #[case::customer_url_checkpoint(true, false)]
+    #[case::legacy_customer_url_checkpoint(true, true)]
     #[tokio::test]
-    async fn commands_push_subscription_uses_canonical_cloud_run_oidc_audience() {
+    async fn commands_push_subscription_uses_canonical_cloud_run_oidc_audience(
+        #[case] resumed: bool,
+        #[case] legacy: bool,
+    ) {
         let mut worker = function_private_ingress();
         worker.commands_enabled = true;
         let function_name = format!("test-{}", worker.id);
-        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false, false);
+        let mock_cloudrun =
+            setup_mock_client_for_creation_and_update(&function_name, false, resumed);
 
         let mut mock_pubsub = MockPubSubApi::new();
         mock_pubsub
@@ -7497,9 +7583,25 @@ mod tests {
 
         let mock_provider =
             setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));
+        let mut controller = if resumed {
+            let mut controller = GcpWorkerController::mock_ready(&function_name);
+            controller.state = GcpWorkerState::CreatingCommandsInfrastructure;
+            controller.url = Some("https://private-api.example.com".to_string());
+            if legacy {
+                controller.service_uri = None;
+            }
+            controller
+        } else {
+            GcpWorkerController::default()
+        };
+        let mut saved = serde_json::to_value(&controller).unwrap();
+        if legacy {
+            saved.as_object_mut().unwrap().remove("serviceUri");
+        }
+        controller = serde_json::from_value(saved).unwrap();
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
-            .controller(GcpWorkerController::default())
+            .controller(controller)
             .platform(Platform::Gcp)
             .service_provider(mock_provider)
             .with_test_dependencies()
@@ -7548,7 +7650,7 @@ mod tests {
                     &get_labels,
                 )
             })
-            .times(2);
+            .times(3);
 
         // Validate IAM policy operations are called for resource-scoped permissions
         mock_cloudrun
@@ -7655,7 +7757,7 @@ mod tests {
                     &get_labels,
                 )
             })
-            .times(2);
+            .times(3);
 
         mock_cloudrun
             .expect_get_service_iam_policy()
@@ -7773,7 +7875,7 @@ mod tests {
                     &get_labels,
                 )
             })
-            .times(2);
+            .times(3);
 
         // Mock IAM policy operations for resource-scoped permissions
         mock_cloudrun
@@ -7881,7 +7983,7 @@ mod tests {
                     &get_labels,
                 )
             })
-            .times(2);
+            .times(3);
 
         // Mock IAM policy operations for resource-scoped permissions
         mock_cloudrun
@@ -7943,6 +8045,7 @@ mod tests {
             service_name: None, // This is the key - no service name set
             service_owner: None,
             url: None,
+            service_uri: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
