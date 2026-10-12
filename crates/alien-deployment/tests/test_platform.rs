@@ -4195,6 +4195,10 @@ async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource(
     let _vault = test_vault_env().await;
     let mut stack = Stack::new("manual-new-gate".into())
         .add(
+            Storage::new("baseline".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
             Storage::new("old-archive".into()).build(),
             ResourceLifecycle::Frozen,
         )
