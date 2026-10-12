@@ -109,8 +109,8 @@ impl AutomaticSetup {
         // No further setup calls occur. A resource type absent from the first release must be
         // provisioned with the installed management grant, then updated and removed by runtime.
         for (name, stack) in [
-            ("add", storage_stack(false)),
-            ("change", storage_stack(true)),
+            ("add", storage_stack(self.platform, false)),
+            ("change", storage_stack(self.platform, true)),
             ("remove", Stack::new("automatic-setup".into()).build()),
         ] {
             let release = publish(&self.manager, self.platform, &stack).await?;
@@ -144,8 +144,13 @@ impl AutomaticSetup {
                             "Storage must reach running"
                         );
                         anyhow::ensure!(
-                            state["resources"]["archive"]["config"]["publicRead"]
-                                == (name == "change"),
+                            state["resources"]["archive"]["config"][if self.platform
+                                == Platform::Gcp
+                            {
+                                "versioning"
+                            } else {
+                                "publicRead"
+                            }] == (name == "change"),
                             "The installed configuration must converge"
                         );
                     }
@@ -180,12 +185,18 @@ impl AutomaticSetup {
     }
 }
 
-fn storage_stack(public: bool) -> Stack {
+fn storage_stack(platform: Platform, changed: bool) -> Stack {
+    // Domain-restricted GCP projects reject public principals by policy. Change
+    // bucket versioning there so this exercises a real supported update without
+    // weakening the organization's access restrictions. Azure uses per-container
+    // public access because versioning is an account-level setting there.
+    let storage = if platform == Platform::Gcp {
+        Storage::new("archive".into()).versioning(changed).build()
+    } else {
+        Storage::new("archive".into()).public_read(changed).build()
+    };
     Stack::new("automatic-setup".into())
-        .add(
-            Storage::new("archive".into()).public_read(public).build(),
-            ResourceLifecycle::Frozen,
-        )
+        .add(storage, ResourceLifecycle::Frozen)
         .build()
 }
 

@@ -46,7 +46,9 @@ impl StackMutation for AzureResourceGroupMutation {
             }
         });
 
-        if !has_user_resources {
+        // The cross-environment management identity lives in this group even
+        // when the first release contains no application resources yet.
+        if !has_user_resources && config.management_config.is_none() {
             return false;
         }
 
