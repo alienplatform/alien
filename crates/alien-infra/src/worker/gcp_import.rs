@@ -34,6 +34,7 @@ impl ResourceImporter for GcpWorkerImporter {
         let controller = GcpWorkerController {
             state: GcpWorkerState::Ready,
             service_name: Some(data.service_name),
+            service_owner: None,
             url: data.url,
             operation_name: None,
             image_pull_permission_retries: 0,
