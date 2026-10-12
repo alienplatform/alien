@@ -291,6 +291,8 @@ impl AzureStorageAccountController {
             .clone()
             .unwrap_or_else(|| generate_storage_account_name(&ctx.resource_prefix, &config.id));
 
+        self.account_name = Some(account_name.clone());
+
         info!(account_name=%account_name, "Initiating Azure Storage Account deletion");
 
         let azure_config = ctx.get_azure_config()?;
