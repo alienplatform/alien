@@ -202,6 +202,10 @@ pub struct ContainerResourceSelection {
     /// Memory allocation, using binary units such as Mi or Gi.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
+    /// Persistent volume capacity per replica, in whole GiB. Must be at least
+    /// the release's declared capacity. Existing volumes can only grow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_size_gib: Option<u32>,
 }
 
 fn deserialize_selected_cpu<'de, D: serde::Deserializer<'de>>(

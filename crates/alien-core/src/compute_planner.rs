@@ -1196,6 +1196,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn deployment_volume_selection_is_applied_without_changing_release_defaults() {
+        let mut release = stack_with_container();
+        release.resources.get_mut("api").unwrap().config.downcast_mut::<Container>().unwrap()
+            .persistent_storage = Some(crate::PersistentStorage {
+                size: "20Gi".into(), mount_path: "/data".into(), backups: crate::VolumeBackups::default(),
+            });
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 40}}
+        })).unwrap();
+        let mut deployment = release.clone();
+        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings)).unwrap();
+        let volume = |stack: &Stack| stack.resources["api"].config.downcast_ref::<Container>().unwrap()
+            .persistent_storage.as_ref().unwrap().size.clone();
+        assert_eq!(volume(&deployment), "40Gi");
+        assert_eq!(volume(&release), "20Gi");
+        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings)).unwrap();
+        assert_eq!(volume(&deployment), "40Gi");
+        for size in [0, 19, 65537] {
+            let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "containers": {"api": {"volumeSizeGib": size}}
+            })).unwrap();
+            assert_eq!(crate::container_resources::resolve_container_resources(&mut release.clone(), Some(&invalid))
+                .unwrap_err().code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        }
+        assert_eq!(crate::container_resources::resolve_container_resources(&mut stack_with_container(), Some(&settings))
+            .unwrap_err().code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+    }
+
+    #[test]
+    fn volume_capacity_parsing_rejects_overflow_and_preserves_legacy_units() {
+        use crate::container_resources::parse_volume_size_gib;
+        for (value, size) in [("20Gi", 20), ("20GiB", 20), ("20GB", 20), ("1Ti", 1024), ("1TB", 1000)] {
+            assert_eq!(parse_volume_size_gib(value).unwrap(), size);
+        }
+        for value in ["0Gi", "-1Gi", "NaNGi", "0.5Gi", "4294967295Ti", "65537Gi", "20"] {
+            assert!(parse_volume_size_gib(value).is_err(), "{value}");
+        }
+    }
+
     fn stack_with_container() -> Stack {
         let container = Container::new("api".to_string())
             .code(ContainerCode::Image {

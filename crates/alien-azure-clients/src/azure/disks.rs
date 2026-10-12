@@ -35,6 +35,9 @@ pub trait ManagedDisksApi: Send + Sync + std::fmt::Debug {
         disk: &Disk,
     ) -> Result<DiskOperationResult>;
 
+    /// Expand only the capacity of an existing managed data disk.
+    async fn resize_disk(&self, resource_group_name: &str, disk_name: &str, size_gib: u32) -> Result<DiskOperationResult>;
+
     /// Get a managed disk by name
     async fn get_disk(&self, resource_group_name: &str, disk_name: &str) -> Result<Disk>;
 
@@ -121,6 +124,19 @@ impl ManagedDisksApi for AzureManagedDisksClient {
         self.base
             .execute_request_with_long_running_support(signed, "CreateOrUpdateDisk", disk_name)
             .await
+    }
+
+    async fn resize_disk(&self, resource_group_name: &str, disk_name: &str, size_gib: u32) -> Result<DiskOperationResult> {
+        let bearer_token = self.token_cache.get_bearer_token_with_scope("https://management.azure.com/.default").await?;
+        let url = self.base.build_url(&format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/disks/{}",
+            self.token_cache.config().subscription_id, resource_group_name, disk_name),
+            Some(vec![("api-version", Self::API_VERSION.into())]));
+        let body = serde_json::json!({"properties": {"diskSizeGB": size_gib}}).to_string();
+        let request = AzureRequestBuilder::new(Method::PATCH, url).content_type_json()
+            .content_length(&body).body(body).build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        self.base.execute_request_with_long_running_support(signed, "ResizeDisk", disk_name).await
     }
 
     async fn get_disk(&self, resource_group_name: &str, disk_name: &str) -> Result<Disk> {

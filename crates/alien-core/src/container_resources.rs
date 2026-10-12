@@ -42,6 +42,32 @@ pub fn resolve_container_resources(
             .and_then(|selected| selected.cpu.as_ref())
             .map(ToString::to_string);
         let memory = selected.and_then(|selected| selected.memory.as_deref());
+        if let Some(size) = selected.and_then(|selected| selected.volume_size_gib) {
+            let storage = container.persistent_storage.as_mut().ok_or_else(|| {
+                invalid(
+                    &id,
+                    "volumeSizeGib",
+                    "the release declares no persistent volume",
+                )
+            })?;
+            if size == 0 || size > 65536 {
+                return Err(invalid(
+                    &id,
+                    "volumeSizeGib",
+                    "capacity must be between 1 and 65536 GiB",
+                ));
+            }
+            let minimum = parse_volume_size_gib(&storage.size)
+                .map_err(|reason| invalid(&id, "volumeSizeGib", &reason))?;
+            if size < minimum {
+                return Err(invalid(
+                    &id,
+                    "volumeSizeGib",
+                    &format!("capacity must be at least the release's declared {minimum} GiB"),
+                ));
+            }
+            storage.size = format!("{size}Gi");
+        }
         let choices = container.resource_choices.as_ref();
         resolve_dimension(
             &id,
@@ -146,4 +172,27 @@ fn invalid(id: &str, dimension: &str, reason: &str) -> AlienError<ErrorData> {
         dimension: dimension.to_string(),
         reason: reason.to_string(),
     })
+}
+
+/// Parse whole-volume capacities used by cloud block disks. Legacy GB/TB
+/// spellings retain their existing GiB allocation semantics.
+pub fn parse_volume_size_gib(value: &str) -> std::result::Result<u32, String> {
+    let value = value.trim();
+    let (number, multiplier) = [
+        ("GiB", 1),
+        ("Gi", 1),
+        ("GB", 1),
+        ("TiB", 1024),
+        ("Ti", 1024),
+        ("TB", 1000),
+    ]
+    .into_iter()
+    .find_map(|(suffix, multiplier)| value.strip_suffix(suffix).map(|n| (n, multiplier)))
+    .ok_or_else(|| format!("Invalid volume capacity '{value}'; use whole GiB or TiB"))?;
+    number
+        .parse::<u32>()
+        .ok()
+        .and_then(|n| n.checked_mul(multiplier))
+        .filter(|n| (1..=65536).contains(n))
+        .ok_or_else(|| format!("Volume capacity '{value}' must be between 1 and 65536 GiB"))
 }
