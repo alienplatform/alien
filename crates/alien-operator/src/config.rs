@@ -245,6 +245,7 @@ mod tests {
                 compute: None,
                 public_endpoints: None,
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                setup_management: alien_core::SetupManagement::Manual,
             }))
             .api_server_port(8080)
             .build();
@@ -323,6 +324,7 @@ mod tests {
                 compute: None,
                 public_endpoints: None,
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                setup_management: alien_core::SetupManagement::Manual,
             }))
             .build();
 
@@ -348,6 +350,7 @@ mod tests {
                 compute: None,
                 public_endpoints: None,
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                setup_management: alien_core::SetupManagement::Manual,
             }))
             .build();
 
@@ -373,6 +376,7 @@ mod tests {
                 compute: None,
                 public_endpoints: None,
                 endpoint_access: alien_core::EndpointAccess::Internet,
+                setup_management: alien_core::SetupManagement::Manual,
             }))
             .build();
 
