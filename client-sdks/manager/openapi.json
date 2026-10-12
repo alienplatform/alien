@@ -8385,6 +8385,15 @@
               "null"
             ],
             "description": "Memory allocation, using binary units such as Mi or Gi."
+          },
+          "volumeSizeGib": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Persistent volume capacity per replica, in whole GiB. Omitted values\nuse the release default. Existing volumes can only grow.",
+            "minimum": 0
           }
         },
         "additionalProperties": false
