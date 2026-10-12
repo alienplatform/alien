@@ -382,15 +382,27 @@ fn supports_stack_grant(id: &str, platform: Platform) -> bool {
         return false;
     };
     match platform {
-        Platform::Aws => permission_set.platforms.aws.as_ref().is_some_and(|entries| {
-            !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
-        }),
-        Platform::Gcp => permission_set.platforms.gcp.as_ref().is_some_and(|entries| {
-            !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
-        }),
-        Platform::Azure => permission_set.platforms.azure.as_ref().is_some_and(|entries| {
-            !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
-        }),
+        Platform::Aws => permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .is_some_and(|entries| {
+                !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+            }),
+        Platform::Gcp => permission_set
+            .platforms
+            .gcp
+            .as_ref()
+            .is_some_and(|entries| {
+                !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+            }),
+        Platform::Azure => permission_set
+            .platforms
+            .azure
+            .as_ref()
+            .is_some_and(|entries| {
+                !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+            }),
         Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => false,
     }
 }
