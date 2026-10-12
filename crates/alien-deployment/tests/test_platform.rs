@@ -4083,12 +4083,12 @@ async fn automatic_setup_reconciles_frozen_addition_and_removal_without_a_second
     let _vault = test_vault_env().await;
     let mut config = create_test_config("automatic", false);
     config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
-    let initial = create_initial_state(create_test_stack("automatic", "test-function"));
+    let initial = create_initial_state(Stack::new("automatic".into()).build());
     let mut state = run_to_completion(initial, config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
     assert!(state.runtime_metadata.as_ref().unwrap().automatic_setup);
 
-    let with_storage = create_test_stack_with_storage("automatic", "archive", "test-function");
+    let with_storage = Stack::new("automatic".into()).add(Storage::new("archive".into()).build(), ResourceLifecycle::Frozen).build();
     start_update(&mut state, release_of("with-archive", with_storage));
     state = run_to_completion(state, config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
@@ -4097,7 +4097,7 @@ async fn automatic_setup_reconciles_frozen_addition_and_removal_without_a_second
 
     // Reload the checkpoint between releases, as an actual reconciler does.
     state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
-    start_update(&mut state, release_of("without-archive", create_test_stack("automatic", "test-function")));
+    start_update(&mut state, release_of("without-archive", Stack::new("automatic".into()).build()));
     state = run_to_completion(state, config).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
     assert_eq!(state.current_release.as_ref().unwrap().release_id.as_deref(), Some("without-archive"));
@@ -4108,13 +4108,15 @@ async fn automatic_setup_reconciles_frozen_addition_and_removal_without_a_second
 async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_installation() {
     let _vault = test_vault_env().await;
     let mut config = create_test_config("manual", false);
-    let mut state = run_to_completion(create_initial_state(create_test_stack("manual", "test-function")), config.clone()).await;
+    let mut state = run_to_completion(create_initial_state(Stack::new("manual".into()).build()), config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
     assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
     config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
-    start_update(&mut state, release_of("with-archive", create_test_stack_with_storage("manual", "archive", "test-function")));
-    state = run_to_completion(state, config).await;
-    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    start_update(&mut state, release_of("with-archive", Stack::new("manual".into()).add(Storage::new("archive".into()).build(), ResourceLifecycle::Frozen).build()));
+    let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+        .await.expect_err("Changing a setting must not authorize setup");
+    assert_eq!(error.code, "PREFLIGHT_CHECKS_FAILED");
+    assert_eq!(error.source.as_ref().unwrap().code, "DEPLOYMENT_SETUP_REQUIRED");
     assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
     assert!(!state.stack_state.as_ref().unwrap().resources.contains_key("archive"));
     assert_eq!(state.current_release.as_ref().unwrap().release_id.as_deref(), Some("rel_v1"));
