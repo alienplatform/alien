@@ -157,7 +157,7 @@ fn parse_positive_memory(value: &str) -> std::result::Result<u64, String> {
     Ok(bytes)
 }
 
-fn invalid(id: &str, dimension: &str, reason: &str) -> AlienError<ErrorData> {
+pub(crate) fn invalid(id: &str, dimension: &str, reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
         resource_id: id.to_string(),
         dimension: dimension.to_string(),

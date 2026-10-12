@@ -42,9 +42,12 @@ pub struct ContainerResourcePlan {
     /// Effective persistent capacity per replica, in GiB.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_size_gib: Option<u32>,
-    /// Minimum capacity declared by the release.
+    /// Installed capacity, or the provider minimum for a new volume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_volume_size_gib: Option<u32>,
+    /// Maximum supported capacity for this provider, in GiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_volume_size_gib: Option<u32>,
 }
 
 /// Planner output for one compute pool.
@@ -116,6 +119,23 @@ pub fn plan_compute_with_state(
         &mut resolved_stack,
         selected_settings,
     )?;
+    if let Some(settings) = selected_settings {
+        let (minimum, maximum) = match platform {
+            Platform::Gcp => (10, 65536),
+            Platform::Azure => (1, 32767),
+            _ => (1, 65536),
+        };
+        for (id, selection) in &settings.containers {
+            if let Some(size) = selection.volume_size_gib {
+                if size < minimum || size > maximum {
+                    return Err(AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
+                        resource_id: id.clone(), dimension: "volumeSizeGib".into(),
+                        reason: format!("capacity for {platform} must be between {minimum} and {maximum} GiB"),
+                    }));
+                }
+            }
+        }
+    }
     if let Some(previous_state) = previous_state {
         for (id, entry) in &resolved_stack.resources {
             let desired = entry
@@ -287,35 +307,45 @@ pub fn plan_compute_with_state(
     let mut containers: Vec<_> = stack
         .resources
         .values()
-        .filter_map(|entry| {
-            let container = entry.config.downcast_ref::<Container>()?;
-            if container.resource_choices.is_none() && container.persistent_storage.is_none() {
-                return None;
-            }
-            let choices = container.resource_choices.clone().unwrap_or_default();
-            let volume_size_gib = container.persistent_storage.as_ref().and_then(|storage| {
-                crate::container_resources::parse_volume_size_gib(&storage.size).ok()
-            });
-            let minimum_volume_size_gib = volume_size_gib.map(|_| {
-                previous_state
-                    .and_then(|state| state.resources.get(&container.id))
-                    .and_then(|resource| resource.config.downcast_ref::<Container>())
-                    .and_then(|container| container.persistent_storage.as_ref())
-                    .and_then(|storage| {
-                        crate::container_resources::parse_volume_size_gib(&storage.size).ok()
-                    })
-                    .unwrap_or(if platform == Platform::Gcp { 10 } else { 1 })
-            });
-            Some(ContainerResourcePlan {
+        .filter_map(|entry| entry.config.downcast_ref::<Container>())
+        .filter(|container| {
+            container.resource_choices.is_some() || container.persistent_storage.is_some()
+        })
+        .map(|container| {
+            let capacity = |storage: &crate::PersistentStorage| {
+                crate::container_resources::parse_volume_size_gib(&storage.size).map_err(|reason| {
+                    crate::container_resources::invalid(&container.id, "volumeSizeGib", &reason)
+                })
+            };
+            let volume_size_gib = container
+                .persistent_storage
+                .as_ref()
+                .map(capacity)
+                .transpose()?;
+            let installed = previous_state
+                .and_then(|state| state.resources.get(&container.id))
+                .and_then(|resource| resource.config.downcast_ref::<Container>())
+                .and_then(|container| container.persistent_storage.as_ref())
+                .map(capacity)
+                .transpose()?;
+            Ok(ContainerResourcePlan {
                 container_id: container.id.clone(),
-                choices,
+                choices: container.resource_choices.clone().unwrap_or_default(),
                 cpu: container.cpu.clone(),
                 memory: container.memory.clone(),
                 volume_size_gib,
-                minimum_volume_size_gib,
+                minimum_volume_size_gib: volume_size_gib
+                    .map(|_| installed.unwrap_or(if platform == Platform::Gcp { 10 } else { 1 })),
+                maximum_volume_size_gib: volume_size_gib.map(|_| {
+                    if platform == Platform::Azure {
+                        32767
+                    } else {
+                        65536
+                    }
+                }),
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ErrorData>>()?;
     containers.sort_by(|a, b| a.container_id.cmp(&b.container_id));
     Ok(ComputePlan { pools, containers })
 }
@@ -1327,6 +1357,15 @@ mod tests {
                 }))
                 .is_err()
             );
+        }
+        for (platform, size) in [(Platform::Gcp, 9), (Platform::Azure, 32768)] {
+            let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "containers": {"api": {"volumeSizeGib": size}}
+            }))
+            .unwrap();
+            let error = plan_compute(&release, platform, Some(&invalid)).unwrap_err();
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+            assert!(error.to_string().contains("must be between"));
         }
         for size in [0, 65537] {
             let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
