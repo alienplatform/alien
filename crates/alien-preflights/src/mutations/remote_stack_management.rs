@@ -71,7 +71,19 @@ impl StackMutation for RemoteStackManagementMutation {
         // Push-mode cloud stacks need an external manager management config.
         // Cloud-backed Kubernetes pull stacks still need this setup-owned
         // identity, but the agent uses it from inside the cluster.
-        if config.management_config.is_none() && !cloud_backed_kubernetes_pull {
+        // Runtime credentials do not carry installer management configuration.
+        // Keep the installed identity in automatic targets so reconciliation
+        // cannot interpret its absence as a request to revoke its own access.
+        let installed_automatic_management = config.stack_settings.setup_management
+            == alien_core::SetupManagement::Automatic
+            && stack_state.resources.values().any(|resource| {
+                resource.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+                    && resource.status != alien_core::ResourceStatus::Deleted
+            });
+        if config.management_config.is_none()
+            && !cloud_backed_kubernetes_pull
+            && !installed_automatic_management
+        {
             return false;
         }
 

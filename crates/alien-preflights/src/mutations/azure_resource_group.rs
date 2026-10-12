@@ -48,8 +48,14 @@ impl StackMutation for AzureResourceGroupMutation {
 
         // The cross-environment management identity lives in this group even
         // when the first release contains no application resources yet.
-        let installs_automatic_management = config.management_config.is_some()
-            && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+        let installs_automatic_management = config.stack_settings.setup_management
+            == alien_core::SetupManagement::Automatic
+            && (config.management_config.is_some()
+                || stack_state.resources.values().any(|resource| {
+                    resource.config.resource_type()
+                        == alien_core::RemoteStackManagement::RESOURCE_TYPE
+                        && resource.status != alien_core::ResourceStatus::Deleted
+                }));
         if !has_user_resources && !installs_automatic_management {
             return false;
         }

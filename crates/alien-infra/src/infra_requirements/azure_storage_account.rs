@@ -284,12 +284,12 @@ impl AzureStorageAccountController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<AzureStorageAccount>()?;
-        let account_name = self.account_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Storage account name not set in state".to_string(),
-            })
-        })?;
+        // Creation can fail before the provider returns an account. Its name
+        // is deterministic, so teardown can still delete it or accept a 404.
+        let account_name = self
+            .account_name
+            .clone()
+            .unwrap_or_else(|| generate_storage_account_name(&ctx.resource_prefix, &config.id));
 
         info!(account_name=%account_name, "Initiating Azure Storage Account deletion");
 
@@ -300,7 +300,7 @@ impl AzureStorageAccountController {
             .get_azure_storage_accounts_client(azure_config)?;
 
         match client
-            .delete_storage_account(&resource_group_name, account_name)
+            .delete_storage_account(&resource_group_name, &account_name)
             .await
         {
             Ok(_) => {

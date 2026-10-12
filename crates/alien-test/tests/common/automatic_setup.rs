@@ -132,6 +132,10 @@ impl AutomaticSetup {
                     let state = serde_json::to_value(
                         state.stack_state.as_ref().context("Stack state required")?,
                     )?;
+                    anyhow::ensure!(
+                        state["resources"]["management"]["status"] == "running",
+                        "Automatic updates must retain the installed management identity"
+                    );
                     if name == "remove" {
                         let resource = &state["resources"]["archive"];
                         anyhow::ensure!(
