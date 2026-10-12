@@ -81,9 +81,9 @@ pub struct RuntimeMetadata {
     /// keyed by input id, recorded when the deployment is created or its
     /// setup import registers.
     ///
-    /// A frozen gate's answer is fixed for the deployment's lifetime: the
-    /// update path refuses input values that conflict with these, and a Live
-    /// resource sharing such an input resolves the persisted answer forever.
+    /// Manual installations keep these answers fixed. An installation with an
+    /// ongoing-management grant refreshes them when preparing a release. Live
+    /// resources sharing a gate use the same recorded answer as Frozen resources.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub persisted_gate_answers: GateAnswers,
 

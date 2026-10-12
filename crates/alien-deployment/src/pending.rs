@@ -19,14 +19,18 @@ pub async fn prepare_direct_setup_update(
     existing_metadata: &alien_core::RuntimeMetadata,
 ) -> Result<alien_core::RuntimeMetadata> {
     let mut config = config.clone();
-    // A setup update answers gates from the requested inputs. Existing resource
-    // presence describes the previous release, unlike an imported installation
-    // where presence is the only authoritative record of its setup choices.
-    let persisted_gate_answers = resolve_frozen_gate_answers_from_presence(
-        &target_stack,
-        &std::collections::HashSet::new(),
-        &config.input_values,
-    )?;
+    // Ongoing management answers gates from requested inputs. Resource presence
+    // describes the previous release. Manual installations retain their original
+    // setup choices, including those inferred from an imported installation.
+    let persisted_gate_answers = if existing_metadata.automatic_setup {
+        resolve_frozen_gate_answers_from_presence(
+            &target_stack,
+            &std::collections::HashSet::new(),
+            &config.input_values,
+        )?
+    } else {
+        resolve_frozen_gate_answers(&target_stack, stack_state, &config.input_values)?
+    };
     let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack = strip_frozen_declines_with_compute_settings(
         target_stack,
