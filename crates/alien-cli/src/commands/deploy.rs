@@ -1477,7 +1477,7 @@ async fn deploy_task_with_environment(
                         let sdk_client = create_platform_client(token, &base_url)?;
 
                         let stack_settings = serde_json::from_value(
-                            deployment_stack_settings_json(resolved_args, args)?,
+                            deployment_stack_settings_json(&resolved_args, &args)?,
                         )
                         .into_alien_error()
                         .context(ErrorData::ConfigurationError {
