@@ -760,7 +760,7 @@ impl DeploymentLoop {
                 management_config,
                 environment_variables,
                 allow_frozen_changes: false,
-        setup_run: false,
+                setup_run: false,
                 compute_backend: None,
                 external_bindings: deployment
                     .stack_settings

@@ -201,10 +201,17 @@ macro_rules! automatic_setup_test {
         struct $context(common::automatic_setup::AutomaticSetup);
         impl test_context::AsyncTestContext for $context {
             async fn setup() -> Self {
-                Self(common::automatic_setup::AutomaticSetup::new($platform).await.expect("create automatic setup test"))
+                Self(
+                    common::automatic_setup::AutomaticSetup::new($platform)
+                        .await
+                        .expect("create automatic setup test"),
+                )
             }
             async fn teardown(self) {
-                self.0.cleanup().await.expect("automatic setup cleanup must finish");
+                self.0
+                    .cleanup()
+                    .await
+                    .expect("automatic setup cleanup must finish");
             }
         }
         #[test_context($context)]
@@ -216,4 +223,8 @@ macro_rules! automatic_setup_test {
 }
 automatic_setup_test!(AwsAutomaticSetup, push_aws_automatic_setup, Platform::Aws);
 automatic_setup_test!(GcpAutomaticSetup, push_gcp_automatic_setup, Platform::Gcp);
-automatic_setup_test!(AzureAutomaticSetup, push_azure_automatic_setup, Platform::Azure);
+automatic_setup_test!(
+    AzureAutomaticSetup,
+    push_azure_automatic_setup,
+    Platform::Azure
+);

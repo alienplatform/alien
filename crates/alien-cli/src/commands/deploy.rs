@@ -314,10 +314,17 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
             message: e,
         })
     })?;
-    if args.automatic_setup && !matches!(platform_enum, Platform::Aws | Platform::Gcp | Platform::Azure) {
+    if args.automatic_setup
+        && !matches!(
+            platform_enum,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        )
+    {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "automatic-setup".to_string(),
-            message: "Automatic setup is supported for CLI-installed AWS, GCP and Azure deployments.".to_string(),
+            message:
+                "Automatic setup is supported for CLI-installed AWS, GCP and Azure deployments."
+                    .to_string(),
         }));
     }
 
@@ -1218,7 +1225,11 @@ async fn create_standalone_deployment(
                 .platform(platform)
                 .stack_settings(settings)
                 .input_values(
-                    resolved_args.input_values.clone().into_iter().collect::<serde_json::Map<String, serde_json::Value>>(),
+                    resolved_args
+                        .input_values
+                        .clone()
+                        .into_iter()
+                        .collect::<serde_json::Map<String, serde_json::Value>>(),
                 );
             if let Some(prefix) = &args.resource_prefix {
                 body = body.resource_prefix(prefix.clone());
@@ -1456,7 +1467,8 @@ async fn deploy_task_with_environment(
                         )
                         .into_alien_error()
                         .context(ErrorData::ConfigurationError {
-                            message: "Failed to convert deployment settings to SDK type".to_string(),
+                            message: "Failed to convert deployment settings to SDK type"
+                                .to_string(),
                         })?;
 
                         let parsed_setup_item = match args.setup_item {
@@ -1465,13 +1477,15 @@ async fn deploy_task_with_environment(
                                     item.api_name().to_string(),
                                 ))
                                 .into_alien_error()
-                                .context(ErrorData::ValidationError {
-                                    field: "setup-item".to_string(),
-                                    message: format!(
-                                        "The API does not accept setup item '{}'",
-                                        item.cli_name()
-                                    ),
-                                })?,
+                                .context(
+                                    ErrorData::ValidationError {
+                                        field: "setup-item".to_string(),
+                                        message: format!(
+                                            "The API does not accept setup item '{}'",
+                                            item.cli_name()
+                                        ),
+                                    },
+                                )?,
                             ),
                             None => None,
                         };

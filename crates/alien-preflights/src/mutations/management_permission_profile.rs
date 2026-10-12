@@ -8,7 +8,9 @@ use alien_core::{
     Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
-use alien_permissions::{get_permission_set, list_permission_set_ids, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
+use alien_permissions::{
+    get_permission_set, list_permission_set_ids, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD,
+};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -109,7 +111,11 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
-        add_role_guards(&mut stack, stack_state.platform, config.stack_settings.setup_management);
+        add_role_guards(
+            &mut stack,
+            stack_state.platform,
+            config.stack_settings.setup_management,
+        );
 
         Ok(stack)
     }
@@ -118,7 +124,11 @@ impl StackMutation for ManagementPermissionProfileMutation {
 /// Whatever else management is granted on `role/<prefix>-*`, it may not change its own role, nor
 /// the roles setup creates for AWS sandboxes. A Deny can only narrow the identity, so an Override
 /// profile gets them too.
-fn add_role_guards(stack: &mut Stack, platform: Platform, setup_management: alien_core::SetupManagement) {
+fn add_role_guards(
+    stack: &mut Stack,
+    platform: Platform,
+    setup_management: alien_core::SetupManagement,
+) {
     if platform != Platform::Aws {
         return;
     }
@@ -126,7 +136,8 @@ fn add_role_guards(stack: &mut Stack, platform: Platform, setup_management: alie
         .resources()
         .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some());
     let guards: Vec<PermissionSetReference> = [
-        (declares_a_sandbox && setup_management != alien_core::SetupManagement::Automatic).then_some(SANDBOX_SETUP_ROLES_GUARD),
+        (declares_a_sandbox && setup_management != alien_core::SetupManagement::Automatic)
+            .then_some(SANDBOX_SETUP_ROLES_GUARD),
         Some(MANAGEMENT_ROLE_GUARD),
     ]
     .into_iter()
@@ -188,7 +199,9 @@ fn generate_auto_management_profile(
         // rather than keeping a second cloud-specific administrator-policy implementation.
         // Data payload permissions remain explicit, resource-scoped grants.
         for id in list_permission_set_ids() {
-            let Some((resource_type, operation)) = id.split_once('/') else { continue; };
+            let Some((resource_type, operation)) = id.split_once('/') else {
+                continue;
+            };
             if matches!(operation, "provision" | "management" | "heartbeat")
                 && resource_type != "remote-stack-management"
             {

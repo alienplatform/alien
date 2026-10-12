@@ -110,14 +110,19 @@ pub async fn handle_update_pending(
 
     // This grant is written by direct setup and retained by the store as setup-owned
     // metadata. A release or a mutable runtime setting cannot confer setup authority.
-    if let Some(metadata) = current.runtime_metadata.as_ref().filter(|metadata| metadata.automatic_setup) {
+    if let Some(metadata) = current
+        .runtime_metadata
+        .as_ref()
+        .filter(|metadata| metadata.automatic_setup)
+    {
         let metadata = crate::pending::prepare_direct_setup_update(
             target_stack,
             &stack_state,
             &config,
             &client_config,
             metadata,
-        ).await?;
+        )
+        .await?;
         next.status = DeploymentStatus::InitialSetup;
         next.runtime_metadata = Some(metadata);
         next.error = None;

@@ -48,13 +48,13 @@ pub(crate) fn management_permissions_revision(
             (scope, sets)
         })
         .collect::<Vec<_>>();
-    let serialized = serde_json::to_vec(&resolved)
-        .into_alien_error()
-        .context(ErrorData::InfrastructureError {
+    let serialized = serde_json::to_vec(&resolved).into_alien_error().context(
+        ErrorData::InfrastructureError {
             message: "Failed to serialize the management permissions".to_string(),
             operation: Some("management_permissions_revision".to_string()),
             resource_id: None,
-        })?;
+        },
+    )?;
     Ok(Some(format!("{:x}", Sha256::digest(&serialized))))
 }
 
@@ -74,7 +74,8 @@ pub(crate) fn management_permissions_need_refresh(
     }
     // Automatic setup installs its complete infrastructure grant once. Runtime may
     // use it, but must never rewrite its own management identity or remove its guard.
-    if ctx.deployment_config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+    if ctx.deployment_config.stack_settings.setup_management
+        == alien_core::SetupManagement::Automatic
         && !ctx.deployment_config.setup_run
     {
         return Ok(false);
@@ -148,10 +149,16 @@ mod tests {
             assert!(stale, "{platform:?}: a changed revision is refreshed");
             let (legacy, _) =
                 needs_update(platform, InitialSetupAuthority::DirectSetup, None).await;
-            assert!(legacy, "{platform:?}: an install without a recorded revision is refreshed");
+            assert!(
+                legacy,
+                "{platform:?}: an install without a recorded revision is refreshed"
+            );
             let (unchanged, _) =
                 needs_update(platform, InitialSetupAuthority::DirectSetup, Some(&current)).await;
-            assert!(!unchanged, "{platform:?}: the applied revision is left alone");
+            assert!(
+                !unchanged,
+                "{platform:?}: the applied revision is left alone"
+            );
         }
     }
 

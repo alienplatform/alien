@@ -16,36 +16,95 @@ impl AutomaticSetup {
     pub async fn new(platform: Platform) -> anyhow::Result<Self> {
         alien_test::e2e::init_tracing();
         let config = TestConfig::from_env();
-        anyhow::ensure!(config.has_platform(platform), "Cloud credentials are required");
-        let manager = Arc::new(TestManager::start_with_config(&config, &[platform]).await.map_err(|e| anyhow::anyhow!(e.to_string()))?);
+        anyhow::ensure!(
+            config.has_platform(platform),
+            "Cloud credentials are required"
+        );
+        let manager = Arc::new(
+            TestManager::start_with_config(&config, &[platform])
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        );
         // This test must exercise the runtime's installed identity. An administrator fallback
         // would make a missing grant invisible, especially in local Azure runs.
-        anyhow::ensure!(manager.management_config().is_some(), "A remote management identity is required; target-static mode cannot prove this flow");
+        anyhow::ensure!(
+            manager.management_config().is_some(),
+            "A remote management identity is required; target-static mode cannot prove this flow"
+        );
         let initial = Stack::new("automatic-setup".into()).build();
         publish(&manager, platform, &initial).await?;
-        let group = manager.client().create_deployment_group().body(alien_manager_api::types::CreateDeploymentGroupRequest {
-            name: "automatic-setup".into(), max_deployments: None,
-            environment_variables: Default::default(), input_values: Default::default(),
-        }).send().await?;
-        let response = manager.client().create_deployment().body(alien_manager_api::types::CreateDeploymentRequest {
-            name: format!("automatic-{}", uuid::Uuid::new_v4().simple()),
-            platform: serde_json::from_value(serde_json::json!(platform))?,
-            deployment_group_id: Some(group.id.clone()),
-            stack_settings: Some(serde_json::from_value(serde_json::json!({ "setupManagement": "automatic", "telemetry": "off" }))?),
-            environment_variables: None,
-            resource_prefix: Some(alien_test::config::e2e_resource_prefix()?),
-            input_values: Default::default(),
-        }).send().await?;
-        let deployment = TestDeployment::new(response.deployment.id.clone(), response.deployment.name.clone(), platform.as_str().into(), None, response.token.clone().context("Deployment token required")?, manager.clone());
-        Ok(Self { config, manager, deployment, platform })
+        let group = manager
+            .client()
+            .create_deployment_group()
+            .body(alien_manager_api::types::CreateDeploymentGroupRequest {
+                name: "automatic-setup".into(),
+                max_deployments: None,
+                environment_variables: Default::default(),
+                input_values: Default::default(),
+            })
+            .send()
+            .await?;
+        let response = manager
+            .client()
+            .create_deployment()
+            .body(alien_manager_api::types::CreateDeploymentRequest {
+                name: format!("automatic-{}", uuid::Uuid::new_v4().simple()),
+                platform: serde_json::from_value(serde_json::json!(platform))?,
+                deployment_group_id: Some(group.id.clone()),
+                stack_settings: Some(serde_json::from_value(
+                    serde_json::json!({ "setupManagement": "automatic", "telemetry": "off" }),
+                )?),
+                environment_variables: None,
+                resource_prefix: Some(alien_test::config::e2e_resource_prefix()?),
+                input_values: Default::default(),
+            })
+            .send()
+            .await?;
+        let deployment = TestDeployment::new(
+            response.deployment.id.clone(),
+            response.deployment.name.clone(),
+            platform.as_str().into(),
+            None,
+            response
+                .token
+                .clone()
+                .context("Deployment token required")?,
+            manager.clone(),
+        );
+        Ok(Self {
+            config,
+            manager,
+            deployment,
+            platform,
+        })
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        alien_test::setup_target(&self.config, self.platform, &self.deployment, &Stack::new("automatic-setup".into()).build(), &self.manager, self.manager.management_config()).await?;
-        self.deployment.wait_until_running(Duration::from_secs(900)).await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let installed = self.manager.client().get_deployment().id(&self.deployment.id).send().await?;
+        alien_test::setup_target(
+            &self.config,
+            self.platform,
+            &self.deployment,
+            &Stack::new("automatic-setup".into()).build(),
+            &self.manager,
+            self.manager.management_config(),
+        )
+        .await?;
+        self.deployment
+            .wait_until_running(Duration::from_secs(900))
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let installed = self
+            .manager
+            .client()
+            .get_deployment()
+            .id(&self.deployment.id)
+            .send()
+            .await?;
         let metadata = serde_json::to_value(&installed.runtime_metadata)?;
-        anyhow::ensure!(metadata["automaticSetup"] == true, "Setup must persist its grant");
+        anyhow::ensure!(
+            metadata["automaticSetup"] == true,
+            "Setup must persist its grant"
+        );
 
         // No further setup calls occur. A resource type absent from the first release must be
         // provisioned with the installed management grant, then updated and removed by runtime.
@@ -57,23 +116,48 @@ impl AutomaticSetup {
             let release = publish(&self.manager, self.platform, &stack).await?;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(900);
             loop {
-                let state = self.manager.client().get_deployment().id(&self.deployment.id).send().await?;
+                let state = self
+                    .manager
+                    .client()
+                    .get_deployment()
+                    .id(&self.deployment.id)
+                    .send()
+                    .await?;
                 if state.status.ends_with("-failed") || state.status == "error" {
                     bail!("{name} failed: {:?}", state.error);
                 }
-                if state.status == "running" && state.current_release_id.as_deref() == Some(&release) {
-                    let state = serde_json::to_value(state.stack_state.context("Stack state required")?)?;
+                if state.status == "running"
+                    && state.current_release_id.as_deref() == Some(&release)
+                {
+                    let state =
+                        serde_json::to_value(state.stack_state.context("Stack state required")?)?;
                     if name == "remove" {
                         let resource = &state["resources"]["archive"];
-                        anyhow::ensure!(resource.is_null() || resource["status"] == "deleted", "Removed storage must finish deletion before release promotion");
+                        anyhow::ensure!(
+                            resource.is_null() || resource["status"] == "deleted",
+                            "Removed storage must finish deletion before release promotion"
+                        );
                     } else {
-                        anyhow::ensure!(state["resources"]["archive"]["status"] == "running", "Storage must reach running");
-                        anyhow::ensure!(state["resources"]["archive"]["config"]["publicRead"] == (name == "change"), "The installed configuration must converge");
+                        anyhow::ensure!(
+                            state["resources"]["archive"]["status"] == "running",
+                            "Storage must reach running"
+                        );
+                        anyhow::ensure!(
+                            state["resources"]["archive"]["config"]["publicRead"]
+                                == (name == "change"),
+                            "The installed configuration must converge"
+                        );
                     }
-                    tracing::info!(phase = name, "Automatic infrastructure update completed with installed credentials");
+                    tracing::info!(
+                        phase = name,
+                        "Automatic infrastructure update completed with installed credentials"
+                    );
                     break;
                 }
-                anyhow::ensure!(tokio::time::Instant::now() < deadline, "{name} did not converge");
+                anyhow::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "{name} did not converge"
+                );
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
@@ -81,20 +165,45 @@ impl AutomaticSetup {
     }
 
     pub async fn cleanup(self) -> anyhow::Result<()> {
-        self.deployment.destroy().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        alien_test::teardown_target(&self.config, self.platform, &self.deployment.id, &self.manager).await
+        self.deployment
+            .destroy()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        alien_test::teardown_target(
+            &self.config,
+            self.platform,
+            &self.deployment.id,
+            &self.manager,
+        )
+        .await
     }
 }
 
 fn storage_stack(public: bool) -> Stack {
     Stack::new("automatic-setup".into())
-        .add(Storage::new("archive".into()).public_read(public).build(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("archive".into()).public_read(public).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build()
 }
 
-async fn publish(manager: &TestManager, platform: Platform, stack: &Stack) -> anyhow::Result<String> {
-    Ok(manager.client().create_release().body(alien_manager_api::types::CreateReleaseRequest {
-        project_id: "default".into(), channel: None, git_metadata: None,
-        stack: serde_json::from_value(serde_json::json!({ (platform.as_str()): stack }))?,
-    }).send().await?.id.clone())
+async fn publish(
+    manager: &TestManager,
+    platform: Platform,
+    stack: &Stack,
+) -> anyhow::Result<String> {
+    Ok(manager
+        .client()
+        .create_release()
+        .body(alien_manager_api::types::CreateReleaseRequest {
+            project_id: "default".into(),
+            channel: None,
+            git_metadata: None,
+            stack: serde_json::from_value(serde_json::json!({ (platform.as_str()): stack }))?,
+        })
+        .send()
+        .await?
+        .id
+        .clone())
 }

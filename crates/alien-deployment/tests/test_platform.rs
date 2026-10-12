@@ -4091,36 +4091,101 @@ async fn automatic_setup_reconciles_frozen_addition_and_removal_without_a_second
     assert!(state.runtime_metadata.as_ref().unwrap().automatic_setup);
     config.setup_run = false;
 
-    let with_storage = Stack::new("automatic".into()).add(Storage::new("archive".into()).build(), ResourceLifecycle::Frozen).build();
+    let with_storage = Stack::new("automatic".into())
+        .add(
+            Storage::new("archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
     start_update(&mut state, release_of("with-archive", with_storage));
     state = run_to_completion(state, config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
-    assert_eq!(state.current_release.as_ref().unwrap().release_id.as_deref(), Some("with-archive"));
-    assert_eq!(state.stack_state.as_ref().unwrap().resources["archive"].status, alien_core::ResourceStatus::Running);
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("with-archive")
+    );
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources["archive"].status,
+        alien_core::ResourceStatus::Running
+    );
 
     // Reload the checkpoint between releases, as an actual reconciler does.
     state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
-    start_update(&mut state, release_of("without-archive", Stack::new("automatic".into()).build()));
+    start_update(
+        &mut state,
+        release_of("without-archive", Stack::new("automatic".into()).build()),
+    );
     state = run_to_completion(state, config).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
-    assert_eq!(state.current_release.as_ref().unwrap().release_id.as_deref(), Some("without-archive"));
-    assert!(state.stack_state.as_ref().unwrap().resources.get("archive").is_none_or(|resource| resource.status == alien_core::ResourceStatus::Deleted));
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("without-archive")
+    );
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("archive")
+        .is_none_or(|resource| resource.status == alien_core::ResourceStatus::Deleted));
 }
 
 #[tokio::test]
 async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_installation() {
     let _vault = test_vault_env().await;
     let mut config = create_test_config("manual", false);
-    let mut state = run_to_completion(create_initial_state(Stack::new("manual".into()).build()), config.clone()).await;
+    let mut state = run_to_completion(
+        create_initial_state(Stack::new("manual".into()).build()),
+        config.clone(),
+    )
+    .await;
     assert_eq!(state.status, DeploymentStatus::Running);
     assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
     config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
-    start_update(&mut state, release_of("with-archive", Stack::new("manual".into()).add(Storage::new("archive".into()).build(), ResourceLifecycle::Frozen).build()));
+    start_update(
+        &mut state,
+        release_of(
+            "with-archive",
+            Stack::new("manual".into())
+                .add(
+                    Storage::new("archive".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+    );
     let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
-        .await.expect_err("Changing a setting must not authorize setup");
+        .await
+        .expect_err("Changing a setting must not authorize setup");
     assert_eq!(error.code, "PREFLIGHT_CHECKS_FAILED");
-    assert_eq!(error.source.as_ref().unwrap().code, "DEPLOYMENT_SETUP_REQUIRED");
+    assert_eq!(
+        error.source.as_ref().unwrap().code,
+        "DEPLOYMENT_SETUP_REQUIRED"
+    );
     assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
-    assert!(!state.stack_state.as_ref().unwrap().resources.contains_key("archive"));
-    assert_eq!(state.current_release.as_ref().unwrap().release_id.as_deref(), Some("rel_v1"));
+    assert!(!state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("archive"));
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
 }
