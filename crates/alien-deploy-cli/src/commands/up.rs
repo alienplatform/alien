@@ -2780,6 +2780,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         output::label_value("Manager", &manager_url);
         output::label_value("Name", &name);
         output::label_value("Compute", &effective_compute_summary(&stack_settings));
+        if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+            output::info("Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.");
+        }
         if let Some(public_endpoints) = public_endpoints.as_ref() {
             let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
             output::label_value("Public endpoints", &endpoint_count.to_string());

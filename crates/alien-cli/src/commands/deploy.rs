@@ -1335,6 +1335,9 @@ async fn deploy_task_with_environment(
     }
 
     info!("Starting deploy command");
+    if args.automatic_setup {
+        println!("Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.");
+    }
     println!(
         "{}",
         contextual_heading(
