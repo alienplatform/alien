@@ -51,6 +51,48 @@ async fn wait(ctx: &CloudRunTestContext, operation: Operation) -> Result<(), Str
     }
 }
 
+// A successful command response can still carry an asynchronously rejected
+// operation. Check the final result before deciding whether a stale write won.
+async fn expect_conflict(
+    ctx: &CloudRunTestContext,
+    result: alien_client_core::Result<Operation>,
+    action: &str,
+) -> Result<(), String> {
+    let mut operation = match result {
+        Err(error) if concurrency_conflict(&error) => return Ok(()),
+        Err(error) => return Err(format!("Stale {action} failed unexpectedly: {error}")),
+        Ok(operation) => operation,
+    };
+    let name = required(operation.name.as_deref(), "conflict operation name")?;
+    let id = name.rsplit('/').next().ok_or("invalid operation name")?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        if let Some(OperationResult::Error { error }) = operation.result {
+            // google.rpc.Code: FAILED_PRECONDITION or ABORTED. Permission and
+            // transport failures must never count as concurrency protection.
+            return if matches!(error.code, 9 | 10) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Stale {action} operation failed unexpectedly: {error:?}"
+                ))
+            };
+        }
+        if operation.done == Some(true) {
+            return Err(format!("Provider applied a stale {action} ETag"));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("Timed out waiting for stale {action} rejection"));
+        }
+        sleep(Duration::from_secs(2)).await;
+        operation = ctx
+            .client
+            .get_operation(ctx.location.clone(), id.to_string())
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+}
+
 async fn observe_native_access(client: &Client, uri: &str, public: bool) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -137,16 +179,15 @@ async fn access_only_updates_preserve_identity_revision_and_fence_stale_writes(
             if index == 0 {
                 let stale_patch = Service::builder().etag(previous_etag.clone())
                     .ingress(Ingress::IngressTrafficAll).build();
-                let error = ctx.client.patch_service(ctx.location.clone(), name.clone(), stale_patch,
-                    Some("ingress".to_string()), None, Some(false)).await
-                    .err().ok_or("Provider accepted a stale patch ETag")?;
-                if !concurrency_conflict(&error) {
-                    return Err(format!("Stale patch failed for an unexpected reason: {error}"));
-                }
-                let error = ctx.client.delete_service(ctx.location.clone(), name.clone(), None,
-                    Some(previous_etag)).await.err().ok_or("Provider accepted a stale delete ETag")?;
-                if !concurrency_conflict(&error) {
-                    return Err(format!("Stale delete failed for an unexpected reason: {error}"));
+                expect_conflict(ctx, ctx.client.patch_service(ctx.location.clone(), name.clone(), stale_patch,
+                    Some("ingress".to_string()), None, Some(false)).await, "patch").await?;
+                expect_conflict(ctx, ctx.client.delete_service(ctx.location.clone(), name.clone(), None,
+                    Some(previous_etag)).await, "delete").await?;
+                let unchanged = ctx.client.get_service(ctx.location.clone(), name.clone())
+                    .await.map_err(|error| error.to_string())?;
+                if unchanged.uid != current.uid || unchanged.etag != current.etag
+                    || unchanged.ingress != current.ingress {
+                    return Err("Stale write changed the current service".to_string());
                 }
             }
             println!("Verified access phase {index}: same service UID, revision and URI");
