@@ -661,6 +661,7 @@
             "compute.regionSslCertificates.create",
             "compute.regionSslCertificates.delete",
             "compute.regionSslCertificates.get",
+            "certificatemanager.certs.use",
             "compute.regionBackendServices.create",
             "compute.regionBackendServices.delete",
             "compute.regionBackendServices.get",

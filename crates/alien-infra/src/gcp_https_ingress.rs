@@ -272,6 +272,10 @@ impl GcpHttpsIngressState {
         &self.project
     }
 
+    pub fn backend_name(&self) -> String {
+        self.name()
+    }
+
     fn record_operation(
         &mut self,
         operation: Operation,

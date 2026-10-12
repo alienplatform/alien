@@ -10,9 +10,9 @@ mod gcp_https_ingress;
 #[cfg(feature = "gcp")]
 pub use gcp_https_ingress::*;
 #[cfg(feature = "gcp")]
-mod gcp_private_domains;
+mod gcp_https_domains;
 #[cfg(feature = "gcp")]
-pub use gcp_private_domains::*;
+pub use gcp_https_domains::*;
 
 mod error;
 pub use error::*;
