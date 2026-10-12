@@ -137,7 +137,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
     run.expect_patch_service()
         .times(expected_patches)
         .returning(move |_, _, request, mask, _, _| {
-            assert_eq!(mask.as_deref(), Some("ingress,invokerIamDisabled"));
+            assert_eq!(mask.as_deref(), Some("ingress,invokerIamDisabled,etag"));
             assert!(
                 request.template.is_none(),
                 "access changes must not restart a revision"

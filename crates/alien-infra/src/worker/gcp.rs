@@ -956,7 +956,7 @@ impl GcpWorkerController {
                 gcp_config.region.clone(),
                 service_name.clone(),
                 service,
-                Some("template".to_string()),
+                Some("template,etag".to_string()),
                 None,
                 Some(false),
             )
@@ -2781,7 +2781,10 @@ impl GcpWorkerController {
                 gcp_config.region.clone(),
                 service_name.clone(),
                 updated_service,
-                access_only.then(|| "ingress,invokerIamDisabled".to_string()),
+                // Cloud Run ignores a supplied ETag when an explicit mask omits
+                // it. Real-provider qualification exercises stale patch/delete
+                // rejection with this mask, without replacing the revision.
+                access_only.then(|| "ingress,invokerIamDisabled,etag".to_string()),
                 None, // validate_only
                 None, // allow_missing
             )
@@ -7453,7 +7456,7 @@ mod tests {
                         labels.get("alien-image-pull-retry").map(String::as_str) == Some("1")
                     });
                 has_retry_label
-                    && update_mask.as_deref() == Some("template")
+                    && update_mask.as_deref() == Some("template,etag")
                     && *allow_missing == Some(false)
             })
             .returning(move |_, _, _, _, _, _| {
