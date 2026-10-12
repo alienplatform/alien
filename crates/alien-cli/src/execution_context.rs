@@ -689,6 +689,12 @@ impl ExecutionMode {
                     info!("Manager ready after {} attempt(s)", attempt);
                 }
 
+                if resolved.manager_is_system == Some(true) {
+                    eprintln!(
+                        "Warning: using the Alien-hosted system manager for {platform}. Check `alien managers defaults show` if you intended to use a private manager."
+                    );
+                }
+
                 let manager_url = normalize_base_url(&resolved.manager_url);
 
                 info!("Manager: {}", manager_url);
