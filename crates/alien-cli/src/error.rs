@@ -22,7 +22,8 @@ pub enum ErrorData {
         code = "VALIDATION_ERROR",
         message = "Validation failed for {field}: {message}",
         retryable = "false",
-        internal = "false"
+        internal = "false",
+        http_status_code = 400
     )]
     ValidationError {
         /// The field or parameter that failed validation
