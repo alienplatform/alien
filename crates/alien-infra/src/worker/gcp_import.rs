@@ -49,6 +49,7 @@ impl ResourceImporter for GcpWorkerImporter {
             uses_custom_domain: false,
             certificate_issued_at: None,
             serverless_neg_name: None,
+            ingress_negs: Default::default(),
             backend_service_name: None,
             url_map_name: None,
             target_https_proxy_name: None,

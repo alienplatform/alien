@@ -8,6 +8,7 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
 use crate::worker::run_readiness_probe;
+use crate::{GcpIngressNegs, GcpServerlessNegPlan};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_gcp_clients::cloudrun::{
     Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
@@ -16,8 +17,7 @@ use alien_gcp_clients::cloudrun::{
 use alien_gcp_clients::cloudscheduler::{HttpTarget, SchedulerJob, SchedulerOidcToken};
 use alien_gcp_clients::compute::{
     Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
-    ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
-    NetworkEndpointGroupCloudRun, NetworkEndpointType, Operation as ComputeOperation,
+    ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, Operation as ComputeOperation,
     SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
 };
 use alien_gcp_clients::gcs::GcsNotification;
@@ -316,6 +316,9 @@ pub struct GcpWorkerController {
     // HTTPS Load Balancer components
     /// The serverless NEG name pointing to Cloud Run
     pub(crate) serverless_neg_name: Option<String>,
+    /// Durable regional NEG identity, operation and ownership for new ingress.
+    #[serde(default)]
+    pub(crate) ingress_negs: GcpIngressNegs,
     /// The backend service name
     pub(crate) backend_service_name: Option<String>,
     /// The URL map name
@@ -909,7 +912,8 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.serverless_neg_name.is_some() {
+        // Old checkpoints keep their original operation/wait path.
+        if self.serverless_neg_name.is_some() && !self.ingress_negs.initialized() {
             let state = if self.compute_operation_name.is_some() {
                 WaitingForServerlessNeg
             } else {
@@ -934,45 +938,34 @@ impl GcpWorkerController {
 
         let neg_name = get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "neg");
 
-        // Create serverless NEG pointing to Cloud Run service
-        // According to GCP API: https://docs.cloud.google.com/compute/docs/reference/rest/v1/networkEndpointGroups
-        // For serverless NEGs, we must specify cloud_run, app_engine, or cloud_function
-        let cloud_run_config = NetworkEndpointGroupCloudRun::builder()
-            .service(service_name.clone())
-            .build();
-
-        let neg = NetworkEndpointGroup::builder()
-            .name(neg_name.clone())
-            .description(format!("Serverless NEG for worker {}", worker_config.id))
-            .network_endpoint_type(NetworkEndpointType::Serverless)
-            .cloud_run(cloud_run_config)
-            .build();
-
-        let operation = compute_client
-            .insert_region_network_endpoint_group(gcp_config.region.clone(), neg)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create serverless NEG".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
-
-        self.serverless_neg_name = Some(neg_name);
-        self.record_compute_operation(
-            operation,
-            Some(gcp_config.region.clone()),
-            &worker_config.id,
-            "serverless NEG creation",
-        )?;
-
-        info!(
-            worker=%worker_config.id,
-            neg_name=%self.serverless_neg_name.as_ref().unwrap(),
-            "Serverless NEG created"
-        );
-
+        if self._internal_stay_count.is_none() {
+            self.ingress_negs.reset_poll_count();
+        }
+        if !self
+            .ingress_negs
+            .reconcile_serverless(
+                compute_client.as_ref(),
+                GcpServerlessNegPlan {
+                    resource_id: &worker_config.id,
+                    project: &gcp_config.project_id,
+                    region: &gcp_config.region,
+                    service: service_name,
+                    name: &neg_name,
+                    legacy_name: None,
+                    legacy_description: "",
+                },
+            )
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(720),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        self.serverless_neg_name = self.ingress_negs.names.get(&gcp_config.region).cloned();
         Ok(HandlerAction::Continue {
-            state: WaitingForServerlessNeg,
-            suggested_delay: Some(Duration::from_secs(5)),
+            state: CreatingBackendService,
+            suggested_delay: None,
         })
     }
 
@@ -3618,6 +3611,61 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
 
+        if self.ingress_negs.initialized() {
+            if self._internal_stay_count.is_none() {
+                self.ingress_negs.reset_poll_count();
+            }
+            let compute = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+            let result = self
+                .ingress_negs
+                .delete(
+                    compute.as_ref(),
+                    &gcp_config.project_id,
+                    ctx.desired_config.id(),
+                )
+                .await;
+            match result {
+                Ok(false) => {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(720),
+                        suggested_delay: Some(Duration::from_secs(5)),
+                    })
+                }
+                Ok(true) => self.serverless_neg_name = None,
+                Err(error)
+                    if error_chain_contains_resource_in_use(
+                        &error.code,
+                        &error.message,
+                        error.source.as_deref(),
+                    ) =>
+                {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(30),
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    });
+                }
+                Err(error) => {
+                    // The executor treats a nested 401/403 as complete deletion.
+                    // Preserve the NEG checkpoint and fail the phase instead.
+                    let mut denied = error.code == "REMOTE_ACCESS_DENIED"
+                        || matches!(error.http_status_code, Some(401 | 403));
+                    let mut cause = error.source.as_deref();
+                    while let Some(current) = cause {
+                        denied |= current.code == "REMOTE_ACCESS_DENIED"
+                            || matches!(current.http_status_code, Some(401 | 403));
+                        cause = current.source.as_deref();
+                    }
+                    if denied {
+                        return Err(AlienError::new(ErrorData::CloudPlatformError {
+                            message: error.message,
+                            resource_id: Some(ctx.desired_config.id().to_string()),
+                        }));
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
         if let Some(neg_name) = &self.serverless_neg_name {
             info!(name=%neg_name, "Deleting serverless NEG");
 
@@ -5606,6 +5654,7 @@ impl GcpWorkerController {
             uses_custom_domain: false,
             certificate_issued_at: None,
             serverless_neg_name: None,
+            ingress_negs: GcpIngressNegs::default(),
             backend_service_name: None,
             url_map_name: None,
             target_https_proxy_name: None,
@@ -5649,7 +5698,9 @@ mod tests {
     use alien_gcp_clients::cloudrun::{
         Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, Service,
     };
-    use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
+    use alien_gcp_clients::gcp::compute::{
+        Address, MockComputeApi, NetworkEndpointGroup, Operation, OperationStatus,
+    };
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
@@ -5666,7 +5717,7 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
-    use crate::GcpWorkerState;
+    use crate::{GcpIngressNegs, GcpWorkerState};
 
     #[rstest]
     #[case::create(false)]
@@ -5857,6 +5908,174 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct NegCloud {
+        objects: HashMap<(String, String), NetworkEndpointGroup>,
+        mutations: usize,
+        lose_create: bool,
+        deny_delete: bool,
+    }
+
+    fn mock_negs(mock: &mut MockComputeApi, cloud: Arc<std::sync::Mutex<NegCloud>>) {
+        let store = cloud.clone();
+        mock.expect_get_region_network_endpoint_group()
+            .returning(move |region, name| {
+                store
+                    .lock()
+                    .unwrap()
+                    .objects
+                    .get(&(region, name))
+                    .cloned()
+                    .ok_or_else(|| {
+                        AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "NEG".to_string(),
+                            resource_name: "test".to_string(),
+                        })
+                    })
+            });
+        let store = cloud.clone();
+        mock.expect_insert_region_network_endpoint_group()
+            .returning(move |region, mut neg| {
+                let mut store = store.lock().unwrap();
+                let key = (region, neg.name.clone().unwrap());
+                assert!(!store.objects.contains_key(&key), "duplicate NEG create");
+                store.mutations += 1;
+                neg.id = Some(store.mutations.to_string());
+                store.objects.insert(key, neg);
+                if std::mem::take(&mut store.lose_create) {
+                    return Err(AlienError::new(CloudClientErrorData::AuthenticationError {
+                        message: "lost create response".to_string(),
+                    }));
+                }
+                Ok(Operation {
+                    name: Some("neg-create".to_string()),
+                    status: Some(OperationStatus::Done),
+                    ..Default::default()
+                })
+            });
+        mock.expect_get_region_operation().returning(|_, _| {
+            Ok(Operation {
+                status: Some(OperationStatus::Done),
+                ..Default::default()
+            })
+        });
+        mock.expect_delete_region_network_endpoint_group()
+            .returning(move |region, name| {
+                let mut store = cloud.lock().unwrap();
+                if std::mem::take(&mut store.deny_delete) {
+                    return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                        resource_type: "NEG".to_string(),
+                        resource_name: name.clone(),
+                    }));
+                }
+                assert!(store.objects.remove(&(region, name)).is_some());
+                store.mutations += 1;
+                Ok(Operation {
+                    name: Some("neg-delete".to_string()),
+                    status: Some(OperationStatus::Done),
+                    ..Default::default()
+                })
+            });
+    }
+
+    async fn neg_executor(
+        controller: GcpWorkerController,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn restore_worker(executor: &SingleControllerExecutor) -> GcpWorkerController {
+        serde_json::from_value(
+            serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::finish_create(false)]
+    #[case::delete_after_lost_response(true)]
+    #[tokio::test]
+    async fn worker_neg_checkpoint_recovers_lost_create_and_denied_cleanup(
+        #[case] delete_immediately: bool,
+    ) {
+        let cloud = Arc::new(std::sync::Mutex::new(NegCloud {
+            lose_create: true,
+            ..Default::default()
+        }));
+        let mut compute = MockComputeApi::new();
+        mock_negs(&mut compute, cloud.clone());
+        let provider =
+            setup_mock_service_provider(Arc::new(MockCloudRunApi::new()), Some(Arc::new(compute)));
+        let mut controller = GcpWorkerController::mock_ready("test-service");
+        controller.state = GcpWorkerState::CreatingServerlessNeg;
+        let mut executor = neg_executor(controller.clone(), provider.clone()).await;
+        assert!(executor.step().await.is_err());
+        let mut controller = restore_worker(&executor);
+        assert_eq!(controller.ingress_negs.names.len(), 1);
+        assert!(
+            controller.serverless_neg_name.is_none(),
+            "unconfirmed resource must not be exposed as ready"
+        );
+        if !delete_immediately {
+            executor = neg_executor(controller.clone(), provider.clone()).await;
+            for _ in 0..10 {
+                executor.step().await.unwrap();
+                controller = restore_worker(&executor);
+                if matches!(controller.state, GcpWorkerState::CreatingBackendService) {
+                    break;
+                }
+                executor = neg_executor(controller.clone(), provider.clone()).await;
+            }
+            assert!(matches!(
+                controller.state,
+                GcpWorkerState::CreatingBackendService
+            ));
+            assert!(controller.serverless_neg_name.is_some());
+        }
+        assert_eq!(cloud.lock().unwrap().mutations, 1);
+        controller.state = GcpWorkerState::DeletingServerlessNeg;
+        controller._internal_stay_count = None;
+        cloud.lock().unwrap().deny_delete = true;
+        executor = neg_executor(controller.clone(), provider.clone()).await;
+        let error = executor.step().await.unwrap_err();
+        assert!(
+            error.source.is_none(),
+            "denied cleanup must not let the executor skip later children"
+        );
+        assert!(!matches!(error.http_status_code, Some(401 | 403 | 404)));
+        controller = restore_worker(&executor);
+        assert_eq!(controller.ingress_negs.names.len(), 1);
+        executor = neg_executor(controller.clone(), provider.clone()).await;
+        for _ in 0..10 {
+            let before = cloud.lock().unwrap().mutations;
+            executor.step().await.unwrap();
+            assert!(cloud.lock().unwrap().mutations - before <= 1);
+            controller = restore_worker(&executor);
+            if matches!(controller.state, GcpWorkerState::DeletingSslCertificate) {
+                break;
+            }
+            executor = neg_executor(controller.clone(), provider.clone()).await;
+        }
+        assert!(matches!(
+            controller.state,
+            GcpWorkerState::DeletingSslCertificate
+        ));
+        assert!(controller.serverless_neg_name.is_none());
+        assert!(controller.ingress_negs.names.is_empty());
+        assert!(cloud.lock().unwrap().objects.is_empty());
+        assert_eq!(cloud.lock().unwrap().mutations, 2);
+    }
+
     fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockComputeApi> {
         fn completed_compute_operation() -> Operation {
             Operation {
@@ -5869,8 +6088,10 @@ mod tests {
         let mut mock = MockComputeApi::new();
         mock.expect_insert_ssl_certificate()
             .returning(|_| Ok(completed_compute_operation()));
-        mock.expect_insert_region_network_endpoint_group()
-            .returning(|_, _| Ok(completed_compute_operation()));
+        mock_negs(
+            &mut mock,
+            Arc::new(std::sync::Mutex::new(NegCloud::default())),
+        );
         mock.expect_insert_backend_service()
             .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_url_map()
@@ -5895,8 +6116,6 @@ mod tests {
             .returning(|_| Ok(Operation::default()));
         mock.expect_delete_backend_service()
             .returning(|_| Ok(Operation::default()));
-        mock.expect_delete_region_network_endpoint_group()
-            .returning(|_, _| Ok(Operation::default()));
         mock.expect_delete_ssl_certificate()
             .returning(|_| Ok(Operation::default()));
         mock.expect_delete_global_address()
@@ -7270,6 +7489,7 @@ mod tests {
             uses_custom_domain: false,
             certificate_issued_at: None,
             serverless_neg_name: None,
+            ingress_negs: GcpIngressNegs::default(),
             backend_service_name: None,
             url_map_name: None,
             target_https_proxy_name: None,
