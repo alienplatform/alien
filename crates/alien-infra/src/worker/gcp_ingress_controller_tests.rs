@@ -5,13 +5,14 @@ use super::tests::{
 };
 use super::{CloudRunIngress, GcpWorkerController, GcpWorkerState, Service};
 use crate::core::controller_test::SingleControllerExecutor;
+use crate::core::{ResourceController, StackExecutor, StackResourceStateExt, StackStateExt};
 use crate::gcp_https_ingress::tests::{provider, Provider};
 use crate::worker::fixtures::function_public_ingress;
 use crate::GcpNetworkController;
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
     DnsRecordStatus, EndpointAccess, ManagedDomainInfo, Network, NetworkSettings, Platform,
-    ResourceStatus, StackSettings, Worker,
+    ResourceLifecycle, ResourceStatus, StackSettings, Worker,
 };
 use alien_error::AlienError;
 use alien_gcp_clients::cloudrun::MockCloudRunApi;
@@ -33,6 +34,8 @@ enum Fault {
     PendingDns,
     LostBackendResponse,
     LostNegResponse,
+    LostBackendRetry,
+    LostNegRetry,
 }
 
 #[rstest]
@@ -64,6 +67,22 @@ enum Fault {
     EndpointAccess::Private,
     Fault::LostNegResponse
 )]
+#[case::retry_public_backend(
+    EndpointAccess::Internet,
+    EndpointAccess::Internet,
+    Fault::LostBackendRetry
+)]
+#[case::retry_private_backend(
+    EndpointAccess::Private,
+    EndpointAccess::Private,
+    Fault::LostBackendRetry
+)]
+#[case::retry_public_neg(
+    EndpointAccess::Internet,
+    EndpointAccess::Internet,
+    Fault::LostNegRetry
+)]
+#[case::retry_private_neg(EndpointAccess::Private, EndpointAccess::Private, Fault::LostNegRetry)]
 #[tokio::test]
 async fn access_changes_preserve_service_revision_and_retained_frontends(
     #[case] initial: EndpointAccess,
@@ -72,6 +91,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
 ) {
     let pending_dns = fault == Fault::PendingDns;
     let fail_then_delete = matches!(fault, Fault::LostBackendResponse | Fault::LostNegResponse);
+    let retry_lost_response = matches!(fault, Fault::LostBackendRetry | Fault::LostNegRetry);
     let expected_patches =
         usize::from(!fail_then_delete && initial.internet_enabled() != desired.internet_enabled());
     let services = Arc::new(Mutex::new(Services::default()));
@@ -137,9 +157,11 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
         .returning(|_, _, policy| Ok(policy));
 
     let graphs = Arc::new(Mutex::new(Provider::default()));
-    graphs.lock().unwrap().lose_backend_response = fault == Fault::LostBackendResponse;
+    graphs.lock().unwrap().lose_backend_response =
+        matches!(fault, Fault::LostBackendResponse | Fault::LostBackendRetry);
     let negs = Arc::new(Mutex::new(NegCloud::default()));
-    negs.lock().unwrap().lose_create = fault == Fault::LostNegResponse;
+    negs.lock().unwrap().lose_create =
+        matches!(fault, Fault::LostNegResponse | Fault::LostNegRetry);
     let mut compute = provider(&graphs);
     mock_negs(&mut compute, negs.clone());
     let mut network = GcpNetworkController::mock_ready("default-network");
@@ -203,7 +225,6 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             .controller(controller)
             .platform(Platform::Gcp)
             .service_provider(provider.clone())
-            .with_test_dependencies()
             .with_dependency(
                 Network::new("default-network".to_string())
                     .settings(NetworkSettings::Create {
@@ -230,7 +251,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                 )
             });
         }
-        if fail_then_delete {
+        if fail_then_delete || retry_lost_response {
             let mut failed = false;
             for _ in 0..200 {
                 if executor.step().await.is_err() {
@@ -239,7 +260,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                 }
             }
             assert!(failed, "lost backend response was not exercised");
-            if fault == Fault::LostBackendResponse {
+            if matches!(fault, Fault::LostBackendResponse | Fault::LostBackendRetry) {
                 assert!(!graphs.lock().unwrap().lose_backend_response);
                 assert!(graphs
                     .lock()
@@ -260,6 +281,88 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                 controller.state,
                 GcpWorkerState::ReconcilingWorkerIngress
             ));
+            if retry_lost_response {
+                // Persist the actual post-mutation handler checkpoint as a terminal
+                // failure, then exercise the same retry -> plan -> step path as runtime.
+                // The single-controller harness itself has no failure/backoff storage.
+                let (mut stack, config, client_config) = executor.with_context(|ctx| {
+                    (
+                        ctx.desired_stack.clone(),
+                        ctx.deployment_config.clone(),
+                        ctx.client_config.clone(),
+                    )
+                });
+                let mut state = executor.stack_state().clone();
+                // The generic harness labels explicit dependencies Live. In a
+                // deployment this network was handed off by setup as Frozen.
+                stack
+                    .resources
+                    .get_mut("default-network")
+                    .unwrap()
+                    .lifecycle = ResourceLifecycle::Frozen;
+                state
+                    .resources
+                    .get_mut("default-network")
+                    .unwrap()
+                    .lifecycle = Some(ResourceLifecycle::Frozen);
+                let saved = state.resources.get_mut(&worker.id).unwrap();
+                saved
+                    .set_last_failed_controller(Some(Box::new(controller.clone())))
+                    .unwrap();
+                let mut terminal = controller.clone();
+                terminal.transition_to_failure();
+                saved.status = terminal.get_status();
+                saved
+                    .set_internal_controller(Some(Box::new(terminal)))
+                    .unwrap();
+                state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+                assert_eq!(state.retry_failed().unwrap(), vec![worker.id.clone()]);
+                let resumed = state.resources[&worker.id]
+                    .get_internal_controller_typed::<GcpWorkerController>()
+                    .unwrap();
+                assert!(matches!(
+                    resumed.state,
+                    GcpWorkerState::ReconcilingWorkerIngress
+                ));
+                let runtime = StackExecutor::builder(&stack, client_config)
+                    .deployment_config(&config)
+                    .service_provider(provider.clone())
+                    .step_running_resources(false)
+                    .lifecycle_filter(vec![ResourceLifecycle::Live])
+                    .step_out_of_scope_resources(false)
+                    .build()
+                    .unwrap();
+                let plan = runtime.plan(&state).unwrap();
+                assert!(plan.creates.is_empty());
+                assert!(
+                    plan.updates.is_empty(),
+                    "retry unexpectedly planned updates: {:?}",
+                    plan.updates
+                );
+                assert!(plan.replaces.is_empty());
+                assert!(plan.deletes.is_empty());
+                for _ in 0..200 {
+                    if state.resources[&worker.id].status == ResourceStatus::Running {
+                        break;
+                    }
+                    state = runtime.step(state).await.unwrap().next_state;
+                }
+                assert_eq!(state.resources[&worker.id].status, ResourceStatus::Running);
+                assert!(state.resources[&worker.id].last_failed_state.is_none());
+                controller = state.resources[&worker.id]
+                    .get_internal_controller_typed::<GcpWorkerController>()
+                    .unwrap();
+                assert_eq!(
+                    !controller.ingress.public_endpoints.is_empty(),
+                    initial.internet_enabled()
+                );
+                assert_eq!(
+                    !controller.ingress.private_endpoints.is_empty(),
+                    initial.private_enabled()
+                );
+                assert_eq!(services.lock().unwrap().creates, 1);
+                assert_eq!(services.lock().unwrap().patches, 0);
+            }
             break;
         }
         if index == 1 && pending_dns {
@@ -362,7 +465,6 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
         .controller(controller)
         .platform(Platform::Gcp)
         .service_provider(provider)
-        .with_test_dependencies()
         .build()
         .await
         .unwrap();
