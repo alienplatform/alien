@@ -851,6 +851,7 @@ mod tests {
             resources: HashMap::from([(
                 resource_id.to_string(),
                 ResourceDomainInfo {
+                    private_endpoints: std::collections::HashMap::new(),
                     fqdn: format!("{resource_id}.test.example.com"),
                     certificate_id: "cert".to_string(),
                     certificate_status: CertificateStatus::Issued,

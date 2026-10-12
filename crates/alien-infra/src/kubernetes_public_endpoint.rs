@@ -3936,6 +3936,7 @@ mod tests {
                 resources: HashMap::from([(
                     "api".to_string(),
                     ResourceDomainInfo {
+                        private_endpoints: std::collections::HashMap::new(),
                         fqdn: "api.example.com".to_string(),
                         certificate_id: "cert-1".to_string(),
                         certificate_status: CertificateStatus::Issued,
