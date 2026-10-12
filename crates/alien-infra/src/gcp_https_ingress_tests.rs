@@ -64,6 +64,7 @@ fn insert(
     let mut store = store.lock().unwrap();
     let key = format!("{kind}/{name}");
     assert!(!store.objects.contains_key(&key), "duplicate create {key}");
+    value["id"] = json!((store.mutations + 1).to_string());
     store.objects.insert(key, value);
     store.mutations += 1;
     if kind == "backend" && store.lose_backend_response {
@@ -298,7 +299,9 @@ async fn ready(
     for _ in 0..60 {
         *state = checkpoint(state);
         let before = store.lock().unwrap().mutations;
-        let complete = state.reconcile(client, plan(certificate)).await.unwrap();
+        let mut desired = plan(certificate);
+        desired.scope = state.scope;
+        let complete = state.reconcile(client, desired).await.unwrap();
         assert!(store.lock().unwrap().mutations - before <= 1);
         if complete {
             return;
@@ -366,6 +369,63 @@ async fn lost_response_checkpoint_rotation_and_failed_cleanup_preserve_frontend(
     assert!(state.children.is_empty());
     assert!(store.lock().unwrap().objects.is_empty());
     assert_eq!(state.address, None);
+}
+
+#[tokio::test]
+async fn replaced_or_missing_confirmed_frontend_is_not_recreated_or_deleted() {
+    for scope in [
+        GcpHttpsIngressScope::RegionalPrivate,
+        GcpHttpsIngressScope::GlobalPublic,
+    ] {
+        let store = Arc::new(Mutex::new(Provider::default()));
+        let client = provider(&store);
+        let mut desired = plan("certificate");
+        desired.scope = scope;
+        let mut state = GcpHttpsIngressState::new(&desired);
+        ready(&mut state, &client, &store, "certificate").await;
+        state = checkpoint(&state);
+        let frontend = format!("frontend/{}", state.name());
+        let before = store.lock().unwrap().mutations;
+        // Even a copied ownership description cannot authorize a replacement
+        // with a different immutable provider ID.
+        store.lock().unwrap().objects.get_mut(&frontend).unwrap()["id"] = json!("replacement");
+        let mut desired = plan("certificate");
+        desired.scope = scope;
+        assert!(state
+            .reconcile(&client, desired)
+            .await
+            .unwrap_err()
+            .message
+            .contains("replaced"));
+        assert!(state
+            .delete(&client, "api")
+            .await
+            .unwrap_err()
+            .message
+            .contains("replaced"));
+        assert_eq!(store.lock().unwrap().mutations, before);
+        store.lock().unwrap().objects.remove(&frontend).unwrap();
+        let mut desired = plan("certificate");
+        desired.scope = scope;
+        assert!(state
+            .reconcile(&client, desired)
+            .await
+            .unwrap_err()
+            .message
+            .contains("missing"));
+        assert_eq!(store.lock().unwrap().mutations, before);
+        // A confirmed 404 is still successful best-effort teardown, including
+        // after restoring the checkpoint which refused the replacement.
+        for _ in 0..60 {
+            state = checkpoint(&state);
+            if state.delete(&client, "api").await.unwrap() {
+                break;
+            }
+        }
+        assert!(state.children.is_empty());
+        assert!(state.provider_ids.is_empty());
+        assert!(store.lock().unwrap().objects.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -542,6 +602,7 @@ async fn checkpoint_without_scope_resumes_as_regional_private() {
     ready(&mut private, &client, &store, "certificate").await;
     let mut checkpoint = serde_json::to_value(&private).unwrap();
     checkpoint.as_object_mut().unwrap().remove("scope");
+    checkpoint.as_object_mut().unwrap().remove("providerIds");
     let mut restored: GcpHttpsIngressState = serde_json::from_value(checkpoint).unwrap();
     let before = store.lock().unwrap().mutations;
     ready(&mut restored, &client, &store, "certificate").await;

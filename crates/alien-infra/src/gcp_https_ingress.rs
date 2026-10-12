@@ -11,7 +11,7 @@ use alien_gcp_clients::gcp::compute::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 use crate::{ErrorData, GcpIngressOperation, GcpIngressOperationProgress, Result};
@@ -76,6 +76,8 @@ pub struct GcpHttpsIngressState {
     #[serde(default)]
     children: BTreeSet<Child>,
     #[serde(default)]
+    provider_ids: BTreeMap<String, String>,
+    #[serde(default)]
     operation: Option<GcpIngressOperation>,
     #[serde(default, rename = "privateIp")]
     pub address: Option<String>,
@@ -96,6 +98,20 @@ enum Child {
 }
 
 impl Child {
+    fn identity(&self) -> String {
+        let kind = match self {
+            Self::Firewall(_) => "firewall",
+            Self::HealthCheck(_) => "healthCheck",
+            Self::Backend(_) => "backend",
+            Self::UrlMap(_) => "urlMap",
+            Self::Certificate(_) => "certificate",
+            Self::HttpsProxy(_) => "httpsProxy",
+            Self::Address(_) => "address",
+            Self::Frontend(_) => "frontend",
+        };
+        format!("{kind}/{}", self.name())
+    }
+
     fn name(&self) -> &str {
         match self {
             Self::Firewall(name)
@@ -233,6 +249,7 @@ impl GcpHttpsIngressState {
             subnetwork: plan.subnetwork.to_string(),
             token: Uuid::new_v4(),
             children: BTreeSet::new(),
+            provider_ids: BTreeMap::new(),
             operation: None,
             address: None,
         }
@@ -301,13 +318,35 @@ impl GcpHttpsIngressState {
         }
     }
 
-    fn check_owner(&self, live: &Value, resource_id: &str, child: &Child) -> Result<()> {
+    fn check_owner(&mut self, live: &Value, resource_id: &str, child: &Child) -> Result<()> {
         if live.get("description").and_then(Value::as_str) != Some(self.owner().as_str()) {
             return Err(AlienError::new(self.error(
                 resource_id,
                 format!("Refusing foreign private ingress child '{}'", child.name()),
             )));
         }
+        let id = live
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                AlienError::new(self.error(
+                    resource_id,
+                    format!("Ingress child '{}' has no provider ID", child.name()),
+                ))
+            })?;
+        let identity = child.identity();
+        if self
+            .provider_ids
+            .get(&identity)
+            .is_some_and(|expected| expected != id)
+        {
+            return Err(AlienError::new(self.error(
+                resource_id,
+                format!("Refusing replaced ingress child '{}'", child.name()),
+            )));
+        }
+        self.provider_ids.insert(identity, id.to_string());
         Ok(())
     }
 
@@ -423,6 +462,15 @@ impl GcpHttpsIngressState {
                         Some(ClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    if self.provider_ids.contains_key(&child.identity()) {
+                        return Err(AlienError::new(self.error(
+                            plan.resource_id,
+                            format!(
+                                "Previously confirmed ingress child '{}' is missing",
+                                child.name()
+                            ),
+                        )));
+                    }
                     None
                 }
                 Err(error) => {
@@ -631,6 +679,7 @@ impl GcpHttpsIngressState {
                 ) =>
             {
                 self.children.remove(child);
+                self.provider_ids.remove(&child.identity());
                 return Ok(());
             }
             Err(error) => {
@@ -651,6 +700,7 @@ impl GcpHttpsIngressState {
                 ) =>
             {
                 self.children.remove(child);
+                self.provider_ids.remove(&child.identity());
             }
             Err(error) => {
                 return Err(error.context(self.error(
