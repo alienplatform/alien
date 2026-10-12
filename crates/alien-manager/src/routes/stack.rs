@@ -132,6 +132,13 @@ pub async fn stack_import(
         }
     };
 
+    if req.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+        return ErrorData::bad_request(
+            "Imported installations keep setup ownership. Use a new CLI installation for automatic infrastructure management.",
+        )
+        .into_response();
+    }
+
     if req.resources.is_empty() {
         return ErrorData::bad_request(
             "Stack import payload must include at least one imported resource",

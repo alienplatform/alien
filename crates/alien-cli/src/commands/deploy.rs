@@ -1463,11 +1463,13 @@ async fn deploy_task_with_environment(
                             })?
                     }
                     DeploymentToken::DeploymentGroup {
+                        deployment_group_id,
                         deployment_group_name,
                         workspace_name,
                         project_id,
                         ..
                     } => {
+                        supplied_group_token = Some((deployment_group_id, token.clone()));
                         info!(
                             "   Using deployment group token for group '{}'",
                             deployment_group_name
@@ -1749,17 +1751,25 @@ async fn deploy_task_with_environment(
     let initial_setup =
         existing_deployment_plan(&status, None, ctx.is_platform(), has_installed_release)
             == ExistingDeploymentPlan::InitialSetup;
-    let (deployment_group_id, active_update) = if ctx.is_platform() && !initial_setup {
-        let (group, active_update) = platform_deployment_progress(
-            &base_url,
-            &tracked_deployment.api_key,
-            &tracked_deployment.deployment_id,
-        )
-        .await?;
-        (Some(group), active_update)
-    } else {
-        (None, None)
-    };
+    let initial_automatic_setup = initial_setup
+        && deployment.stack_settings.as_ref().is_some_and(|settings| {
+            settings
+                .get("setupManagement")
+                .and_then(serde_json::Value::as_str)
+                == Some("automatic")
+        });
+    let (deployment_group_id, active_update) =
+        if ctx.is_platform() && (!initial_setup || initial_automatic_setup) {
+            let (group, active_update) = platform_deployment_progress(
+                &base_url,
+                &tracked_deployment.api_key,
+                &tracked_deployment.deployment_id,
+            )
+            .await?;
+            (Some(group), active_update)
+        } else {
+            (None, None)
+        };
     let plan = existing_deployment_plan(
         &status,
         active_update,
@@ -1796,7 +1806,11 @@ async fn deploy_task_with_environment(
     // Setup runs with setup authority for the deployment group; the
     // deployment token keeps configuring the runtime.
     let (setup_client, setup_token) = match plan {
-        ExistingDeploymentPlan::SetupUpdate { .. } => {
+        ExistingDeploymentPlan::SetupUpdate { .. } | ExistingDeploymentPlan::InitialSetup
+            if ctx.is_platform()
+                && (initial_automatic_setup
+                    || matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. })) =>
+        {
             let deployment_group_id = deployment_group_id.as_deref().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "A setup update needs the deployment's group from the platform"
@@ -1838,6 +1852,10 @@ async fn deploy_task_with_environment(
             );
             (Some(client), Some(setup_token))
         }
+        ExistingDeploymentPlan::InitialSetup if initial_automatic_setup => (
+            Some(manager_ctx.client.clone()),
+            manager_ctx.auth_token.clone(),
+        ),
         _ => (None, None),
     };
     // The client that holds the lock: setup authority for a setup update.
@@ -2062,6 +2080,7 @@ async fn deploy_task_with_environment(
                 message: "Failed to deserialize stored deployment inputs".to_string(),
             })?;
     }
+    config.setup_run = setup_owned_status;
     config.manager_url = Some(manager_ctx.manager_url.clone());
     config.deployment_token = Some(tracked_deployment.api_key.clone());
 

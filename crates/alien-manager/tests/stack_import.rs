@@ -2484,3 +2484,19 @@ async fn runtime_reports_cannot_grant_automatic_setup_to_an_imported_installatio
         .unwrap();
     assert!(!persisted.runtime_metadata.unwrap().automatic_setup);
 }
+
+#[tokio::test]
+async fn imported_installations_cannot_request_automatic_setup() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut request =
+        aws_s3_import_request("manual-installation", "us-east-1", "assets", "test-imports");
+    request.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+    let deployments = fixture
+        .deployment_store
+        .list_deployments(&alien_manager::auth::Subject::system(), &Default::default())
+        .await
+        .unwrap();
+    assert!(deployments.is_empty());
+}

@@ -1464,12 +1464,14 @@ impl DeploymentStore for SqliteDeploymentStore {
                 | crate::auth::Role::ProjectDeveloper
                 | crate::auth::Role::DeploymentGroupDeployer
         ) && deployment.as_ref().is_some_and(|deployment| {
-            deployment.stack_settings.as_ref().is_some_and(|settings| {
-                settings.setup_management == alien_core::SetupManagement::Automatic
-            }) && matches!(
-                deployment.platform,
-                Platform::Aws | Platform::Gcp | Platform::Azure
-            )
+            deployment.import_source.is_none()
+                && deployment.stack_settings.as_ref().is_some_and(|settings| {
+                    settings.setup_management == alien_core::SetupManagement::Automatic
+                })
+                && matches!(
+                    deployment.platform,
+                    Platform::Aws | Platform::Gcp | Platform::Azure
+                )
         });
         if !may_install_grant {
             if installed_grant || data.state.runtime_metadata.is_some() {
