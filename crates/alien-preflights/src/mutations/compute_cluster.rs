@@ -1109,7 +1109,8 @@ fn build_categorized_capacity_groups(
                 gpu: None,
             }),
             min_size: 0,
-            max_size: 0,
+            // Machines groups need a concrete capacity bound.
+            max_size: if platform == Platform::Machines { 10 } else { 0 },
             scale_policy: None,
             nested_virtualization: None,
         }]),
@@ -1399,31 +1400,45 @@ mod tests {
 
     #[tokio::test]
     async fn machines_implicit_cluster_has_bounded_capacity() {
-        let container = Container::new("api".to_string())
-            .code(ContainerCode::Image { image: "example/api:latest".to_string() })
-            .build();
-        let stack = Stack::new("machines-test".to_string())
-            .add(container, ResourceLifecycle::Live)
-            .build();
-        let state = StackState::new(Platform::Machines);
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
-        let mutation = ComputeClusterMutation;
-        assert!(mutation.should_run(&stack, &state, &config));
-        let prepared = mutation.mutate(stack, &state, &config).await.unwrap();
-        let container = prepared.resources["api"].config.downcast_ref::<Container>().unwrap();
-        let cluster = prepared.resources[container.cluster.as_deref().unwrap()]
-            .config.downcast_ref::<ComputeCluster>().unwrap();
-        assert_eq!(cluster.capacity_groups.len(), 1);
-        let group = &cluster.capacity_groups[0];
-        assert_eq!(group.group_id, "general");
-        assert_eq!((group.min_size, group.max_size), (0, 10));
-        assert!(group.profile.is_some());
-        assert!(!mutation.should_run(&prepared, &state, &config));
+        for platform in [Platform::Machines, Platform::Kubernetes, Platform::Test] {
+            let container = test_container("api", "1", "1Gi");
+            let stack = Stack::new("machines-test".to_string())
+                .add(container, ResourceLifecycle::Live)
+                .build();
+            let state = StackState::new(platform);
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let mutation = ComputeClusterMutation;
+            if platform == Platform::Kubernetes {
+                assert!(!mutation.should_run(&stack, &state, &config));
+                continue;
+            }
+            assert!(mutation.should_run(&stack, &state, &config));
+            let prepared = mutation.mutate(stack, &state, &config).await.unwrap();
+            let container = prepared.resources["api"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap();
+            let cluster = prepared.resources[container.cluster.as_deref().unwrap()]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap();
+            assert_eq!(cluster.capacity_groups.len(), 1);
+            let group = &cluster.capacity_groups[0];
+            assert_eq!(group.group_id, "general");
+            let expected_max = if platform == Platform::Machines {
+                10
+            } else {
+                0
+            };
+            assert_eq!((group.min_size, group.max_size), (0, expected_max));
+            assert!(group.profile.is_some());
+            assert!(!mutation.should_run(&prepared, &state, &config));
+        }
     }
 
     #[tokio::test]
