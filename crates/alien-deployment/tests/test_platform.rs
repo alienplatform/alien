@@ -4374,3 +4374,22 @@ async fn automatic_setup_applies_a_superseding_release_before_promoting_it() {
         assert!(state.target_release.is_none());
     }
 }
+
+#[tokio::test]
+async fn automatic_azure_setup_rejects_missing_management_before_cloud_access() {
+    let mut state = create_initial_state(Stack::new("automatic-azure".into()).build());
+    state.platform = Platform::Azure;
+    let mut config = create_test_config("automatic-azure", false);
+    config.setup_run = true;
+    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    let error = alien_deployment::step(
+        state,
+        config,
+        ClientConfig::Azure(Box::new(alien_azure_clients::AzureClientConfig::mock())),
+        None,
+    )
+    .await
+    .expect_err("automatic setup must reject a missing management identity configuration");
+    assert_eq!(error.code, "MISSING_CONFIGURATION");
+    assert!(error.to_string().contains("install its runtime identity"));
+}

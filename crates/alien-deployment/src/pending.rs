@@ -95,6 +95,23 @@ pub async fn handle_pending(
 ) -> Result<DeploymentStepResult> {
     info!("Handling Pending status");
 
+    // Azure automatic management must hand off to an installed identity;
+    // bootstrap credentials are never a runtime fallback for this mode.
+    if current.platform == Platform::Azure
+        && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+        && config.management_config.is_none()
+        && !current.stack_state.as_ref().is_some_and(|state| {
+            state.resources.values().any(|resource| {
+                resource.config.resource_type() == alien_core::RemoteStackManagement::RESOURCE_TYPE
+                    && resource.status != alien_core::ResourceStatus::Deleted
+            })
+        })
+    {
+        return Err(AlienError::new(ErrorData::MissingConfiguration {
+            message: "Automatic Azure management requires management configuration to install its runtime identity".to_string(),
+        }));
+    }
+
     // Step 1: Initialize stack state. Direct platform deployments may carry a
     // user-selected resource prefix in their initial stack state.
     let stack_state = current
