@@ -42,7 +42,7 @@ impl ApiKeysArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ApiKeysCommand {
-    /// Create a least-privileged project key. The secret is returned only once.
+    /// Create a scoped project key. The secret is returned only once.
     Create {
         /// Intended use; selects the corresponding project role
         #[arg(long = "for", value_enum)]
@@ -72,6 +72,8 @@ pub enum ApiKeyPurpose {
     AiGateway,
     EncryptionGateway,
     Deployments,
+    /// Full project lifecycle and API-key management
+    ProjectAdmin,
     RemoteBindings,
     RemoteSandbox,
     ReadOnly,
@@ -249,6 +251,7 @@ impl ApiKeyPurpose {
             Self::AiGateway => ProjectRole::ProjectAiGateway,
             Self::EncryptionGateway => ProjectRole::ProjectEncryption,
             Self::Deployments => ProjectRole::ProjectDeveloper,
+            Self::ProjectAdmin => ProjectRole::ProjectAdmin,
             Self::RemoteBindings => ProjectRole::ProjectRemoteBindings,
             Self::RemoteSandbox => ProjectRole::ProjectSandboxGateway,
             Self::ReadOnly => ProjectRole::ProjectViewer,
@@ -259,6 +262,17 @@ impl ApiKeyPurpose {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_admin_creation_selects_explicit_admin_authority() {
+        let args =
+            ApiKeysArgs::try_parse_from(["api-keys", "create", "--for", "project-admin", "--json"])
+                .expect("project admin creation should parse");
+        let ApiKeysCommand::Create { purpose, .. } = args.command else {
+            panic!("expected key creation");
+        };
+        assert_eq!(purpose.role(), ProjectRole::ProjectAdmin);
+    }
 
     #[test]
     fn creation_uses_purpose_instead_of_internal_role_names() {
