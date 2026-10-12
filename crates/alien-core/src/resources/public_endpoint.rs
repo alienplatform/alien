@@ -7,6 +7,21 @@ use url::Url;
 /// Host label that places a generated public endpoint at the deployment base hostname.
 pub const APEX_HOST_LABEL: &str = "@";
 
+/// Returns a private connection label within the deployment certificate namespace.
+///
+/// Prefixing the endpoint label keeps both connections one level below the
+/// deployment hostname, so ordinary endpoints share its wildcard certificate.
+pub fn private_endpoint_host_label(resource_id: &str, host_label: &str) -> Result<String> {
+    validate_endpoint_host_label(resource_id, host_label)?;
+    let private_label = if host_label == APEX_HOST_LABEL {
+        "private".to_string()
+    } else {
+        format!("private-{host_label}")
+    };
+    validate_endpoint_host_label(resource_id, &private_label)?;
+    Ok(private_label)
+}
+
 /// Protocol for public workload endpoints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -261,6 +276,31 @@ mod tests {
     #[test]
     fn host_label_allows_apex_marker() {
         validate_endpoint_host_label("gateway", APEX_HOST_LABEL).expect("apex host label");
+    }
+
+    #[test]
+    fn private_connection_stays_in_deployment_wildcard_namespace() {
+        for (public, private) in [("api", "private-api"), (APEX_HOST_LABEL, "private")] {
+            assert_eq!(
+                private_endpoint_host_label("gateway", public).expect("private connection label"),
+                private
+            );
+        }
+        let longest = "a".repeat(55);
+        assert_eq!(
+            private_endpoint_host_label("gateway", &longest)
+                .expect("maximum private connection label")
+                .len(),
+            63
+        );
+        for invalid in ["a".repeat(56), "api.example".to_string(), "-api".to_string()] {
+            assert_eq!(
+                private_endpoint_host_label("gateway", &invalid)
+                    .expect_err("invalid private connection label")
+                    .code,
+                "INVALID_RESOURCE_UPDATE"
+            );
+        }
     }
 
     #[test]
