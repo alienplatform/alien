@@ -1,6 +1,15 @@
 mod core;
 pub use core::*;
 
+#[cfg(feature = "gcp")]
+mod gcp_ingress_operation;
+#[cfg(feature = "gcp")]
+pub use gcp_ingress_operation::*;
+#[cfg(feature = "gcp")]
+mod gcp_private_ingress;
+#[cfg(feature = "gcp")]
+pub use gcp_private_ingress::*;
+
 mod error;
 pub use error::*;
 
