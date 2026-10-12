@@ -160,7 +160,7 @@ async fn access_only_updates_preserve_identity_revision_and_fence_stale_writes(
             let patch = Service::builder().etag(previous_etag.clone())
                 .ingress(ingress.clone()).invoker_iam_disabled(true).build();
             let operation = ctx.client.patch_service(ctx.location.clone(), name.clone(), patch,
-                Some("ingress,invokerIamDisabled".to_string()), None, Some(false))
+                Some("ingress,invokerIamDisabled,etag".to_string()), None, Some(false))
                 .await.map_err(|error| error.to_string())?;
             wait(ctx, operation).await?;
             current = ctx.client.get_service(ctx.location.clone(), name.clone())
@@ -180,7 +180,7 @@ async fn access_only_updates_preserve_identity_revision_and_fence_stale_writes(
                 let stale_patch = Service::builder().etag(previous_etag.clone())
                     .ingress(Ingress::IngressTrafficAll).build();
                 expect_conflict(ctx, ctx.client.patch_service(ctx.location.clone(), name.clone(), stale_patch,
-                    Some("ingress".to_string()), None, Some(false)).await, "patch").await?;
+                    Some("ingress,etag".to_string()), None, Some(false)).await, "patch").await?;
                 expect_conflict(ctx, ctx.client.delete_service(ctx.location.clone(), name.clone(), None,
                     Some(previous_etag)).await, "delete").await?;
                 let unchanged = ctx.client.get_service(ctx.location.clone(), name.clone())
