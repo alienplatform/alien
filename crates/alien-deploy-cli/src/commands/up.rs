@@ -6132,6 +6132,8 @@ async fn push_initial_setup_targeted(
             apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
         }
 
+        config.setup_run = true;
+
         // Re-fetch the deployment state now that we hold the lock.
         // The manager may have advanced the state while we were waiting.
         let deployment = client

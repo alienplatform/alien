@@ -234,6 +234,10 @@ pub async fn handle_initial_setup(
         // Note: Cross-account access setup happens in the manager after this step
         // The manager has access to the artifact registry binding
 
+        if config.setup_run {
+            runtime_metadata.automatic_setup =
+                config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+        }
         let mut next = current_cloned;
         next.status = DeploymentStatus::Provisioning;
         next.stack_state = Some(step_result.next_state);

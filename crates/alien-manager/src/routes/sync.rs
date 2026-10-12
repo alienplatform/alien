@@ -1534,6 +1534,7 @@ mod tests {
                 created_at: String::new(),
             },
             allow_frozen_changes: false,
+        setup_run: false,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,

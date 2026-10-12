@@ -927,6 +927,7 @@ mod tests {
             observe_all_namespaces: false,
             compute_backend: None,
             allow_frozen_changes: false,
+        setup_run: false,
             domain_metadata: None,
             public_endpoints: None,
             monitoring: None,

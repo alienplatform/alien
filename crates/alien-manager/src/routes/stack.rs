@@ -1333,6 +1333,7 @@ async fn prepare_import_stack(
             created_at: "1970-01-01T00:00:00Z".to_string(),
         },
         allow_frozen_changes: false,
+        setup_run: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: req.base_platform,

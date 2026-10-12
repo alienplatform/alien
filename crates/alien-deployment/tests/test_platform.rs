@@ -267,6 +267,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         observe_all_namespaces: false,
         compute_backend: None,
         allow_frozen_changes: false,
+        setup_run: false,
         domain_metadata: None,
         public_endpoints: None,
         monitoring: None,
@@ -4083,10 +4084,12 @@ async fn automatic_setup_reconciles_frozen_addition_and_removal_without_a_second
     let _vault = test_vault_env().await;
     let mut config = create_test_config("automatic", false);
     config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    config.setup_run = true;
     let initial = create_initial_state(Stack::new("automatic".into()).build());
     let mut state = run_to_completion(initial, config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
     assert!(state.runtime_metadata.as_ref().unwrap().automatic_setup);
+    config.setup_run = false;
 
     let with_storage = Stack::new("automatic".into()).add(Storage::new("archive".into()).build(), ResourceLifecycle::Frozen).build();
     start_update(&mut state, release_of("with-archive", with_storage));

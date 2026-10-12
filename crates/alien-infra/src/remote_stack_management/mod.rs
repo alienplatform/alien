@@ -74,7 +74,9 @@ pub(crate) fn management_permissions_need_refresh(
     }
     // Automatic setup installs its complete infrastructure grant once. Runtime may
     // use it, but must never rewrite its own management identity or remove its guard.
-    if ctx.deployment_config.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+    if ctx.deployment_config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+        && !ctx.deployment_config.setup_run
+    {
         return Ok(false);
     }
     Ok(management_permissions_revision(ctx)?.as_deref() != applied_revision)

@@ -202,6 +202,7 @@ mod tests {
             stored_secret_input_ids: None,
             input_values: Default::default(),
             allow_frozen_changes: false,
+        setup_run: false,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform,
