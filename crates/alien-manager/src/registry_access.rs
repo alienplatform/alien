@@ -1564,6 +1564,49 @@ mod tests {
     }
 
     #[test]
+    fn gcp_worker_and_sandbox_grants_name_only_own_and_published_resources() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        let own = alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap();
+        let mut state = gcp_state_with_stack(worker_stack(&format!(
+            "manager.example.com/vendor/{own}/{PROJECT}/worker:v1"
+        )));
+        state.target_release = Some(ReleaseInfo {
+            release_id: Some("rel_sandbox".to_string()),
+            version: None,
+            description: None,
+            stack: sandbox_stack_with_code(
+                "manager.example.com/vendor/artifacts-shared/agents:v1",
+                None,
+            ),
+        });
+        let mut expected = vec![
+            format!("vendor/{own}"),
+            "vendor/artifacts-shared".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(
+            repository_access(&registry, &state, PROJECT),
+            (expected, false)
+        );
+        let Some(CrossAccountAccess::Gcp(access)) = build_cross_account_access(
+            state.environment_info.as_ref().unwrap(),
+            None,
+            declares_sandbox(&state),
+        ) else {
+            panic!("GCP access");
+        };
+        assert_eq!(
+            access.allowed_service_types,
+            vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
+        );
+        assert_eq!(access.project_numbers, vec!["123456789012"]);
+    }
+
+    #[test]
     fn pre_cutover_gcp_releases_never_open_the_mixed_repository() {
         let registry = TestArtifactRegistry {
             prefix: "vendor/artifacts".to_string(),
