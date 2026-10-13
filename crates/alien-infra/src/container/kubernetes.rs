@@ -931,7 +931,17 @@ impl KubernetesContainerController {
                 })
                 .transpose()
         };
-        if capacity(previous)? != capacity(config)? {
+        let unchanged_spelling = previous
+            .persistent_storage
+            .as_ref()
+            .map(|storage| &storage.size)
+            == config
+                .persistent_storage
+                .as_ref()
+                .map(|storage| &storage.size);
+        // Unchanged Kubernetes quantities need no parsing. Keep supporting all
+        // quantities accepted during installation, including decimal exponents.
+        if !unchanged_spelling && capacity(previous)? != capacity(config)? {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Changing persistent storage on Kubernetes requires an explicit PVC expansion and StatefulSet migration; volumeClaimTemplates are immutable".into(),
                 resource_id: Some(config.id.clone()),
