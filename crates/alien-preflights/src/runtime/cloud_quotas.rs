@@ -168,7 +168,7 @@ fn elastic_ip_demand(stack: &Stack, state: &StackState) -> Option<QuotaDemand> {
 
 /// Preserve the provider's exclusions: ALB/service-managed and BYOIP addresses
 /// consume no customer EC2-VPC allocation quota; customer NAT addresses do.
-fn elastic_ip_usage(response: DescribeAddressesResponse) -> Option<f64> {
+pub fn elastic_ip_usage(response: DescribeAddressesResponse) -> Option<f64> {
     let addresses = response.addresses_set?.items;
     if addresses.iter().any(|address| address.domain.is_none()) {
         return None;
@@ -185,7 +185,9 @@ fn elastic_ip_usage(response: DescribeAddressesResponse) -> Option<f64> {
     )
 }
 
-async fn read_elastic_ip_observation(
+/// Read the applied EC2-VPC quota and provider-counted customer address usage.
+/// Missing permissions or incomplete provider data leave the observation unknown.
+pub async fn read_elastic_ip_observation(
     ec2: &dyn Ec2Api,
     quotas: &dyn ServiceQuotasApi,
 ) -> Option<QuotaObservation> {

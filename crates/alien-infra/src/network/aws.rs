@@ -26,7 +26,7 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAddressesResponse, DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest,
+    DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest,
     DescribeNatGatewaysRequest, DescribeNetworkInterfacesRequest, DescribeRouteTablesRequest,
     DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
     DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
@@ -43,7 +43,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
-use alien_preflights::quotas::aws_network_quota_identity;
+use alien_preflights::{
+    quotas::{aws_network_quota_identity, evaluate, QuotaDemand, QuotaOutcome},
+    runtime::cloud_quotas::read_elastic_ip_observation,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -481,108 +484,72 @@ fn subnets_needing_association<'a>(
         .collect()
 }
 
-const EC2_VPC_EIP_QUOTA_CODE: &str = "L-0263D0A3";
-
-#[derive(Debug, PartialEq)]
-enum EipQuotaPreflight {
-    Available { used: usize, limit: f64 },
-    Exhausted { used: usize, limit: f64 },
-    Unknown(&'static str),
-}
-
-fn assess_eip_quota(used: Option<usize>, limit: Option<f64>) -> EipQuotaPreflight {
-    match (
-        used,
-        limit.filter(|value| value.is_finite() && *value >= 0.0),
-    ) {
-        (Some(used), Some(limit)) if used as f64 + 1.0 > limit => {
-            EipQuotaPreflight::Exhausted { used, limit }
-        }
-        (Some(used), Some(limit)) => EipQuotaPreflight::Available { used, limit },
-        (None, _) => EipQuotaPreflight::Unknown("current Elastic IP usage is unavailable"),
-        (_, None) => EipQuotaPreflight::Unknown("the applied Elastic IP quota is unavailable"),
-    }
-}
-
-fn quota_consuming_eip_usage(response: DescribeAddressesResponse) -> Option<usize> {
-    let addresses = response
-        .addresses_set
-        .map(|set| set.items)
-        .unwrap_or_default();
-
-    // `domain` is required to distinguish the EC2-VPC quota from legacy EC2-Classic
-    // addresses. Do not turn incomplete provider data into a false quota failure.
-    if addresses.iter().any(|address| address.domain.is_none()) {
-        return None;
-    }
-
-    Some(
-        addresses
-            .into_iter()
-            .filter(|address| {
-                address.domain.as_deref() == Some("vpc")
-                    && address.service_managed.as_deref().is_none_or(str::is_empty)
-                    && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
-            })
-            .count(),
-    )
-}
-
 async fn preflight_aws_eip_quota(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
 ) -> Result<()> {
     let aws_config = ctx.get_aws_config()?;
     let ec2 = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
-    let quotas = match ctx
+    let observation = match ctx
         .service_provider
         .get_aws_service_quotas_client(aws_config)
         .await
     {
-        Ok(client) => Some(client),
+        Ok(quotas) => read_elastic_ip_observation(ec2.as_ref(), quotas.as_ref()).await,
         Err(error) => {
-            warn!(error = %error, "Could not initialize the optional AWS Service Quotas client; continuing because quota preflight is best-effort");
+            warn!(error = %error, "Could not initialize the optional AWS Service Quotas client");
             None
         }
     };
-
-    let used = match ec2.describe_addresses().await {
-        Ok(response) => quota_consuming_eip_usage(response),
-        Err(error) => {
-            warn!(error = %error, "Could not verify current AWS Elastic IP usage; continuing because quota preflight is best-effort");
-            None
-        }
-    };
-    let limit = match quotas {
-        Some(quotas) => match quotas
-            .get_service_quota("ec2", EC2_VPC_EIP_QUOTA_CODE)
-            .await
-        {
-            Ok(response) => response.quota.and_then(|quota| quota.value),
-            Err(error) => {
-                warn!(error = %error, "Could not read the applied AWS Elastic IP quota; continuing because quota preflight is best-effort");
-                None
-            }
+    match evaluate(
+        QuotaDemand {
+            peak: 1.0,
+            held: 0.0,
         },
-        None => None,
-    };
-
-    match assess_eip_quota(used, limit) {
-        EipQuotaPreflight::Available { used, limit } => {
-            info!(used, limit, required = 1, "AWS Elastic IP quota preflight passed");
+        observation,
+    ) {
+        QuotaOutcome::Pass {
+            used,
+            limit,
+            needed,
+        } => {
+            info!(
+                used,
+                limit,
+                required = needed,
+                "AWS Elastic IP quota preflight passed"
+            );
             Ok(())
         }
-        EipQuotaPreflight::Exhausted { used, limit } => {
-            Err(AlienError::new(ErrorData::InfrastructureError {
-                message: format!(
-                    "Cannot create the managed AWS network: its NAT gateway requires 1 Elastic IP, but this Region already uses {used} of the applied {limit} EC2-VPC Elastic IP quota. Release an owned Elastic IP, request a quota increase, or configure NetworkSettings::ByoVpcAws. No network resources were created."
-                ),
-                operation: Some("preflight_elastic_ip_quota".to_string()),
-                resource_id: Some(resource_id.to_string()),
+        QuotaOutcome::Fail {
+            used,
+            limit,
+            needed,
+        } => {
+            let quota = aws_network_quota_identity(
+                &aws_config.region,
+                "L-0263D0A3",
+                "EC2-VPC Elastic IP addresses per Region",
+            );
+            let message = format!(
+                "{} ({}, {}): used {used}, applied limit {limit}, additional demand {needed}. Request an increase: {}. Network '{}' requires one Elastic IP for its NAT gateway.",
+                quota.name, quota.provider_id, quota.scope, quota.increase_url, resource_id,
+            );
+            Err(AlienError::new(ErrorData::CloudQuotaExceeded {
+                quota,
+                message,
             }))
         }
-        EipQuotaPreflight::Unknown(reason) => {
-            warn!(reason, required = 1, "AWS managed network requires one Elastic IP, but quota preflight is uncertain");
+        QuotaOutcome::Unknown { reason } => {
+            warn!(
+                reason,
+                required = 1,
+                "AWS managed network requires one Elastic IP, but quota preflight is uncertain"
+            );
+            Ok(())
+        }
+        QuotaOutcome::Warn { message } => {
+            warn!(message, "AWS Elastic IP quota preflight warning");
             Ok(())
         }
     }
@@ -593,7 +560,8 @@ mod tests {
     use std::sync::Arc;
 
     use alien_aws_clients::ec2::{
-        Address, AddressSet, Ec2Api, Ec2Client, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
+        Address, AddressSet, DescribeAddressesResponse, Ec2Api, Ec2Client, IpPermissionSet,
+        IpRangeResponse, IpRangeSet, MockEc2Api,
     };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
@@ -603,6 +571,7 @@ mod tests {
 
     use super::*;
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_preflights::runtime::cloud_quotas::elastic_ip_usage;
 
     #[test]
     fn detects_existing_all_protocol_ipv4_rule() {
@@ -763,40 +732,6 @@ mod tests {
         assert!(to_attach.is_empty());
     }
 
-    #[test]
-    fn eip_preflight_blocks_when_required_address_exceeds_quota() {
-        assert_eq!(
-            assess_eip_quota(Some(5), Some(5.0)),
-            EipQuotaPreflight::Exhausted {
-                used: 5,
-                limit: 5.0
-            }
-        );
-    }
-
-    #[test]
-    fn eip_preflight_accepts_last_available_address() {
-        assert_eq!(
-            assess_eip_quota(Some(4), Some(5.0)),
-            EipQuotaPreflight::Available {
-                used: 4,
-                limit: 5.0
-            }
-        );
-    }
-
-    #[test]
-    fn eip_preflight_is_uncertain_without_usage_or_applied_limit() {
-        assert!(matches!(
-            assess_eip_quota(None, Some(5.0)),
-            EipQuotaPreflight::Unknown(_)
-        ));
-        assert!(matches!(
-            assess_eip_quota(Some(0), None),
-            EipQuotaPreflight::Unknown(_)
-        ));
-    }
-
     /// Compare the real signed EC2 Query response with an independently counted
     /// customer-owned usage supplied by the cloud test runner. Requires a test
     /// account containing service-managed ALB addresses; performs only reads.
@@ -836,7 +771,7 @@ mod tests {
             addresses.len() > expected,
             "test account must include excluded addresses"
         );
-        assert_eq!(quota_consuming_eip_usage(response), Some(expected));
+        assert_eq!(elastic_ip_usage(response), Some(expected as f64));
     }
 
     #[test]
@@ -851,15 +786,8 @@ mod tests {
                 { "domain": "vpc", "publicIpv4Pool": "ipv4pool-ec2-customer" }
             ] }
         })).unwrap();
-        let used = quota_consuming_eip_usage(response);
-        assert_eq!(used, Some(2));
-        assert_eq!(
-            assess_eip_quota(used, Some(5.0)),
-            EipQuotaPreflight::Available {
-                used: 2,
-                limit: 5.0
-            }
-        );
+        let used = elastic_ip_usage(response);
+        assert_eq!(used, Some(2.0));
     }
 
     #[test]
@@ -901,7 +829,7 @@ mod tests {
             }),
         };
 
-        assert_eq!(quota_consuming_eip_usage(response), Some(2));
+        assert_eq!(elastic_ip_usage(response), Some(2.0));
     }
 
     #[test]
@@ -921,90 +849,139 @@ mod tests {
             }),
         };
 
-        assert_eq!(quota_consuming_eip_usage(response), None);
+        assert_eq!(elastic_ip_usage(response), None);
     }
 
     #[tokio::test]
-    async fn create_start_does_not_reject_byoip_addresses_as_quota_usage() {
-        let mut ec2 = MockEc2Api::new();
-        ec2.expect_describe_addresses().return_once(|| {
-            Ok(DescribeAddressesResponse {
-                addresses_set: Some(AddressSet {
-                    items: vec![
-                        Address {
-                            allocation_id: Some("eipalloc-amazon-1".to_string()),
-                            public_ip: None,
-                            domain: Some("vpc".to_string()),
-                            association_id: None,
-                            network_interface_id: None,
-                            public_ipv4_pool: Some("amazon".to_string()),
-                            service_managed: None,
-                            tag_set: None,
-                        },
-                        Address {
-                            allocation_id: Some("eipalloc-byoip".to_string()),
-                            public_ip: None,
-                            domain: Some("vpc".to_string()),
-                            association_id: None,
-                            network_interface_id: None,
-                            public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
-                            service_managed: None,
-                            tag_set: None,
-                        },
-                    ],
-                }),
-            })
-        });
-        let ec2 = Arc::new(ec2);
+    async fn create_start_uses_shared_eip_outcomes_before_any_mutation() {
+        for (quota_code, limit, blocked) in [
+            ("L-0263D0A3", 2.0, false),
+            ("L-0263D0A3", 1.0, true),
+            ("L-0263D0A3", f64::NAN, false),
+            ("unrelated-quota", 1.0, false),
+            ("denied", 1.0, false),
+        ] {
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_create_vpc().times(0);
+            ec2.expect_describe_addresses()
+                .times(if quota_code == "L-0263D0A3" { 1 } else { 0 })
+                .returning(|| {
+                    Ok(DescribeAddressesResponse {
+                        addresses_set: Some(AddressSet {
+                            items: vec![
+                                Address {
+                                    allocation_id: Some("eipalloc-amazon-1".to_string()),
+                                    public_ip: None,
+                                    domain: Some("vpc".to_string()),
+                                    association_id: None,
+                                    network_interface_id: None,
+                                    public_ipv4_pool: Some("amazon".to_string()),
+                                    service_managed: None,
+                                    tag_set: None,
+                                },
+                                Address {
+                                    allocation_id: Some("eipalloc-byoip".to_string()),
+                                    public_ip: None,
+                                    domain: Some("vpc".to_string()),
+                                    association_id: None,
+                                    network_interface_id: None,
+                                    public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                                    service_managed: None,
+                                    tag_set: None,
+                                },
+                            ],
+                        }),
+                    })
+                });
+            let ec2 = Arc::new(ec2);
 
-        let mut quotas = MockServiceQuotasApi::new();
-        quotas.expect_get_service_quota().return_once(|_, _| {
-            Ok(GetServiceQuotaResponse {
-                quota: Some(ServiceQuota {
-                    quota_code: Some(EC2_VPC_EIP_QUOTA_CODE.to_string()),
-                    service_code: Some("ec2".to_string()),
-                    quota_name: None,
-                    value: Some(2.0),
-                }),
-            })
-        });
-        let quotas = Arc::new(quotas);
+            let mut quotas = MockServiceQuotasApi::new();
+            quotas.expect_get_service_quota().return_once(move |_, _| {
+                if quota_code == "denied" {
+                    return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                        resource_type: "ServiceQuota".into(),
+                        resource_name: "L-0263D0A3".into(),
+                    }));
+                }
+                Ok(GetServiceQuotaResponse {
+                    quota: Some(ServiceQuota {
+                        quota_code: Some(quota_code.to_string()),
+                        service_code: Some("ec2".to_string()),
+                        quota_name: None,
+                        value: Some(limit),
+                    }),
+                })
+            });
+            let quotas = Arc::new(quotas);
 
-        let mut provider = MockPlatformServiceProvider::new();
-        provider
-            .expect_get_aws_ec2_client()
-            .returning(move |_| Ok(ec2.clone()));
-        provider
-            .expect_get_aws_service_quotas_client()
-            .returning(move |_| Ok(quotas.clone()));
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_ec2_client()
+                .returning(move |_| Ok(ec2.clone()));
+            provider
+                .expect_get_aws_service_quotas_client()
+                .returning(move |_| Ok(quotas.clone()));
 
-        let network = Network::new("quota-test".to_string())
-            .settings(NetworkSettings::Create {
-                cidr: None,
-                availability_zones: 2,
-            })
-            .build();
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(network)
-            .controller(AwsNetworkController::default())
-            .platform(Platform::Aws)
-            .service_provider(Arc::new(provider))
-            .with_test_dependencies()
-            .build()
-            .await
-            .expect("executor should build");
+            let network = Network::new("quota-test".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build();
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(network)
+                .controller(AwsNetworkController::default())
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor should build");
 
-        executor
-            .step()
-            .await
-            .expect("BYOIP address must not produce a false quota failure");
-        assert_eq!(
-            executor
-                .internal_state::<AwsNetworkController>()
-                .expect("network controller state")
-                .state,
-            AwsNetworkState::CreatingVpc
-        );
+            if blocked {
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("full EIP quota must block");
+                assert!(!error.retryable);
+                let cause = &error;
+                assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
+                let quota: alien_preflights::quotas::QuotaIdentity = serde_json::from_value(
+                    cause.context.as_ref().expect("quota context")["quota"].clone(),
+                )
+                .expect("typed quota identity");
+                assert_eq!(quota.provider_id, "L-0263D0A3");
+                assert_eq!(quota.service, "ec2");
+                assert!(!quota.scope.is_empty());
+                assert!(cause.message.contains(&quota.increase_url));
+                assert!(cause
+                    .message
+                    .contains("used 1, applied limit 1, additional demand 1"));
+                assert_eq!(
+                    executor.internal_state::<AwsNetworkController>().expect("network controller state").state,
+                    AwsNetworkState::CreateStart,
+                );
+            } else {
+                executor
+                    .step()
+                    .await
+                    .expect("available or Unknown must not block");
+                assert_eq!(
+                    executor
+                        .internal_state::<AwsNetworkController>()
+                        .expect("network controller state")
+                        .state,
+                    AwsNetworkState::CreatingVpc,
+                );
+            }
+            assert_eq!(
+                executor
+                    .internal_state::<AwsNetworkController>()
+                    .expect("network controller state")
+                    .vpc_id,
+                None,
+            );
+        }
     }
 }
 
@@ -5485,7 +5462,8 @@ mod controller_state_tests {
     use std::sync::{Arc, Mutex};
 
     use alien_aws_clients::ec2::{
-        CreateNatGatewayRequest, DescribeNetworkInterfacesResponse, MockEc2Api,
+        CreateNatGatewayRequest, DescribeAddressesResponse, DescribeNetworkInterfacesResponse,
+        MockEc2Api,
     };
     use alien_aws_clients::service_quotas::{
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
@@ -8995,7 +8973,7 @@ mod controller_state_tests {
         quotas.expect_get_service_quota().returning(|_, _| {
             Ok(GetServiceQuotaResponse {
                 quota: Some(ServiceQuota {
-                    quota_code: Some(EC2_VPC_EIP_QUOTA_CODE.to_string()),
+                    quota_code: Some("L-0263D0A3".to_string()),
                     service_code: Some("ec2".to_string()),
                     quota_name: None,
                     value: Some(5.0),
