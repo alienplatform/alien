@@ -12,6 +12,8 @@ pub mod initial_setup;
 #[cfg(feature = "infrastructure")]
 pub mod registry;
 #[cfg(feature = "infrastructure")]
+mod revision;
+#[cfg(feature = "infrastructure")]
 pub mod variables;
 #[cfg(feature = "infrastructure")]
 pub use infrastructure::*;
@@ -22,6 +24,8 @@ pub use registry::{
     permission_set_reaches_a_sandbox, AZURE_SANDBOX_DATA_PLANE_ROLE, MANAGEMENT_ROLE_GUARD,
     MICROVM_SESSION_LIFECYCLE_ACTIONS, SANDBOX_SETUP_ROLES_GUARD, SENSITIVE_MICROVM_ACTIONS,
 };
+#[cfg(feature = "infrastructure")]
+pub use revision::management_permissions_revision;
 #[cfg(feature = "infrastructure")]
 pub use variables::VariableInterpolator;
 

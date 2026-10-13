@@ -25,7 +25,7 @@ use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSet,
     PermissionSetReference, RemoteStackManagement, Result,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
@@ -153,7 +153,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        let fields = vec![
+        let mut fields = vec![
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "projectNumber",
@@ -169,6 +169,17 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
         ];
+        if let Some(revision) =
+            alien_permissions::management_permissions_revision(ctx.stack.management().profile())
+                .context(ErrorData::GenericError {
+                    message: "Failed to record installed management permissions".to_string(),
+                })?
+        {
+            fields.push((
+                "managementPermissionsRevision",
+                Expression::String(revision),
+            ));
+        }
         Ok(expr::object(fields))
     }
 }

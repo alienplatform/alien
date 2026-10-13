@@ -146,7 +146,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        let fields = vec![
+        let mut fields = vec![
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             (
@@ -172,6 +172,17 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
         ];
+        if let Some(revision) =
+            alien_permissions::management_permissions_revision(ctx.stack.management().profile())
+                .context(ErrorData::GenericError {
+                    message: "Failed to record installed management permissions".to_string(),
+                })?
+        {
+            fields.push((
+                "managementPermissionsRevision",
+                Expression::String(revision),
+            ));
+        }
         Ok(expr::object(fields))
     }
 }

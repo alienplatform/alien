@@ -172,11 +172,22 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        let fields = vec![
+        let mut fields = vec![
             ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
             ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
             ("managementPermissionsApplied", Expression::Bool(true)),
         ];
+        if let Some(revision) =
+            alien_permissions::management_permissions_revision(ctx.stack.management().profile())
+                .context(ErrorData::GenericError {
+                    message: "Failed to record installed management permissions".to_string(),
+                })?
+        {
+            fields.push((
+                "managementPermissionsRevision",
+                Expression::String(revision),
+            ));
+        }
         Ok(expr::object(fields))
     }
 }

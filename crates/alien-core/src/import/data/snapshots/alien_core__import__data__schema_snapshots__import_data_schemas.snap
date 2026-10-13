@@ -632,6 +632,13 @@ expression: schemas
         "description": "Whether the management inline policy was attached by the generated stack.",
         "type": "boolean"
       },
+      "managementPermissionsRevision": {
+        "description": "Revision of the management grants actually installed by this setup artifact.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "remoteBindingsRoleArn": {
         "description": "Setup-owned role used only for opted-in remote binding data access.",
         "type": [
@@ -1242,6 +1249,13 @@ expression: schemas
         "description": "Whether the management role assignments were applied by the generated stack.",
         "type": "boolean"
       },
+      "managementPermissionsRevision": {
+        "description": "Revision of the management grants actually installed by this setup artifact.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "principalId": {
         "description": "Management UAMI principal id.",
         "type": "string"
@@ -1804,6 +1818,22 @@ expression: schemas
         "description": "Project ID owning the network.",
         "type": "string"
       },
+      "proxySubnetCidr": {
+        "default": null,
+        "description": "Proxy source range used to allow load balancer traffic to workload backends.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "proxySubnetSelfLink": {
+        "default": null,
+        "description": "Setup-owned regional managed proxy subnet for internal load balancers.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "routerSelfLink": {
         "description": "Cloud Router self-link backing Cloud NAT (when created).",
         "type": [
@@ -1938,6 +1968,13 @@ expression: schemas
       "managementPermissionsApplied": {
         "description": "Whether the management role binding was attached by the generated stack.",
         "type": "boolean"
+      },
+      "managementPermissionsRevision": {
+        "description": "Revision of the management grants actually installed by this setup artifact.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "projectId": {
         "description": "Project ID containing the management service account.",

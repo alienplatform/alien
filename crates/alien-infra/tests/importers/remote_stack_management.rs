@@ -10,6 +10,7 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
             "arn:aws:iam::123456789012:role/alien-stack-remote-bindings".to_string(),
         ),
         management_permissions_applied: true,
+        management_permissions_revision: Some("installed-revision".to_string()),
     };
     let state = run_through_registry(
         &RemoteStackManagement::RESOURCE_TYPE,
@@ -20,6 +21,10 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
         &aws_management_config(),
     );
     assert_eq!(state.status, ResourceStatus::Running);
+    assert_eq!(
+        internal_state(&state)["managementPermissionsRevision"],
+        "installed-revision"
+    );
     let internal = internal_state(&state);
     assert!(
         internal
@@ -54,6 +59,7 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
             "remote-bindings@my-project.iam.gserviceaccount.com".to_string(),
         ),
         management_permissions_applied: true,
+        management_permissions_revision: Some("installed-revision".to_string()),
     };
     let state = run_through_registry(
         &RemoteStackManagement::RESOURCE_TYPE,
@@ -65,6 +71,10 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     );
 
     assert_eq!(state.status, ResourceStatus::Running);
+    assert_eq!(
+        internal_state(&state)["managementPermissionsRevision"],
+        "installed-revision"
+    );
     assert_eq!(internal_state(&state)["state"], "ready");
     let internal = internal_state(&state);
     assert_eq!(internal["roleBound"], true);
@@ -89,6 +99,7 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
         tenant_id: "33333333-3333-3333-3333-333333333333".to_string(),
         management_permissions_applied: true,
+        management_permissions_revision: Some("installed-revision".to_string()),
     };
     let state = run_through_registry(
         &RemoteStackManagement::RESOURCE_TYPE,
@@ -99,6 +110,10 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         &azure_management_config(),
     );
     assert_eq!(state.status, ResourceStatus::Provisioning);
+    assert_eq!(
+        internal_state(&state)["managementPermissionsRevision"],
+        "installed-revision"
+    );
     assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
     assert_eq!(internal_state(&state)["roleAssignmentIds"], json!([]));
 
