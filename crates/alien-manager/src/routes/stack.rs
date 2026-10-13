@@ -132,11 +132,31 @@ pub async fn stack_import(
         }
     };
 
-    if req.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
-        return ErrorData::bad_request(
-            "Imported installations keep setup ownership. Use a new CLI installation for automatic infrastructure management.",
-        )
-        .into_response();
+    let automatic = req.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+    if automatic {
+        let approved = match state
+            .deployment_store
+            .get_deployment_by_name(&subject, &deployment_group_id, req.deployment_name.trim())
+            .await
+        {
+            Ok(Some(existing)) => {
+                existing.import_source.is_some()
+                    && state.authz.can_update_deployment(&subject, &existing)
+                    && existing.stack_settings.as_ref().is_some_and(|settings| {
+                        settings.setup_management == alien_core::SetupManagement::Automatic
+                    })
+                    && (existing.status == "pending"
+                        || existing
+                            .runtime_metadata
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.automatic_setup))
+            }
+            Ok(None) => false,
+            Err(error) => return error.into_response(),
+        };
+        if !approved {
+            return ErrorData::bad_request("Ongoing management registration requires its approved own-environment installation.").into_response();
+        }
     }
 
     if req.resources.is_empty() {
@@ -226,7 +246,11 @@ pub async fn stack_import(
         .collect();
     let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers_from_presence(
         source_stack,
-        &delivered_resource_ids,
+        if automatic {
+            &std::collections::HashSet::new()
+        } else {
+            &delivered_resource_ids
+        },
         &req.input_values,
     ) {
         Ok(answers) => answers,
@@ -451,7 +475,7 @@ pub async fn stack_import(
                     }
                 }
             }
-            let runtime_metadata = if activates_setup_reservation {
+            let mut runtime_metadata = if activates_setup_reservation {
                 import_runtime_metadata(&prepared_stack, imported_gate_answers)
             } else {
                 match reimport_runtime_metadata(
@@ -465,6 +489,11 @@ pub async fn stack_import(
                     Err(error) => return error.into_response(),
                 }
             };
+            if automatic {
+                runtime_metadata.automatic_setup = true;
+                runtime_metadata.initial_setup_authority =
+                    alien_core::InitialSetupAuthority::DirectSetup;
+            }
             let should_reconcile = !activates_setup_reservation
                 && import_changes_deployment(
                     &existing,
@@ -1571,8 +1600,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     let expected: std::collections::HashSet<&str> = stack
         .resources()
         .filter(|(_, entry)| {
-            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-                .emits_setup_scaffolding(entry.lifecycle)
+            alien_core::emits_package_scaffolding(entry, req.stack_settings.setup_management)
         })
         .map(|(resource_id, _)| resource_id.as_str())
         .collect();

@@ -202,7 +202,9 @@ fn generate_auto_management_profile(
             let Some((resource_type, operation)) = id.split_once('/') else {
                 continue;
             };
-            if matches!(operation, "provision" | "management" | "heartbeat")
+            let requested_operation = matches!(operation, "provision" | "management" | "heartbeat")
+                || (operation == "telemetry" && config.stack_settings.telemetry.is_enabled());
+            if requested_operation
                 && resource_type != "remote-stack-management"
                 && supports_stack_grant(id, platform)
             {
