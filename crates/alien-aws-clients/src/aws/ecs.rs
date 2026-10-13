@@ -20,6 +20,11 @@ pub use types::*;
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait EcsApi: Send + Sync + std::fmt::Debug {
+    async fn list_tags_for_resource(
+        &self,
+        request: ListTagsForResourceRequest,
+    ) -> Result<ListTagsForResourceResponse>;
+
     async fn create_cluster(&self, request: CreateClusterRequest) -> Result<ClusterResponse>;
     async fn describe_clusters(
         &self,
@@ -136,7 +141,7 @@ impl EcsClient {
                 // native missing-definition response narrowly; other ClientException
                 // failures must never make a durable owner forget a resource.
                 "ClientException"
-                    if operation == "DescribeTaskDefinition"
+                    if matches!(operation, "DescribeTaskDefinition" | "ListTagsForResource")
                         && detail == "Unable to describe task definition." =>
                 {
                     ErrorData::RemoteResourceNotFound {
@@ -189,6 +194,13 @@ impl EcsClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl EcsApi for EcsClient {
+    async fn list_tags_for_resource(
+        &self,
+        request: ListTagsForResourceRequest,
+    ) -> Result<ListTagsForResourceResponse> {
+        self.send("ListTagsForResource", &request).await
+    }
+
     async fn create_cluster(&self, request: CreateClusterRequest) -> Result<ClusterResponse> {
         self.send("CreateCluster", &request).await
     }

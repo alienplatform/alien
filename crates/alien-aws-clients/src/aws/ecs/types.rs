@@ -493,3 +493,20 @@ pub struct TaskContainer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
+
+/// Exact ECS resource whose ownership metadata is requested.
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTagsForResourceRequest {
+    /// Full provider ARN; no configuration or payload is returned.
+    pub resource_arn: String,
+}
+
+/// Resource tags returned independently of task-definition configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTagsForResourceResponse {
+    /// Complete resource ownership metadata.
+    #[serde(default)]
+    pub tags: Vec<Tag>,
+}

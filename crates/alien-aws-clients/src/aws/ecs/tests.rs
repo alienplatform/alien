@@ -266,3 +266,50 @@ async fn only_exact_native_missing_definition_is_classified_as_absent() {
     assert_eq!(error.code, "INVALID_INPUT");
     call.assert_hits_async(1).await;
 }
+
+#[tokio::test]
+async fn ownership_tags_are_read_without_fetching_task_definition_configuration() {
+    let server = MockServer::start_async().await;
+    let mut call = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/")
+                .header(
+                    "x-amz-target",
+                    "AmazonEC2ContainerServiceV20141113.ListTagsForResource",
+                )
+                .json_body(json!({"resourceArn":"owned:1"}));
+            then.status(200)
+                .json_body(json!({"tags":[{"key":"CreateAttempt","value":"generation"}]}));
+        })
+        .await;
+    let response = client(&server)
+        .list_tags_for_resource(ListTagsForResourceRequest {
+            resource_arn: "owned:1".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(response.tags.len(), 1);
+    assert_eq!(response.tags[0].value, "generation");
+    call.assert_hits_async(1).await;
+    call.delete_async().await;
+    let absent = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/").header(
+                "x-amz-target",
+                "AmazonEC2ContainerServiceV20141113.ListTagsForResource",
+            );
+            then.status(400).json_body(
+                json!({"__type":"ClientException","message":"Unable to describe task definition."}),
+            );
+        })
+        .await;
+    let error = client(&server)
+        .list_tags_for_resource(ListTagsForResourceRequest {
+            resource_arn: "owned:1".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
+    absent.assert_hits_async(1).await;
+}

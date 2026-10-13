@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_aws_clients::ecs::{
-    ContainerDefinition, DeleteTaskDefinitionsRequest, DescribeTaskDefinitionRequest, EcsApi,
+    ContainerDefinition, DeleteTaskDefinitionsRequest, EcsApi, ListTagsForResourceRequest,
     ListTaskDefinitionsRequest, PortMapping, RegisterTaskDefinitionRequest, RuntimePlatform, Tag,
     TaskDefinitionRequest, TaskDefinitionResponse,
 };
@@ -130,12 +130,11 @@ impl GatewayTask {
             return Ok(None);
         }
         let found = self.inventory(ecs).await?;
-        if let Some(arn) = found.first() {
-            let task = self.describe(ecs, arn).await?;
-            if task.task_definition.status.as_deref() != Some("ACTIVE") {
+        if let Some((arn, status)) = found.first_key_value() {
+            if status != "ACTIVE" {
                 return Err(invalid("Gateway task generation is no longer active"));
             }
-            self.revisions.extend(found.iter().cloned());
+            self.revisions.extend(found.keys().cloned());
             return Ok(Some(arn.clone()));
         }
         if self.registration_attempted {
@@ -169,35 +168,31 @@ impl GatewayTask {
             return Ok(true);
         }
         let found = self.inventory(ecs).await?;
-        self.revisions.extend(found.iter().cloned());
+        self.revisions.extend(found.keys().cloned());
         if self.revisions.is_empty() {
             return Ok(false); // Uncertain registration must never disappear from state.
         }
         for arn in &self.revisions {
-            if !found.contains(arn) {
+            let Some(status) = found.get(arn) else {
                 if !self.delete_requested.contains(arn) {
                     return Ok(false);
                 }
                 match ecs
-                    .describe_task_definition(
-                        DescribeTaskDefinitionRequest::builder()
-                            .task_definition(arn.clone())
-                            .include(vec!["TAGS".into()])
-                            .build(),
-                    )
+                    .list_tags_for_resource(ListTagsForResourceRequest {
+                        resource_arn: arn.clone(),
+                    })
                     .await
                 {
                     Err(error) if is_remote_not_found(&error) => continue,
                     Err(error) => return Err(error.context(cloud("Confirm gateway task absence"))),
                     Ok(response) => {
-                        self.verify(&response)?;
+                        self.verify_tags(&response.tags)?;
                         return Ok(false);
                     }
                 }
-            }
-            let response = self.describe(ecs, arn).await?;
-            match response.task_definition.status.as_deref() {
-                Some("ACTIVE") => {
+            };
+            match status.as_str() {
+                "ACTIVE" => {
                     ecs.deregister_task_definition(TaskDefinitionRequest {
                         task_definition: arn.clone(),
                     })
@@ -205,7 +200,7 @@ impl GatewayTask {
                     .context(cloud("Deregister owned gateway task definition"))?;
                     return Ok(false);
                 }
-                Some("INACTIVE") => {
+                "INACTIVE" => {
                     if self.delete_requested.insert(arn.clone()) {
                         return Ok(false); // Checkpoint before a delete can commit remotely.
                     }
@@ -227,7 +222,7 @@ impl GatewayTask {
                     }
                     return Ok(false);
                 }
-                Some("DELETE_IN_PROGRESS") => {
+                "DELETE_IN_PROGRESS" => {
                     self.delete_requested.insert(arn.clone());
                     return Ok(false);
                 }
@@ -237,8 +232,8 @@ impl GatewayTask {
         Ok(found.is_empty())
     }
 
-    async fn inventory(&self, ecs: &dyn EcsApi) -> Result<BTreeSet<String>> {
-        let mut found = BTreeSet::new();
+    async fn inventory(&self, ecs: &dyn EcsApi) -> Result<BTreeMap<String, String>> {
+        let mut found = BTreeMap::new();
         for status in ["ACTIVE", "INACTIVE", "DELETE_IN_PROGRESS"] {
             let mut next_token = None;
             let mut cursors = BTreeSet::new();
@@ -255,8 +250,14 @@ impl GatewayTask {
                     .context(cloud("Discover owned gateway task family"))?;
                 for arn in response.task_definition_arns {
                     self.validate_arn(&arn)?;
-                    self.describe(ecs, &arn).await?;
-                    found.insert(arn);
+                    let metadata = ecs
+                        .list_tags_for_resource(ListTagsForResourceRequest {
+                            resource_arn: arn.clone(),
+                        })
+                        .await
+                        .context(cloud("Verify gateway task ownership metadata"))?;
+                    self.verify_tags(&metadata.tags)?;
+                    found.insert(arn, status.to_string());
                 }
                 next_token = response.next_token;
                 let Some(token) = &next_token else {
@@ -287,34 +288,9 @@ impl GatewayTask {
         Ok(())
     }
 
-    async fn describe(&self, ecs: &dyn EcsApi, arn: &str) -> Result<TaskDefinitionResponse> {
-        let response = ecs
-            .describe_task_definition(
-                DescribeTaskDefinitionRequest::builder()
-                    .task_definition(arn.into())
-                    .include(vec!["TAGS".into()])
-                    .build(),
-            )
-            .await
-            .context(cloud("Verify gateway task generation"))?;
-        if response.task_definition.task_definition_arn != arn {
-            return Err(invalid(
-                "Gateway task describe returned a different identity",
-            ));
-        }
-        self.verify(&response)?;
-        Ok(response)
-    }
-
-    fn verify(&self, response: &TaskDefinitionResponse) -> Result<()> {
-        let task = &response.task_definition;
-        self.validate_arn(&task.task_definition_arn)?;
-        let tags: BTreeMap<_, _> = response
-            .tags
-            .iter()
-            .map(|tag| (&tag.key, &tag.value))
-            .collect();
-        if tags.len() != response.tags.len()
+    fn verify_tags(&self, actual: &[Tag]) -> Result<()> {
+        let tags: BTreeMap<_, _> = actual.iter().map(|tag| (&tag.key, &tag.value)).collect();
+        if tags.len() != actual.len()
             || self
                 .request
                 .tags
@@ -325,6 +301,13 @@ impl GatewayTask {
                 "Gateway task tags do not match the recorded generation",
             ));
         }
+        Ok(())
+    }
+
+    fn verify(&self, response: &TaskDefinitionResponse) -> Result<()> {
+        let task = &response.task_definition;
+        self.validate_arn(&task.task_definition_arn)?;
+        self.verify_tags(&response.tags)?;
         let expected = &self.request.container_definitions[0];
         if task.family != self.request.family
             || task.container_definitions.len() != 1
@@ -392,7 +375,9 @@ fn cloud(message: &str) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_aws_clients::ecs::{ListTaskDefinitionsResponse, MockEcsApi};
+    use alien_aws_clients::ecs::{
+        ListTagsForResourceResponse, ListTaskDefinitionsResponse, MockEcsApi,
+    };
     use alien_client_core::ErrorData as ClientError;
     use serde_json::json;
 
@@ -440,16 +425,18 @@ mod tests {
                 })
             });
         if !items.is_empty() {
-            ecs.expect_describe_task_definition()
+            ecs.expect_list_tags_for_resource()
                 .returning(move |request| {
-                    assert_eq!(request.include, Some(vec!["TAGS".into()]));
-                    Ok(items
-                        .iter()
-                        .find(|item| {
-                            item.task_definition.task_definition_arn == request.task_definition
-                        })
-                        .unwrap()
-                        .clone())
+                    Ok(ListTagsForResourceResponse {
+                        tags: items
+                            .iter()
+                            .find(|item| {
+                                item.task_definition.task_definition_arn == request.resource_arn
+                            })
+                            .unwrap()
+                            .tags
+                            .clone(),
+                    })
                 });
         }
     }
@@ -526,9 +513,9 @@ mod tests {
                 })
             }
         });
-        ecs.expect_describe_task_definition()
+        ecs.expect_list_tags_for_resource()
             .times(1)
-            .return_once(move |_| Ok(foreign));
+            .return_once(move |_| Ok(ListTagsForResourceResponse { tags: foreign.tags }));
         assert!(owner.step_delete(&ecs).await.is_err());
     }
 
@@ -560,19 +547,18 @@ mod tests {
                 })
             }
         });
-        ecs.expect_describe_task_definition()
+        ecs.expect_list_tags_for_resource()
             .returning(move |request| {
-                Ok(
-                    if request.task_definition == first.task_definition.task_definition_arn {
-                        first.clone()
-                    } else {
-                        assert_eq!(
-                            request.task_definition,
-                            second.task_definition.task_definition_arn
-                        );
-                        second.clone()
-                    },
-                )
+                let tags = if request.resource_arn == first.task_definition.task_definition_arn {
+                    first.tags.clone()
+                } else {
+                    assert_eq!(
+                        request.resource_arn,
+                        second.task_definition.task_definition_arn
+                    );
+                    second.tags.clone()
+                };
+                Ok(ListTagsForResourceResponse { tags })
             });
         ecs.expect_deregister_task_definition()
             .times(1)
@@ -619,7 +605,7 @@ mod tests {
         ecs.checkpoint();
         owner = reload(&owner);
         inventory(&mut ecs, vec![]);
-        ecs.expect_describe_task_definition()
+        ecs.expect_list_tags_for_resource()
             .times(1)
             .return_once(|_| {
                 Err(AlienError::new(ClientError::RemoteResourceNotFound {
