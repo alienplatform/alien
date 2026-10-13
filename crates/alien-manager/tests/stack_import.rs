@@ -35,8 +35,8 @@ use alien_core::{
     GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, HeartbeatsMode,
     KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
     Network, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus,
-    RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState, Storage, UpdatesMode,
-    Worker, WorkerCode,
+    RuntimeMetadata, ServiceAccount, Stack, StackResourceState, StackSettings, StackState, Storage,
+    UpdatesMode, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -2573,6 +2573,7 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
         );
         assert!(metadata
             .prepared_stack
+            .as_ref()
             .unwrap()
             .resources
             .contains_key("archive"));
@@ -2581,6 +2582,98 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
         assert!(
             !state.resources.contains_key("archive"),
             "Application infrastructure must be created after registration using installed access"
+        );
+
+        // A later package registration reports only setup scaffolding. It must
+        // retain application controller state, even for Frozen resources and
+        // resources that a subsequent release is still deleting.
+        let mut running_state = state;
+        let archive_config = stack_with_storage("archive")
+            .resources
+            .get("archive")
+            .unwrap()
+            .config
+            .clone();
+        let mut archive = StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.into(),
+            archive_config,
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        archive.status = ResourceStatus::Running;
+        archive.internal_state = Some(serde_json::json!({ "installed": true }));
+        running_state
+            .resources
+            .insert("archive".into(), archive.clone());
+        let mut retiring = archive.clone();
+        retiring.config = stack_with_storage("retiring")
+            .resources
+            .get("retiring")
+            .unwrap()
+            .config
+            .clone();
+        retiring.status = ResourceStatus::Deleting;
+        running_state
+            .resources
+            .insert("retiring".into(), retiring.clone());
+        fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: reserved.id.clone(),
+                    session: "test-reconcile".into(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: DeploymentStatus::Running,
+                        platform: Platform::Aws,
+                        current_release: Some(ReleaseInfo {
+                            release_id: fixture.release_id.clone(),
+                            version: None,
+                            description: None,
+                            stack: stack_with_storage("archive"),
+                        }),
+                        target_release: None,
+                        stack_state: Some(running_state),
+                        error: None,
+                        environment_info: installed.environment_info,
+                        runtime_metadata: Some(metadata),
+                        retry_requested: false,
+                        protocol_version: installed.deployment_protocol_version,
+                    },
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .unwrap();
+        request.setup_fingerprint = "updated-test".into();
+        let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+        assert_eq!(status, StatusCode::OK, "{body:#}");
+        let reimported = fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .stack_state
+            .unwrap();
+        assert_eq!(
+            reimported.resources["archive"].status,
+            ResourceStatus::Running
+        );
+        assert_eq!(
+            reimported.resources["archive"].internal_state,
+            archive.internal_state
+        );
+        assert_eq!(
+            reimported.resources["retiring"].status,
+            ResourceStatus::Deleting
         );
     }
 }

@@ -14,12 +14,19 @@ pub enum SetupConfigurationProfile {
 pub fn emits_package_scaffolding(entry: &ResourceEntry, management: SetupManagement) -> bool {
     let resource_type = entry.config.resource_type();
     if management == SetupManagement::Automatic {
-        matches!(
-            resource_type.as_ref(),
-            "remote-stack-management" | "vault" | "azure_resource_group" | "service_activation"
-        )
+        is_automatic_setup_package_resource_type(resource_type.as_ref())
     } else {
         ownership_policy_for_resource_type(resource_type.as_ref())
             .emits_setup_scaffolding(entry.lifecycle)
     }
+}
+
+/// Resources whose state is replaced by an automatic setup package import.
+/// Application resources are managed through the installed identity and must
+/// retain their controller state when that package is reimported.
+pub fn is_automatic_setup_package_resource_type(resource_type: &str) -> bool {
+    matches!(
+        resource_type,
+        "remote-stack-management" | "vault" | "azure_resource_group" | "service_activation"
+    )
 }

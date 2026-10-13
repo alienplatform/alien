@@ -446,6 +446,10 @@ pub async fn stack_import(
                         &prepared_stack,
                         existing_stack_state,
                         stack_state,
+                        existing
+                            .runtime_metadata
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.automatic_setup),
                     ) {
                         Ok(state) => state,
                         Err(error) => return error.into_response(),
@@ -801,6 +805,7 @@ fn merge_reimported_stack_state(
     stack: &Stack,
     existing: &StackState,
     mut imported: StackState,
+    automatic_setup: bool,
 ) -> crate::error::Result<StackState> {
     for resource in &req.resources {
         let Some(existing_resource) = existing.resources.get(&resource.id) else {
@@ -870,10 +875,25 @@ fn merge_reimported_stack_state(
         imported.resources.insert(resource.id.clone(), merged);
     }
 
-    // The setup payload is authoritative for setup-owned resources: omission
-    // means setup removed one. Runtime-owned resources are not present in that
-    // payload, so carry their current controller state across explicitly.
-    preserve_live_runtime_state(stack, existing, &mut imported);
+    // The package replaces the state of resources it emits. In automatic mode
+    // it omits application infrastructure, including Frozen resources and
+    // resources that a later release is still deleting. Keep those controller
+    // states even when the resource is absent from the current prepared stack.
+    if automatic_setup {
+        for (resource_id, resource) in &existing.resources {
+            if !imported.resources.contains_key(resource_id)
+                && !alien_core::is_automatic_setup_package_resource_type(&resource.resource_type)
+            {
+                imported
+                    .resources
+                    .insert(resource_id.clone(), resource.clone());
+            }
+        }
+    } else {
+        // For manual setup, omission removes setup-owned resources. Only Live
+        // runtime resources survive an incomplete package registration.
+        preserve_live_runtime_state(stack, existing, &mut imported);
+    }
 
     Ok(imported)
 }
