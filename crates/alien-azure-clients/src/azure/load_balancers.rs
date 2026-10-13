@@ -67,6 +67,14 @@ pub trait LoadBalancerApi: Send + Sync + std::fmt::Debug {
         load_balancing_rule_name: &str,
     ) -> Result<OperationResult<Value>>;
 
+    /// Delete only the exact provider snapshot whose ownership was verified.
+    async fn delete_load_balancer_if_match(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        etag: &str,
+    ) -> Result<OperationResult<()>>;
+
     /// Delete a load balancer
     ///
     /// This method deletes a Load Balancer. The operation may complete synchronously with
@@ -346,6 +354,39 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
         Ok(load_balancer)
     }
 
+    async fn delete_load_balancer_if_match(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        etag: &str,
+    ) -> Result<OperationResult<()>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                load_balancer_name
+            ),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+        let request = AzureRequestBuilder::new(Method::DELETE, url)
+            .content_length("")
+            .header("If-Match", etag)
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "DeleteLoadBalancer",
+                load_balancer_name,
+            )
+            .await
+    }
+
     async fn delete_load_balancer(
         &self,
         resource_group_name: &str,
@@ -404,6 +445,11 @@ mod tests {
                 .query_param("api-version", "2024-05-01").header("If-Match", "W/\"snapshot\"").json_body(body.clone());
             then.status(412).json_body(json!({"error":{"code":"PreconditionFailed", "message":"Snapshot changed"}}));
         }).await;
+        let delete = server.mock_async(|when, then| {
+            when.method(DELETE).path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb")
+                .query_param("api-version", "2024-05-01").header("If-Match", "W/\"snapshot\"");
+            then.status(412).json_body(json!({"error":{"code":"PreconditionFailed", "message":"Snapshot changed"}}));
+        }).await;
         let config = AzureClientConfig {
             subscription_id: "sub".to_string(),
             tenant_id: "tenant".to_string(),
@@ -435,6 +481,19 @@ mod tests {
             !error.retryable,
             "refresh the snapshot before another update"
         );
+        let deletion = client
+            .delete_load_balancer_if_match("rg", "lb", snapshot["etag"].as_str().unwrap())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                deletion.error,
+                Some(ErrorData::RemoteResourceConflict { .. })
+            ),
+            "{deletion}"
+        );
+        assert!(!deletion.retryable);
+        delete.assert_hits_async(1).await;
         read.assert_hits_async(1).await;
         write.assert_hits_async(1).await;
     }
