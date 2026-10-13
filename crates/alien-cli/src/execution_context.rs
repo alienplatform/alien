@@ -131,7 +131,7 @@ impl ExecutionMode {
     pub async fn ensure_ready(&self) -> Result<()> {
         match self {
             Self::Dev { port } => {
-                if !check_server_health(*port).await {
+                if !check_server_health(*port).await? {
                     return Err(AlienError::new(ErrorData::ConfigurationError {
                         message: format!(
                             "Local dev server is not running on http://localhost:{port}. Start it with `alien dev` (full session) or `alien dev server`."
@@ -164,7 +164,7 @@ impl ExecutionMode {
                         })?;
                 headers.insert(reqwest::header::AUTHORIZATION, header_value);
 
-                let http_client = reqwest::Client::builder()
+                let http_client = crate::http_client::builder()
                     .default_headers(headers)
                     .build()
                     .into_alien_error()
@@ -205,7 +205,7 @@ impl ExecutionMode {
                         })?;
                 headers.insert(reqwest::header::AUTHORIZATION, header_value);
 
-                let http_client = reqwest::Client::builder()
+                let http_client = crate::http_client::builder()
                     .default_headers(headers)
                     .build()
                     .into_alien_error()
@@ -455,7 +455,7 @@ impl ExecutionMode {
             }
             Self::Dev { port } => {
                 let base_url = format!("http://localhost:{}", port);
-                Ok(crate::auth::AuthHttp::new_unauthenticated(base_url))
+                crate::auth::AuthHttp::new_unauthenticated(base_url)
             }
             #[cfg(feature = "platform")]
             Self::Platform { .. } => get_auth_http(&self.auth_opts()).await,
@@ -555,7 +555,7 @@ impl ExecutionMode {
                         })?;
                 headers.insert(reqwest::header::AUTHORIZATION, header_value);
 
-                let http_client = reqwest::Client::builder()
+                let http_client = crate::http_client::builder()
                     .default_headers(headers)
                     .build()
                     .into_alien_error()
@@ -581,7 +581,7 @@ impl ExecutionMode {
             }
             Self::Dev { port } => {
                 let manager_url = format!("http://localhost:{}", port);
-                let http_client = reqwest::Client::new();
+                let http_client = crate::http_client::client()?;
                 let client = ServerSdkClient::new_with_client(&manager_url, http_client.clone());
 
                 Ok(ManagerContext {
@@ -865,10 +865,10 @@ impl ExecutionMode {
 }
 
 /// Check if dev server is healthy
-async fn check_server_health(port: u16) -> bool {
-    let client = reqwest::Client::new();
+async fn check_server_health(port: u16) -> Result<bool> {
+    let client = crate::http_client::client()?;
     let url = format!("http://localhost:{}/health", port);
-    client.get(&url).send().await.is_ok()
+    Ok(client.get(&url).send().await.is_ok())
 }
 
 /// Response from GET /v1/resolve
