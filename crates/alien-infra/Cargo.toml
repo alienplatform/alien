@@ -69,7 +69,7 @@ pem = { workspace = true }
 p12 = "0.6"
 
 # Kubeconfig dependencies
-axum = { workspace = true, optional = true }
+axum = { workspace = true, optional = true, features = ["json"] }
 base64 = { workspace = true, optional = true }
 ed25519-compact = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }

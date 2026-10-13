@@ -1245,6 +1245,7 @@ fn aws_remote_storage_management_role_keeps_its_heartbeat() {
         "aws",
         "remote storage management",
     );
+    insta::assert_snapshot!("aws_remote_storage_management_setup", yaml);
 
     let management = template
         .resources
