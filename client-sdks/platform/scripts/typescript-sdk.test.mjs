@@ -6,6 +6,8 @@ import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
 import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
+import { deploymentSetupConfigInputToJSON } from "../typescript/esm/models/deploymentsetupconfiginput.js";
+import { deploymentSetupPolicyFromJSON, deploymentSetupPolicyToJSON } from "../typescript/esm/models/deploymentsetuppolicy.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -21,6 +23,20 @@ import {
   UpdateProjectHelm$outboundSchema,
   updateProjectHelmToJSON,
 } from "../typescript/esm/models/updateproject.js";
+
+test("link configuration profiles survive request and response serialization without a legacy default", () => {
+  for (const configurationProfile of [undefined, "standard", "advanced"]) {
+    const policy = {
+      allowedPlatforms: ["aws"],
+      allowedSetupMethods: ["cloudformation"],
+      ...(configurationProfile === undefined ? {} : { configurationProfile }),
+    };
+    const request = JSON.parse(deploymentSetupConfigInputToJSON({ policy }));
+    assert.deepEqual(request.policy, policy);
+    assert.deepEqual(JSON.parse(deploymentSetupPolicyToJSON(policy)), policy);
+    assert.deepEqual(deploymentSetupPolicyFromJSON(JSON.stringify(policy)), { ok: true, value: policy });
+  }
+});
 
 test("published package model imports still validate and serialize", () => {
   const rule = { apiGroup: "apps", resource: "deployments", verbs: ["get"], reason: "Read workload state" };
