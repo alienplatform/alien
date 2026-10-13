@@ -3,6 +3,15 @@
   "description": "Allows managing the worker fleet inside a setup-owned ComputeCluster boundary.",
   "platforms": {
     "aws": [
+      // Updates run quota preflights with the installed management role.
+      // These reads expose applied quotas and public hardware metadata.
+      {
+        "grant": { "actions": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"] },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
       // EC2 Describe actions do not support resource-level permissions or
       // conditions. Runtime needs this metadata read to adopt a launch template
       // created by an interrupted attempt.
