@@ -13,7 +13,7 @@
 use alien_core::{
     import::ImportContext, ErrorData, Platform, ResourceType, Result, StackResourceState,
 };
-use alien_error::{AlienError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 
@@ -96,6 +96,16 @@ where
         imported: StackResourceState,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
+        // Typed importers may deserialize directly into a controller struct.
+        // Check envelopes first so re-import cannot discard newer ownership.
+        for state in [&existing, &imported] {
+            for value in [&state.internal_state, &state.last_failed_state].into_iter().flatten() {
+                crate::validate_controller_state_value(value, Some(ctx.resource_id))
+                    .context(ErrorData::JsonDeserializationFailed {
+                        reason: "Controller checkpoint is incompatible with this importer".to_string(),
+                    })?;
+            }
+        }
         ResourceImporter::merge_reimport(self, existing, imported, ctx)
     }
 }
