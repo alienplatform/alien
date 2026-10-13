@@ -136,13 +136,16 @@ Resources:
       PolicyDocument:
         Version: 2012-10-17
         Statement:
-        - Action:
-          - lambda:InvokeAsync
-          - lambda:InvokeFunction
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-store
-          Sid: WorkerDispatchCommand
+        - Fn::If:
+          - InputStoreEnabledIsTrue
+          - Action:
+            - lambda:InvokeAsync
+            - lambda:InvokeFunction
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-store
+            Sid: WorkerDispatchCommand
+          - Ref: AWS::NoValue
         - Sid: ReadOwnManagementRole
           Effect: Allow
           Action: iam:GetRole

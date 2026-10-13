@@ -432,5 +432,29 @@ fn management_receipt_follows_the_optional_resource() {
             .as_array()
             .expect("installed grant list");
         assert_eq!(!grants.is_empty(), enabled);
+        let policy =
+            &template.resources["ManagementRoleManagementPolicy1"].properties["PolicyDocument"];
+        let policy = resolve(
+            policy,
+            &HashMap::from([(GATE_CONDITION, enabled)]),
+            Declined::Removed,
+        )
+        .expect("management policy resolves");
+        let policy = serde_json::to_value(policy).unwrap();
+        let invokes_worker = policy["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|statement| {
+                statement["Action"].as_array().is_some_and(|actions| {
+                    actions
+                        .iter()
+                        .any(|action| action == "lambda:InvokeFunction")
+                })
+            });
+        assert_eq!(
+            invokes_worker, enabled,
+            "IAM and receipt must follow the same input"
+        );
     }
 }

@@ -293,6 +293,11 @@ locals {
         roleName                     = aws_iam_role.management.name
         roleArn                      = aws_iam_role.management.arn
         managementPermissionsApplied = true
+        installedManagementGrants = {
+          kubernetes = [
+            "41bb4a333895df4ecb67736e4c59171fafb5d5b648d295a240a3755f60095c35"
+          ]
+        }
       }
     }
   ]

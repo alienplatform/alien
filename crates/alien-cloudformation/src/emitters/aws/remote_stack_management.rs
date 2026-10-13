@@ -166,7 +166,11 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
                 if let Some(CfExpression::List(policy_statements)) =
                     policy_object.shift_remove("Statement")
                 {
-                    statements.extend(policy_statements);
+                    statements.extend(
+                        policy_statements
+                            .into_iter()
+                            .map(|statement| (statement, None)),
+                    );
                 }
             }
         }
@@ -212,12 +216,16 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
             if let Some(CfExpression::List(policy_statements)) =
                 policy_object.shift_remove("Statement")
             {
-                statements.extend(policy_statements);
+                statements.extend(
+                    policy_statements
+                        .into_iter()
+                        .map(|statement| (statement, resource_entry.enabled_when.as_deref())),
+                );
             }
         }
     }
 
-    statements.push(CfExpression::object([
+    statements.push((CfExpression::object([
         ("Sid", CfExpression::from("ReadOwnManagementRole")),
         ("Effect", CfExpression::from("Allow")),
         ("Action", CfExpression::from("iam:GetRole")),
@@ -227,9 +235,18 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
                 "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management",
             ),
         ),
-    ]));
+    ]), None));
 
-    chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))
+    // Assign unique Sids before wrapping statements in installer conditions.
+    let (statements, gates): (Vec<_>, Vec<_>) = statements.into_iter().unzip();
+    let statements = uniquify_iam_statement_sids(statements)
+        .into_iter()
+        .zip(gates)
+        .map(|(statement, gate)| {
+            crate::emitters::enabled::when_enabled(gate, statement, CfExpression::no_value())
+        })
+        .collect();
+    chunk_managed_policy_statements(statements)
 }
 
 fn management_policy_resources(
