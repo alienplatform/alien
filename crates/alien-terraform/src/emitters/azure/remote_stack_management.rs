@@ -172,15 +172,21 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
         ];
-        if let Some(revision) =
-            alien_permissions::management_permissions_revision(ctx.stack.management().profile())
-                .context(ErrorData::GenericError {
-                    message: "Failed to record installed management permissions".to_string(),
-                })?
-        {
+        if let Some(revision) = alien_permissions::management_grant_revisions(
+            ctx.stack.management().profile(),
+            ctx.platform,
+        )
+        .context(ErrorData::GenericError {
+            message: "Failed to record installed management permissions".to_string(),
+        })? {
             fields.push((
-                "managementPermissionsRevision",
-                Expression::String(revision),
+                "installedManagementGrants",
+                expr::object(revision.into_iter().map(|(scope, grants)| {
+                    (
+                        scope,
+                        Expression::Array(grants.into_iter().map(Expression::String).collect()),
+                    )
+                })),
             ));
         }
         Ok(expr::object(fields))

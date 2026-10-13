@@ -25,7 +25,7 @@ pub use registry::{
     MICROVM_SESSION_LIFECYCLE_ACTIONS, SANDBOX_SETUP_ROLES_GUARD, SENSITIVE_MICROVM_ACTIONS,
 };
 #[cfg(feature = "infrastructure")]
-pub use revision::management_permissions_revision;
+pub use revision::{management_grant_revisions, management_permissions_revision};
 #[cfg(feature = "infrastructure")]
 pub use variables::VariableInterpolator;
 

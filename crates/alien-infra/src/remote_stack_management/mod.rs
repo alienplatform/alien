@@ -40,6 +40,20 @@ pub(crate) fn management_permissions_revision(
         })
 }
 
+fn management_grant_revisions(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<std::collections::BTreeMap<String, Vec<String>>>> {
+    alien_permissions::management_grant_revisions(
+        ctx.desired_stack.management().profile(),
+        ctx.platform,
+    )
+    .context(ErrorData::InfrastructureError {
+        message: "Failed to record installed management grants".to_string(),
+        operation: Some("management_grant_revisions".to_string()),
+        resource_id: None,
+    })
+}
+
 /// Check the installed grant receipt before runtime starts or resumes mutations.
 /// Cleanup remains available even when a newer release requires setup changes.
 pub(crate) fn validate_installed_management_permissions(
@@ -61,15 +75,19 @@ pub(crate) fn validate_installed_management_permissions(
     {
         return Ok(());
     }
-    let expected = alien_permissions::management_permissions_revision(stack.management().profile())
-        .context(ErrorData::InfrastructureError {
-            message: "Failed to resolve required management permissions".to_string(),
-            operation: Some("validate_installed_management_permissions".to_string()),
-            resource_id: None,
-        })?;
+    let expected =
+        alien_permissions::management_grant_revisions(stack.management().profile(), state.platform)
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to resolve required management permissions".to_string(),
+                operation: Some("validate_installed_management_permissions".to_string()),
+                resource_id: None,
+            })?;
     let Some(expected) = expected else {
         return Ok(());
     };
+    if expected.is_empty() {
+        return Ok(());
+    }
     for (id, resource) in stack.resources() {
         if resource
             .config
@@ -90,21 +108,27 @@ pub(crate) fn validate_installed_management_permissions(
             Platform::Aws => {
                 installed
                     .get_internal_controller_typed::<AwsRemoteStackManagementController>()?
-                    .management_permissions_revision
+                    .installed_management_grants
             }
             Platform::Gcp => {
                 installed
                     .get_internal_controller_typed::<GcpRemoteStackManagementController>()?
-                    .management_permissions_revision
+                    .installed_management_grants
             }
             Platform::Azure => {
                 installed
                     .get_internal_controller_typed::<AzureRemoteStackManagementController>()?
-                    .management_permissions_revision
+                    .installed_management_grants
             }
             _ => continue,
         };
-        if applied.as_deref() != Some(expected.as_str()) {
+        if !applied.as_ref().is_some_and(|installed| {
+            expected.iter().all(|(scope, grants)| {
+                installed
+                    .get(scope)
+                    .is_some_and(|available| grants.iter().all(|grant| available.contains(grant)))
+            })
+        }) {
             return Err(AlienError::new(ErrorData::SetupRequired {
                 message: "The registered management grants do not match this release. Regenerate and apply setup, then register its outputs before retrying".to_string(),
                 resource_id: Some(id.to_string()),
@@ -142,8 +166,8 @@ mod tests {
         GcpRemoteStackManagementController,
     };
     use alien_core::{
-        Platform, RemoteStackManagement, Resource, ResourceEntry, ResourceLifecycle,
-        ResourceStatus, StackResourceState, Worker, WorkerCode,
+        ManagementPermissions, Platform, RemoteStackManagement, Resource, ResourceEntry,
+        ResourceLifecycle, ResourceStatus, StackResourceState, Storage,
     };
 
     async fn executor(
@@ -262,41 +286,73 @@ mod tests {
                 )
             });
             stack.resources.get_mut("management").unwrap().lifecycle = ResourceLifecycle::Frozen;
-            let worker = Resource::new(
-                Worker::new("pending-worker".to_string())
-                    .code(WorkerCode::Image {
-                        image: "example.invalid/worker:test".to_string(),
-                    })
-                    .build(),
-            );
+            let storage = Resource::new(Storage::new("pending-storage".to_string()).build());
             stack.resources.insert(
-                "pending-worker".to_string(),
+                "pending-storage".to_string(),
                 ResourceEntry {
-                    config: worker.clone(),
+                    config: storage.clone(),
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: vec![],
                     remote_access: false,
                     enabled_when: None,
                 },
             );
-            let revision =
-                alien_permissions::management_permissions_revision(stack.management().profile())
-                    .unwrap()
-                    .unwrap();
-            let runtime = StackExecutor::builder(&stack, client)
+            let revision = alien_permissions::management_grant_revisions(
+                stack.management().profile(),
+                platform,
+            )
+            .unwrap()
+            .unwrap();
+            let runtime = StackExecutor::builder(&stack, client.clone())
                 .deployment_config(&config)
                 .lifecycle_filter(vec![ResourceLifecycle::Live])
                 .step_out_of_scope_resources(false)
                 .build()
                 .unwrap();
-            for installed in [None, Some("older-grants"), Some(revision.as_str())] {
+            for installed in [
+                None,
+                Some(std::collections::BTreeMap::new()),
+                Some(revision.clone()),
+            ] {
                 let mut state = fixture.stack_state().clone();
                 let management = state.resources.get_mut("management").unwrap();
                 management.lifecycle = Some(ResourceLifecycle::Frozen);
-                management.internal_state.as_mut().unwrap()["managementPermissionsRevision"] =
+                management.internal_state.as_mut().unwrap()["installedManagementGrants"] =
                     serde_json::json!(installed);
-                if installed == Some(revision.as_str()) {
-                    assert_eq!(runtime.plan(&state).unwrap().creates, ["pending-worker"]);
+                if installed.as_ref() == Some(&revision) {
+                    assert_eq!(runtime.plan(&state).unwrap().creates, ["pending-storage"]);
+                    let mut narrowed = stack.clone();
+                    let mut profile = stack.management().profile().unwrap().clone();
+                    for grants in profile.0.values_mut() {
+                        grants.pop();
+                    }
+                    narrowed.permissions.management = ManagementPermissions::Override(profile);
+                    validate_installed_management_permissions(
+                        &narrowed,
+                        &state,
+                        InitialSetupAuthority::ImportedHandoff,
+                    )
+                    .unwrap();
+                    let mut expanded = stack.clone();
+                    let mut profile = stack.management().profile().unwrap().clone();
+                    let grants = profile
+                        .0
+                        .values()
+                        .find(|grants| !grants.is_empty())
+                        .unwrap()
+                        .clone();
+                    profile.0.insert("new-resource-scope".to_string(), grants);
+                    expanded.permissions.management = ManagementPermissions::Override(profile);
+                    assert_eq!(
+                        validate_installed_management_permissions(
+                            &expanded,
+                            &state,
+                            InitialSetupAuthority::ImportedHandoff
+                        )
+                        .unwrap_err()
+                        .code,
+                        "DEPLOYMENT_SETUP_REQUIRED"
+                    );
                     continue;
                 }
                 assert_eq!(
@@ -308,19 +364,30 @@ mod tests {
                     "DEPLOYMENT_SETUP_REQUIRED"
                 );
                 let mut pending = StackResourceState::new_pending(
-                    "worker".to_string(),
-                    worker.clone(),
+                    Storage::RESOURCE_TYPE.to_string(),
+                    storage.clone(),
                     Some(ResourceLifecycle::Live),
                     vec![],
                 );
                 pending.status = ResourceStatus::Updating;
                 state
                     .resources
-                    .insert("pending-worker".to_string(), pending);
+                    .insert("pending-storage".to_string(), pending);
                 assert_eq!(
-                    runtime.refresh(state).await.unwrap_err().code,
+                    runtime.refresh(state.clone()).await.unwrap_err().code,
                     "DEPLOYMENT_SETUP_REQUIRED"
                 );
+                state.resources.get_mut("pending-storage").unwrap().status =
+                    ResourceStatus::Running;
+                let mut cleanup_stack = stack.clone();
+                cleanup_stack.resources.shift_remove("pending-storage");
+                let cleanup = StackExecutor::builder(&cleanup_stack, client.clone())
+                    .deployment_config(&config)
+                    .lifecycle_filter(vec![ResourceLifecycle::Live])
+                    .step_out_of_scope_resources(false)
+                    .build()
+                    .unwrap();
+                assert_eq!(cleanup.plan(&state).unwrap().deletes, ["pending-storage"]);
             }
         }
     }

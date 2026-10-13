@@ -60,15 +60,21 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             ("roleArn", CfExpression::get_att(&role_id, "Arn")),
             ("managementPermissionsApplied", CfExpression::from(true)),
         ];
-        if let Some(revision) =
-            alien_permissions::management_permissions_revision(ctx.stack.management().profile())
-                .context(ErrorData::GenericError {
-                    message: "Failed to record installed management permissions".to_string(),
-                })?
-        {
+        if let Some(revision) = alien_permissions::management_grant_revisions(
+            ctx.stack.management().profile(),
+            ctx.platform,
+        )
+        .context(ErrorData::GenericError {
+            message: "Failed to record installed management permissions".to_string(),
+        })? {
             fields.push((
-                "managementPermissionsRevision",
-                CfExpression::from(revision),
+                "installedManagementGrants",
+                CfExpression::object(revision.into_iter().map(|(scope, grants)| {
+                    (
+                        scope,
+                        CfExpression::list(grants.into_iter().map(CfExpression::from)),
+                    )
+                })),
             ));
         }
         Ok(CfExpression::object(fields))

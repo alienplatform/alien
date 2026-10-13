@@ -49,8 +49,9 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             role_definition_id: None,
             role_assignment_ids: Vec::new(),
             role_assignment_wait_until_epoch_secs: None,
-            management_permissions_revision: data
-                .management_permissions_revision
+            management_permissions_revision: None,
+            installed_management_grants: data
+                .installed_management_grants
                 .filter(|_| data.management_permissions_applied),
             _internal_stay_count: None,
         };

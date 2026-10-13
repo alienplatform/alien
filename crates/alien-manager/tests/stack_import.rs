@@ -290,7 +290,7 @@ fn aws_s3_import_request(
                     role_name: "AlienManager".to_string(),
                     role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
                     management_permissions_applied: true,
-                    management_permissions_revision: None,
+                    installed_management_grants: None,
                     remote_bindings_role_arn: None,
                 })
                 .unwrap(),
@@ -368,7 +368,7 @@ fn aws_remote_management_import_request(
                 role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
                 remote_bindings_role_arn: None,
                 management_permissions_applied: true,
-                management_permissions_revision: None,
+                installed_management_grants: None,
             })
             .unwrap(),
         }],
@@ -457,7 +457,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
                     ),
                     remote_bindings_role_arn: None,
                     management_permissions_applied: true,
-                    management_permissions_revision: None,
+                    installed_management_grants: None,
                 })
                 .unwrap(),
             },
@@ -503,7 +503,7 @@ fn gcp_remote_management_import_request(
                 service_account_unique_id: "1234567890".to_string(),
                 remote_bindings_service_account_email: None,
                 management_permissions_applied: true,
-                management_permissions_revision: None,
+                installed_management_grants: None,
             })
             .unwrap(),
         }],
@@ -553,7 +553,7 @@ fn azure_remote_management_import_request(
                     remote_bindings_identity_id: None,
                     remote_bindings_client_id: None,
                     management_permissions_applied: true,
-                    management_permissions_revision: None,
+                    installed_management_grants: None,
                 })
                 .unwrap(),
             }],

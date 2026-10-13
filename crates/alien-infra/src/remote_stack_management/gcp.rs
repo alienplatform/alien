@@ -46,6 +46,9 @@ pub struct GcpRemoteStackManagementController {
     /// controllers from before revisions were recorded.
     #[serde(default)]
     pub(crate) management_permissions_revision: Option<String>,
+    /// Installed setup grants; runtime can narrow its requirements without rewriting this receipt.
+    #[serde(default)]
+    pub(crate) installed_management_grants: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 #[controller]
@@ -331,6 +334,7 @@ impl GcpRemoteStackManagementController {
 
         self.role_bound = true;
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
+        self.installed_management_grants = super::management_grant_revisions(ctx)?;
 
         Ok(HandlerAction::Continue {
             state: GrantingImpersonation,
@@ -992,6 +996,7 @@ impl GcpRemoteStackManagementController {
             impersonation_granted: true,
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             management_permissions_revision: None,
+            installed_management_grants: None,
             _internal_stay_count: None,
         }
     }

@@ -28,8 +28,9 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
             role_arn: Some(data.role_arn),
             role_name: Some(data.role_name),
             management_permissions_applied: data.management_permissions_applied,
-            management_permissions_revision: data
-                .management_permissions_revision
+            management_permissions_revision: None,
+            installed_management_grants: data
+                .installed_management_grants
                 .filter(|_| data.management_permissions_applied),
             _internal_stay_count: None,
         };

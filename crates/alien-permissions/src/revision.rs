@@ -1,4 +1,4 @@
-use alien_core::PermissionProfile;
+use alien_core::{PermissionProfile, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
 
@@ -43,6 +43,57 @@ pub fn management_permissions_revision(
     Ok(Some(format!("{:x}", Sha256::digest(&serialized))))
 }
 
+/// Per-scope grant receipts let runtime remove grants without requiring setup,
+/// while additions and changed definitions still require installer action.
+pub fn management_grant_revisions(
+    profile: Option<&PermissionProfile>,
+    platform: Platform,
+) -> Result<Option<std::collections::BTreeMap<String, Vec<String>>>> {
+    let Some(profile) = profile else {
+        return Ok(None);
+    };
+    let mut scopes = std::collections::BTreeMap::new();
+    for (scope, references) in &profile.0 {
+        let mut revisions = Vec::new();
+        for reference in references {
+            let set = reference
+                .resolve(|name| get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidPermissionSet {
+                        message: format!("Unknown management permission set '{}'", reference.id()),
+                    })
+                })?;
+            let native = match platform {
+                Platform::Aws => set.platforms.aws.as_ref().map(serde_json::to_value),
+                Platform::Gcp => set.platforms.gcp.as_ref().map(serde_json::to_value),
+                Platform::Azure => set.platforms.azure.as_ref().map(serde_json::to_value),
+                _ => None,
+            }
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: "Failed to serialize installed management grants".to_string(),
+            })?;
+            let Some(native) = native else {
+                continue;
+            };
+            let serialized = serde_json::to_vec(&(set.id, native))
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: "Failed to serialize an installed management grant revision"
+                        .to_string(),
+                })?;
+            revisions.push(format!("{:x}", Sha256::digest(&serialized)));
+        }
+        revisions.sort();
+        revisions.dedup();
+        if !revisions.is_empty() {
+            scopes.insert(scope.clone(), revisions);
+        }
+    }
+    Ok(Some(scopes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +123,19 @@ mod tests {
         assert_ne!(
             revision,
             management_permissions_revision(Some(&changed_profile)).unwrap()
+        );
+        assert_eq!(
+            management_grant_revisions(Some(&named), Platform::Aws).unwrap(),
+            management_grant_revisions(Some(&installed_profile), Platform::Aws).unwrap(),
+        );
+        assert_ne!(
+            management_grant_revisions(Some(&installed_profile), Platform::Aws).unwrap(),
+            management_grant_revisions(Some(&changed_profile), Platform::Aws).unwrap(),
+        );
+        assert_eq!(
+            management_grant_revisions(Some(&installed_profile), Platform::Gcp).unwrap(),
+            management_grant_revisions(Some(&changed_profile), Platform::Gcp).unwrap(),
+            "AWS-only permission changes must not invalidate GCP setup",
         );
         let unknown = PermissionProfile::new().global([PermissionSetReference::from_name(
             "worker/missing-permission",
