@@ -22,6 +22,8 @@ use crate::{ErrorData, Result};
 #[serde(rename_all = "camelCase")]
 pub(super) struct PrivateRestApi {
     name: String,
+    account: String,
+    region: String,
     tags: HashMap<String, String>,
     create_permitted: bool,
     create_attempted: bool,
@@ -29,6 +31,7 @@ pub(super) struct PrivateRestApi {
     delete_permitted: BTreeSet<String>,
     retiring: bool,
     routes: Option<RestRoutes>,
+    endpoint_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,10 +54,16 @@ struct RestRoutes {
 }
 
 impl PrivateRestApi {
-    pub fn new(stack: &str, resource: &str) -> Result<Self> {
+    pub fn new(account: &str, region: &str, stack: &str, resource: &str) -> Result<Self> {
         let generation = Uuid::new_v4().to_string();
         let name = format!("{stack}-{resource}-private-{generation}");
-        if stack.is_empty() || resource.is_empty() || name.len() > 128 {
+        if account.len() != 12
+            || !account.bytes().all(|b| b.is_ascii_digit())
+            || region.is_empty()
+            || stack.is_empty()
+            || resource.is_empty()
+            || name.len() > 128
+        {
             return Err(invalid(
                 "Private REST API requires a valid stack/resource name",
             ));
@@ -63,6 +72,8 @@ impl PrivateRestApi {
         tags.insert(CREATE_ATTEMPT_TAG.into(), generation);
         Ok(Self {
             name,
+            account: account.into(),
+            region: region.into(),
             tags,
             create_permitted: false,
             create_attempted: false,
@@ -70,6 +81,7 @@ impl PrivateRestApi {
             delete_permitted: BTreeSet::new(),
             retiring: false,
             routes: None,
+            endpoint_id: None,
         })
     }
 
@@ -139,7 +151,7 @@ impl PrivateRestApi {
     /// Only this API's resource policy changes; the endpoint policy is owned by
     /// the separate endpoint receipt. Existing public API routing is untouched.
     pub async fn step_policy(
-        &self,
+        &mut self,
         api: &dyn ApiGatewayApi,
         id: &str,
         endpoint_id: &str,
@@ -155,6 +167,14 @@ impl PrivateRestApi {
                 "Private REST API policy requires exact owned API and endpoint IDs",
             ));
         }
+        if let Some(recorded) = &self.endpoint_id {
+            if recorded != endpoint_id {
+                return Err(invalid("Private REST endpoint identity changed"));
+            }
+        } else {
+            self.endpoint_id = Some(endpoint_id.into());
+            return Ok(false);
+        }
         let details = api
             .get_rest_api_details(id)
             .await
@@ -163,10 +183,8 @@ impl PrivateRestApi {
         if details.id.as_deref() != Some(id) {
             return Err(invalid("Private REST policy lookup identity changed"));
         }
-        let policy = serde_json::json!({"Version":"2012-10-17","Statement":[{
-            "Effect":"Allow","Principal":"*","Action":"execute-api:Invoke","Resource":"execute-api:/*",
-            "Condition":{"StringEquals":{"aws:SourceVpce":endpoint_id}}
-        }]}).to_string();
+        let policy = endpoint_policy(endpoint_id, &self.invocation_arn(id));
+        self.verify_policy(&details)?;
         if policies_equal(details.policy.as_deref(), &policy) {
             return Ok(true);
         }
@@ -183,10 +201,10 @@ impl PrivateRestApi {
             || self.ids.len() != 1
             || !self.ids.contains(&plan.api_id)
             || plan.root_id.is_empty()
-            || plan.region.is_empty()
+            || plan.region != self.region
             || !plan
                 .function_arn
-                .starts_with(&format!("arn:aws:lambda:{}:", plan.region))
+                .starts_with(&format!("arn:aws:lambda:{}:{}:", self.region, self.account))
             || !plan.function_arn.contains(":function:")
         {
             return Err(invalid(
@@ -225,6 +243,7 @@ impl PrivateRestApi {
             .await
             .context(cloud("Read private REST routing owner"))?;
         self.verify(&details)?;
+        self.verify_policy(&details)?;
         if details.id.as_deref() != Some(&plan.api_id)
             || details.root_resource_id.as_deref() != Some(&plan.root_id)
         {
@@ -510,6 +529,33 @@ impl PrivateRestApi {
         }
     }
 
+    fn invocation_arn(&self, id: &str) -> String {
+        format!(
+            "arn:aws:execute-api:{}:{}:{id}/*",
+            self.region, self.account
+        )
+    }
+
+    fn verify_policy(&self, details: &RestApiDetails) -> Result<()> {
+        let api_id = details
+            .id
+            .as_deref()
+            .ok_or_else(|| invalid("Private REST policy owner ID is missing"))?;
+        if policies_equal(details.policy.as_deref(), &deny_policy())
+            || self.endpoint_id.as_ref().is_some_and(|id| {
+                policies_equal(
+                    details.policy.as_deref(),
+                    &endpoint_policy(id, &self.invocation_arn(api_id)),
+                )
+            })
+        {
+            return Ok(());
+        }
+        Err(invalid(
+            "Private REST invocation policy changed outside its recorded endpoint boundary",
+        ))
+    }
+
     fn verify(&self, details: &RestApiDetails) -> Result<()> {
         let tags = details
             .tags
@@ -542,6 +588,16 @@ fn deny_policy() -> String {
     serde_json::json!({"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":"*","Action":"execute-api:Invoke","Resource":"*"}]}).to_string()
 }
 
+fn endpoint_policy(endpoint_id: &str, resource_arn: &str) -> String {
+    serde_json::json!({"Version":"2012-10-17","Statement":[
+        {"Effect":"Deny","Principal":"*","Action":"execute-api:Invoke","Resource":resource_arn,
+         "Condition":{"StringNotEquals":{"aws:SourceVpce":endpoint_id}}},
+        {"Effect":"Allow","Principal":"*","Action":"execute-api:Invoke","Resource":resource_arn,
+         "Condition":{"StringEquals":{"aws:SourceVpce":endpoint_id}}}
+    ]})
+    .to_string()
+}
+
 fn policies_equal(actual: Option<&str>, expected: &str) -> bool {
     actual.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
         == serde_json::from_str::<serde_json::Value>(expected).ok()
@@ -563,7 +619,9 @@ fn cloud(message: &str) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_aws_clients::apigateway::{MockApiGatewayApi, RestApi, RestApisPage};
+    use alien_aws_clients::apigateway::{
+        MockApiGatewayApi, ResourcesPage, RestApi, RestApisPage, RestMethod, RestStage,
+    };
     use alien_client_core::ErrorData as ClientError;
     use std::sync::{Arc, Mutex};
 
@@ -581,7 +639,8 @@ mod tests {
 
     #[tokio::test]
     async fn lost_create_and_delete_replies_recover_exact_generation_after_reload() {
-        let mut owner = PrivateRestApi::new("stack", "worker").unwrap();
+        let mut owner =
+            PrivateRestApi::new("123456789012", "us-east-1", "stack", "worker").unwrap();
         let remote = Arc::new(Mutex::new(None::<RestApiDetails>));
         let mut api = MockApiGatewayApi::new();
         let world = remote.clone();
@@ -641,7 +700,8 @@ mod tests {
 
     #[tokio::test]
     async fn foreign_generation_is_not_adopted_or_deleted_and_empty_uncertainty_is_retained() {
-        let mut owner = PrivateRestApi::new("stack", "worker").unwrap();
+        let mut owner =
+            PrivateRestApi::new("123456789012", "us-east-1", "stack", "worker").unwrap();
         let mut foreign = details(&owner, "foreign");
         foreign
             .tags
@@ -671,7 +731,8 @@ mod tests {
 
     #[tokio::test]
     async fn successful_create_checkpoints_id_before_optional_response_validation() {
-        let mut owner = PrivateRestApi::new("stack", "worker").unwrap();
+        let mut owner =
+            PrivateRestApi::new("123456789012", "us-east-1", "stack", "worker").unwrap();
         let mut api = MockApiGatewayApi::new();
         api.expect_get_rest_apis().returning(|_| {
             Ok(RestApisPage {
@@ -694,7 +755,6 @@ mod tests {
     }
     #[tokio::test]
     async fn routing_recovers_every_lost_mutation_reply_without_duplicate_deployment() {
-        use alien_aws_clients::apigateway::{ResourcesPage, RestMethod, RestStage};
         #[derive(Default)]
         struct World {
             proxy: bool,
@@ -714,7 +774,8 @@ mod tests {
             })
         }
         let world = Arc::new(Mutex::new(World::default()));
-        let mut owner = PrivateRestApi::new("stack", "worker").unwrap();
+        let mut owner =
+            PrivateRestApi::new("123456789012", "us-east-1", "stack", "worker").unwrap();
         owner.ids.insert("owned".into());
         owner.create_permitted = true;
         owner
@@ -855,5 +916,72 @@ mod tests {
             Some("deployment")
         );
         assert!(reload(&owner).step_routes(&api).await.unwrap());
+    }
+    #[tokio::test]
+    async fn invocation_policy_checkpoints_endpoint_and_recovers_lost_reply_without_widening_access(
+    ) {
+        let mut owner =
+            PrivateRestApi::new("123456789012", "us-east-1", "stack", "worker").unwrap();
+        owner.ids.insert("owned".into());
+        let remote = Arc::new(Mutex::new(details(&owner, "owned")));
+        let mut api = MockApiGatewayApi::new();
+        let world = remote.clone();
+        api.expect_get_rest_api_details().returning(move |id| {
+            assert_eq!(id, "owned");
+            Ok(world.lock().unwrap().clone())
+        });
+        let world = remote.clone();
+        api.expect_update_rest_api_policy()
+            .times(1)
+            .returning(move |id, policy| {
+                assert_eq!(id, "owned");
+                let parsed: serde_json::Value = serde_json::from_str(policy).unwrap();
+                let statements = parsed["Statement"].as_array().unwrap();
+                assert_eq!(statements.len(), 2);
+                assert_eq!(statements[0]["Effect"], "Deny");
+                assert_eq!(
+                    statements[0]["Condition"]["StringNotEquals"]["aws:SourceVpce"],
+                    "vpce-012abc"
+                );
+                assert_eq!(statements[1]["Effect"], "Allow");
+                assert_eq!(
+                    statements[1]["Condition"]["StringEquals"]["aws:SourceVpce"],
+                    "vpce-012abc"
+                );
+                for statement in statements {
+                    assert_eq!(
+                        statement["Resource"],
+                        "arn:aws:execute-api:us-east-1:123456789012:owned/*"
+                    );
+                }
+                world.lock().unwrap().policy = Some(policy.into());
+                Err(AlienError::new(ClientError::InvalidInput {
+                    message: "lost policy reply".into(),
+                    field_name: None,
+                }))
+            });
+        assert!(!owner
+            .step_policy(&api, "owned", "vpce-012abc")
+            .await
+            .unwrap());
+        owner = reload(&owner);
+        assert!(owner
+            .step_policy(&api, "owned", "vpce-012abc")
+            .await
+            .is_err());
+        owner = reload(&owner);
+        assert!(owner
+            .step_policy(&api, "owned", "vpce-012abc")
+            .await
+            .unwrap());
+        assert!(owner
+            .step_policy(&api, "owned", "vpce-999fff")
+            .await
+            .is_err());
+        remote.lock().unwrap().policy=Some(serde_json::json!({"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"execute-api:Invoke","Resource":"*"}]}).to_string());
+        assert!(owner
+            .step_policy(&api, "owned", "vpce-012abc")
+            .await
+            .is_err());
     }
 }
