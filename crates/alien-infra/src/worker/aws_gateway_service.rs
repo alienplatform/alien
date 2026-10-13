@@ -164,6 +164,11 @@ impl GatewayService {
         Ok(())
     }
 
+    pub fn uses_task_definition(&self, task_definition: &str) -> bool {
+        self.request.task_definition == task_definition
+            || self.pending_task_definition.as_deref() == Some(task_definition)
+    }
+
     /// Parent checkpoints pending results and independently checks target-group health.
     pub async fn step_create(
         &mut self,
@@ -202,7 +207,7 @@ impl GatewayService {
                     .cluster(self.request.cluster.clone())
                     .service(self.expected_arn.clone())
                     .task_definition(pending.clone())
-                    .maybe_deployment_configuration(self.request.deployment_configuration.clone())
+                    .deployment_configuration(self.request.deployment_configuration.clone())
                     .build(),
             )
             .await

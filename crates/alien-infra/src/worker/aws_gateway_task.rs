@@ -155,7 +155,7 @@ impl GatewayTask {
         Ok(None)
     }
 
-    /// Caller must first prove the service and every task stopped and detached.
+    /// Caller must first prove no service or running task uses this definition.
     pub async fn step_delete(&mut self, ecs: &dyn EcsApi) -> Result<bool> {
         self.delete_inner(ecs)
             .await

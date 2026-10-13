@@ -80,6 +80,8 @@ pub(super) struct PrivateWorkerIngress {
     endpoint: Option<PrivateEndpoint>,
     cluster: Option<GatewayCluster>,
     task: Option<GatewayTask>,
+    #[serde(default)]
+    retired_tasks: Vec<GatewayTask>,
     service: Option<GatewayService>,
     frontend: AwsVmFrontend,
     frontend_deleted: bool,
@@ -93,8 +95,34 @@ pub(super) struct PrivateWorkerIngress {
 }
 
 impl PrivateWorkerIngress {
-    pub fn matches_plan(&self, plan: &PrivateIngressPlan) -> bool {
-        self.plan == *plan && !self.retiring
+    /// Domain updates roll gateway tasks while retaining the network and frontend.
+    /// The caller checkpoints the changed graph before taking another cloud step.
+    pub fn configure_plan(&mut self, plan: &PrivateIngressPlan) -> Result<bool> {
+        let mut retained = plan.clone();
+        retained.domains = self.plan.domains.clone();
+        if self.retiring || retained != self.plan {
+            return Err(invalid(
+                "Private worker network or function changed; replacement handoff is required",
+            ));
+        }
+        if plan.domains == self.plan.domains {
+            return Ok(true);
+        }
+        if !self.retired_tasks.is_empty() {
+            return Err(invalid(
+                "Private worker domain rollout is still retiring its previous tasks",
+            ));
+        }
+        bootstrap(GatewaySpec {
+            endpoint_dns: "validation.example.test",
+            api_id: "validation",
+            domains: &plan.domains,
+        })?;
+        if let Some(task) = self.task.take() {
+            self.retired_tasks.push(task);
+        }
+        self.plan.domains = plan.domains.clone();
+        Ok(false)
     }
 
     pub fn serving_certificate_arns(&self) -> &[String] {
@@ -128,6 +156,7 @@ impl PrivateWorkerIngress {
             domains: &plan.domains,
         })?;
         Ok(Self {
+            retired_tasks: Vec::new(),
             permission: None,
             api: Some(PrivateRestApi::new(
                 &plan.account,
@@ -414,6 +443,12 @@ impl PrivateWorkerIngress {
         else {
             return Ok(None);
         };
+        if let Some(service) = &mut self.service {
+            if !service.uses_task_definition(&task) {
+                service.prepare_task_rollout(&task)?;
+                return Ok(None);
+            }
+        }
         if self.service.is_none() {
             let mut tags = standard_resource_tags(&self.plan.stack, &self.plan.resource);
             tags.insert(CREATE_ATTEMPT_TAG.into(), self.generation.clone());
@@ -521,6 +556,12 @@ impl PrivateWorkerIngress {
                         != Some(GATEWAY_HEALTH_PORT.to_string().as_str())
             })
         {
+            return Ok(None);
+        }
+        if let Some(task) = self.retired_tasks.last_mut() {
+            if task.step_delete(clients.ecs).await? {
+                self.retired_tasks.pop();
+            }
             return Ok(None);
         }
         Ok(Some(frontend))
@@ -658,6 +699,12 @@ impl PrivateWorkerIngress {
                 return Ok(false);
             }
             self.task = None;
+            return Ok(false);
+        }
+        if let Some(task) = self.retired_tasks.last_mut() {
+            if task.step_delete(clients.ecs).await? {
+                self.retired_tasks.pop();
+            }
             return Ok(false);
         }
         if let Some(cluster) = &mut self.cluster {
@@ -1019,6 +1066,76 @@ mod tests {
             domains: vec!["private-api.example.test".into()],
             function_arn: "arn:aws:lambda:us-east-1:123456789012:function:worker".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn domain_rollout_checkpoint_keeps_old_task_ownership_through_cancelled_create() {
+        let original = plan();
+        let mut owner = PrivateWorkerIngress::new(original.clone()).unwrap();
+        let generation = owner.generation.clone();
+        owner.task = Some(
+            GatewayTask::new(
+                original.account.clone(),
+                original.region.clone(),
+                &original.stack,
+                &original.resource,
+                &bootstrap(GatewaySpec {
+                    endpoint_dns: "endpoint.execute-api.us-east-1.vpce.amazonaws.com",
+                    api_id: "owned-api",
+                    domains: &original.domains,
+                })
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut changed = original.clone();
+        changed.domains = vec!["private-new.example.test".into()];
+        assert!(!owner.configure_plan(&changed).unwrap());
+        owner = serde_json::from_value(serde_json::to_value(owner).unwrap()).unwrap();
+        assert!(owner.configure_plan(&changed).unwrap());
+        assert_eq!(owner.generation, generation);
+        assert!(owner.task.is_none());
+        assert_eq!(owner.retired_tasks.len(), 1);
+        let checkpoint = serde_json::to_value(&owner).unwrap();
+        assert!(
+            owner.configure_plan(&original).is_err(),
+            "pending rollout cannot be overwritten"
+        );
+        let mut foreign = changed.clone();
+        foreign.vpc_id = "vpc-different".into();
+        assert!(owner.configure_plan(&foreign).is_err());
+        assert_eq!(serde_json::to_value(&owner).unwrap(), checkpoint);
+        // Neither generation was registered. Cancellation must forget neither
+        // receipt, and it must finish without acquiring provider resources.
+        let api = MockApiGatewayApi::new();
+        let ec2 = MockEc2Api::new();
+        let ecs = MockEcsApi::new();
+        let iam = MockIamApi::new();
+        let elb = MockElbv2Api::new();
+        let lambda = MockLambdaApi::new();
+        let clients = PrivateIngressClients {
+            api: &api,
+            ec2: &ec2,
+            ecs: &ecs,
+            iam: &iam,
+            elb: &elb,
+            lambda: &lambda,
+        };
+        let mut deleted = false;
+        for _ in 0..20 {
+            deleted = owner.step_delete(&clients).await.unwrap();
+            owner = serde_json::from_value(serde_json::to_value(owner).unwrap()).unwrap();
+            if deleted {
+                break;
+            }
+        }
+        assert!(deleted);
+        assert!(owner.retired_tasks.is_empty());
+        assert!(owner.task.is_none());
+        assert!(
+            owner.configure_plan(&changed).is_err(),
+            "retiring graph cannot be reused"
+        );
     }
 
     #[tokio::test]

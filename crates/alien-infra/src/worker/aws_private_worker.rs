@@ -130,8 +130,8 @@ impl AwsPrivateWorker {
             .graph
             .as_mut()
             .ok_or_else(|| invalid("Private worker graph missing"))?;
-        if !graph.matches_plan(&plan) {
-            return Err(invalid("Private worker gateway network or serving domains changed; retained graph requires a replacement handoff"));
+        if !graph.configure_plan(&plan)? {
+            return Ok(false);
         }
         let acm = ctx.service_provider.get_aws_acm_client(aws).await?;
         let certificate = match domains.certificate {
