@@ -280,6 +280,7 @@ export * from "./serviceactivationheartbeatstatus.js";
 export * from "./setdeploymentchannelrequest.js";
 export * from "./setdeploymentpinrequest.js";
 export * from "./setsecretrequest.js";
+export * from "./setupmanagement.js";
 export * from "./sourcecredentials.js";
 export * from "./stackbyplatform.js";
 export * from "./stackimportrequest.js";

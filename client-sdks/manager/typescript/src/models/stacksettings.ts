@@ -52,6 +52,11 @@ import {
   NetworkSettings$outboundSchema,
 } from "./networksettings.js";
 import {
+  SetupManagement,
+  SetupManagement$inboundSchema,
+  SetupManagement$outboundSchema,
+} from "./setupmanagement.js";
+import {
   TelemetryMode,
   TelemetryMode$inboundSchema,
   TelemetryMode$outboundSchema,
@@ -103,6 +108,10 @@ export type StackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: SetupManagement | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: TelemetryMode | undefined;
@@ -128,6 +137,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     publicEndpoints: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    setupManagement: SetupManagement$inboundSchema.optional(),
     telemetry: TelemetryMode$inboundSchema.optional(),
     updates: UpdatesMode$inboundSchema.optional(),
   });
@@ -145,6 +155,7 @@ export type StackSettings$Outbound = {
   kubernetes?: KubernetesSettings$Outbound | null | undefined;
   network?: NetworkSettings$Outbound | null | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -167,6 +178,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  setupManagement: SetupManagement$outboundSchema.optional(),
   telemetry: TelemetryMode$outboundSchema.optional(),
   updates: UpdatesMode$outboundSchema.optional(),
 });
