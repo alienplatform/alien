@@ -230,9 +230,14 @@ impl AcmClient {
             .content_sha256(&body)
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+        // Dependency drain (ResourceInUseException), denial, and not-found belong to the
+        // controller. Retry only throttling/transport failures of this idempotent delete.
+        let result = crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+            builder,
+            &self.sign_config(),
+            is_transient_json_error,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&body))
     }
@@ -298,6 +303,11 @@ impl AcmClient {
                     resource_name: resource.into(),
                 }
             }
+            "ResourceInUseException" | "ConflictException" => ErrorData::RemoteResourceConflict {
+                message: format!("{code}: {message}"),
+                resource_type: "Certificate".into(),
+                resource_name: resource.into(),
+            },
             "ResourceNotFoundException" => ErrorData::RemoteResourceNotFound {
                 resource_type: "Certificate".into(),
                 resource_name: resource.into(),
@@ -810,6 +820,31 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_an_in_use_certificate_returns_a_resource_conflict() {
+        let server = MockServer::start_async().await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.DeleteCertificate")
+                    .json_body(json!({ "CertificateArn": IMPORTED_OURS }));
+                then.status(400).json_body(json!({
+                    "__type": "ResourceInUseException", "Message": "Certificate is in use"
+                }));
+            })
+            .await;
+        let error = client(&server)
+            .delete_certificate(IMPORTED_OURS)
+            .await
+            .expect_err("dependency drain must remain distinguishable from other failures");
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { ref message, .. })
+            if message.contains("ResourceInUseException")),
+            "{error:?}"
+        );
+        delete.assert_hits_async(1).await;
     }
 
     #[tokio::test]
