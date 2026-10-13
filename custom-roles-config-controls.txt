@@ -1,0 +1,7 @@
+$ GCP custom-role config demand controls (real test target)
+
+Real E2E target: roles.list(showDeleted=true): 300 counted identities
+New config role: {"status":"fail","used":300.0,"limit":300.0,"needed":1.0}
+Existing config role: {"status":"pass","used":300.0,"limit":300.0,"needed":0.0}
+Cloud-side before/after: 300 identical role names, including deleted. Cloud writes: 0.
+Config demand + real reader controls only; deployment proof remains open.
