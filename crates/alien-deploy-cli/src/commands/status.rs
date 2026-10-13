@@ -400,6 +400,26 @@ fn collect_error_chain(error: &JsonValue, lines: &mut Vec<String>) {
         lines.push(summary);
     }
 
+    // Validation summaries contain counts; the saved results contain the
+    // actionable failures and warnings, including quota identities and limits.
+    if json_string_field(object, "code") == Some("VALIDATION_FAILED") {
+        if let Some(results) = object
+            .get("context")
+            .and_then(|context| context.get("results"))
+            .and_then(JsonValue::as_array)
+        {
+            for result in results {
+                for (field, label) in [("errors", "Error"), ("warnings", "Warning")] {
+                    if let Some(messages) = result.get(field).and_then(JsonValue::as_array) {
+                        for message in messages.iter().filter_map(JsonValue::as_str) {
+                            lines.push(format!("{label}: {message}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for key in ["source", "cause"] {
         if let Some(source) = object.get(key) {
             collect_error_chain(source, lines);
@@ -488,6 +508,33 @@ mod tests {
                 "PREFLIGHT_CHECKS_FAILED: Compute pool general requires at least 4 vCPU"
             ]
         );
+    }
+
+    #[test]
+    fn shows_all_saved_validation_failures_and_warnings() {
+        let error = serde_json::json!({
+            "code": "PREFLIGHT_CHECKS_FAILED",
+            "message": "Preflight checks failed",
+            "source": {
+                "code": "VALIDATION_FAILED",
+                "message": "Validation failed with 2 errors and 1 warnings",
+                "context": { "results": [
+                    { "errors": [], "warnings": [] },
+                    { "errors": [
+                        "Running On-Demand vCPUs (L-1216C47A, eu-west-1): used 0, applied limit 16, additional needed 18. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A",
+                        "VPC quota is exhausted"
+                    ], "warnings": ["GPU usage is unknown; missing permission"] }
+                ] }
+            }
+        });
+
+        assert_eq!(format_error_chain(&error), vec![
+            "PREFLIGHT_CHECKS_FAILED: Preflight checks failed",
+            "VALIDATION_FAILED: Validation failed with 2 errors and 1 warnings",
+            "Error: Running On-Demand vCPUs (L-1216C47A, eu-west-1): used 0, applied limit 16, additional needed 18. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A",
+            "Error: VPC quota is exhausted",
+            "Warning: GPU usage is unknown; missing permission",
+        ]);
     }
 
     #[test]
