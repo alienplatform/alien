@@ -437,3 +437,100 @@ async fn unexpected_hypermedia_collections_fail_instead_of_hiding_owned_children
     assert!(api.get_domain_name_access_associations(None).await.is_err());
     unexpected.assert_hits(3);
 }
+
+#[tokio::test]
+async fn lost_response_recovery_reads_resource_paths_method_and_selected_deployment() {
+    let server = MockServer::start_async().await;
+    let api = client(&server);
+    let cursor = "opaque+/cursor=";
+    let resources = server.mock_async(|when, then| {
+        when.method(GET).path("/restapis/owned/resources")
+            .header("accept", "application/json").query_param("limit", "500")
+            .query_param("position", cursor);
+        then.status(200).json_body(json!({"item":[{"id":"proxy","parentId":"root","pathPart":"{proxy+}","path":"/{proxy+}"}],"position":cursor}));
+    }).await;
+    let method = server.mock_async(|when, then| {
+        when.method(GET).path("/restapis/owned/resources/proxy/methods/ANY");
+        then.status(200).json_body(json!({"httpMethod":"ANY","authorizationType":"NONE","apiKeyRequired":false,
+            "methodIntegration":{"type":"AWS_PROXY","httpMethod":"POST","uri":"owned-lambda-stream-uri","responseTransferMode":"STREAM","timeoutInMillis":90000}}));
+    }).await;
+    let stage = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/restapis/owned/stages/live");
+            then.status(200)
+                .json_body(json!({"stageName":"live","deploymentId":"committed-deployment"}));
+        })
+        .await;
+    let page = api
+        .get_resources("owned", Some(cursor.into()))
+        .await
+        .unwrap();
+    assert_eq!(page.position.as_deref(), Some(cursor));
+    assert_eq!(page.items.len(), 1);
+    let resource = &page.items[0];
+    assert_eq!(resource.parent_id.as_deref(), Some("root"));
+    assert_eq!(resource.path.as_deref(), Some("/{proxy+}"));
+    assert_eq!(resource.path_part.as_deref(), Some("{proxy+}"));
+    let found = api
+        .get_method("owned", resource.id.as_deref().unwrap(), "ANY")
+        .await
+        .unwrap();
+    assert_eq!(found.http_method.as_deref(), Some("ANY"));
+    assert_eq!(found.authorization_type.as_deref(), Some("NONE"));
+    assert_eq!(found.api_key_required, Some(false));
+    let integration = found.method_integration.unwrap();
+    assert_eq!(integration.integration_type, "AWS_PROXY");
+    assert_eq!(integration.integration_http_method, "POST");
+    assert_eq!(integration.uri, "owned-lambda-stream-uri");
+    assert_eq!(
+        integration.response_transfer_mode.as_deref(),
+        Some("STREAM")
+    );
+    assert_eq!(integration.timeout_in_millis, Some(90000));
+    let found = api.get_stage("owned", "live").await.unwrap();
+    assert_eq!(found.stage_name.as_deref(), Some("live"));
+    assert_eq!(found.deployment_id.as_deref(), Some("committed-deployment"));
+    for request in [&resources, &method, &stage] {
+        request.assert_hits_async(1).await;
+    }
+}
+
+#[tokio::test]
+async fn policy_update_uses_exact_policy_string_and_keeps_provider_denial_distinct_from_absence() {
+    let server = MockServer::start_async().await;
+    let api = client(&server);
+    let policy = json!({"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"execute-api:Invoke","Resource":"*","Condition":{"StringEquals":{"aws:SourceVpce":"vpce-owned"}}}]}).to_string();
+    let patch = server
+        .mock_async(|when, then| {
+            when.method(PATCH).path("/restapis/owned").json_body(
+                json!({"patchOperations":[{"op":"replace","path":"/policy","value":policy}]}),
+            );
+            then.status(200)
+                .json_body(json!({"id":"owned","policy":policy}));
+        })
+        .await;
+    let denied = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/restapis/owned/stages/denied");
+            then.status(403)
+                .json_body(json!({"__type":"AccessDeniedException","message":"denied"}));
+        })
+        .await;
+    let absent = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/restapis/owned/stages/absent");
+            then.status(404)
+                .json_body(json!({"__type":"NotFoundException","message":"missing"}));
+        })
+        .await;
+    let updated = api.update_rest_api_policy("owned", &policy).await.unwrap();
+    assert_eq!(updated.id.as_deref(), Some("owned"));
+    assert_eq!(updated.policy.as_deref(), Some(policy.as_str()));
+    let denial = api.get_stage("owned", "denied").await.unwrap_err();
+    let absence = api.get_stage("owned", "absent").await.unwrap_err();
+    assert_ne!(denial.code, absence.code);
+    assert_eq!(absence.code, "REMOTE_RESOURCE_NOT_FOUND");
+    for request in [&patch, &denied, &absent] {
+        request.assert_hits_async(1).await;
+    }
+}

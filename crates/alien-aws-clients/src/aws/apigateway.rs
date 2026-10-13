@@ -49,6 +49,24 @@ pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
     /// Account-owned domains, including public entries without a domainNameId.
     async fn get_domain_names(&self, position: Option<String>) -> Result<DomainNamesPage>;
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()>;
+    /// Replace the invocation policy after the owned endpoint identity is known.
+    async fn update_rest_api_policy(
+        &self,
+        rest_api_id: &str,
+        policy: &str,
+    ) -> Result<RestApiDetails>;
+    async fn get_resources(
+        &self,
+        rest_api_id: &str,
+        position: Option<String>,
+    ) -> Result<ResourcesPage>;
+    async fn get_method(
+        &self,
+        rest_api_id: &str,
+        resource_id: &str,
+        http_method: &str,
+    ) -> Result<RestMethod>;
+    async fn get_stage(&self, rest_api_id: &str, stage_name: &str) -> Result<RestStage>;
 
     async fn create_resource(
         &self,
@@ -445,6 +463,68 @@ impl ApiGatewayApi for ApiGatewayClient {
             "account-owned domains",
         )
         .await
+    }
+
+    async fn update_rest_api_policy(
+        &self,
+        rest_api_id: &str,
+        policy: &str,
+    ) -> Result<RestApiDetails> {
+        let path = format!("/restapis/{}", urlencoding::encode(rest_api_id));
+        let body = Self::serialize(
+            &serde_json::json!({"patchOperations": [{"op": "replace", "path": "/policy", "value": policy}]}),
+            "UpdateRestApiPolicy",
+        )?;
+        self.send_json(
+            Method::PATCH,
+            &path,
+            Some(body),
+            "UpdateRestApi",
+            rest_api_id,
+        )
+        .await
+    }
+
+    async fn get_resources(
+        &self,
+        rest_api_id: &str,
+        position: Option<String>,
+    ) -> Result<ResourcesPage> {
+        let path = collection_path(
+            &format!(
+                "/restapis/{}/resources?limit=500",
+                urlencoding::encode(rest_api_id)
+            ),
+            position,
+        );
+        self.send_json(Method::GET, &path, None, "GetResources", rest_api_id)
+            .await
+    }
+
+    async fn get_method(
+        &self,
+        rest_api_id: &str,
+        resource_id: &str,
+        http_method: &str,
+    ) -> Result<RestMethod> {
+        let path = format!(
+            "/restapis/{}/resources/{}/methods/{}",
+            urlencoding::encode(rest_api_id),
+            urlencoding::encode(resource_id),
+            urlencoding::encode(http_method)
+        );
+        self.send_json(Method::GET, &path, None, "GetMethod", rest_api_id)
+            .await
+    }
+
+    async fn get_stage(&self, rest_api_id: &str, stage_name: &str) -> Result<RestStage> {
+        let path = format!(
+            "/restapis/{}/stages/{}",
+            urlencoding::encode(rest_api_id),
+            urlencoding::encode(stage_name)
+        );
+        self.send_json(Method::GET, &path, None, "GetStage", rest_api_id)
+            .await
     }
 
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()> {
@@ -913,6 +993,40 @@ pub struct CreateResourceRequest {
 pub struct Resource {
     pub id: Option<String>,
     pub path_part: Option<String>,
+}
+
+/// A resource's full path and parent are needed to recover a lost create response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestResourceDetails {
+    pub id: Option<String>,
+    pub parent_id: Option<String>,
+    pub path_part: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcesPage {
+    #[serde(rename = "item")]
+    pub items: Vec<RestResourceDetails>,
+    pub position: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestMethod {
+    pub http_method: Option<String>,
+    pub authorization_type: Option<String>,
+    pub api_key_required: Option<bool>,
+    pub method_integration: Option<PutIntegrationRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestStage {
+    pub stage_name: Option<String>,
+    pub deployment_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
