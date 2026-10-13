@@ -29,20 +29,43 @@ async fn deleted_group_history_preserves_pagination_and_explicit_opt_in() {
             .body_contains("MaxRecords=100");
         then.status(200).body("<DescribeScalingActivitiesResponse><DescribeScalingActivitiesResult><Activities><member><ActivityId>launch</ActivityId><StatusCode>Successful</StatusCode></member></Activities><NextToken>page-two</NextToken></DescribeScalingActivitiesResult></DescribeScalingActivitiesResponse>");
     }).await;
-    let response = client.describe_scaling_activities(DescribeScalingActivitiesRequest::builder()
-        .auto_scaling_group_name("removed-group".to_string()).include_deleted_groups(true)
-        .max_records(100).build()).await.unwrap().describe_scaling_activities_result;
+    let response = client
+        .describe_scaling_activities(
+            DescribeScalingActivitiesRequest::builder()
+                .auto_scaling_group_name("removed-group".to_string())
+                .include_deleted_groups(true)
+                .max_records(100)
+                .build(),
+        )
+        .await
+        .unwrap()
+        .describe_scaling_activities_result;
     first.assert_async().await;
-    assert_eq!(response.activities.unwrap().members[0].status_code.as_deref(), Some("Successful"));
+    assert_eq!(
+        response.activities.unwrap().members[0]
+            .status_code
+            .as_deref(),
+        Some("Successful")
+    );
     assert_eq!(response.next_token.as_deref(), Some("page-two"));
     let second = server.mock_async(|when, then| {
         when.method(POST).body_contains("IncludeDeletedGroups=true")
             .body_contains("NextToken=page-two");
         then.status(200).body("<DescribeScalingActivitiesResponse><DescribeScalingActivitiesResult><Activities/></DescribeScalingActivitiesResult></DescribeScalingActivitiesResponse>");
     }).await;
-    let response = client.describe_scaling_activities(DescribeScalingActivitiesRequest::builder()
-        .auto_scaling_group_name("removed-group".to_string()).include_deleted_groups(true)
-        .next_token(response.next_token.unwrap()).build()).await.unwrap();
+    let response = client
+        .describe_scaling_activities(
+            DescribeScalingActivitiesRequest::builder()
+                .auto_scaling_group_name("removed-group".to_string())
+                .include_deleted_groups(true)
+                .next_token(response.next_token.unwrap())
+                .build(),
+        )
+        .await
+        .unwrap();
     second.assert_async().await;
-    assert!(response.describe_scaling_activities_result.next_token.is_none());
+    assert!(response
+        .describe_scaling_activities_result
+        .next_token
+        .is_none());
 }
