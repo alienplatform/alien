@@ -83,6 +83,7 @@ impl StackResourceStateExt for StackResourceState {
             })
         })?;
 
+        crate::core::validate_controller_state_value(value, Some(self.config.id()))?;
         serde_json::from_value::<T>(value.clone())
             .into_alien_error()
             .context(ErrorData::ControllerStateTypeMismatch {
@@ -598,6 +599,42 @@ mod tests {
     use alien_core::{Platform, Resource, ResourceStatus, StackResourceState, StackState};
     use alien_core::{Worker, WorkerCode};
     use alien_error::GenericError;
+
+    #[test]
+    fn typed_controller_reads_enforce_the_version_gate() {
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "test:latest".into(),
+            })
+            .permissions("execution".into())
+            .build();
+        let mut resource = StackResourceState::new_pending(
+            "worker".into(),
+            Resource::new(config),
+            None,
+            Vec::new(),
+        );
+        resource
+            .set_internal_controller(Some(Box::new(TestWorkerController::default())))
+            .unwrap();
+        for version in [1, crate::core::CURRENT_CONTROLLER_STATE_VERSION] {
+            resource.internal_state.as_mut().unwrap()["_controllerStateVersion"] = version.into();
+            resource
+                .get_internal_controller_typed::<TestWorkerController>()
+                .unwrap();
+        }
+        resource.internal_state.as_mut().unwrap()["_controllerStateVersion"] =
+            (crate::core::CURRENT_CONTROLLER_STATE_VERSION + 1).into();
+        let saved = resource.internal_state.clone();
+        assert_eq!(
+            resource
+                .get_internal_controller_typed::<TestWorkerController>()
+                .unwrap_err()
+                .code,
+            "INCOMPATIBLE_CONTROLLER_STATE"
+        );
+        assert_eq!(resource.internal_state, saved);
+    }
 
     #[test]
     fn filtered_retry_recovers_only_failed_resources_in_the_selected_lifecycle() {
