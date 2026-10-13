@@ -82,20 +82,20 @@ impl TfEmitter for AwsKeyEmitter {
         ]));
 
         if let Some(management_label) = management_label(ctx) {
-            let permission = PermissionSetReference::from_name("key/management");
-            if let Some(permission_set) =
-                permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
-            {
+            let profile = ctx.stack.management().profile();
+            for permission in profile.and_then(|profile| profile.0.get(ctx.resource_id)).into_iter().flatten() {
+                let permission_set = permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                    .ok_or_else(|| alien_error::AlienError::new(alien_core::ErrorData::GenericError {
+                        message: format!("Unknown Key management permission '{}'", permission.id()),
+                    }))?;
                 let context = aws_terraform_permission_context()
                     .with_resource_name(format!("${{terraform_data.{label}_key_identity.output}}"));
+                let suffix = iam_policy_name_sanitize(&permission_set.id);
                 emit_iam_role_policy_for_target_with_label(
-                    &mut fragment,
-                    management_label,
-                    &permission_set,
-                    &format!("{management_label}_{label}_management"),
-                    &format!("management-{}-key-metadata", ctx.resource_id),
-                    &context,
-                    BindingTarget::Resource,
+                    &mut fragment, management_label, &permission_set,
+                    &format!("{management_label}_{label}_{suffix}"),
+                    &format!("management-{}-{suffix}", ctx.resource_id),
+                    &context, BindingTarget::Resource,
                 )?;
             }
         }

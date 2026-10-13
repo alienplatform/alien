@@ -1,12 +1,13 @@
 use crate::{
     emitter::CfEmitter,
-    emitters::aws::helpers::{required_logical_id, resource_config, tags},
+    emitters::aws::helpers::{cf_from_json, required_logical_id, resource_config, tags},
     template::{CfExpression, CfResource},
 };
 use alien_core::{
     import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKeyEmitter;
@@ -106,18 +107,43 @@ fn management_metadata_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfR
         "Roles".to_string(),
         CfExpression::list([CfExpression::ref_(&role_id)]),
     );
+    let profile = ctx.stack.management().profile();
+    let context =
+        super::service_account::permission_context().with_resource_name("selected-key".to_string());
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let mut statements = Vec::new();
+    for permission in profile
+        .and_then(|profile| profile.0.get(ctx.resource_id))
+        .into_iter()
+        .flatten()
+    {
+        let permission_set = permission
+            .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("Unknown Key management permission '{}'", permission.id()),
+                })
+            })?;
+        let document = generator
+            .generate_policy(&permission_set, BindingTarget::Resource, &context)
+            .context(ErrorData::GenericError {
+                message: "Failed to generate Key management policy".to_string(),
+            })?;
+        for mut statement in document.statement {
+            statement.resource = vec![serde_json::json!({"Fn::GetAtt": [key_id, "Arn"]})];
+            let value = serde_json::to_value(statement).into_alien_error().context(
+                ErrorData::GenericError {
+                    message: "Failed to serialize Key management policy".to_string(),
+                },
+            )?;
+            statements.push(cf_from_json(value)?);
+        }
+    }
     policy.properties.insert(
         "PolicyDocument".to_string(),
         CfExpression::object([
             ("Version", CfExpression::from("2012-10-17")),
-            (
-                "Statement",
-                CfExpression::list([CfExpression::object([
-                    ("Effect", CfExpression::from("Allow")),
-                    ("Action", CfExpression::from("kms:DescribeKey")),
-                    ("Resource", CfExpression::get_att(key_id, "Arn")),
-                ])]),
-            ),
+            ("Statement", CfExpression::list(statements)),
         ]),
     );
     policy.depends_on.push(role_id);

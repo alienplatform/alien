@@ -1,0 +1,54 @@
+{
+  "id": "key/native-volume",
+  "description": "Allows native EBS encryption using the selected key through EC2, including service-created grants",
+  "platforms": {
+    "aws": [
+      {
+        "label": "use-through-ec2",
+        "grant": {
+          "actions": [
+            "kms:Decrypt",
+            "kms:DescribeKey",
+            "kms:GenerateDataKeyWithoutPlaintext",
+            "kms:ReEncrypt*"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "resources": [
+              "${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "kms:ViaService": "ec2.${awsRegion}.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "grant-to-ebs",
+        "grant": {
+          "actions": [
+            "kms:CreateGrant"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "resources": [
+              "${resourceName}"
+            ],
+            "condition": {
+              "Bool": {
+                "kms:GrantIsForAWSResource": "true"
+              },
+              "StringEquals": {
+                "kms:ViaService": "ec2.${awsRegion}.amazonaws.com"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

@@ -229,6 +229,21 @@ fn generate_auto_management_profile(
                 .insert("sandbox/images".to_string());
         }
 
+        if resource_type == "key" && platform == Platform::Aws {
+            resource_permission_set_ids.entry(resource_id.clone()).or_default()
+                .insert("key/availability".to_string());
+        }
+
+        if platform == Platform::Aws {
+            if let Some(key) = resource_entry.config.downcast_ref::<Container>()
+                .and_then(|container| container.persistent_storage.as_ref())
+                .and_then(|storage| storage.encryption_key.as_ref())
+            {
+                resource_permission_set_ids.entry(key.id().to_string()).or_default()
+                    .insert("key/native-volume".to_string());
+            }
+        }
+
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.heartbeats.is_enabled() {

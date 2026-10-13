@@ -3839,6 +3839,8 @@ pub struct Volume {
     pub iops: Option<i32>,
     pub throughput: Option<i32>,
     pub encrypted: Option<bool>,
+    /// ARN of the KMS key that encrypts this resource.
+    pub kms_key_id: Option<String>,
     pub snapshot_id: Option<String>,
     pub create_time: Option<String>,
     #[serde(rename = "attachmentSet")]
@@ -3934,6 +3936,8 @@ pub struct Snapshot {
     pub volume_size: Option<i32>,
     pub description: Option<String>,
     pub encrypted: Option<bool>,
+    /// ARN of the KMS key that encrypts this resource.
+    pub kms_key_id: Option<String>,
     pub storage_tier: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,

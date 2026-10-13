@@ -51,6 +51,10 @@ pub enum KeyFingerprint {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KeyOutputs {
+    /// Latest key availability observation. Absent on older imported states.
+    /// A false observation suspends dependent reconciliation without replacing resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
     /// Stable provider key-family identity.
     pub fingerprint: KeyFingerprint,
     /// Exact provider key version used for new wrapping operations.
@@ -116,6 +120,10 @@ impl ResourceDefinition for Key {
 }
 
 impl ResourceOutputsDefinition for KeyOutputs {
+    fn is_available(&self) -> bool {
+        self.available.unwrap_or(true)
+    }
+
     fn get_resource_type(&self) -> ResourceType {
         Key::RESOURCE_TYPE
     }
@@ -148,10 +156,12 @@ mod tests {
                 .to_string(),
         };
         let before = KeyOutputs {
+            available: None,
             fingerprint: fingerprint.clone(),
             wrapping_key_id: "projects/example/locations/us/keyRings/data/cryptoKeys/customer/cryptoKeyVersions/1".to_string(),
         };
         let after = KeyOutputs {
+            available: None,
             fingerprint,
             wrapping_key_id: "projects/example/locations/us/keyRings/data/cryptoKeys/customer/cryptoKeyVersions/2".to_string(),
         };

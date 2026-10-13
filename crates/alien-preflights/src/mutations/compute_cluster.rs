@@ -284,7 +284,37 @@ impl StackMutation for ComputeClusterMutation {
         };
 
         let stack = self.materialize_capacity_groups(stack, stack_state, config)?;
-        self.materialize_persistent_container_pools(stack, stack_state)
+        let mut stack = self.materialize_persistent_container_pools(stack, stack_state)?;
+        if stack_state.platform == Platform::Aws {
+            let keys: Vec<_> = stack
+                .resources
+                .values()
+                .filter_map(|entry| entry.config.downcast_ref::<Container>())
+                .filter_map(|container| {
+                    Some((
+                        container.cluster.clone()?,
+                        container
+                            .persistent_storage
+                            .as_ref()?
+                            .encryption_key
+                            .clone()?,
+                    ))
+                })
+                .collect();
+            for (cluster, key) in keys {
+                let entry = stack.resources.get_mut(&cluster).ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: self.description().to_string(),
+                        resource_id: Some(cluster.clone()),
+                        message: "Encrypted volume has no compute cluster".to_string(),
+                    })
+                })?;
+                if !entry.dependencies.contains(&key) {
+                    entry.dependencies.push(key);
+                }
+            }
+        }
+        Ok(stack)
     }
 }
 

@@ -30,6 +30,7 @@ pub trait RdsApi: Send + Sync + std::fmt::Debug {
     async fn modify_db_cluster(&self, request: ModifyDbClusterRequest) -> Result<()>;
     async fn delete_db_cluster(&self, request: DeleteDbClusterRequest) -> Result<()>;
     async fn describe_db_clusters(&self, identifier: &str) -> Result<Vec<DbCluster>>;
+    async fn start_db_cluster(&self, identifier: &str) -> Result<()>;
     async fn create_db_instance(&self, request: CreateDbInstanceRequest) -> Result<()>;
     async fn delete_db_instance(&self, request: DeleteDbInstanceRequest) -> Result<()>;
     async fn describe_db_instances(&self, cluster_identifier: &str) -> Result<Vec<DbInstance>>;
@@ -98,6 +99,10 @@ pub struct DeleteDbInstanceRequest {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct DbCluster {
+    #[serde(default)]
+    pub kms_key_id: Option<String>,
+    #[serde(default)]
+    pub storage_encrypted: Option<bool>,
     #[serde(rename = "DBClusterIdentifier")]
     pub identifier: String,
     pub status: String,
@@ -568,6 +573,13 @@ impl RdsApi for RdsClient {
     async fn delete_db_cluster(&self, request: DeleteDbClusterRequest) -> Result<()> {
         let id = request.identifier.clone();
         self.send_form_no_body(delete_db_cluster_form(&request), "DeleteDBCluster", &id)
+            .await
+    }
+
+    async fn start_db_cluster(&self, identifier: &str) -> Result<()> {
+        let mut form = base_form("StartDBCluster");
+        form.insert("DBClusterIdentifier".into(), identifier.to_string());
+        self.send_form_no_body(form, "StartDBCluster", identifier)
             .await
     }
 
