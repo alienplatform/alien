@@ -31,7 +31,7 @@ impl CompileTimeCheck for SingleExposedPortCheck {
                 validate_container_public_endpoints(container, platform, &mut failures);
             }
             if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
-                validate_daemon_public_endpoints(daemon, &mut failures);
+                validate_daemon_public_endpoints(daemon, platform, &mut failures);
                 validate_daemon_runtime(daemon, &mut failures);
             }
             if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
@@ -135,10 +135,16 @@ fn container_endpoint_supported(platform: Platform, protocol: ExposeProtocol) ->
     }
 }
 
-fn validate_daemon_public_endpoints(daemon: &Daemon, failures: &mut Vec<String>) {
+fn validate_daemon_public_endpoints(
+    daemon: &Daemon,
+    platform: Platform,
+    failures: &mut Vec<String>,
+) {
     let mut endpoint_names = std::collections::BTreeSet::new();
     let mut public_backend_ports = std::collections::BTreeSet::new();
 
+    let mut has_http = false;
+    let mut has_tcp = false;
     for endpoint in &daemon.public_endpoints {
         if let Err(error) = endpoint.validate_for_resource(&daemon.id) {
             failures.push(format!("Daemon '{}': {}", daemon.id, error));
@@ -149,15 +155,23 @@ fn validate_daemon_public_endpoints(daemon: &Daemon, failures: &mut Vec<String>)
                 daemon.id, endpoint.name
             ));
         }
-        if endpoint.protocol != ExposeProtocol::Http {
+        has_http |= endpoint.protocol == ExposeProtocol::Http;
+        has_tcp |= endpoint.protocol == ExposeProtocol::Tcp;
+        if endpoint.protocol == ExposeProtocol::Tcp && platform != Platform::Aws {
             failures.push(format!(
-                "Daemon '{}': public endpoints currently support only HTTP",
+                "Daemon '{}': TCP endpoints are not supported on {platform}",
                 daemon.id
             ));
         }
         public_backend_ports.insert(endpoint.port);
     }
 
+    if has_http && has_tcp {
+        failures.push(format!(
+            "Daemon '{}' cannot mix HTTP and TCP public endpoints",
+            daemon.id
+        ));
+    }
     if public_backend_ports.len() > 1 {
         failures.push(format!(
             "Daemon '{}' has public endpoints on multiple backend ports ({:?}), but one backend port is currently supported. Split the endpoints across separate resources or route them through one port.",
@@ -437,6 +451,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daemon_tcp_is_accepted_only_on_supported_platforms() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 5432,
+                protocol: ExposeProtocol::Tcp,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .permissions("test".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Machines,
+            Platform::Local,
+        ] {
+            let result = SingleExposedPortCheck
+                .check(&stack, platform)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.success,
+                platform == Platform::Aws,
+                "{platform}: {:?}",
+                result.errors
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_daemon_endpoint_and_runtime_validation_fails() {
         let daemon = Daemon::new("gateway".to_string())
             .code(DaemonCode::Image {
@@ -485,7 +538,7 @@ mod tests {
         assert!(result
             .errors
             .iter()
-            .any(|e| e.contains("support only HTTP")));
+            .any(|e| e.contains("cannot mix HTTP and TCP")));
         assert!(result
             .errors
             .iter()

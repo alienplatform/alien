@@ -22,7 +22,7 @@
       },
       {
         "label": "create-public-load-balancer",
-        "description": "Create ALB resources for public daemon endpoints.",
+        "description": "Create ALB and NLB resources for daemon endpoints.",
         "grant": {
           "actions": [
             "elasticloadbalancing:CreateLoadBalancer",
@@ -54,7 +54,7 @@
       },
       {
         "label": "tag-public-load-balancer-on-create",
-        "description": "Allow tags supplied during daemon ALB resource creation. AWS authorizes tag-on-create through AddTags plus elasticloadbalancing:CreateAction.",
+        "description": "Allow tags supplied during daemon load balancer resource creation. AWS authorizes tag-on-create through AddTags plus elasticloadbalancing:CreateAction.",
         "grant": {
           "actions": ["elasticloadbalancing:AddTags"]
         },
@@ -88,10 +88,12 @@
       },
       {
         "label": "manage-public-load-balancer",
-        "description": "Update and delete ALB resources owned by public daemon endpoints.",
+        "description": "Update and delete ALB and NLB resources owned by daemon endpoints.",
         "grant": {
           "actions": [
             "elasticloadbalancing:ModifyListener",
+            "elasticloadbalancing:ModifyLoadBalancerAttributes",
+            "elasticloadbalancing:ModifyTargetGroupAttributes",
             "elasticloadbalancing:DeleteLoadBalancer",
             "elasticloadbalancing:DeleteTargetGroup",
             "elasticloadbalancing:DeleteListener"
@@ -101,8 +103,10 @@
           "stack": {
             "resources": [
               "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
               "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
@@ -114,8 +118,10 @@
           "resource": {
             "resources": [
               "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
               "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
@@ -153,7 +159,7 @@
       },
       {
         "label": "inspect-public-load-balancer",
-        "description": "Inspect ALB resources for daemon endpoint status and cleanup.",
+        "description": "Inspect ALB and NLB resources for daemon endpoint status and cleanup.",
         "grant": {
           "actions": [
             "elasticloadbalancing:DescribeLoadBalancers",
@@ -173,7 +179,7 @@
       },
       {
         "label": "create-public-load-balancer-security-group",
-        "description": "Create the runtime-owned ALB security group for public daemon endpoints.",
+        "description": "Create the runtime-owned load balancer security group for daemon endpoints.",
         "grant": {
           "actions": ["ec2:CreateSecurityGroup"]
         },
@@ -194,7 +200,7 @@
       },
       {
         "label": "tag-public-load-balancer-security-group",
-        "description": "Apply runtime boundary tags while creating the daemon ALB security group.",
+        "description": "Apply runtime boundary tags while creating the daemon load balancer security group.",
         "grant": {
           "actions": ["ec2:CreateTags"]
         },
@@ -224,7 +230,7 @@
       },
       {
         "label": "manage-public-load-balancer-security-group",
-        "description": "Open HTTPS ingress on, revoke rules from, and delete the runtime-owned ALB security group.",
+        "description": "Open endpoint ingress on, revoke rules from, and delete the runtime-owned load balancer security group.",
         "grant": {
           "actions": [
             "ec2:AuthorizeSecurityGroupIngress",
@@ -256,7 +262,7 @@
       },
       {
         "label": "manage-compute-cluster-ingress",
-        "description": "Add and remove the ALB-to-managed-compute host-port rule on the setup-owned ComputeCluster security group.",
+        "description": "Add and remove the Load-balancer-to-managed-compute host-port rule on the setup-owned ComputeCluster security group.",
         "grant": {
           "actions": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress"]
         },
