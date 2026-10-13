@@ -6,8 +6,9 @@ use alien_aws_clients::{
     credential_provider::AwsCredentialProvider,
     elbv2::{
         Action, CreateRuleRequest, DescribeRulesRequest, ElbTag, Elbv2Api, Elbv2Client,
-        FixedResponseActionConfig, ModifyListenerRequest, HostHeaderConditionConfig, ModifyRuleRequest, Rewrite, RewriteConfig, Rewrites,
-        RuleCondition, RuleTransform, RuleValues,
+        FixedResponseActionConfig, HostHeaderConditionConfig, ModifyListenerRequest,
+        ModifyRuleRequest, Rewrite, RewriteConfig, Rewrites, RuleCondition, RuleTransform,
+        RuleValues,
     },
 };
 use alien_core::{AwsClientConfig, AwsCredentials};
@@ -240,6 +241,7 @@ async fn reads_page_updates_rewrite_and_explicitly_resets_it() {
 async fn failed_mutations_are_not_retried_and_missing_rule_is_typed() {
     for (operation, code, status) in [
         ("CreateRule", "PriorityInUse", 400),
+        ("CreateRule", "InternalFailure", 503),
         ("ModifyRule", "AccessDenied", 403),
         ("DeleteRule", "RuleNotFound", 400),
     ] {
@@ -284,8 +286,26 @@ async fn listener_update_sends_the_complete_default_denial_action() {
             .body_contains(pair("DefaultActions.member.1.FixedResponseConfig.MessageBody", "Unknown host"));
         then.status(200).body("<ModifyListenerResponse><ModifyListenerResult><Listeners/></ModifyListenerResult></ModifyListenerResponse>");
     }).await;
-    client(&server).modify_listener(ModifyListenerRequest::builder().listener_arn("owned-listener".into())
-        .default_actions(vec![Action::builder().action_type("fixed-response".into()).order(1)
-            .fixed_response_config(FixedResponseActionConfig::builder().status_code("404".into()).content_type("text/plain".into()).message_body("Unknown host".into()).build()).build()]).build()).await.unwrap();
+    client(&server)
+        .modify_listener(
+            ModifyListenerRequest::builder()
+                .listener_arn("owned-listener".into())
+                .default_actions(vec![
+                    Action::builder()
+                        .action_type("fixed-response".into())
+                        .order(1)
+                        .fixed_response_config(
+                            FixedResponseActionConfig::builder()
+                                .status_code("404".into())
+                                .content_type("text/plain".into())
+                                .message_body("Unknown host".into())
+                                .build(),
+                        )
+                        .build(),
+                ])
+                .build(),
+        )
+        .await
+        .unwrap();
     mock.assert_async().await;
 }
