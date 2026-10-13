@@ -1,0 +1,7 @@
+$ AWS_REGION=eu-west-1 alien destroy --name q5-vpc --platform aws --token <private-token>
+Destroying q5-vpc
+> Success! Deployment destroyed.
+Deployment q5-vpc ([DEPLOYMENT REDACTED])
+Next alien deployments get [DEPLOYMENT REDACTED]
+
+Exit code: 0
