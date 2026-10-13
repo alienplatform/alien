@@ -764,44 +764,76 @@ fn repository_access_with_proxy(
         return (repo_ids, refused);
     }
 
-    // No per-project path to hold a sandbox to here: a GCP sandbox pulls the agents image Alien
-    // publishes under the shared prefix, and GAR binds IAM at the repository, so every grant on
-    // this platform opens the same shared repository. AWS narrows its own grant per project.
-    if !has_image_in_repository_prefix(state, &prefix, sandbox_source) {
-        return (Vec::new(), false);
+    if matches!(platform, Some(Platform::Gcp)) {
+        return gcp_repository_access(state, &prefix, project_id, sandbox_source);
     }
-
-    let repo_ids = HashSet::from([prefix]);
-    let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
-    repo_ids.sort();
-    (repo_ids, false)
+    (Vec::new(), false)
 }
 
-fn has_image_in_repository_prefix(
+fn gcp_repository_access(
     state: &DeploymentState,
     prefix: &str,
+    project_id: &str,
     sandbox_source: SandboxImageSource,
-) -> bool {
-    let stack_matches = |stack: &Stack| {
-        stack.resources().any(|(_id, entry)| {
-            resource_image_reference(entry, sandbox_source)
-                .is_some_and(|image| image_repository_matches_prefix(image, prefix))
-        })
+) -> (Vec<String>, bool) {
+    let Some((cloud_project, repository_prefix)) = prefix.split_once('/') else {
+        return (Vec::new(), false);
     };
-
-    state
-        .current_release
+    let mut repositories = HashSet::new();
+    let mut refused = false;
+    let mut collect = |stack: &Stack| {
+        for (resource_id, entry) in stack.resources() {
+            let Some(image) = resource_image_reference(entry, sandbox_source) else {
+                continue;
+            };
+            let Some(repository_path) = image_repository_path(image) else {
+                continue;
+            };
+            let Some(path) = repository_path.strip_prefix(&format!("{cloud_project}/")) else {
+                continue;
+            };
+            let repository = path.split('/').next().unwrap_or_default();
+            if repository == format!("{repository_prefix}-shared") {
+                repositories.insert(format!("{cloud_project}/{repository}"));
+            } else if let Some(owner) =
+                alien_core::gar_repository::project_id_for_path(path, repository_prefix)
+            {
+                if owner == project_id {
+                    repositories.insert(format!("{cloud_project}/{repository}"));
+                } else {
+                    refused = true;
+                    warn!(
+                        project_id,
+                        resource_id, "Refusing an image repository belonging to another project"
+                    );
+                }
+            } else if repository == repository_prefix
+                || repository.starts_with(&format!("{repository_prefix}-prj-"))
+            {
+                refused = true;
+                warn!(
+                    project_id,
+                    resource_id, "Image repository requires migration before direct pull access"
+                );
+            }
+        }
+    };
+    if let Some(release) = &state.current_release {
+        collect(&release.stack);
+    }
+    if let Some(release) = &state.target_release {
+        collect(&release.stack);
+    }
+    if let Some(stack) = state
+        .runtime_metadata
         .as_ref()
-        .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .target_release
-            .as_ref()
-            .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .runtime_metadata
-            .as_ref()
-            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(stack_matches)
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+    {
+        collect(stack);
+    }
+    let mut repositories: Vec<_> = repositories.into_iter().collect();
+    repositories.sort();
+    (repositories, refused)
 }
 
 /// The principals a GCP grant names: Cloud Run always, and the sandbox agent when a release
@@ -1035,14 +1067,6 @@ fn ecr_repository_from_image(image: &str, prefix: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn image_repository_matches_prefix(image: &str, prefix: &str) -> bool {
-    image_repository_path(image).is_some_and(|repository| {
-        repository == prefix
-            || repository.starts_with(&format!("{prefix}-"))
-            || repository.starts_with(&format!("{prefix}/"))
-    })
 }
 
 fn image_repository_path(image: &str) -> Option<String> {
@@ -1960,19 +1984,108 @@ mod tests {
     }
 
     #[test]
+    fn gar_grants_only_the_own_project_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for (owner, expected) in [
+            (
+                PROJECT,
+                vec![format!(
+                    "vendor/{}",
+                    alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap()
+                )],
+            ),
+            ("prj_other", Vec::new()),
+        ] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "region-docker.pkg.dev/vendor/{}/{owner}/worker:v1",
+                alien_core::gar_repository::project_repository("artifacts", owner).unwrap()
+            )));
+            let (repositories, refused) = repository_access(&registry, &state, PROJECT);
+            assert_eq!(repositories, expected);
+            assert_eq!(refused, owner != PROJECT);
+        }
+    }
+
+    #[test]
+    fn gcp_worker_and_sandbox_grants_name_only_own_and_published_resources() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        let own = alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap();
+        let mut state = gcp_state_with_stack(worker_stack(&format!(
+            "manager.example.com/vendor/{own}/{PROJECT}/worker:v1"
+        )));
+        state.target_release = Some(ReleaseInfo {
+            release_id: Some("rel_sandbox".to_string()),
+            version: None,
+            description: None,
+            stack: sandbox_stack_with_code(
+                "manager.example.com/vendor/artifacts-shared/agents:v1",
+                None,
+            ),
+        });
+        let mut expected = vec![
+            format!("vendor/{own}"),
+            "vendor/artifacts-shared".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(
+            repository_access(&registry, &state, PROJECT),
+            (expected, false)
+        );
+        let Some(CrossAccountAccess::Gcp(access)) = build_cross_account_access(
+            state.environment_info.as_ref().unwrap(),
+            None,
+            declares_sandbox(&state),
+        ) else {
+            panic!("GCP access");
+        };
+        assert_eq!(
+            access.allowed_service_types,
+            vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
+        );
+        assert_eq!(access.project_numbers, vec!["123456789012"]);
+    }
+
+    #[test]
+    fn pre_cutover_gcp_releases_never_open_the_mixed_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for path in [format!("{PROJECT}/worker"), "agents".to_string()] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "manager.example.com/vendor/artifacts/{path}:v1"
+            )));
+            assert_eq!(
+                repository_access(&registry, &state, PROJECT),
+                (vec![], true)
+            );
+        }
+    }
+
+    #[test]
     fn gcp_registry_access_requires_worker_image_under_prefix() {
         let registry = TestArtifactRegistry {
             prefix: "test-project/alien-artifacts".to_string(),
             fail_remove: false,
             removed_repository_is_gone: false,
         };
-        let state = gcp_state_with_stack(worker_stack(
-            "manager.example.com/test-project/alien-artifacts/test-worker:abc123",
-        ));
-
+        let own =
+            alien_core::gar_repository::project_repository("alien-artifacts", PROJECT).unwrap();
+        let state = gcp_state_with_stack(worker_stack(&format!(
+            "manager.example.com/test-project/{own}/{PROJECT}/worker:abc123"
+        )));
         assert_eq!(
             repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts".to_string()]
+            vec![format!("test-project/{own}")]
         );
     }
 
@@ -2690,13 +2803,13 @@ mod tests {
             removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(sandbox_stack_with_code(
-            "manager.example.com/test-project/alien-artifacts/agents:abc123",
+            "manager.example.com/test-project/alien-artifacts-shared/agents:abc123",
             None,
         ));
 
         assert_eq!(
             repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts".to_string()],
+            vec!["test-project/alien-artifacts-shared".to_string()],
             "a GCP sandbox pulls its container from Alien's registry, so it earns the grant"
         );
     }
