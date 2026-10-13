@@ -6,18 +6,14 @@ use crate::{
     CheckResult,
 };
 use alien_aws_clients::{
-    cloudwatch::{Dimension, GetMetricDataRequest, Metric, MetricDataQuery, MetricStat},
     ec2::{DescribeInstancesRequest, Filter},
-    CloudWatchApi, Ec2Api, ServiceQuotasApi,
+    Ec2Api, ServiceQuotasApi,
 };
 use alien_core::{
     instance_catalog::find_instance_type, ComputeCluster, ComputeClusterOutputs, Platform,
     ResourceStatus, Stack, StackState,
 };
-use std::{
-    collections::BTreeMap,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::BTreeMap;
 
 /// Quota families are independent pools; never charge specialized machines to Standard.
 pub fn family_quota(instance_type: &str) -> Option<&'static str> {
@@ -127,7 +123,6 @@ pub async fn check(
     state: &StackState,
     region: &str,
     quotas: &dyn ServiceQuotasApi,
-    metrics: &dyn CloudWatchApi,
     ec2: &dyn Ec2Api,
     result: &mut CheckResult,
 ) {
@@ -144,7 +139,7 @@ pub async fn check(
         return;
     };
     for (code, demand) in demands {
-        let observation = read_observation(quotas, metrics, ec2, code).await;
+        let observation = read_observation(quotas, ec2, code).await;
         record(
             result,
             QuotaResult {
@@ -157,7 +152,6 @@ pub async fn check(
 
 pub async fn read_observation(
     quotas: &dyn ServiceQuotasApi,
-    metrics: &dyn CloudWatchApi,
     ec2: &dyn Ec2Api,
     code: &str,
 ) -> Option<QuotaObservation> {
@@ -166,77 +160,20 @@ pub async fn read_observation(
         return None;
     }
     let limit = quota.value?;
-    let usage = quota.usage_metric?;
-    let end = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
-    let response = metrics
-        .get_metric_data(GetMetricDataRequest {
-            start_time: end - 600,
-            end_time: end,
-            metric_data_queries: vec![MetricDataQuery {
-                id: "usage".into(),
-                expression: None,
-                label: None,
-                period: None,
-                return_data: Some(true),
-                metric_stat: Some(MetricStat {
-                    metric: Metric {
-                        namespace: Some(usage.metric_namespace),
-                        metric_name: Some(usage.metric_name),
-                        dimensions: usage
-                            .metric_dimensions
-                            .into_iter()
-                            .map(|(name, value)| Dimension { name, value })
-                            .collect(),
-                    },
-                    period: 60,
-                    stat: usage.metric_statistic_recommendation,
-                    unit: None,
-                }),
-            }],
-            max_datapoints: None,
-            next_token: None,
-            scan_by: Some("TimestampDescending".into()),
-        })
-        .await
-        .ok()?;
-    if response.next_token.is_some()
-        || !response.messages.is_empty()
-        || response.metric_data_results.len() != 1
-    {
-        return None;
-    }
-    let data = &response.metric_data_results[0];
-    if data.id != "usage"
-        || data.status_code.as_deref() != Some("Complete")
-        || !data.messages.is_empty()
-        || data.values.len() != data.timestamps.len()
-    {
-        return None;
-    }
-    if data.values.is_empty() {
-        return Some(QuotaObservation {
-            used: read_instance_usage(ec2, code).await?,
-            limit,
-        });
-    }
-    let (timestamp, used) = data
-        .timestamps
-        .iter()
-        .zip(&data.values)
-        .max_by_key(|(timestamp, _)| *timestamp)?;
-    if *timestamp < end - 300 || *timestamp > end {
-        return None;
-    }
-    Some(QuotaObservation { used: *used, limit })
+    Some(QuotaObservation {
+        used: read_instance_usage(ec2, code).await?,
+        limit,
+    })
 }
 
-/// CloudWatch does not publish a zero series in every idle account. Only a
-/// successful, complete empty metric read uses this conservative inventory fallback.
+/// Count pending/running On-Demand hardware totals, excluding Spot and stopped
+/// instances. Public metadata supplies default vCPUs even with custom CPU options.
 async fn read_instance_usage(ec2: &dyn Ec2Api, code: &str) -> Option<f64> {
     let mut token = None;
     let mut seen_tokens = std::collections::HashSet::new();
     let mut identities = std::collections::HashSet::new();
     let mut used = 0.0;
+    let mut cpu_counts = BTreeMap::new();
     loop {
         let response = ec2
             .describe_instances(DescribeInstancesRequest {
@@ -261,7 +198,26 @@ async fn read_instance_usage(ec2: &dyn Ec2Api, code: &str) -> Option<f64> {
                 }
                 let machine = instance.instance_type?;
                 if family_quota(&machine)? == code {
-                    used += f64::from(find_instance_type(Platform::Aws, &machine)?.vcpu);
+                    if !cpu_counts.contains_key(&machine) {
+                        let response =
+                            ec2.describe_instance_types(&[machine.clone()]).await.ok()?;
+                        if response.next_token.is_some() {
+                            return None;
+                        }
+                        let types = response.instance_type_set?.items;
+                        if types.len() != 1
+                            || types[0].instance_type.as_deref() != Some(machine.as_str())
+                        {
+                            return None;
+                        }
+                        let cpu = types[0]
+                            .vcpu_info
+                            .as_ref()?
+                            .default_vcpus
+                            .filter(|cpu| *cpu > 0)?;
+                        cpu_counts.insert(machine.clone(), cpu);
+                    }
+                    used += f64::from(cpu_counts[&machine]);
                 }
             }
         }
@@ -277,10 +233,7 @@ async fn read_instance_usage(ec2: &dyn Ec2Api, code: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_aws_clients::{
-        cloudwatch::{GetMetricDataResponse, MockCloudWatchApi},
-        service_quotas::{GetServiceQuotaResponse, MockServiceQuotasApi},
-    };
+    use alien_aws_clients::service_quotas::{GetServiceQuotaResponse, MockServiceQuotasApi};
     use alien_core::{
         CapacityGroup, Resource, ResourceLifecycle, ResourceOutputs, StackResourceState,
     };
@@ -396,6 +349,8 @@ mod tests {
                 )
                 .unwrap())
             });
+        ec2.expect_describe_instance_types().times(1).withf(|types| types == ["m7g.xlarge"])
+            .returning(|_| Ok(serde_json::from_str(r#"{"instanceTypeSet":{"item":[{"instanceType":"m7g.xlarge","vCpuInfo":{"defaultVCpus":4}}]}}"#).unwrap()));
         assert_eq!(read_instance_usage(&ec2, "L-1216C47A").await, Some(8.0));
     }
 
@@ -413,63 +368,64 @@ mod tests {
             ec2.expect_describe_instances()
                 .times(1)
                 .returning(move |_| Ok(serde_json::from_str(body).unwrap()));
+            if body.contains("m99.large") {
+                ec2.expect_describe_instance_types()
+                    .times(1)
+                    .returning(|_| {
+                        Err(alien_error::AlienError::new(
+                            alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                                resource_type: "InstanceType".into(),
+                                resource_name: "m99.large".into(),
+                            },
+                        ))
+                    });
+            }
             assert_eq!(read_instance_usage(&ec2, "L-1216C47A").await, expected);
         }
     }
 
     #[tokio::test]
-    async fn applied_metric_metadata_and_fresh_complete_usage_are_required() {
-        for valid in [true, false] {
-            let mut quotas = MockServiceQuotasApi::new();
-            quotas
-                .expect_get_service_quota()
-                .times(1)
-                .withf(|service, code| service == "ec2" && code == "L-1216C47A")
-                .returning(|_, _| {
-                    Ok(
-                        serde_json::from_str::<GetServiceQuotaResponse>(include_str!(
-                            "fixtures/aws-ec2-standard-applied.json"
-                        ))
-                        .unwrap(),
-                    )
-                });
-            let mut metrics = MockCloudWatchApi::new();
-            metrics.expect_get_metric_data().times(1).withf(|request| {
-                let metric = &request.metric_data_queries[0].metric_stat.as_ref().unwrap().metric;
-                metric.namespace.as_deref() == Some("AWS/Usage") && metric.dimensions.iter().any(|dimension| dimension.name == "Class" && dimension.value == "Standard/OnDemand")
-            }).returning(move |request| Ok(serde_json::from_value::<GetMetricDataResponse>(serde_json::json!({
-                "MetricDataResults": [{"Id":"usage", "StatusCode": if valid {"Complete"} else {"PartialData"},
-                    "Timestamps": [request.end_time - 60], "Values": [12.0]}]
-            })).unwrap()));
-            let ec2 = alien_aws_clients::ec2::MockEc2Api::new();
-            let observation = read_observation(&quotas, &metrics, &ec2, "L-1216C47A").await;
-            if valid {
-                assert_eq!(
-                    observation,
-                    Some(QuotaObservation {
-                        used: 12.0,
-                        limit: 16.0
-                    })
-                );
-                assert!(evaluate(
-                    QuotaDemand {
-                        peak: 8.0,
-                        held: 0.0
-                    },
-                    observation
+    async fn applied_limit_and_inventory_determine_headroom_without_metric_access() {
+        let mut quotas = MockServiceQuotasApi::new();
+        quotas
+            .expect_get_service_quota()
+            .times(1)
+            .withf(|service, code| service == "ec2" && code == "L-1216C47A")
+            .returning(|_, _| {
+                Ok(
+                    serde_json::from_str::<GetServiceQuotaResponse>(include_str!(
+                        "fixtures/aws-ec2-standard-applied.json"
+                    ))
+                    .unwrap(),
                 )
-                .blocks());
-            } else {
-                assert_eq!(observation, None);
-                assert!(!evaluate(
-                    QuotaDemand {
-                        peak: 8.0,
-                        held: 0.0
-                    },
-                    observation
-                )
-                .blocks());
-            }
-        }
+            });
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        ec2.expect_describe_instances()
+            .times(1)
+            .returning(|_| Ok(serde_json::from_str(r#"{"reservationSet":{"item":[]}}"#).unwrap()));
+        let observation = read_observation(&quotas, &ec2, "L-1216C47A").await;
+        assert_eq!(
+            observation,
+            Some(QuotaObservation {
+                used: 0.0,
+                limit: 16.0
+            })
+        );
+        assert!(evaluate(
+            QuotaDemand {
+                peak: 40.0,
+                held: 0.0
+            },
+            observation
+        )
+        .blocks());
+        assert!(!evaluate(
+            QuotaDemand {
+                peak: 4.0,
+                held: 0.0
+            },
+            observation
+        )
+        .blocks());
     }
 }

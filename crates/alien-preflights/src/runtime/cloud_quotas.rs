@@ -7,8 +7,7 @@ use crate::quotas::{
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
     ec2::{DescribeAddressesResponse, DescribeInternetGatewaysRequest, DescribeVpcsRequest},
-    AwsCredentialProvider, CloudWatchClient, Ec2Api, Ec2Client, ServiceQuotasApi,
-    ServiceQuotasClient,
+    AwsCredentialProvider, Ec2Api, Ec2Client, ServiceQuotasApi, ServiceQuotasClient,
 };
 use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
@@ -110,7 +109,6 @@ impl RuntimeCheck for CloudQuotasCheck {
         };
         let client = reqwest::Client::new();
         let ec2 = Ec2Client::new(client.clone(), credentials.clone());
-        let metrics = CloudWatchClient::new(client.clone(), credentials.clone());
         let quotas = ServiceQuotasClient::new(client, credentials);
         if has_compute {
             super::aws_compute::check(
@@ -118,7 +116,6 @@ impl RuntimeCheck for CloudQuotasCheck {
                 stack_state,
                 &config.region,
                 &quotas,
-                &metrics,
                 &ec2,
                 &mut result,
             )

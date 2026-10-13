@@ -183,6 +183,12 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         request: DescribeInstanceTypeOfferingsRequest,
     ) -> Result<DescribeInstanceTypeOfferingsResponse>;
 
+    /// Public hardware metadata; quota counts the instance type's default vCPUs.
+    async fn describe_instance_types(
+        &self,
+        instance_types: &[String],
+    ) -> Result<DescribeInstanceTypesResponse>;
+
     // AMI Operations
     async fn describe_images(
         &self,
@@ -1698,6 +1704,21 @@ impl Ec2Api for Ec2Client {
     // ---------------------------------------------------------------------------
     // Instance Type Operations
     // ---------------------------------------------------------------------------
+
+    async fn describe_instance_types(
+        &self,
+        instance_types: &[String],
+    ) -> Result<DescribeInstanceTypesResponse> {
+        let mut form_data = HashMap::from([
+            ("Action".to_string(), "DescribeInstanceTypes".to_string()),
+            ("Version".to_string(), "2016-11-15".to_string()),
+        ]);
+        for (index, instance_type) in instance_types.iter().enumerate() {
+            form_data.insert(format!("InstanceType.{}", index + 1), instance_type.clone());
+        }
+        self.send_form(form_data, "DescribeInstanceTypes", "InstanceType")
+            .await
+    }
 
     async fn describe_instance_type_offerings(
         &self,
@@ -3588,6 +3609,31 @@ pub struct TerminatingInstance {
 pub struct InstanceState {
     pub code: Option<i32>,
     pub name: Option<String>,
+}
+
+/// Public instance-type metadata returned by EC2.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeInstanceTypesResponse {
+    pub instance_type_set: Option<InstanceTypeInfoSet>,
+    pub next_token: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+pub struct InstanceTypeInfoSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<InstanceTypeInfo>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceTypeInfo {
+    pub instance_type: Option<String>,
+    #[serde(rename = "vCpuInfo")]
+    pub vcpu_info: Option<VcpuInfo>,
+}
+#[derive(Debug, Deserialize)]
+pub struct VcpuInfo {
+    #[serde(rename = "defaultVCpus")]
+    pub default_vcpus: Option<u32>,
 }
 
 /// Request to describe instances.

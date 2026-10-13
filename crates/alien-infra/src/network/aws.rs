@@ -974,7 +974,6 @@ mod tests {
                         quota_code: Some(quota_code.to_string()),
                         service_code: Some("ec2".to_string()),
                         quota_name: None,
-                        usage_metric: None,
                         value: Some(limit),
                     }),
                 })
@@ -6120,7 +6119,6 @@ mod controller_state_tests {
                                 quota_code: Some("L-FE5A380F".into()),
                                 service_code: Some("vpc".into()),
                                 quota_name: None,
-                                usage_metric: None,
                                 value: Some(limit),
                             }),
                         })
@@ -9224,7 +9222,6 @@ mod controller_state_tests {
                     quota_code: Some("L-0263D0A3".to_string()),
                     service_code: Some("ec2".to_string()),
                     quota_name: None,
-                    usage_metric: None,
                     value: Some(5.0),
                 }),
             })

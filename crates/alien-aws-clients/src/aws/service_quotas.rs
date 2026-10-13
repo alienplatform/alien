@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt::Debug};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -17,17 +17,6 @@ pub struct ServiceQuota {
     pub service_code: Option<String>,
     pub quota_name: Option<String>,
     pub value: Option<f64>,
-    pub usage_metric: Option<QuotaUsageMetric>,
-}
-
-/// Provider metric describing how this applied quota counts usage.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct QuotaUsageMetric {
-    pub metric_namespace: String,
-    pub metric_name: String,
-    pub metric_dimensions: BTreeMap<String, String>,
-    pub metric_statistic_recommendation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
