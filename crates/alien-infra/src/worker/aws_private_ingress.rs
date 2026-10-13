@@ -6,8 +6,8 @@ use alien_aws_clients::{
     apigateway::ApiGatewayApi,
     ec2::{
         AuthorizeSecurityGroupIngressRequest, DescribeNetworkInterfacesRequest,
-        DescribeSecurityGroupsRequest, DescribeSubnetsRequest, Ec2Api, IpPermission, IpRange,
-        UserIdGroupPair,
+        DescribeRouteTablesRequest, DescribeSecurityGroupsRequest, DescribeSubnetsRequest, Ec2Api,
+        Filter, IpPermission, IpRange, UserIdGroupPair,
     },
     ecs::{
         AwsVpcConfiguration, CreateServiceRequest, DeploymentCircuitBreaker,
@@ -679,7 +679,7 @@ pub(super) async fn validate_worker_setup(
         return Ok(());
     }
     let network = ctx.require_dependency::<crate::network::AwsNetworkController>(
-        &ResourceRef::new(Network::RESOURCE_TYPE, "default-network".into()),
+        &ResourceRef::new(Network::RESOURCE_TYPE, "default-network"),
     )?;
     let vpc_id = network
         .vpc_id
@@ -763,6 +763,110 @@ async fn validate_subnets(
             return Err(invalid(
                 "Private gateway requires complete subnet membership in two physical zones",
             ));
+        }
+    }
+    validate_gateway_routes(ec2, vpc_id, gateway_subnets).await
+}
+
+/// Fargate has no registry credentials and pulls the pinned public image. A
+/// public IP alone supplies no egress: setup must provide an active IGW route.
+async fn validate_gateway_routes(ec2: &dyn Ec2Api, vpc_id: &str, subnets: &[String]) -> Result<()> {
+    let mut tables = Vec::new();
+    let mut tokens = BTreeSet::new();
+    let mut next_token = None;
+    loop {
+        let response = ec2
+            .describe_route_tables(
+                DescribeRouteTablesRequest::builder()
+                    .filters(vec![Filter {
+                        name: "vpc-id".into(),
+                        values: vec![vpc_id.into()],
+                    }])
+                    .maybe_next_token(next_token)
+                    .build(),
+            )
+            .await
+            .context(cloud("Read private gateway image-pull routes"))?;
+        tables.extend(
+            response
+                .route_table_set
+                .ok_or_else(|| invalid("Gateway setup route-table inventory missing"))?
+                .items,
+        );
+        next_token = response.next_token;
+        if let Some(token) = &next_token {
+            if token.is_empty() || !tokens.insert(token.clone()) {
+                return Err(invalid(
+                    "Gateway setup route-table pagination did not advance",
+                ));
+            }
+        } else {
+            break;
+        }
+    }
+    let mut ids = BTreeSet::new();
+    for table in &tables {
+        let id = table
+            .route_table_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| invalid("Gateway setup route-table ID missing"))?;
+        if !ids.insert(id) || table.vpc_id.as_deref() != Some(vpc_id) {
+            return Err(invalid("Gateway setup route-table identity or VPC changed"));
+        }
+    }
+    for subnet in subnets {
+        let explicit = tables
+            .iter()
+            .filter(|table| {
+                table.association_set.as_ref().is_some_and(|set| {
+                    set.items
+                        .iter()
+                        .any(|association| association.subnet_id.as_ref() == Some(subnet))
+                })
+            })
+            .collect::<Vec<_>>();
+        let selected = if explicit.is_empty() {
+            tables
+                .iter()
+                .filter(|table| {
+                    table.association_set.as_ref().is_some_and(|set| {
+                        set.items
+                            .iter()
+                            .any(|association| association.main == Some(true))
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            explicit
+        };
+        if selected.len() != 1 {
+            return Err(invalid(
+                "Gateway setup must identify one effective route table per subnet",
+            ));
+        }
+        let routes = selected[0]
+            .route_set
+            .as_ref()
+            .ok_or_else(|| invalid("Gateway setup routes missing"))?;
+        let defaults = routes
+            .items
+            .iter()
+            .filter(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"))
+            .collect::<Vec<_>>();
+        if defaults.len() != 1
+            || defaults[0].state.as_deref() != Some("active")
+            || !defaults[0]
+                .gateway_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("igw-") && id.len() > 4)
+            || defaults[0].nat_gateway_id.is_some()
+            || defaults[0].instance_id.is_some()
+            || defaults[0].network_interface_id.is_some()
+            || defaults[0].vpc_peering_connection_id.is_some()
+            || defaults[0].transit_gateway_id.is_some()
+        {
+            return Err(invalid("Private worker gateway requires setup with an active public-subnet internet-gateway route for image pulls"));
         }
     }
     Ok(())
@@ -906,6 +1010,54 @@ mod tests {
             gateway_subnets: vec!["subnet-public-a".into(), "subnet-public-b".into()],
             domains: vec!["private-api.example.test".into()],
             function_arn: "arn:aws:lambda:us-east-1:123456789012:function:worker".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_egress_uses_explicit_subnet_routes_before_main_table() {
+        for scenario in [
+            "main",
+            "explicit",
+            "blackhole",
+            "nat",
+            "foreign",
+            "missing",
+            "repeated-page",
+        ] {
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_describe_route_tables().returning(move |request| {
+                let filters = request.filters.unwrap();
+                assert_eq!(filters.len(), 1);
+                assert_eq!(filters[0].name, "vpc-id");
+                assert_eq!(filters[0].values, vec!["vpc-owned"]);
+                let main = json!({"routeTableId":"rtb-main","vpcId":"vpc-owned",
+                    "associationSet":{"item":[{"main":true}]},
+                    "routeSet":{"item":[{"destinationCidrBlock":"0.0.0.0/0","gatewayId":"igw-owned","state":"active"}]}});
+                if request.next_token.is_none() {
+                    return Ok(serde_json::from_value(json!({"routeTableSet":{"item":[main]},"nextToken":"page-two"})).unwrap());
+                }
+                assert_eq!(request.next_token.as_deref(), Some("page-two"));
+                let explicit = json!({"routeTableId":"rtb-explicit","vpcId":if scenario == "foreign" {"vpc-foreign"} else {"vpc-owned"},
+                    "associationSet":{"item":[{"subnetId":"subnet-gateway-a"}]},
+                    "routeSet":{"item":if scenario == "missing" {vec![]} else {vec![json!({
+                        "destinationCidrBlock":"0.0.0.0/0","gatewayId":if scenario == "nat" {None} else {Some("igw-owned")},
+                        "natGatewayId":if scenario == "nat" {Some("nat-owned")} else {None},
+                        "state":if scenario == "blackhole" {"blackhole"} else {"active"}
+                    })]}}});
+                Ok(serde_json::from_value(json!({"routeTableSet":{"item":if scenario == "main" {vec![]} else {vec![explicit]}},
+                    "nextToken":if scenario == "repeated-page" {Some("page-two")} else {None}})).unwrap())
+            });
+            let result = validate_gateway_routes(
+                &ec2,
+                "vpc-owned",
+                &["subnet-gateway-a".into(), "subnet-gateway-b".into()],
+            )
+            .await;
+            if matches!(scenario, "main" | "explicit") {
+                result.unwrap();
+            } else {
+                assert!(result.is_err(), "{scenario}");
+            }
         }
     }
 
