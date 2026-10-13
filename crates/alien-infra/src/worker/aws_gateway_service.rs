@@ -2,6 +2,7 @@
 //! The parent owns its task family, target group, network and cluster separately.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::Ipv4Addr;
 
 use alien_aws_clients::ecs::{
     CreateServiceRequest, DeleteServiceRequest, DescribeServicesRequest, DescribeTasksRequest,
@@ -28,6 +29,12 @@ pub(super) struct GatewayService {
     delete_requested: bool,
     /// Retained until the parent independently verifies ENI absence before removing its SG.
     pub network_interface_ids: BTreeSet<String>,
+}
+
+struct TaskInventory {
+    stopped: bool,
+    running_tasks: usize,
+    running_interfaces: BTreeMap<String, String>,
 }
 
 impl GatewayService {
@@ -112,13 +119,16 @@ impl GatewayService {
     }
 
     /// Parent checkpoints pending results and independently checks target-group health.
-    pub async fn step_create(&mut self, ecs: &dyn EcsApi) -> Result<bool> {
+    pub async fn step_create(
+        &mut self,
+        ecs: &dyn EcsApi,
+    ) -> Result<Option<BTreeMap<String, String>>> {
         if self.retiring {
             return Err(invalid("A retiring gateway service cannot be reused"));
         }
         if !self.create_permitted {
             self.create_permitted = true;
-            return Ok(false);
+            return Ok(None);
         }
         let Some(service) = self.find(ecs).await? else {
             if self.observed {
@@ -127,10 +137,10 @@ impl GatewayService {
                 ));
             }
             self.create(ecs).await?;
-            return Ok(false);
+            return Ok(None);
         };
         self.observed = true;
-        self.inventory_tasks(ecs).await?;
+        let inventory = self.inventory_tasks(ecs).await?;
         if service.status.as_deref() != Some("ACTIVE") {
             return Err(invalid("Gateway service is not active"));
         }
@@ -141,11 +151,14 @@ impl GatewayService {
         {
             return Err(invalid("Gateway service deployment failed"));
         }
-        Ok(service.desired_count == Some(self.request.desired_count)
+        let ready = service.desired_count == Some(self.request.desired_count)
             && service.running_count == Some(self.request.desired_count)
             && service.pending_count == Some(0)
             && service.deployments.len() == 1
-            && service.deployments[0].rollout_state.as_deref() == Some("COMPLETED"))
+            && service.deployments[0].rollout_state.as_deref() == Some("COMPLETED")
+            && usize::try_from(self.request.desired_count).ok() == Some(inventory.running_tasks)
+            && inventory.running_interfaces.len() == inventory.running_tasks;
+        Ok(ready.then_some(inventory.running_interfaces))
     }
 
     /// Retire incoming routing before draining. Completion still requires parent ENI checks.
@@ -163,7 +176,7 @@ impl GatewayService {
         let service = self.find(ecs).await?;
         let Some(service) = service else {
             if self.delete_requested && self.observed {
-                return self.inventory_tasks(ecs).await;
+                return Ok(self.inventory_tasks(ecs).await?.stopped);
             }
             if self.observed {
                 return Err(invalid(
@@ -175,7 +188,7 @@ impl GatewayService {
             return Ok(false);
         };
         self.observed = true;
-        let tasks_stopped = self.inventory_tasks(ecs).await?;
+        let tasks_stopped = self.inventory_tasks(ecs).await?.stopped;
         if service.status.as_deref() == Some("INACTIVE") {
             if !self.delete_requested {
                 return Err(invalid(
@@ -315,8 +328,10 @@ impl GatewayService {
         Ok(())
     }
 
-    async fn inventory_tasks(&mut self, ecs: &dyn EcsApi) -> Result<bool> {
+    async fn inventory_tasks(&mut self, ecs: &dyn EcsApi) -> Result<TaskInventory> {
         let mut stopped = true;
+        let mut running_tasks = 0;
+        let mut running_interfaces = BTreeMap::new();
         let mut tasks = BTreeSet::new();
         for status in ["RUNNING", "STOPPED"] {
             let mut cursor = None;
@@ -374,24 +389,59 @@ impl GatewayService {
                         "Gateway service inventory contained a foreign task",
                     ));
                 }
+                let running = task.last_status.as_deref() == Some("RUNNING");
+                running_tasks += usize::from(running);
+                let mut interface = None;
+                let mut address = None;
                 for attachment in task.attachments {
                     if attachment.attachment_type.as_deref() == Some("ElasticNetworkInterface") {
                         for detail in attachment.details {
-                            if detail.name == "networkInterfaceId" {
-                                if !detail.value.starts_with("eni-") {
-                                    return Err(invalid(
-                                        "Gateway task interface identity is invalid",
-                                    ));
+                            match detail.name.as_str() {
+                                "networkInterfaceId" => {
+                                    if !detail.value.starts_with("eni-") {
+                                        return Err(invalid(
+                                            "Gateway task interface identity is invalid",
+                                        ));
+                                    }
+                                    self.network_interface_ids.insert(detail.value.clone());
+                                    if interface.replace(detail.value).is_some() {
+                                        return Err(invalid(
+                                            "Gateway task has multiple interface identities",
+                                        ));
+                                    }
                                 }
-                                self.network_interface_ids.insert(detail.value);
+                                "privateIPv4Address" => {
+                                    if detail.value.parse::<Ipv4Addr>().is_err() {
+                                        return Err(invalid(
+                                            "Gateway task private address is invalid",
+                                        ));
+                                    }
+                                    if address.replace(detail.value).is_some() {
+                                        return Err(invalid(
+                                            "Gateway task has multiple private addresses",
+                                        ));
+                                    }
+                                }
+                                _ => {}
                             }
+                        }
+                    }
+                }
+                if running {
+                    if let (Some(interface), Some(address)) = (interface, address) {
+                        if running_interfaces.insert(interface, address).is_some() {
+                            return Err(invalid("Gateway tasks share an interface identity"));
                         }
                     }
                 }
                 stopped &= task.last_status.as_deref() == Some("STOPPED");
             }
         }
-        Ok(stopped)
+        Ok(TaskInventory {
+            stopped,
+            running_tasks,
+            running_interfaces,
+        })
     }
 }
 
@@ -478,11 +528,11 @@ mod tests {
                 next_token: None,
             })
         });
-        assert!(!owner.step_create(&ecs).await.unwrap());
+        assert!(owner.step_create(&ecs).await.unwrap().is_none());
         let checkpoint = reload(&owner);
         assert!(owner.step_create(&ecs).await.is_err());
         owner = checkpoint;
-        assert!(owner.step_create(&ecs).await.unwrap());
+        assert!(owner.step_create(&ecs).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -582,5 +632,54 @@ mod tests {
                 })
             });
         assert!(owner.step_delete(&ecs).await.is_err());
+    }
+    #[tokio::test]
+    async fn readiness_waits_for_running_task_interface_addresses() {
+        let mut owner = owner();
+        owner.create_permitted = true;
+        let live = service(&owner);
+        let mut ecs = MockEcsApi::new();
+        ecs.expect_describe_services().times(2).returning(move |_| {
+            Ok(DescribeServicesResponse {
+                services: vec![live.clone()],
+                failures: vec![],
+            })
+        });
+        ecs.expect_list_tasks().times(4).returning(|request| {
+            Ok(ListTasksResponse {
+                task_arns: if request.desired_status.as_deref() == Some("RUNNING") {
+                    vec!["task-a".into(), "task-b".into()]
+                } else {
+                    vec![]
+                },
+                next_token: None,
+            })
+        });
+        let visible = Arc::new(Mutex::new(false));
+        let world = visible.clone();
+        let cluster = owner.request.cluster.clone();
+        let group = format!("service:{}", owner.request.service_name);
+        let definition = owner.request.task_definition.clone();
+        ecs.expect_describe_tasks().times(2).returning(move |request| {
+            assert_eq!(request.tasks,vec!["task-a","task-b"]);
+            let tasks=[("task-a","eni-a","10.0.1.7"),("task-b","eni-b","10.0.2.7")].into_iter().map(|(task,interface,address)| {
+                let mut details=vec![json!({"name":"networkInterfaceId","value":interface})];
+                if *world.lock().unwrap() {details.push(json!({"name":"privateIPv4Address","value":address}));}
+                json!({"taskArn":task,"clusterArn":cluster,"group":group,"taskDefinitionArn":definition,"lastStatus":"RUNNING",
+                    "attachments":[{"type":"ElasticNetworkInterface","details":details}]})
+            }).collect::<Vec<_>>();
+            Ok(serde_json::from_value(json!({"tasks":tasks,"failures":[]})).unwrap())
+        });
+        assert!(owner.step_create(&ecs).await.unwrap().is_none());
+        assert_eq!(owner.network_interface_ids.len(), 2);
+        *visible.lock().unwrap() = true;
+        owner = reload(&owner);
+        assert_eq!(
+            owner.step_create(&ecs).await.unwrap(),
+            Some(BTreeMap::from([
+                ("eni-a".into(), "10.0.1.7".into()),
+                ("eni-b".into(), "10.0.2.7".into())
+            ]))
+        );
     }
 }

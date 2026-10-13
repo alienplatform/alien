@@ -15,7 +15,8 @@ use alien_aws_clients::{
     },
     elbv2::{
         CreateLoadBalancerRequest, CreateTargetGroupRequest, DescribeTargetHealthRequest, ElbTag,
-        Elbv2Api,
+        Elbv2Api, LoadBalancerAttribute, ModifyLoadBalancerAttributesRequest,
+        ModifyTargetGroupAttributesRequest, TargetGroupAttribute,
     },
     iam::IamApi,
 };
@@ -76,6 +77,8 @@ pub(super) struct PrivateWorkerIngress {
     service: Option<GatewayService>,
     frontend: AwsVmFrontend,
     frontend_deleted: bool,
+    frontend_http_configured: bool,
+    frontend_drain_configured: bool,
     lb_group: Option<AwsVmSecurityGroup>,
     gateway_group: Option<AwsVmSecurityGroup>,
     endpoint_group: Option<AwsVmSecurityGroup>,
@@ -145,6 +148,8 @@ impl PrivateWorkerIngress {
             service: None,
             frontend: AwsVmFrontend::default(),
             frontend_deleted: false,
+            frontend_http_configured: false,
+            frontend_drain_configured: false,
             gateway_interfaces: BTreeSet::new(),
             retiring: false,
         })
@@ -380,6 +385,48 @@ impl PrivateWorkerIngress {
         let Some(frontend) = frontend else {
             return Ok(None);
         };
+        if !self.frontend_http_configured {
+            clients
+                .elb
+                .modify_load_balancer_attributes(
+                    ModifyLoadBalancerAttributesRequest::builder()
+                        .load_balancer_arn(frontend.load_balancer_arn.clone())
+                        .attributes(vec![
+                            LoadBalancerAttribute {
+                                key: "routing.http.preserve_host_header.enabled".into(),
+                                value: "true".into(),
+                            },
+                            LoadBalancerAttribute {
+                                key: "idle_timeout.timeout_seconds".into(),
+                                value: "4000".into(),
+                            },
+                        ])
+                        .build(),
+                )
+                .await
+                .context(cloud("Preserve worker Host and streaming idle duration"))?;
+            self.frontend_http_configured = true;
+            return Ok(None);
+        }
+        if !self.frontend_drain_configured {
+            clients
+                .elb
+                .modify_target_group_attributes(
+                    ModifyTargetGroupAttributesRequest::builder()
+                        .target_group_arn(frontend.target_group_arn.clone())
+                        .attributes(vec![TargetGroupAttribute {
+                            key: "deregistration_delay.timeout_seconds".into(),
+                            value: "900".into(),
+                        }])
+                        .build(),
+                )
+                .await
+                .context(cloud(
+                    "Drain gateway targets for the Lambda response duration",
+                ))?;
+            self.frontend_drain_configured = true;
+            return Ok(None);
+        }
         if self.task.is_none() {
             let suffix = format!(".execute-api.{}.vpce.amazonaws.com", self.plan.region);
             let prefix = format!("{}-", endpoint.vpc_endpoint_id);
@@ -470,8 +517,17 @@ impl PrivateWorkerIngress {
         let ready = service.step_create(clients.ecs).await;
         self.gateway_interfaces
             .extend(service.network_interface_ids.iter().cloned());
-        if !ready? {
+        let Some(interfaces) = ready? else {
             return Ok(None);
+        };
+        let expected_addresses = interfaces
+            .values()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if expected_addresses.len() != 2 {
+            return Err(invalid(
+                "Gateway replicas do not have distinct private addresses",
+            ));
         }
         let health = clients
             .elb
@@ -488,13 +544,28 @@ impl PrivateWorkerIngress {
         else {
             return Ok(None);
         };
+        let addresses = targets
+            .members
+            .iter()
+            .filter_map(|description| {
+                description
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.id.as_deref())
+            })
+            .collect::<BTreeSet<_>>();
         if targets.members.len() != 2
-            || targets.members.iter().any(|target| {
-                target
+            || addresses != expected_addresses
+            || targets.members.iter().any(|description| {
+                description
                     .target_health
                     .as_ref()
                     .and_then(|health| health.state.as_deref())
                     != Some("healthy")
+                    || description.target.as_ref().and_then(|target| target.port)
+                        != Some(i32::from(GATEWAY_HTTP_PORT))
+                    || description.health_check_port.as_deref()
+                        != Some(GATEWAY_HEALTH_PORT.to_string().as_str())
             })
         {
             return Ok(None);
