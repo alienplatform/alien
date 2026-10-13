@@ -85,6 +85,8 @@ fn variable(
 }
 
 struct Fixture {
+    /// Holds the manager's files for the life of the test.
+    _dir: tempfile::TempDir,
     state: AppState,
     store: Arc<dyn DeploymentStore>,
     deployment_id: String,
@@ -97,7 +99,8 @@ struct Fixture {
 /// record keeps the deployment token the command variables are built from
 /// unless `record_token` is false.
 async fn deployment_with_queued_update(record_token: bool) -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir").keep();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let dir = temp_dir.path().to_path_buf();
     let db = Arc::new(
         SqliteDatabase::new(&dir.join("manager.db").to_string_lossy())
             .await
@@ -227,6 +230,7 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
     };
 
     Fixture {
+        _dir: temp_dir,
         state,
         store,
         deployment_id: deployment.id,
@@ -348,14 +352,20 @@ async fn a_runner_that_acquires_an_update_gets_the_variables_the_manager_injects
     assert_eq!(config.manager_url.as_deref(), Some(MANAGER_URL));
 }
 
-/// A config that cannot be built fails the acquire, and the lease it took is
-/// given back: the caller never learned it held it, and the manager must not
-/// wait out the lease before it can run the deployment.
+/// A config that cannot be built fails the acquire, and the acquisition is
+/// undone: the caller never learned it held the lease, so the manager must not
+/// wait out the lease, and the retry request the acquire consumed must still
+/// be there for the next runner.
 #[tokio::test]
 async fn an_acquire_whose_config_cannot_be_built_gives_back_the_lease() {
     // Without a deployment token on the record, the command-enabled container
     // has no commands token.
     let fixture = deployment_with_queued_update(false).await;
+    fixture
+        .store
+        .set_retry_requested(&Subject::system(), &fixture.deployment_id)
+        .await
+        .expect("retry request");
 
     let error = fixture.acquire_as_cli().await.expect_err(
         "the acquire must fail instead of returning a config without command variables",
@@ -372,4 +382,8 @@ async fn an_acquire_whose_config_cannot_be_built_gives_back_the_lease() {
         .expect("deployment read")
         .expect("deployment exists");
     assert_eq!(record.locked_by, None, "the acquire's lease was released");
+    assert!(
+        record.retry_requested,
+        "the retry request the acquire consumed was restored"
+    );
 }
