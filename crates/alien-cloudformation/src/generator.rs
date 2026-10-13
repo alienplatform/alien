@@ -12,11 +12,11 @@ use alien_core::{
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
     ComputePoolSelection, Container, Daemon, DeploymentModel, DomainSettings, ErrorData,
     ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
-    NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    NetworkSettings, Platform, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result,
+    Sandbox, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use indexmap::{indexmap, IndexMap};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -375,6 +375,32 @@ pub fn generate_cloudformation_template(
         options.target,
     )?;
     add_stack_input_parameters(&mut template, &stack_inputs)?;
+    // Live resources emit no workload here, but their installed management
+    // grant receipts still depend on the installer's enabled inputs.
+    if stack.resources().any(|(_, resource)| {
+        resource
+            .config
+            .downcast_ref::<RemoteStackManagement>()
+            .is_some()
+    }) {
+        if let Some(grants) = alien_permissions::management_grant_revisions(
+            stack.management().profile(),
+            options.target.cloud_platform(),
+        )
+        .context(ErrorData::GenericError {
+            message: "Failed to resolve management receipt conditions".to_string(),
+        })? {
+            for scope in grants.keys() {
+                if let Some(input_id) = stack
+                    .resources
+                    .get(scope)
+                    .and_then(|resource| resource.enabled_when.as_deref())
+                {
+                    declare_enabled_condition(&mut template, &stack_inputs, input_id, scope)?;
+                }
+            }
+        }
+    }
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);

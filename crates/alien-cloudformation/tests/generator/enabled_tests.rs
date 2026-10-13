@@ -416,7 +416,7 @@ fn management_receipt_follows_the_optional_resource() {
     insta::assert_snapshot!("optional_management_receipt", yaml);
     for enabled in [false, true] {
         let payload = resolve(
-            registration_payload(&template),
+            &registration_payload(&template),
             &HashMap::from([(GATE_CONDITION, enabled)]),
             Declined::Removed,
         )
