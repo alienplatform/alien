@@ -1,0 +1,11 @@
+{
+  "deployExitCode": 0,
+  "destroyExitCode": 0,
+  "sameRecordRetrySucceeded": true,
+  "taggedResourcesAbsent": true,
+  "activeNatGateways": 0,
+  "awsRetainedDeletedNatRecords": 4,
+  "vpcAndIgwBaselineRestored": true,
+  "allEightFillersDeleted": true,
+  "quotaOverrides": false
+}
