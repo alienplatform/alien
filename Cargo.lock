@@ -469,6 +469,7 @@ dependencies = [
  "flate2",
  "futures",
  "git-url-parse",
+ "h2 0.4.15",
  "hex",
  "hostname 0.4.2",
  "http 1.5.0",
