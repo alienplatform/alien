@@ -14,6 +14,9 @@ use uuid::Uuid;
 use super::aws_tag_scoped::{is_remote_not_found, CREATE_ATTEMPT_TAG};
 use crate::{ErrorData, Result};
 
+#[path = "aws_vm_load_balancer_listener.rs"]
+mod listener;
+
 /// An additional frontend never replaces a retained frontend's load balancer.
 /// The caller owns its security group, target groups, listeners and DNS records.
 /// Checkpoint every pending result; retire DNS before calling `step_delete` and
@@ -31,6 +34,8 @@ pub struct AwsVmLoadBalancer {
     ownership_tags: BTreeMap<String, String>,
     #[serde(default)]
     arn: Option<String>,
+    #[serde(default)]
+    listener: Option<listener::ListenerReceipt>,
 }
 
 impl AwsVmLoadBalancer {
@@ -89,6 +94,7 @@ impl AwsVmLoadBalancer {
                 || self.name.is_some()
                 || self.fingerprint.is_some()
                 || !self.ownership_tags.is_empty()
+                || self.listener.is_some()
             {
                 return Err(invalid("Load balancer ownership has no attempt token"));
             }
