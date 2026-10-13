@@ -19,6 +19,7 @@ use alien_aws_clients::{
         ModifyTargetGroupAttributesRequest, TargetGroupAttribute,
     },
     iam::IamApi,
+    lambda::LambdaApi,
 };
 use alien_core::standard_resource_tags;
 use alien_error::{AlienError, Context, ContextError};
@@ -27,6 +28,7 @@ use uuid::Uuid;
 
 use super::{
     aws_gateway_cluster::GatewayCluster,
+    aws_gateway_permission::GatewayPermission,
     aws_gateway_config::{bootstrap, GatewaySpec, GATEWAY_HEALTH_PORT, GATEWAY_HTTP_PORT},
     aws_gateway_service::GatewayService,
     aws_gateway_task::GatewayTask,
@@ -63,6 +65,7 @@ pub(super) struct PrivateIngressClients<'a> {
     pub ecs: &'a dyn EcsApi,
     pub iam: &'a dyn IamApi,
     pub elb: &'a dyn Elbv2Api,
+    pub lambda: &'a dyn LambdaApi,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +74,8 @@ pub(super) struct PrivateWorkerIngress {
     plan: PrivateIngressPlan,
     generation: String,
     api: Option<PrivateRestApi>,
+    #[serde(default)]
+    permission: Option<GatewayPermission>,
     endpoint: Option<PrivateEndpoint>,
     cluster: Option<GatewayCluster>,
     task: Option<GatewayTask>,
@@ -114,6 +119,7 @@ impl PrivateWorkerIngress {
             domains: &plan.domains,
         })?;
         Ok(Self {
+            permission: None,
             api: Some(PrivateRestApi::new(
                 &plan.account,
                 &plan.region,
@@ -212,8 +218,7 @@ impl PrivateWorkerIngress {
         Ok(())
     }
 
-    /// The parent checkpoints the API ID and grants this exact API permission to
-    /// invoke the retained Lambda before calling step_prepare.
+    /// Discover the owned API before preparing its invocation grant and ingress.
     pub async fn step_api(
         &mut self,
         clients: &PrivateIngressClients<'_>,
@@ -244,7 +249,7 @@ impl PrivateWorkerIngress {
     }
 
     /// Prepared output is published only after both ECS replicas and their ALB
-    /// targets are healthy. The caller owns DNS and the Lambda invoke permission.
+    /// targets are healthy. The caller owns DNS and the retained Lambda.
     pub async fn step_prepare(
         &mut self,
         clients: &PrivateIngressClients<'_>,
@@ -261,6 +266,21 @@ impl PrivateWorkerIngress {
         let Some(api_id) = self.step_api(clients).await? else {
             return Ok(None);
         };
+        if self.permission.is_none() {
+            self.permission = Some(GatewayPermission::new(
+                &self.plan.function_arn,
+                &self.plan.account,
+                &self.plan.region,
+                &api_id,
+            )?);
+            return Ok(None);
+        }
+        if !self.permission.as_mut()
+            .ok_or_else(|| invalid("Private invocation permission receipt missing"))?
+            .step_prepare(clients.lambda).await?
+        {
+            return Ok(None);
+        }
         let Some(lb_group) = self
             .lb_group
             .as_mut()
@@ -633,6 +653,13 @@ impl PrivateWorkerIngress {
             self.endpoint = None;
             return Ok(false);
         }
+        if let Some(permission) = &mut self.permission {
+            if !permission.step_delete(clients.lambda).await? {
+                return Ok(false);
+            }
+            self.permission = None;
+            return Ok(false);
+        }
         if let Some(api) = &mut self.api {
             if !api.step_delete(clients.api).await? {
                 return Ok(false);
@@ -793,7 +820,7 @@ mod tests {
     use super::*;
     use alien_aws_clients::{
         apigateway::MockApiGatewayApi, ec2::MockEc2Api, ecs::MockEcsApi, elbv2::MockElbv2Api,
-        iam::MockIamApi,
+        iam::MockIamApi, lambda::MockLambdaApi,
     };
     use alien_client_core::ErrorData as ClientError;
     use serde_json::json;
@@ -825,6 +852,7 @@ mod tests {
             let api = MockApiGatewayApi::new();
             let ecs = MockEcsApi::new();
             let elb = MockElbv2Api::new();
+            let lambda = MockLambdaApi::new();
             let mut iam = MockIamApi::new();
             let mut ec2 = MockEc2Api::new();
             iam.expect_get_role().times(1).returning(move |name| {
@@ -850,6 +878,7 @@ mod tests {
                 ecs: &ecs,
                 iam: &iam,
                 elb: &elb,
+                lambda: &lambda,
             };
             assert!(ingress.step_api(&clients).await.is_err(), "{scenario}");
             assert!(

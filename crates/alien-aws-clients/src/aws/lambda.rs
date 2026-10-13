@@ -64,6 +64,12 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
         function_name: &str,
         qualifier: Option<String>,
     ) -> Result<GetPolicyResponse>;
+    /// Remove one statement, optionally guarded by the policy revision read by the caller.
+    async fn remove_permission(
+        &self,
+        function_name: &str,
+        request: RemovePermissionRequest,
+    ) -> Result<()>;
 
     // Function invocation operations
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse>;
@@ -175,8 +181,11 @@ impl LambdaClient {
             builder.content_sha256("")
         };
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = if operation == "AddPermission" {
+            crate::aws::aws_request_utils::sign_send_json_once(builder, &self.sign_config()).await
+        } else {
+            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await
+        };
 
         Self::map_result(result, operation, resource, body.as_deref())
     }
@@ -219,9 +228,15 @@ impl LambdaClient {
             ))
             .content_sha256("");
 
-        let result =
+        // Policy revisions must be reread after conflicts or lost replies. The
+        // controller owns recovery; replaying a stale removal cannot help.
+        let result = if operation == "RemovePermission" {
+            crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
+                .await
+        } else {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+                .await
+        };
 
         Self::map_result(result, operation, resource, None)
     }
@@ -633,6 +648,34 @@ impl LambdaApi for LambdaClient {
         .await
     }
 
+    async fn remove_permission(
+        &self,
+        function_name: &str,
+        request: RemovePermissionRequest,
+    ) -> Result<()> {
+        let encode = |value: &str| form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+        let path = format!(
+            "/2015-03-31/functions/{}/policy/{}",
+            encode(function_name),
+            encode(&request.statement_id),
+        );
+        let mut query = Vec::new();
+        if let Some(revision) = request.revision_id {
+            query.push(("RevisionId", revision));
+        }
+        if let Some(qualifier) = request.qualifier {
+            query.push(("Qualifier", qualifier));
+        }
+        self.send_no_body(
+            Method::DELETE,
+            &path,
+            if query.is_empty() { None } else { Some(query) },
+            "RemovePermission",
+            function_name,
+        )
+        .await
+    }
+
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse> {
         self.credentials.ensure_fresh().await?;
         let function_name = &request.function_name;
@@ -999,6 +1042,15 @@ pub struct AddPermissionRequest {
     pub source_arn: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+}
+
+#[derive(Debug, Builder)]
+pub struct RemovePermissionRequest {
+    pub statement_id: String,
+    pub revision_id: Option<String>,
+    pub qualifier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1034,6 +1086,7 @@ pub struct UpdateFunctionConfigurationRequest {
 #[serde(rename_all = "PascalCase")]
 pub struct GetPolicyResponse {
     pub policy: Option<String>,
+    pub revision_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

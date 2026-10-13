@@ -6,6 +6,7 @@ mod aws_gateway_config;
 mod aws_gateway_task;
 mod aws_gateway_service;
 mod aws_gateway_cluster;
+mod aws_gateway_permission;
 pub use aws::*;
 
 mod aws_import;
