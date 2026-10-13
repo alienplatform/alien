@@ -307,13 +307,14 @@ async fn private_rest_api_applies_vpc_policy_before_exposing_any_stage() {
     let create = server.mock_async(|when,then| {
         when.method(POST).path("/restapis").json_body(json!({
             "name":"private-worker","endpointConfiguration":{"types":["PRIVATE"],"vpcEndpointIds":["vpce-owned"]},
-            "policy":policy,"disableExecuteApiEndpoint":true,"tags":{"CreateAttempt":"attempt-1"}
+            "policy":policy,"binaryMediaTypes":["*/*"],"disableExecuteApiEndpoint":true,"tags":{"CreateAttempt":"attempt-1"}
         }));
         then.status(201).json_body(json!({"id":"private-api","rootResourceId":"root-owned","name":"private-worker"}));
     }).await;
     let created = client(&server)
         .create_private_rest_api(CreatePrivateRestApiRequest {
             name: "private-worker".to_string(),
+            binary_media_types: Some(vec!["*/*".into()]),
             vpc_endpoint_ids: vec!["vpce-owned".to_string()],
             policy,
             disable_execute_api_endpoint: true,
@@ -340,6 +341,7 @@ async fn ambiguous_private_api_creation_is_not_blindly_resent_by_sdk() {
     client(&server)
         .create_private_rest_api(CreatePrivateRestApiRequest {
             name: "private-worker".to_string(),
+            binary_media_types: Some(vec!["*/*".into()]),
             vpc_endpoint_ids: vec!["vpce-owned".to_string()],
             policy: "{}".to_string(),
             disable_execute_api_endpoint: true,

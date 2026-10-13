@@ -409,16 +409,17 @@ impl ApiGatewayApi for ApiGatewayClient {
         &self,
         request: CreatePrivateRestApiRequest,
     ) -> Result<RestApi> {
-        let body = Self::serialize(
-            &serde_json::json!({
-                "name":request.name,
-                "endpointConfiguration":{"types":["PRIVATE"],"vpcEndpointIds":request.vpc_endpoint_ids},
-                "policy":request.policy,
-                "disableExecuteApiEndpoint":request.disable_execute_api_endpoint,
-                "tags":request.tags,
-            }),
-            "CreatePrivateRestApiRequest",
-        )?;
+        let mut body = serde_json::json!({
+            "name":request.name,
+            "endpointConfiguration":{"types":["PRIVATE"],"vpcEndpointIds":request.vpc_endpoint_ids},
+            "policy":request.policy,
+            "disableExecuteApiEndpoint":request.disable_execute_api_endpoint,
+            "tags":request.tags,
+        });
+        if let Some(media_types) = request.binary_media_types {
+            body["binaryMediaTypes"] = serde_json::json!(media_types);
+        }
+        let body = Self::serialize(&body, "CreatePrivateRestApiRequest")?;
         self.send_json(
             Method::POST,
             "/restapis",
@@ -880,6 +881,7 @@ pub struct DomainNamesPage {
 #[serde(rename_all = "camelCase")]
 pub struct RestApiDetails {
     pub id: Option<String>,
+    pub binary_media_types: Option<Vec<String>>,
     pub name: Option<String>,
     pub root_resource_id: Option<String>,
     pub endpoint_configuration: Option<RestApiEndpointConfiguration>,
@@ -959,6 +961,8 @@ pub struct EndpointConfiguration {
 #[derive(Debug, Clone, Builder)]
 pub struct CreatePrivateRestApiRequest {
     pub name: String,
+    /// Binary request MIME types; use */* for transparent proxy payloads.
+    pub binary_media_types: Option<Vec<String>>,
     pub vpc_endpoint_ids: Vec<String>,
     pub policy: String,
     pub disable_execute_api_endpoint: bool,

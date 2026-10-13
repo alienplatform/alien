@@ -1,5 +1,6 @@
 mod aws;
 mod aws_private_endpoint;
+mod aws_private_rest_api;
 mod aws_gateway_config;
 mod aws_gateway_task;
 mod aws_gateway_service;
