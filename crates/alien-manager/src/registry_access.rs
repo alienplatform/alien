@@ -318,13 +318,13 @@ pub async fn reconcile_registry_access_with_proxy(
 
     let (repo_ids, refused_any) =
         repository_access_with_proxy(artifact_registry.as_ref(), state, project_id, proxy_url);
-    if refused_any {
-        state
-            .runtime_metadata
-            .get_or_insert_with(RuntimeMetadata::default)
-            .registry_access_granted = false;
-    }
     if repo_ids.is_empty() {
+        if refused_any {
+            state
+                .runtime_metadata
+                .get_or_insert_with(RuntimeMetadata::default)
+                .registry_access_granted = false;
+        }
         return;
     }
     let sandbox_declared = declares_sandbox(state);
@@ -370,14 +370,13 @@ pub async fn reconcile_registry_access_with_proxy(
     opened.sort();
     opened.dedup();
     let granted_everything =
-        all_complete && !refused_any && repo_ids.iter().all(|repo_id| opened.contains(repo_id));
+        all_complete && repo_ids.iter().all(|repo_id| opened.contains(repo_id));
     let rm = state
         .runtime_metadata
         .get_or_insert_with(RuntimeMetadata::default);
     // The record says what the policy now holds, so an unchanged one is not rewritten every tick.
-    // The marker says the deployment has everything it asked for, which a refused reference denies
-    // until a later release names a repository this project owns — and that release changes what
-    // is needed, so the comparison above grants it.
+    // The marker tracks completion of the allowed grants, not image validation. A refused
+    // reference must not make an unchanged, successful grant write again on every tick.
     rm.registry_access = Some(RegistryAccess {
         repositories: opened,
         service_types: needed.service_types,
@@ -1555,20 +1554,22 @@ mod tests {
             state.current_release = Some(release(if rejected_slot == 0 { &other } else { &own }));
             state.target_release = Some(release(if rejected_slot == 1 { &other } else { &own }));
             registry.grants.lock().expect("grants lock").clear();
-            reconcile_registry_access(
-                &recording_provider(registry.clone()),
-                &HashMap::new(),
-                "deployment",
-                PROJECT,
-                &mut state,
-            )
-            .await;
+            for _ in 0..2 {
+                reconcile_registry_access(
+                    &recording_provider(registry.clone()),
+                    &HashMap::new(),
+                    "deployment",
+                    PROJECT,
+                    &mut state,
+                )
+                .await;
+            }
             assert_eq!(
                 *registry.grants.lock().expect("grants lock"),
                 vec!["alien-artifacts-prj_test"]
             );
             let metadata = state.runtime_metadata.expect("metadata");
-            assert!(!metadata.registry_access_granted);
+            assert!(metadata.registry_access_granted);
             assert_eq!(
                 metadata.registry_access.expect("record").repositories,
                 vec!["alien-artifacts-prj_test"]
