@@ -13,6 +13,7 @@ use alien_aws_clients::{
     dynamodb::{DynamoDbApi, DynamoDbClient},
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
+    ecs::{EcsApi, EcsClient},
     eks::{EksApi, EksClient},
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
@@ -153,6 +154,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn DynamoDbApi>>;
     async fn get_aws_sqs_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SqsApi>>;
     async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Ec2Api>>;
+    async fn get_aws_ecs_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EcsApi>>;
     async fn get_aws_service_quotas_client(
         &self,
         config: &AwsClientConfig,
@@ -783,6 +785,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(Ec2Client::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_ecs_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EcsApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(EcsClient::new(
             reqwest::Client::new(),
             credentials,
         )))
