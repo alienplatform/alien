@@ -1,0 +1,20 @@
+{
+  "baselineVpcSetRestored": true,
+  "taggedObjects": {
+    "vpcs": 0,
+    "subnets": 0,
+    "gateways": 0,
+    "routes": 0,
+    "groups": 0,
+    "eips": 0,
+    "nat": {
+      "active": 0,
+      "states": [
+        "deleted",
+        "deleted"
+      ]
+    }
+  },
+  "deployExitCode": 0,
+  "destroyExitCode": 0
+}
