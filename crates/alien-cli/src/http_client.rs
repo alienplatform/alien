@@ -177,13 +177,15 @@ mod tests {
     async fn a_failed_connect_is_retried_and_the_request_body_is_sent_once() {
         let (listener, addr, fillers) = syn_dropping_listener().await;
         let requests = Arc::new(AtomicUsize::new(0));
-        let connect_timeout = Duration::from_millis(400);
+        let connect_timeout = Duration::from_millis(200);
 
         // The server starts answering after the client's first connect has
-        // already timed out.
+        // already timed out. Without the retry the kernel would only resend
+        // the first SYN after its 1 s initial retransmission timeout, so a
+        // response well before 1 s shows a new connect attempt got through.
         let server_requests = Arc::clone(&requests);
         let server = tokio::spawn(async move {
-            tokio::time::sleep(connect_timeout + Duration::from_millis(100)).await;
+            tokio::time::sleep(connect_timeout + Duration::from_millis(50)).await;
             drop(fillers);
             loop {
                 let (mut stream, _) = listener.accept().await.expect("accept");
@@ -231,8 +233,8 @@ mod tests {
             "the first connect should have timed out, took {elapsed:?}"
         );
         assert!(
-            elapsed < connect_timeout * (MAX_CONNECT_RETRIES + 1) + Duration::from_secs(1),
-            "took {elapsed:?}"
+            elapsed < Duration::from_millis(900),
+            "a retried connect should answer before the kernel's SYN retransmit, took {elapsed:?}"
         );
         assert_eq!(requests.load(Ordering::SeqCst), 1, "POST body sent once");
         server.abort();
