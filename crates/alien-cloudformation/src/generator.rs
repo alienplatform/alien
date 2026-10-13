@@ -1788,7 +1788,7 @@ fn add_standard_conditions(
     supports_custom_domain: bool,
     target: CloudFormationTarget,
 ) {
-    let has_created_network = stack_has_created_network(stack);
+    let has_created_network = stack_has_created_network(stack, settings.setup_management);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_NETWORK_MODE_CREATE.to_string(),
@@ -1878,12 +1878,13 @@ fn add_standard_conditions(
     }
 }
 
-fn stack_has_created_network(stack: &Stack) -> bool {
+fn stack_has_created_network(stack: &Stack, management: alien_core::SetupManagement) -> bool {
     stack.resources().any(|(_resource_id, resource)| {
-        resource
-            .config
-            .downcast_ref::<Network>()
-            .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
+        alien_core::emits_package_scaffolding(resource, management)
+            && resource
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
     })
 }
 

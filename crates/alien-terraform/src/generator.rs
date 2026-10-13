@@ -893,13 +893,17 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
             };
 
             let address = format!("{provider_type}.{label}");
-            if let Some(existing) = seen_resource_addresses.get(&address) {
+            if let Some(existing) = seen_resource_addresses.get_mut(&address) {
                 if existing != &resource {
-                    return Err(AlienError::new(ErrorData::GenericError {
-                        message: format!(
-                            "generated conflicting Terraform resources for GCP support resource '{address}'"
-                        ),
-                    }));
+                    if provider_type == "google_project_iam_custom_role" {
+                        merge_gcp_custom_role_permissions(existing, &resource)?;
+                    } else {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "generated conflicting Terraform resources for GCP support resource '{address}'"
+                            ),
+                        }));
+                    }
                 }
                 continue;
             }
@@ -924,6 +928,92 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
         fragment.resource_blocks = retained;
     }
 
+    // Each permission set can contribute actions to the same project custom role. The first
+    // fragment owns the Terraform block; replace it with the complete union after every
+    // contributor has been visited.
+    for fragment in per_resource.values_mut() {
+        for resource in &mut fragment.resource_blocks {
+            if resource
+                .labels
+                .first()
+                .is_some_and(|label| label.as_str() == "google_project_iam_custom_role")
+            {
+                if let Some(label) = resource.labels.get(1) {
+                    if let Some(merged) = seen_resource_addresses.get(&format!(
+                        "google_project_iam_custom_role.{}",
+                        label.as_str()
+                    )) {
+                        *resource = merged.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_gcp_custom_role_permissions(existing: &mut Block, incoming: &Block) -> Result<()> {
+    // Several permission sets can share a cloud role ID. Their human labels may differ,
+    // while the role identity and creation settings must agree. Keep the first label and
+    // combine the effective permissions before Terraform sees the role.
+    let without_permission_details = |resource: &Block| {
+        let mut resource = resource.clone();
+        resource.body.0.retain(|structure| {
+            !matches!(
+                structure,
+                Structure::Attribute(attribute)
+                    if matches!(attribute.key.as_str(), "permissions" | "title" | "description")
+            )
+        });
+        resource
+    };
+    if without_permission_details(existing) != without_permission_details(incoming) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "generated conflicting Terraform definitions for GCP custom role {:?}",
+                existing.labels
+            ),
+        }));
+    }
+    let permissions = |resource: &Block| -> Result<Vec<String>> {
+        let Some(Expression::Array(values)) = resource.body.0.iter().find_map(|structure| {
+            if let Structure::Attribute(attribute) = structure {
+                (attribute.key.as_str() == "permissions").then_some(&attribute.expr)
+            } else {
+                None
+            }
+        }) else {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: "generated GCP custom role has no permissions array".into(),
+            }));
+        };
+        values
+            .iter()
+            .map(|value| match value {
+                Expression::String(permission) => Ok(permission.clone()),
+                _ => Err(AlienError::new(ErrorData::GenericError {
+                    message: "generated GCP custom role permission is not a string".into(),
+                })),
+            })
+            .collect()
+    };
+    let mut merged = permissions(existing)?;
+    for permission in permissions(incoming)? {
+        if !merged.contains(&permission) {
+            merged.push(permission);
+        }
+    }
+    merged.sort();
+    for structure in &mut existing.body.0 {
+        if let Structure::Attribute(attribute) = structure {
+            if attribute.key.as_str() == "permissions" {
+                attribute.expr =
+                    Expression::Array(merged.into_iter().map(Expression::String).collect());
+                break;
+            }
+        }
+    }
     Ok(())
 }
 
