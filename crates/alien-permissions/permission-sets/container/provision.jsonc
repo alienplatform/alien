@@ -1017,6 +1017,7 @@
             // Ingress validation is required even with heartbeats disabled.
             "Microsoft.Network/virtualNetworks/read",
             "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action",
             "Microsoft.Network/virtualNetworks/checkIpAddressAvailability/read",
             "Microsoft.Network/applicationGateways/write",
             "Microsoft.Network/applicationGateways/read",
@@ -1035,6 +1036,7 @@
             "Microsoft.Network/loadBalancers/delete",
             "Microsoft.Network/publicIPAddresses/write",
             "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/publicIPAddresses/join/action",
             "Microsoft.Network/publicIPAddresses/delete"
           ]
         },
