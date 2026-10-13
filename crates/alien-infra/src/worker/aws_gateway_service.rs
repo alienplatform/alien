@@ -27,6 +27,12 @@ pub(super) struct GatewayService {
     observed: bool,
     retiring: bool,
     delete_requested: bool,
+    /// Checkpointed before updating the retained service.
+    #[serde(default)]
+    pending_task_definition: Option<String>,
+    /// ECS retains stopped tasks from previous deployments during cleanup.
+    #[serde(default)]
+    previous_task_definitions: BTreeSet<String>,
     /// Retained until the parent independently verifies ENI absence before removing its SG.
     pub network_interface_ids: BTreeSet<String>,
 }
@@ -114,8 +120,48 @@ impl GatewayService {
             observed: false,
             retiring: false,
             delete_requested: false,
+            pending_task_definition: None,
+            previous_task_definitions: BTreeSet::new(),
             network_interface_ids: BTreeSet::new(),
         })
+    }
+
+    /// The parent must verify and retain ownership of the new task definition.
+    /// Persist this receipt before advancing the rollout with `step_create`.
+    pub fn prepare_task_rollout(&mut self, task_definition: &str) -> Result<()> {
+        if self.retiring || !self.observed {
+            return Err(invalid(
+                "Task rollout requires an observed active gateway service",
+            ));
+        }
+        let prefix = self
+            .request
+            .cluster
+            .split_once(":cluster/")
+            .ok_or_else(|| invalid("Gateway cluster ARN is invalid"))?
+            .0;
+        let identity = task_definition
+            .strip_prefix(&format!("{prefix}:task-definition/"))
+            .and_then(|identity| identity.rsplit_once(':'));
+        if !identity.is_some_and(|(family, revision)| {
+            !family.is_empty()
+                && !family.contains('/')
+                && revision.parse::<u64>().is_ok_and(|value| value > 0)
+        }) {
+            return Err(invalid(
+                "Task rollout requires an exact regional task definition ARN",
+            ));
+        }
+        if let Some(pending) = &self.pending_task_definition {
+            if pending != task_definition {
+                return Err(invalid("Gateway task rollout is already pending"));
+            }
+            return Ok(());
+        }
+        if self.request.task_definition != task_definition {
+            self.pending_task_definition = Some(task_definition.into());
+        }
+        Ok(())
     }
 
     /// Parent checkpoints pending results and independently checks target-group health.
@@ -140,6 +186,29 @@ impl GatewayService {
             return Ok(None);
         };
         self.observed = true;
+        if let Some(pending) = &self.pending_task_definition {
+            if service.task_definition.as_deref() == Some(pending.as_str()) {
+                self.previous_task_definitions
+                    .insert(self.request.task_definition.clone());
+                self.request.task_definition = pending.clone();
+                self.pending_task_definition = None;
+                return Ok(None);
+            }
+            if service.status.as_deref() != Some("ACTIVE") {
+                return Err(invalid("Gateway task rollout requires an active service"));
+            }
+            ecs.update_service(
+                UpdateServiceRequest::builder()
+                    .cluster(self.request.cluster.clone())
+                    .service(self.expected_arn.clone())
+                    .task_definition(pending.clone())
+                    .maybe_deployment_configuration(self.request.deployment_configuration.clone())
+                    .build(),
+            )
+            .await
+            .context(cloud("Roll out owned gateway task"))?;
+            return Ok(None);
+        }
         let inventory = self.inventory_tasks(ecs).await?;
         if service.status.as_deref() != Some("ACTIVE") {
             return Err(invalid("Gateway service is not active"));
@@ -281,7 +350,10 @@ impl GatewayService {
         if service.service_arn != self.expected_arn
             || service.service_name != self.request.service_name
             || service.cluster_arn.as_deref() != Some(self.request.cluster.as_str())
-            || service.task_definition.as_deref() != Some(self.request.task_definition.as_str())
+            || (service.task_definition.as_deref() != Some(self.request.task_definition.as_str())
+                && (self.pending_task_definition.is_none()
+                    || service.task_definition.as_deref()
+                        != self.pending_task_definition.as_deref()))
             || service.launch_type.as_deref() != Some("FARGATE")
             || service.platform_version.as_deref() != Some(self.request.platform_version.as_str())
         {
@@ -382,8 +454,11 @@ impl GatewayService {
                 if task.cluster_arn.as_deref() != Some(self.request.cluster.as_str())
                     || task.group.as_deref()
                         != Some(format!("service:{}", self.request.service_name).as_str())
-                    || task.task_definition_arn.as_deref()
-                        != Some(self.request.task_definition.as_str())
+                    || !task.task_definition_arn.as_ref().is_some_and(|definition| {
+                        definition == &self.request.task_definition
+                            || self.pending_task_definition.as_ref() == Some(definition)
+                            || self.previous_task_definitions.contains(definition)
+                    })
                 {
                     return Err(invalid(
                         "Gateway service inventory contained a foreign task",
@@ -427,7 +502,10 @@ impl GatewayService {
                         }
                     }
                 }
-                if running {
+                if running
+                    && task.task_definition_arn.as_deref()
+                        == Some(self.request.task_definition.as_str())
+                {
                     if let (Some(interface), Some(address)) = (interface, address) {
                         if running_interfaces.insert(interface, address).is_some() {
                             return Err(invalid("Gateway tasks share an interface identity"));
@@ -533,6 +611,87 @@ mod tests {
         assert!(owner.step_create(&ecs).await.is_err());
         owner = checkpoint;
         assert!(owner.step_create(&ecs).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn rolling_task_lost_reply_recovers_without_replacing_service_or_repeating_update() {
+        let mut owner = owner();
+        owner.create_permitted = true;
+        owner.observed = true;
+        let old = owner.request.task_definition.clone();
+        let next = "arn:aws:ecs:us-east-1:123456789012:task-definition/next-owned:1";
+        let world = Arc::new(Mutex::new(service(&owner)));
+        let mut ecs = MockEcsApi::new();
+        let read = world.clone();
+        let expected = owner.expected_arn.clone();
+        ecs.expect_describe_services().returning(move |request| {
+            assert_eq!(request.services, vec![expected.clone()]);
+            Ok(DescribeServicesResponse {
+                services: vec![read.lock().unwrap().clone()],
+                failures: vec![],
+            })
+        });
+        let write = world.clone();
+        let expected = owner.expected_arn.clone();
+        ecs.expect_update_service()
+            .times(1)
+            .return_once(move |request| {
+                assert_eq!(request.service, expected);
+                assert_eq!(request.task_definition.as_deref(), Some(next));
+                assert!(request.desired_count.is_none());
+                let deployment = request.deployment_configuration.unwrap();
+                assert_eq!(deployment.minimum_healthy_percent, Some(100));
+                assert_eq!(deployment.maximum_percent, Some(200));
+                write.lock().unwrap().task_definition = Some(next.into());
+                Err(AlienError::new(ClientError::Timeout {
+                    message: "committed rollout reply lost".into(),
+                }))
+            });
+        ecs.expect_list_tasks().times(2).returning(|_| {
+            Ok(ListTasksResponse {
+                task_arns: vec![],
+                next_token: None,
+            })
+        });
+        owner.prepare_task_rollout(next).unwrap();
+        let checkpoint = reload(&owner);
+        assert!(owner.step_create(&ecs).await.is_err());
+        owner = checkpoint;
+        assert!(owner.step_create(&ecs).await.unwrap().is_none());
+        owner = reload(&owner);
+        assert_eq!(owner.request.task_definition, next);
+        assert!(owner.pending_task_definition.is_none());
+        assert_eq!(owner.previous_task_definitions, BTreeSet::from([old]));
+        assert!(
+            owner.step_create(&ecs).await.unwrap().is_none(),
+            "no tasks means not ready"
+        );
+        world.lock().unwrap().task_definition =
+            Some("arn:aws:ecs:us-east-1:123456789012:task-definition/foreign:7".into());
+        assert!(owner.step_create(&ecs).await.is_err());
+        assert!(owner.step_delete(&ecs).await.is_err());
+    }
+
+    #[test]
+    fn pending_rollout_cannot_be_overwritten_or_cross_account() {
+        let mut owner = owner();
+        let next = "arn:aws:ecs:us-east-1:123456789012:task-definition/next-owned:1";
+        assert!(owner.prepare_task_rollout(next).is_err());
+        owner.observed = true;
+        for invalid in [
+            "next-owned",
+            "arn:aws:ecs:us-east-1:999999999999:task-definition/next-owned:1",
+            "arn:aws:ecs:us-east-1:123456789012:task-definition/next-owned:latest",
+        ] {
+            assert!(owner.prepare_task_rollout(invalid).is_err());
+        }
+        owner.prepare_task_rollout(next).unwrap();
+        owner = reload(&owner);
+        owner.prepare_task_rollout(next).unwrap();
+        assert!(owner
+            .prepare_task_rollout("arn:aws:ecs:us-east-1:123456789012:task-definition/different:1")
+            .is_err());
+        assert_eq!(owner.pending_task_definition.as_deref(), Some(next));
     }
 
     #[tokio::test]

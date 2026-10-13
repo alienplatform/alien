@@ -6320,6 +6320,21 @@ mod tests {
                 });
         }
 
+        if !has_url {
+            let expected = format!("arn:aws:lambda:us-east-1:123456789012:function:{worker_name}");
+            mock_lambda
+                .expect_get_function_url_config()
+                .returning(move |function, qualifier| {
+                    assert_eq!(function, expected);
+                    assert!(qualifier.is_none());
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "functionUrl".into(),
+                            resource_name: function.into(),
+                        },
+                    ))
+                });
+        }
         Arc::new(mock_lambda)
     }
 
