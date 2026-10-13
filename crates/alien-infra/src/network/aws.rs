@@ -3787,6 +3787,16 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
+            .map_err(|error| {
+                network_quota_error(
+                    error,
+                    aws_network_quota_identity(
+                        &aws_cfg.region,
+                        "L-0263D0A3",
+                        "EC2-VPC Elastic IP addresses per Region",
+                    ),
+                )
+            })
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to allocate Elastic IP".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -5997,6 +6007,53 @@ mod controller_state_tests {
             availability_zones: vec!["us-east-1a".to_string(), "us-east-1b".to_string()],
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn elastic_ip_quota_race_preserves_identity_and_does_not_retry() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses()
+            .times(1)
+            .returning(|| Ok(parse(json!({}))));
+        ec2.expect_allocate_address().times(1).returning(|_| {
+            Err(AlienError::new(CloudClientErrorData::QuotaExceeded {
+                message: "The maximum number of addresses has been reached".into(),
+            }))
+        });
+        ec2.expect_create_nat_gateway().times(0);
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                eip_create_token: Some("attempt-1".into()),
+                wait_for_create_lookup_iterations: CREATE_LOOKUP_MAX_POLLS,
+                ..after_vpc(AwsNetworkState::AllocatingElasticIp)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let error = executor.step().await.expect_err("quota race must fail");
+        assert!(
+            !error.retryable,
+            "a filled quota must not consume create retries"
+        );
+        let cause = error.source.as_ref().expect("quota cause");
+        assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
+        let quota: alien_preflights::quotas::QuotaIdentity =
+            serde_json::from_value(cause.context.as_ref().expect("quota context")["quota"].clone())
+                .expect("typed quota identity");
+        assert_eq!(
+            quota,
+            aws_network_quota_identity(
+                &quota.scope,
+                "L-0263D0A3",
+                "EC2-VPC Elastic IP addresses per Region"
+            )
+        );
+        assert!(!quota.scope.is_empty());
+        assert!(cause.message.contains(&quota.increase_url));
+        assert!(cause.message.contains("maximum number of addresses"));
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(controller(&executor).eip_allocation_id, None);
     }
 
     #[tokio::test]
