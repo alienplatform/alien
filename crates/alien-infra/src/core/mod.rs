@@ -26,6 +26,8 @@ mod aws_acm_import;
 pub use aws_acm_import::{AwsAcmImport, AwsAcmImports};
 
 #[cfg(feature = "aws")]
+mod aws_vm_security_group;
+pub use aws_vm_security_group::AwsVmSecurityGroup;
 mod aws_vm_target_group;
 #[cfg(feature = "aws")]
 pub use aws_vm_target_group::AwsVmTargetGroup;
