@@ -1228,6 +1228,21 @@ mod tests {
         request: Request<Body>,
         real_http: bool,
     ) -> (StatusCode, serde_json::Value) {
+        send_with_validator(
+            deployment_store,
+            Arc::new(crate::providers::permissive_auth::PermissiveAuthValidator::new()),
+            request,
+            real_http,
+        )
+        .await
+    }
+
+    async fn send_with_validator(
+        deployment_store: MockDeploymentStore,
+        auth_validator: Arc<dyn crate::traits::AuthValidator>,
+        request: Request<Body>,
+        real_http: bool,
+    ) -> (StatusCode, serde_json::Value) {
         let temp = tempfile::tempdir().expect("test directory should be created");
         let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
             LocalKv::new(temp.path().join("kv"))
@@ -1255,9 +1270,7 @@ mod tests {
             release_store: Arc::new(UnusedReleaseStore),
             project_store: Arc::new(crate::providers::SingleWorkspaceProjects),
             token_store: Arc::new(UnusedTokenStore),
-            auth_validator: Arc::new(
-                crate::providers::permissive_auth::PermissiveAuthValidator::new(),
-            ),
+            auth_validator,
             authz: Arc::new(OssAuthz),
             telemetry_backend: Arc::new(NullTelemetryBackend),
             credential_resolver: Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
@@ -1323,6 +1336,67 @@ mod tests {
             status,
             serde_json::from_slice(&body).expect("response should contain JSON"),
         )
+    }
+
+    /// A validator that fails every request with a fixed error, the way an
+    /// embedder's validator fails when its identity service answers.
+    struct FailingValidator {
+        retryable: bool,
+    }
+
+    #[async_trait]
+    impl crate::traits::AuthValidator for FailingValidator {
+        async fn validate(
+            &self,
+            _headers: &http::HeaderMap,
+        ) -> Result<Option<Subject>, AlienError> {
+            let mut error = AlienError::new(alien_error::GenericError {
+                message: "identity service answered 503 at http://identity.internal".to_string(),
+            });
+            error.retryable = self.retryable;
+            Err(error)
+        }
+    }
+
+    async fn list_with_failing_validator(retryable: bool) -> (StatusCode, serde_json::Value) {
+        // The store must not be reached when authentication fails.
+        let deployment_store = MockDeploymentStore::new();
+        let request = Request::builder()
+            .method("GET")
+            .uri("/v1/deployments")
+            .header(http::header::AUTHORIZATION, "Bearer valid-key")
+            .body(Body::empty())
+            .expect("request should build");
+        send_with_validator(
+            deployment_store,
+            Arc::new(FailingValidator { retryable }),
+            request,
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn credentials_that_cannot_be_verified_right_now_get_a_retryable_503() {
+        let (status, body) = list_with_failing_validator(true).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(body["code"], "AUTHENTICATION_UNAVAILABLE", "{body}");
+        assert_eq!(body["retryable"], true, "{body}");
+        let message = body["message"].as_str().expect("message");
+        assert!(
+            !message.contains("identity.internal"),
+            "the validator's internals must not reach the caller: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_credentials_still_get_a_non_retryable_401() {
+        let (status, body) = list_with_failing_validator(false).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["code"], "UNAUTHORIZED", "{body}");
+        assert_eq!(body["retryable"], false, "{body}");
     }
 
     /// `<group>/<name>` specs send the group's name: `alien dev` names its group `local-dev`
