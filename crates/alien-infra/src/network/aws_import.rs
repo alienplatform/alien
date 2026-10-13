@@ -4,9 +4,10 @@ use std::collections::BTreeSet;
 
 use alien_core::{
     import::{data::AwsNetworkImportData, ImportContext},
-    ErrorData as CoreErrorData, NetworkSettings, ResourceStatus, Result, StackResourceState,
+    ErrorData as CoreErrorData, Network, NetworkSettings, ResourceStatus, Result,
+    StackResourceState,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::import::ResourceImporter;
 use crate::import_helpers::{make_imported_state, make_imported_state_with_status};
@@ -103,9 +104,11 @@ impl ResourceImporter for AwsNetworkImporter {
     /// (for example any CloudFormation stack update). Dependents that are already
     /// Running keep stepping meanwhile and would read an empty map.
     ///
-    /// So when the existing network is Ready and the import names the same
-    /// network, the discovered facts are kept. Any other import replaces the
-    /// state and is discovered again.
+    /// So the discovered facts are kept when the existing network is Ready with
+    /// a discovered zone map, its network mode is unchanged, and the import names
+    /// the same VPC and subnets. Any other import replaces the state and is
+    /// discovered again. That includes a network in RefreshFailed: rediscovery
+    /// is the path that repairs it, so it is not short-circuited here.
     fn merge_reimport(
         &self,
         existing: StackResourceState,
@@ -120,8 +123,12 @@ impl ResourceImporter for AwsNetworkImporter {
             return Ok(imported);
         }
         let existing_network = network_controller(&existing, ctx, "existing")?;
+        // A network saved before the zone map existed is Ready with an empty
+        // map; it must go through discovery to get one.
         if !matches!(existing_network.state, AwsNetworkState::Ready)
-            || !describes_same_network(&imported_network, &existing_network)
+            || existing_network.subnets_by_failure_domain.is_empty()
+            || !same_network_mode(&existing, &imported)
+            || !names_same_network(&imported_network, &existing_network)
         {
             return Ok(imported);
         }
@@ -156,23 +163,36 @@ fn network_controller(
             ),
         })
     })?;
-    serde_json::from_value(value).map_err(|error| {
-        AlienError::new(CoreErrorData::JsonDeserializationFailed {
+    serde_json::from_value(value).into_alien_error().context(
+        CoreErrorData::JsonDeserializationFailed {
             reason: format!(
-                "{which} network '{}' has unreadable controller state: {error}",
+                "{which} network '{}' has unreadable controller state",
                 ctx.resource_id
             ),
-        })
-    })
+        },
+    )
 }
 
-/// True when the import names the network the existing state describes.
-/// Use-default imports name no VPC and no subnets; they match the default VPC
-/// the controller discovered.
-fn describes_same_network(
-    imported: &AwsNetworkController,
-    existing: &AwsNetworkController,
-) -> bool {
+/// True when the installed and requested network settings are the same mode
+/// (create, use-existing or use-default). Use-existing and use-default imports
+/// both mark the VPC as setup-owned, so the controller state alone cannot tell
+/// a mode switch apart.
+fn same_network_mode(existing: &StackResourceState, imported: &StackResourceState) -> bool {
+    match (
+        existing.config.downcast_ref::<Network>(),
+        imported.config.downcast_ref::<Network>(),
+    ) {
+        (Some(existing), Some(imported)) => {
+            std::mem::discriminant(&existing.settings) == std::mem::discriminant(&imported.settings)
+        }
+        _ => false,
+    }
+}
+
+/// True when the import names the VPC and subnets the existing state describes,
+/// in any order. Use-default imports name no VPC and no subnets; they match the
+/// default VPC the controller discovered.
+fn names_same_network(imported: &AwsNetworkController, existing: &AwsNetworkController) -> bool {
     let ids = |ids: &[String]| ids.iter().cloned().collect::<BTreeSet<_>>();
     imported.is_byo_vpc == existing.is_byo_vpc
         && match &imported.vpc_id {
@@ -318,6 +338,193 @@ mod tests {
             .expect("imported network should have controller state");
         assert_eq!(internal["state"], "discoveringSubnetFailureDomains");
         assert_eq!(internal["isByoVpc"], true);
+    }
+
+    fn entry_with(settings: &StackSettings) -> ResourceEntry {
+        let mut entry = network_entry();
+        entry.config = Resource::new(
+            Network::new("default-network".to_string())
+                .settings(
+                    settings
+                        .network
+                        .clone()
+                        .expect("test settings name a network"),
+                )
+                .build(),
+        );
+        entry
+    }
+
+    fn create_settings() -> StackSettings {
+        StackSettings {
+            network: Some(NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            }),
+            ..StackSettings::default()
+        }
+    }
+
+    fn byo_settings() -> StackSettings {
+        StackSettings {
+            network: Some(NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-123".to_string(),
+                public_subnet_ids: vec!["subnet-pub-a".to_string(), "subnet-pub-b".to_string()],
+                private_subnet_ids: vec!["subnet-priv-a".to_string(), "subnet-priv-b".to_string()],
+                security_group_ids: vec!["sg-123".to_string()],
+            }),
+            ..StackSettings::default()
+        }
+    }
+
+    /// What a CloudFormation stack hands off for a named VPC: IDs, no zone map.
+    fn named_network_data(is_byo_vpc: bool) -> AwsNetworkImportData {
+        let mut data = empty_default_import_data();
+        data.vpc_id = Some("vpc-123".to_string());
+        data.public_subnet_ids = vec!["subnet-pub-a".to_string(), "subnet-pub-b".to_string()];
+        data.private_subnet_ids = vec!["subnet-priv-a".to_string(), "subnet-priv-b".to_string()];
+        data.security_group_id = Some("sg-123".to_string());
+        data.nat_gateway_id = (!is_byo_vpc).then(|| "nat-123".to_string());
+        data.is_byo_vpc = is_byo_vpc;
+        data
+    }
+
+    fn discovered_map(
+    ) -> std::collections::BTreeMap<String, alien_core::aws::AwsFailureDomainSubnets> {
+        ["a", "b"]
+            .into_iter()
+            .map(|zone| {
+                (
+                    format!("us-east-2{zone}"),
+                    alien_core::aws::AwsFailureDomainSubnets {
+                        public_subnet_ids: vec![format!("subnet-pub-{zone}")],
+                        private_subnet_ids: vec![format!("subnet-priv-{zone}")],
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// The state the controller's discovery step leaves behind: Ready with the map.
+    fn discovered_network(
+        settings: &StackSettings,
+        mut data: AwsNetworkImportData,
+    ) -> StackResourceState {
+        data.subnets_by_failure_domain = discovered_map();
+        let entry = entry_with(settings);
+        let state = AwsNetworkImporter
+            .import(data, &import_context(settings, &entry))
+            .expect("discovered network state should build");
+        assert_eq!(state.status, ResourceStatus::Running);
+        state
+    }
+
+    fn rerun(
+        settings: &StackSettings,
+        existing: StackResourceState,
+        data: AwsNetworkImportData,
+    ) -> (StackResourceState, serde_json::Value) {
+        let entry = entry_with(settings);
+        let ctx = import_context(settings, &entry);
+        let reimported = AwsNetworkImporter
+            .import(data, &ctx)
+            .expect("network import should succeed");
+        let merged = AwsNetworkImporter
+            .merge_reimport(existing, reimported, &ctx)
+            .expect("re-import should merge");
+        let internal = merged
+            .internal_state
+            .clone()
+            .expect("merged network should have controller state");
+        (merged, internal)
+    }
+
+    #[test]
+    fn rerun_keeps_zones_but_takes_changed_setup_ids_from_the_import() {
+        let settings = create_settings();
+        let existing = discovered_network(&settings, named_network_data(false));
+        let mut changed = named_network_data(false);
+        changed.security_group_id = Some("sg-replaced".to_string());
+        changed.nat_gateway_id = Some("nat-replaced".to_string());
+
+        let (merged, internal) = rerun(&settings, existing, changed);
+
+        assert_eq!(merged.status, ResourceStatus::Running);
+        assert_eq!(internal["state"], "ready");
+        assert_eq!(internal["securityGroupId"], "sg-replaced");
+        assert_eq!(internal["natGatewayId"], "nat-replaced");
+        assert_eq!(
+            internal["subnetsByFailureDomain"],
+            serde_json::to_value(discovered_map()).unwrap()
+        );
+    }
+
+    #[test]
+    fn rerun_listing_the_same_subnets_in_another_order_keeps_zones() {
+        let settings = create_settings();
+        let existing = discovered_network(&settings, named_network_data(false));
+        let mut reordered = named_network_data(false);
+        reordered.public_subnet_ids.reverse();
+        reordered.private_subnet_ids.reverse();
+
+        let (merged, internal) = rerun(&settings, existing, reordered);
+
+        assert_eq!(merged.status, ResourceStatus::Running);
+        assert_eq!(internal["state"], "ready");
+        assert_eq!(
+            internal["subnetsByFailureDomain"],
+            serde_json::to_value(discovered_map()).unwrap()
+        );
+    }
+
+    /// Use-existing and use-default imports are both setup-owned VPCs, so only the
+    /// network settings show the switch. The customer VPC must not be kept.
+    #[test]
+    fn switching_use_existing_to_use_default_rediscovers_the_default_vpc() {
+        let existing = discovered_network(&byo_settings(), named_network_data(true));
+        let use_default = StackSettings {
+            network: Some(NetworkSettings::UseDefault),
+            ..StackSettings::default()
+        };
+
+        let (merged, internal) = rerun(&use_default, existing, empty_default_import_data());
+
+        assert_eq!(merged.status, ResourceStatus::Provisioning);
+        assert_eq!(internal["state"], "createStart");
+        assert_eq!(internal["vpcId"], serde_json::Value::Null);
+        assert_eq!(internal["subnetsByFailureDomain"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn rerun_over_a_network_still_discovering_takes_the_import() {
+        let settings = byo_settings();
+        let entry = entry_with(&settings);
+        let existing = AwsNetworkImporter
+            .import(named_network_data(true), &import_context(&settings, &entry))
+            .expect("network import should succeed");
+        assert_eq!(existing.status, ResourceStatus::Provisioning);
+
+        let (merged, internal) = rerun(&settings, existing, named_network_data(true));
+
+        assert_eq!(merged.status, ResourceStatus::Provisioning);
+        assert_eq!(internal["state"], "discoveringSubnetFailureDomains");
+    }
+
+    /// Networks saved before the zone map existed load as Ready with an empty map.
+    /// A setup rerun is how they get one, so it must still discover.
+    #[test]
+    fn rerun_over_a_ready_network_without_a_zone_map_rediscovers() {
+        let settings = byo_settings();
+        let mut existing = discovered_network(&settings, named_network_data(true));
+        existing
+            .internal_state
+            .as_mut()
+            .expect("network controller state")["subnetsByFailureDomain"] = serde_json::json!({});
+
+        let (merged, internal) = rerun(&settings, existing, named_network_data(true));
+
+        assert_eq!(merged.status, ResourceStatus::Provisioning);
+        assert_eq!(internal["state"], "discoveringSubnetFailureDomains");
     }
 
     /// Use-default setup hands off nothing; the controller discovers the default
