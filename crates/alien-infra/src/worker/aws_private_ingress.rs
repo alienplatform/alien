@@ -43,7 +43,7 @@ use crate::{
     ResourceControllerContext, Result,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PrivateIngressPlan {
     pub account: String,
@@ -93,6 +93,14 @@ pub(super) struct PrivateWorkerIngress {
 }
 
 impl PrivateWorkerIngress {
+    pub fn matches_plan(&self, plan: &PrivateIngressPlan) -> bool {
+        self.plan == *plan && !self.retiring
+    }
+
+    pub fn serving_certificate_arns(&self) -> &[String] {
+        self.frontend.serving_certificate_arns()
+    }
+
     pub fn new(plan: PrivateIngressPlan) -> Result<Self> {
         for subnets in [&plan.private_subnets, &plan.gateway_subnets] {
             if subnets.len() < 2

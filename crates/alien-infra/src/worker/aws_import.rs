@@ -36,6 +36,8 @@ impl ResourceImporter for AwsWorkerImporter {
             data.stage_name
         };
         let controller = AwsWorkerController {
+            private_worker: Default::default(),
+            retiring_public_permission: None,
             state: AwsWorkerState::Ready,
             arn: Some(data.function_arn),
             url: data.url,

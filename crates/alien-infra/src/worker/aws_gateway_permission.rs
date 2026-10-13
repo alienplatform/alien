@@ -11,13 +11,15 @@ use crate::{ErrorData, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GatewayPermission {
+pub(crate) struct GatewayPermission {
     function_arn: String,
     account: String,
     source_arn: String,
     statement_id: String,
     create_permitted: bool,
     retiring: bool,
+    #[serde(default)]
+    legacy_public: bool,
 }
 
 impl GatewayPermission {
@@ -40,7 +42,20 @@ impl GatewayPermission {
             statement_id: format!("PrivateGateway-{}", Uuid::new_v4()),
             create_permitted: false,
             retiring: false,
+            legacy_public: false,
         })
+    }
+
+    /// Retire only the exact grant made by the existing public API controller.
+    /// A wider legacy grant or changed statement must not be silently adopted.
+    pub fn retire_public(function: &str, account: &str, region: &str, api: &str) -> Result<Self> {
+        let mut permission = Self::new(function, account, region, api)?;
+        permission.source_arn = format!("arn:aws:execute-api:{region}:{account}:{api}/*");
+        permission.statement_id = "ApiGatewayInvoke".into();
+        permission.create_permitted = true;
+        permission.retiring = true;
+        permission.legacy_public = true;
+        Ok(permission)
     }
 
     pub async fn step_prepare(&mut self, lambda: &dyn LambdaApi) -> Result<bool> {
@@ -148,11 +163,15 @@ impl GatewayPermission {
     }
 
     fn statement(&self) -> Value {
-        json!({
+        let mut statement = json!({
             "Sid":self.statement_id,"Effect":"Allow","Principal":{"Service":"apigateway.amazonaws.com"},
             "Action":"lambda:InvokeFunction","Resource":self.function_arn,
             "Condition":{"ArnLike":{"AWS:SourceArn":self.source_arn},"StringEquals":{"AWS:SourceAccount":self.account}}
-        })
+        });
+        if self.legacy_public {
+            statement["Condition"] = json!({"ArnLike":{"AWS:SourceArn":self.source_arn}});
+        }
+        statement
     }
 }
 

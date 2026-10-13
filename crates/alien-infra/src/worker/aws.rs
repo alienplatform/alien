@@ -352,6 +352,10 @@ impl AwsWorkerController {
 
 #[controller]
 pub struct AwsWorkerController {
+    #[serde(default)]
+    pub(crate) private_worker: super::aws_private_worker::AwsPrivateWorker,
+    #[serde(default)]
+    pub(crate) retiring_public_permission: Option<super::aws_gateway_permission::GatewayPermission>,
     pub(crate) arn: Option<String>,
     pub(crate) url: Option<String>,
     /// The logical AWS Lambda worker name (stack prefix + id). Stored to expose in outputs.
@@ -606,7 +610,9 @@ impl AwsWorkerController {
         let mut function_tags = standard_resource_tags(ctx.resource_prefix, &cfg.id);
         function_tags.insert("Name".to_string(), aws_worker_name.clone());
 
-        if !cfg.public_endpoints.is_empty() {
+        if !cfg.public_endpoints.is_empty()
+            && ctx.deployment_config.stack_settings.endpoint_access.internet_enabled()
+        {
             match Self::resolve_domain_info(ctx, &cfg.id)? {
                 Some(domain_info) => {
                     self.fqdn = Some(domain_info.fqdn.clone());
@@ -766,7 +772,9 @@ impl AwsWorkerController {
             && response.last_update_status.as_deref() == Some("Successful");
 
         if is_active {
-            if !worker_config.public_endpoints.is_empty() {
+            if !worker_config.public_endpoints.is_empty()
+                && ctx.deployment_config.stack_settings.endpoint_access.internet_enabled()
+            {
                 let has_domain_info = self.ensure_domain_info(ctx, &worker_config)?;
                 let next_state = if has_domain_info {
                     // Platform mode: wait for certificate then create API Gateway + custom domain
@@ -2100,7 +2108,9 @@ impl AwsWorkerController {
         // Skip this step if the worker doesn't have public ingress
         // For private workers, the initial env vars already have complete self-binding
         // (no URL to add later)
-        if config.public_endpoints.is_empty() {
+        if config.public_endpoints.is_empty()
+            || !ctx.deployment_config.stack_settings.endpoint_access.internet_enabled()
+        {
             info!(worker=%config.id, "Skipping env var update - no public URL to add");
             return Ok(HandlerAction::Continue {
                 state: CreatingEventSourceMappings,
@@ -2514,9 +2524,17 @@ impl AwsWorkerController {
         }
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: PreparingPrivateIngress,
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = PreparingPrivateIngress, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn preparing_private_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if !self.step_private_ingress(ctx).await? {
+            return Ok(HandlerAction::Stay { max_times: Some(240), suggested_delay: Some(Duration::from_secs(10)) });
+        }
+        Ok(HandlerAction::Continue { state: Ready, suggested_delay: None })
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -2970,7 +2988,9 @@ impl AwsWorkerController {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
 
-        if current_config.public_endpoints.is_empty() {
+        if current_config.public_endpoints.is_empty()
+            || !ctx.deployment_config.stack_settings.endpoint_access.internet_enabled()
+        {
             return Ok(HandlerAction::Continue {
                 state: UpdateRunningReadinessProbe,
                 suggested_delay: None,
@@ -3698,6 +3718,20 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let previous = ctx.previous_resource_config::<Worker>()?;
+        if worker_config.get_permissions() == previous.get_permissions()
+            && worker_config.memory_mb == previous.memory_mb
+            && worker_config.timeout_seconds == previous.timeout_seconds
+            && worker_config.environment == previous.environment
+            && worker_config.links == previous.links
+        {
+            // Access-only changes must not restart the retained Lambda just to
+            // rewrite its own URL. Native invocation still uses its stable ARN.
+            return Ok(HandlerAction::Continue {
+                state: UpdateEventSourceMappings,
+                suggested_delay: None,
+            });
+        }
         match self.updating_env_vars_with_self_binding(ctx).await? {
             HandlerAction::Continue {
                 state: CreatingEventSourceMappings,
@@ -4107,9 +4141,74 @@ impl AwsWorkerController {
         }
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: UpdatingPrivateIngress,
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = UpdatingPrivateIngress, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_private_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if !self.step_private_ingress(ctx).await? {
+            return Ok(HandlerAction::Stay { max_times: Some(240), suggested_delay: Some(Duration::from_secs(10)) });
+        }
+        Ok(HandlerAction::Continue { state: UpdateRetiringPublicIngress, suggested_delay: None })
+    }
+
+    #[handler(state = UpdateRetiringPublicIngress, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn update_retiring_public_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        if ctx.deployment_config.stack_settings.endpoint_access.internet_enabled() && !worker.public_endpoints.is_empty() {
+            return Ok(HandlerAction::Continue { state: Ready, suggested_delay: None });
+        }
+        let aws = ctx.get_aws_config()?;
+        if self.retiring_public_permission.is_none() {
+            if let Some(api) = self.rest_api_id.as_deref().or(self.api_id.as_deref()) {
+                self.retiring_public_permission = Some(super::aws_gateway_permission::GatewayPermission::retire_public(
+                    self.arn.as_deref().ok_or_else(|| AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "Retiring public ingress requires its retained Lambda".into(), resource_id: Some(worker.id.clone()),
+                    }))?, &aws.account_id, &aws.region, api,
+                )?);
+                return Ok(HandlerAction::Continue { state: UpdateRetiringPublicIngress, suggested_delay: None });
+            }
+        }
+        // Reuse public ingress cleanup only. Trigger mappings and the function
+        // remain owned by the retained worker throughout the access change.
+        match self.deleting_api_gateway(ctx).await? {
+            HandlerAction::Continue { state: DeletingEventSourceMappings, .. } => {
+                self.url = None;
+                self.fqdn = None;
+                self.load_balancer = None;
+                self.domain_create_token = None;
+                Ok(HandlerAction::Continue { state: UpdateRetiringPublicPermission, suggested_delay: None })
+            }
+            _ => Err(Self::unexpected_update_wrapper_state(&worker.id, "retire public ingress", self.state.clone())),
+        }
+    }
+
+    #[handler(state = UpdateRetiringPublicPermission, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn update_retiring_public_permission(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if let Some(permission) = &mut self.retiring_public_permission {
+            let lambda = ctx.service_provider.get_aws_lambda_client(ctx.get_aws_config()?).await?;
+            if !permission.step_delete(lambda.as_ref()).await? {
+                return Ok(HandlerAction::Stay { max_times: Some(60), suggested_delay: Some(Duration::from_secs(5)) });
+            }
+            self.retiring_public_permission = None;
+        }
+        Ok(HandlerAction::Continue { state: UpdateRetiringPublicCertificate, suggested_delay: None })
+    }
+
+    #[handler(state = UpdateRetiringPublicCertificate, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn update_retiring_public_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match self.deleting_certificate(ctx).await? {
+            HandlerAction::Continue { state: DeletingLogGroup, .. } => {
+                self.certificate_id = None;
+                self.certificate_issued_at = None;
+                self.uses_custom_domain = false;
+                Ok(HandlerAction::Continue { state: Ready, suggested_delay: None })
+            }
+            _ => Err(Self::unexpected_update_wrapper_state(&worker.id, "retire public certificate", self.state.clone())),
+        }
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -4125,9 +4224,17 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         self.url = None;
         Ok(HandlerAction::Continue {
-            state: DeletingApiGateway,
+            state: DeletingPrivateIngress,
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = DeletingPrivateIngress, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_private_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if !self.private_worker.delete(ctx).await? {
+            return Ok(HandlerAction::Stay { max_times: Some(240), suggested_delay: Some(Duration::from_secs(10)) });
+        }
+        Ok(HandlerAction::Continue { state: DeletingApiGateway, suggested_delay: None })
     }
 
     #[handler(
@@ -4864,7 +4971,7 @@ impl AwsWorkerController {
                 });
 
             ResourceOutputs::new(WorkerOutputs {
-                private_endpoints: std::collections::HashMap::new(),
+                private_endpoints: self.private_worker.endpoints.clone(),
                 worker_name: self
                     .worker_name
                     .clone()
@@ -4920,6 +5027,14 @@ impl AwsWorkerController {
 
 // Separate impl block for helper methods
 impl AwsWorkerController {
+    async fn step_private_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let arn = self.arn.as_deref().ok_or_else(|| AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Private ingress preparation requires the retained Lambda ARN".into(),
+            resource_id: None,
+        }))?;
+        self.private_worker.prepare(ctx, arn).await
+    }
+
     /// Creates the function's log group with a retention period before the
     /// function exists. Otherwise Lambda creates `/aws/lambda/<name>` on the
     /// first invocation and keeps its logs forever. A group that already
@@ -5265,6 +5380,8 @@ impl AwsWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(worker_name: &str) -> Self {
         Self {
+            private_worker: Default::default(),
+            retiring_public_permission: None,
             state: AwsWorkerState::Ready,
             arn: Some(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
