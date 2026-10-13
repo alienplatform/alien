@@ -57,7 +57,7 @@ async fn create_service_signs_explicit_network_and_replays_the_recorded_token() 
         assert_eq!(response.service.service_arn, "service-arn");
         assert_eq!(response.service.status.as_deref(), Some("ACTIVE"));
     }
-    call.assert_calls_async(2).await;
+    call.assert_hits_async(2).await;
 }
 
 #[tokio::test]
@@ -65,8 +65,8 @@ async fn uncertain_task_definition_registration_is_never_retried_inside_the_sdk(
     let server = MockServer::start_async().await;
     let call = server.mock_async(|when, then| {
         when.method(POST).path("/").header("x-amz-target", "AmazonEC2ContainerServiceV20141113.RegisterTaskDefinition")
-            .body_includes("\"networkMode\":\"awsvpc\"")
-            .body_includes("\"requiresCompatibilities\":[\"FARGATE\"]");
+            .body_contains("\"networkMode\":\"awsvpc\"")
+            .body_contains("\"requiresCompatibilities\":[\"FARGATE\"]");
         then.status(503).json_body(json!({"__type": "com.amazonaws.ecs#ServerException", "message": "reply lost after registration"}));
     }).await;
     let request = RegisterTaskDefinitionRequest::builder()
@@ -98,7 +98,7 @@ async fn uncertain_task_definition_registration_is_never_retried_inside_the_sdk(
             .code,
         "REMOTE_SERVICE_UNAVAILABLE"
     );
-    call.assert_calls_async(1).await;
+    call.assert_hits_async(1).await;
 }
 
 #[tokio::test]
@@ -122,7 +122,7 @@ async fn describe_and_delete_preserve_batch_failures_in_successful_http_response
     assert!(response.services.is_empty());
     assert_eq!(response.failures.len(), 1);
     assert_eq!(response.failures[0].reason.as_deref(), Some("MISSING"));
-    describe.assert_calls_async(1).await;
+    describe.assert_hits_async(1).await;
     let delete = server.mock_async(|when, then| {
         when.method(POST).path("/").header("x-amz-target", "AmazonEC2ContainerServiceV20141113.DeleteTaskDefinitions")
             .json_body(json!({"taskDefinitions": ["definition"]}));
@@ -141,7 +141,7 @@ async fn describe_and_delete_preserve_batch_failures_in_successful_http_response
         response.failures[0].reason.as_deref(),
         Some("RESOURCE_IN_USE")
     );
-    delete.assert_calls_async(1).await;
+    delete.assert_hits_async(1).await;
 }
 
 #[tokio::test]
@@ -164,7 +164,7 @@ async fn task_inventory_keeps_pagination_and_interface_identity() {
         .unwrap();
     assert_eq!(response.task_arns, vec!["task"]);
     assert_eq!(response.next_token.as_deref(), Some("page-two"));
-    list.assert_calls_async(1).await;
+    list.assert_hits_async(1).await;
     let describe = server.mock_async(|when, then| {
         when.method(POST).path("/").header("x-amz-target", "AmazonEC2ContainerServiceV20141113.DescribeTasks");
         then.status(200).json_body(json!({"tasks": [{"taskArn": "task", "lastStatus": "RUNNING", "taskDefinitionArn": "definition",
@@ -187,7 +187,7 @@ async fn task_inventory_keeps_pagination_and_interface_identity() {
         "eni-test"
     );
     assert_eq!(response.tasks[0].tags[0].value, "attempt");
-    describe.assert_calls_async(1).await;
+    describe.assert_hits_async(1).await;
 }
 
 #[tokio::test]
@@ -217,6 +217,6 @@ async fn cleanup_errors_distinguish_denial_absence_dependency_drain_and_bad_requ
                 .code,
             expected
         );
-        call.assert_calls_async(1).await;
+        call.assert_hits_async(1).await;
     }
 }
