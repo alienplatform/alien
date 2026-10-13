@@ -1996,18 +1996,17 @@ async fn deploy_task_with_environment(
         ExistingDeploymentPlan::InitialSetup | ExistingDeploymentPlan::SetupUpdate { .. }
     );
 
-    // A local retry flag does not make a failed platform operation claimable.
+    // A local retry flag does not make a failed deployment claimable.
     // Validate the resume configuration first, then requeue with the same
     // authority that will acquire execution. The API rejects a live contender.
-    if ctx.is_platform()
-        && matches!(
-            current.status,
-            DeploymentStatus::PreflightsFailed
-                | DeploymentStatus::InitialSetupFailed
-                | DeploymentStatus::ProvisioningFailed
-                | DeploymentStatus::UpdateFailed
-                | DeploymentStatus::RefreshFailed
-        )
+    if matches!(
+        current.status,
+        DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+    )
     {
         request_deployment_retry(
             &base_url,
