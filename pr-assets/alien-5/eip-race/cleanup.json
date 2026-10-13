@@ -1,0 +1,33 @@
+{
+  "deployExitCode": 1,
+  "destroyExitCode": 0,
+  "raceAfterSuccessfulPreflight": true,
+  "quotaId": "L-0263D0A3",
+  "scope": "eu-west-1",
+  "taggedResourcesAbsent": true,
+  "activeNatGateways": 0,
+  "awsRetainedDeletedNatRecords": 1,
+  "eipFillersDeletedAndVerified": 5,
+  "baselineIdentitySets": {
+    "Vpcs": {
+      "before": [
+        "baseline-vpcs-1"
+      ],
+      "after": [
+        "baseline-vpcs-1"
+      ]
+    },
+    "InternetGateways": {
+      "before": [
+        "baseline-igws-1"
+      ],
+      "after": [
+        "baseline-igws-1"
+      ]
+    },
+    "Addresses": {
+      "before": [],
+      "after": []
+    }
+  }
+}
