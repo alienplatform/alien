@@ -119,21 +119,31 @@ pub fn plan_compute_with_state(
         &mut resolved_stack,
         selected_settings,
     )?;
-    if let Some(settings) = selected_settings {
-        let (minimum, maximum) = match platform {
-            Platform::Gcp => (10, 65536),
-            Platform::Azure => (1, 32767),
-            _ => (1, 65536),
+    let (minimum, maximum) = match platform {
+        Platform::Gcp => (10, 65536),
+        Platform::Azure => (1, 32767),
+        _ => (1, 65536),
+    };
+    for (id, entry) in &resolved_stack.resources {
+        let Some(storage) = entry
+            .config
+            .downcast_ref::<Container>()
+            .and_then(|container| container.persistent_storage.as_ref())
+        else {
+            continue;
         };
-        for (id, selection) in &settings.containers {
-            if let Some(size) = selection.volume_size_gib {
-                if size < minimum || size > maximum {
-                    return Err(AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
-                        resource_id: id.clone(), dimension: "volumeSizeGib".into(),
-                        reason: format!("capacity for {platform} must be between {minimum} and {maximum} GiB"),
-                    }));
-                }
-            }
+        let size = crate::container_resources::parse_volume_size_gib(&storage.size)
+            .map_err(|reason| crate::container_resources::invalid(id, "volumeSizeGib", &reason))?;
+        if size < minimum || size > maximum {
+            return Err(AlienError::new(
+                ErrorData::ContainerResourceSelectionInvalid {
+                    resource_id: id.clone(),
+                    dimension: "volumeSizeGib".into(),
+                    reason: format!(
+                        "capacity for {platform} must be between {minimum} and {maximum} GiB"
+                    ),
+                },
+            ));
         }
     }
     if let Some(previous_state) = previous_state {
@@ -1394,6 +1404,28 @@ mod tests {
     }
 
     #[test]
+    fn release_volume_defaults_obey_provider_bounds_without_a_selection() {
+        for (platform, size) in [(Platform::Gcp, "5Gi"), (Platform::Azure, "40000Gi")] {
+            let mut stack = stack_with_container();
+            stack
+                .resources
+                .get_mut("api")
+                .unwrap()
+                .config
+                .downcast_mut::<Container>()
+                .unwrap()
+                .persistent_storage = Some(crate::PersistentStorage {
+                size: size.into(),
+                mount_path: "/data".into(),
+                backups: crate::VolumeBackups::default(),
+            });
+            let error = plan_compute(&stack, platform, None).unwrap_err();
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+            assert!(error.to_string().contains("must be between"));
+        }
+    }
+
+    #[test]
     fn volume_capacity_parsing_rejects_overflow_and_preserves_legacy_units() {
         use crate::container_resources::parse_volume_size_gib;
         for (value, size) in [
@@ -1402,18 +1434,14 @@ mod tests {
             ("20GB", 20),
             ("1Ti", 1024),
             ("1TB", 1000),
+            ("1.5Ti", 1536),
+            ("1536Mi", 2),
+            ("0.5Gi", 1),
+            ("1073741824", 1),
         ] {
             assert_eq!(parse_volume_size_gib(value).unwrap(), size);
         }
-        for value in [
-            "0Gi",
-            "-1Gi",
-            "NaNGi",
-            "0.5Gi",
-            "4294967295Ti",
-            "65537Gi",
-            "20",
-        ] {
+        for value in ["0Gi", "-1Gi", "NaNGi", "4294967295Ti", "65537Gi"] {
             assert!(parse_volume_size_gib(value).is_err(), "{value}");
         }
     }

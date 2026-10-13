@@ -169,21 +169,26 @@ pub(crate) fn invalid(id: &str, dimension: &str, reason: &str) -> AlienError<Err
 /// spellings retain their existing GiB allocation semantics.
 pub fn parse_volume_size_gib(value: &str) -> std::result::Result<u32, String> {
     let value = value.trim();
-    let (number, multiplier) = [
-        ("GiB", 1),
-        ("Gi", 1),
-        ("GB", 1),
-        ("TiB", 1024),
-        ("Ti", 1024),
-        ("TB", 1000),
-    ]
-    .into_iter()
-    .find_map(|(suffix, multiplier)| value.strip_suffix(suffix).map(|n| (n, multiplier)))
-    .ok_or_else(|| format!("Invalid volume capacity '{value}'; use whole GiB or TiB"))?;
-    number
-        .parse::<u32>()
+    // Keep historical cloud GB/TB semantics while accepting existing Kubernetes
+    // quantities. Cloud disks allocate whole GiB, so round release quantities up;
+    // deployment selections themselves are unsigned integer GiB.
+    let bytes = if let Some(number) = value.strip_suffix("TB") {
+        parse_memory_bytes(&format!("{number}Gi"))?
+            .checked_mul(1000)
+            .ok_or_else(|| format!("Volume capacity '{value}' is too large"))?
+    } else if let Some(number) = value
+        .strip_suffix("GB")
+        .or_else(|| value.strip_suffix("GiB"))
+    {
+        parse_memory_bytes(&format!("{number}Gi"))?
+    } else if let Some(number) = value.strip_suffix("TiB") {
+        parse_memory_bytes(&format!("{number}Ti"))?
+    } else {
+        parse_memory_bytes(value)?
+    };
+    let gib = bytes.div_ceil(1024 * 1024 * 1024);
+    u32::try_from(gib)
         .ok()
-        .and_then(|n| n.checked_mul(multiplier))
         .filter(|n| (1..=65536).contains(n))
         .ok_or_else(|| format!("Volume capacity '{value}' must be between 1 and 65536 GiB"))
 }

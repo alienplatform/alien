@@ -3957,3 +3957,37 @@ export const SyncReconcileRequestHealth19$outboundSchema: z.ZodEnum<
 export const SyncReconcileRequestLifecycle19$outboundSchema: z.ZodEnum<
   typeof SyncReconcileRequestLifecycle19
 > = z.enum(SyncReconcileRequestLifecycle19);
+
+// Published resource-name compatibility exports.
+export type { SyncReconcileRequestCpuUnion10 as CpuUnion10 };
+export type { SyncReconcileRequestMemoryUnion10 as MemoryUnion10 };
+export type { SyncReconcileRequestCpuUnion9 as CpuUnion9 };
+export type { SyncReconcileRequestMemoryUnion9 as MemoryUnion9 };
+export type { SyncReconcileRequestCpuUnion8 as CpuUnion8 };
+export type { SyncReconcileRequestMemoryUnion8 as MemoryUnion8 };
+export type { SyncReconcileRequestCpuUnion7 as CpuUnion7 };
+export type { SyncReconcileRequestMemoryUnion7 as MemoryUnion7 };
+export type { SyncReconcileRequestCpuUnion10$Outbound as CpuUnion10$Outbound };
+export { SyncReconcileRequestCpuUnion10$outboundSchema as CpuUnion10$outboundSchema };
+export { syncReconcileRequestCpuUnion10ToJSON as cpuUnion10ToJSON };
+export type { SyncReconcileRequestMemoryUnion10$Outbound as MemoryUnion10$Outbound };
+export { SyncReconcileRequestMemoryUnion10$outboundSchema as MemoryUnion10$outboundSchema };
+export { syncReconcileRequestMemoryUnion10ToJSON as memoryUnion10ToJSON };
+export type { SyncReconcileRequestCpuUnion9$Outbound as CpuUnion9$Outbound };
+export { SyncReconcileRequestCpuUnion9$outboundSchema as CpuUnion9$outboundSchema };
+export { syncReconcileRequestCpuUnion9ToJSON as cpuUnion9ToJSON };
+export type { SyncReconcileRequestMemoryUnion9$Outbound as MemoryUnion9$Outbound };
+export { SyncReconcileRequestMemoryUnion9$outboundSchema as MemoryUnion9$outboundSchema };
+export { syncReconcileRequestMemoryUnion9ToJSON as memoryUnion9ToJSON };
+export type { SyncReconcileRequestCpuUnion8$Outbound as CpuUnion8$Outbound };
+export { SyncReconcileRequestCpuUnion8$outboundSchema as CpuUnion8$outboundSchema };
+export { syncReconcileRequestCpuUnion8ToJSON as cpuUnion8ToJSON };
+export type { SyncReconcileRequestMemoryUnion8$Outbound as MemoryUnion8$Outbound };
+export { SyncReconcileRequestMemoryUnion8$outboundSchema as MemoryUnion8$outboundSchema };
+export { syncReconcileRequestMemoryUnion8ToJSON as memoryUnion8ToJSON };
+export type { SyncReconcileRequestCpuUnion7$Outbound as CpuUnion7$Outbound };
+export { SyncReconcileRequestCpuUnion7$outboundSchema as CpuUnion7$outboundSchema };
+export { syncReconcileRequestCpuUnion7ToJSON as cpuUnion7ToJSON };
+export type { SyncReconcileRequestMemoryUnion7$Outbound as MemoryUnion7$Outbound };
+export { SyncReconcileRequestMemoryUnion7$outboundSchema as MemoryUnion7$outboundSchema };
+export { syncReconcileRequestMemoryUnion7ToJSON as memoryUnion7ToJSON };

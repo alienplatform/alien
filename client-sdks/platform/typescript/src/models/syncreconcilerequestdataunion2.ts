@@ -4236,3 +4236,49 @@ export function syncReconcileRequestDataUnion2ToJSON(
     ),
   );
 }
+
+// Published resource-name compatibility exports.
+export type { SyncReconcileRequestMemoryUnion5 as MemoryUnion5 };
+export type { SyncReconcileRequestCpuUnion4 as CpuUnion4 };
+export type { SyncReconcileRequestMemoryUnion4 as MemoryUnion4 };
+export type { SyncReconcileRequestContainer2 as Container2 };
+export type { SyncReconcileRequestCpuUnion3 as CpuUnion3 };
+export type { SyncReconcileRequestMemoryUnion3 as MemoryUnion3 };
+export type { SyncReconcileRequestCpuUnion2 as CpuUnion2 };
+export type { SyncReconcileRequestMemoryUnion2 as MemoryUnion2 };
+export type { SyncReconcileRequestCpuUnion1 as CpuUnion1 };
+export type { SyncReconcileRequestMemoryUnion1 as MemoryUnion1 };
+export type { SyncReconcileRequestContainer1 as Container1 };
+export type { SyncReconcileRequestMemoryUnion5$Outbound as MemoryUnion5$Outbound };
+export { SyncReconcileRequestMemoryUnion5$outboundSchema as MemoryUnion5$outboundSchema };
+export { syncReconcileRequestMemoryUnion5ToJSON as memoryUnion5ToJSON };
+export type { SyncReconcileRequestCpuUnion4$Outbound as CpuUnion4$Outbound };
+export { SyncReconcileRequestCpuUnion4$outboundSchema as CpuUnion4$outboundSchema };
+export { syncReconcileRequestCpuUnion4ToJSON as cpuUnion4ToJSON };
+export type { SyncReconcileRequestMemoryUnion4$Outbound as MemoryUnion4$Outbound };
+export { SyncReconcileRequestMemoryUnion4$outboundSchema as MemoryUnion4$outboundSchema };
+export { syncReconcileRequestMemoryUnion4ToJSON as memoryUnion4ToJSON };
+export type { SyncReconcileRequestContainer2$Outbound as Container2$Outbound };
+export { SyncReconcileRequestContainer2$outboundSchema as Container2$outboundSchema };
+export { syncReconcileRequestContainer2ToJSON as container2ToJSON };
+export type { SyncReconcileRequestCpuUnion3$Outbound as CpuUnion3$Outbound };
+export { SyncReconcileRequestCpuUnion3$outboundSchema as CpuUnion3$outboundSchema };
+export { syncReconcileRequestCpuUnion3ToJSON as cpuUnion3ToJSON };
+export type { SyncReconcileRequestMemoryUnion3$Outbound as MemoryUnion3$Outbound };
+export { SyncReconcileRequestMemoryUnion3$outboundSchema as MemoryUnion3$outboundSchema };
+export { syncReconcileRequestMemoryUnion3ToJSON as memoryUnion3ToJSON };
+export type { SyncReconcileRequestCpuUnion2$Outbound as CpuUnion2$Outbound };
+export { SyncReconcileRequestCpuUnion2$outboundSchema as CpuUnion2$outboundSchema };
+export { syncReconcileRequestCpuUnion2ToJSON as cpuUnion2ToJSON };
+export type { SyncReconcileRequestMemoryUnion2$Outbound as MemoryUnion2$Outbound };
+export { SyncReconcileRequestMemoryUnion2$outboundSchema as MemoryUnion2$outboundSchema };
+export { syncReconcileRequestMemoryUnion2ToJSON as memoryUnion2ToJSON };
+export type { SyncReconcileRequestCpuUnion1$Outbound as CpuUnion1$Outbound };
+export { SyncReconcileRequestCpuUnion1$outboundSchema as CpuUnion1$outboundSchema };
+export { syncReconcileRequestCpuUnion1ToJSON as cpuUnion1ToJSON };
+export type { SyncReconcileRequestMemoryUnion1$Outbound as MemoryUnion1$Outbound };
+export { SyncReconcileRequestMemoryUnion1$outboundSchema as MemoryUnion1$outboundSchema };
+export { syncReconcileRequestMemoryUnion1ToJSON as memoryUnion1ToJSON };
+export type { SyncReconcileRequestContainer1$Outbound as Container1$Outbound };
+export { SyncReconcileRequestContainer1$outboundSchema as Container1$outboundSchema };
+export { syncReconcileRequestContainer1ToJSON as container1ToJSON };
