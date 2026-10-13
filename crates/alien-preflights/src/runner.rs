@@ -1004,8 +1004,9 @@ async fn run_stack_checks(
 mod management_definition_upgrade_tests {
     use super::*;
     use alien_core::{
-        permissions::PermissionProfile, EnvironmentVariablesSnapshot, ExternalBindings,
-        RemoteStackManagement, ResourceLifecycle, StackSettings,
+        permissions::{PermissionProfile, PermissionSetReference},
+        EnvironmentVariablesSnapshot, ExternalBindings, RemoteStackManagement, ResourceLifecycle,
+        StackSettings,
     };
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -1088,13 +1089,18 @@ mod management_definition_upgrade_tests {
                 if legacy {
                     management.management_permission_sets = None;
                 } else {
-                    let set = management
+                    let reference = management
                         .management_permission_sets
                         .as_mut()
                         .unwrap()
-                        .iter_mut()
-                        .find(|set| set.id == "container/provision")
+                        .0
+                        .values_mut()
+                        .flatten()
+                        .find(|set| set.id() == "container/provision")
                         .unwrap();
+                    let PermissionSetReference::Inline(set) = reference else {
+                        panic!("captured management grants must contain definitions");
+                    };
                     match platform {
                         Platform::Aws => {
                             assert!(set.platforms.aws.as_mut().unwrap().pop().is_some());
@@ -1183,6 +1189,44 @@ mod management_definition_upgrade_tests {
                 )
                 .await
                 .expect("unchanged installed definitions need no setup");
+            let mut rescoped = release.clone();
+            rescoped.permissions.management =
+                alien_core::permissions::ManagementPermissions::Override(
+                    PermissionProfile::new().resource("api", ["container/provision"]),
+                );
+            let prepared_rescoped = runner
+                .apply_mutations(rescoped.clone(), &state, &config)
+                .await
+                .unwrap();
+            assert_ne!(
+                prepared.setup_owned_digest(),
+                prepared_rescoped.setup_owned_digest(),
+                "setup authorization must bind grant scopes as well as definitions"
+            );
+            calls.store(0, Ordering::SeqCst);
+            let stale_scope_authorization = alien_core::SetupUpdateAuthorization {
+                nonce: "old-scope".into(),
+                baseline_frozen_digest: prepared.setup_owned_digest(),
+                target_frozen_digest: prepared.setup_owned_digest(),
+                release_id: "release".into(),
+                setup_target: "target".into(),
+                setup_fingerprint: "fingerprint".into(),
+                setup_fingerprint_version: 1,
+            };
+            let error = runner
+                .run_deployment_time_preflights(
+                    rescoped,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&prepared),
+                    Some(&stale_scope_authorization),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
             let mut narrowed = release;
             narrowed.permissions.management =
                 alien_core::permissions::ManagementPermissions::Override(PermissionProfile::new());

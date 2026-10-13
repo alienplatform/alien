@@ -4,7 +4,7 @@
 */
 
 import * as z from "zod";
-import { PermissionSetSchema } from "./permission-set-schema.js";
+import { PermissionProfileSchema } from "./permission-profile-schema.js";
 
 /**
  * @description Represents cross-account management access configuration for a stack deployed\non AWS, GCP, or Azure platforms. This resource sets up the necessary IAM/RBAC\nconfiguration to allow another cloud account to manage the stack.\n\nMaps to:\n- AWS: Cross-account IAM role with management permissions\n- GCP: Service account with management permissions and impersonation rights\n- Azure: User-assigned managed identity with federated credential and custom RBAC\n\nThis resource is automatically created for AWS, GCP, and Azure platforms\nwhen the stack needs to be managed by another account. The management account\nand identity information comes from the platform configuration.
@@ -12,7 +12,7 @@ import { PermissionSetSchema } from "./permission-set-schema.js";
 export const RemoteStackManagementSchema = z.object({
     "id": z.string().describe("Identifier for the remote stack management. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
 get "managementPermissionSets"(){
-                return z.array(PermissionSetSchema.describe("A permission set that can be applied across different cloud platforms")).describe("Resolved management grants captured by setup, for detecting changes to named sets.\nMissing on older installs; the next setup records the installed definitions.").nullish()
+                return z.union([PermissionProfileSchema, z.null()]).optional()
               }
     }).describe("Represents cross-account management access configuration for a stack deployed\non AWS, GCP, or Azure platforms. This resource sets up the necessary IAM/RBAC\nconfiguration to allow another cloud account to manage the stack.\n\nMaps to:\n- AWS: Cross-account IAM role with management permissions\n- GCP: Service account with management permissions and impersonation rights\n- Azure: User-assigned managed identity with federated credential and custom RBAC\n\nThis resource is automatically created for AWS, GCP, and Azure platforms\nwhen the stack needs to be managed by another account. The management account\nand identity information comes from the platform configuration.")
 

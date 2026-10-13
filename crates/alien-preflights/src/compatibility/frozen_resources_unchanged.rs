@@ -40,7 +40,12 @@ fn management_definitions_retained(old: &Resource, new: &Resource) -> bool {
     ) else {
         return false;
     };
-    old.id == new.id && new_sets.iter().all(|set| old_sets.contains(set))
+    old.id == new.id
+        && new_sets
+            .0
+            .values()
+            .flatten()
+            .all(|set| old_sets.0.values().flatten().any(|old_set| old_set == set))
 }
 
 /// Setup owns the ComputeCluster identity and network boundary, but its

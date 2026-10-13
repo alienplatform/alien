@@ -123,40 +123,44 @@ fn capture_management_permission_sets(stack: &mut Stack, platform: Platform) -> 
     }) {
         return Ok(());
     }
-    let mut sets = Vec::new();
-    for reference in stack
+    let mut captured = PermissionProfile::new();
+    for (scope, references) in stack
         .management()
         .profile()
         .into_iter()
-        .flat_map(|profile| profile.0.values())
-        .flatten()
+        .flat_map(|profile| &profile.0)
     {
-        let mut set = reference
-            .resolve(|id| get_permission_set(id).cloned())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::StackMutationFailed {
-                    mutation_name: "Capture management permission definitions".to_string(),
-                    message: format!("Permission set '{}' is not registered", reference.id()),
-                    resource_id: None,
-                })
-            })?;
-        // A change on another cloud does not require this installation to rerun setup.
-        if platform != Platform::Aws {
-            set.platforms.aws = None;
+        let mut sets = Vec::new();
+        for reference in references {
+            let mut set = reference
+                .resolve(|id| get_permission_set(id).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::StackMutationFailed {
+                        mutation_name: "Capture management permission definitions".to_string(),
+                        message: format!("Permission set '{}' is not registered", reference.id()),
+                        resource_id: None,
+                    })
+                })?;
+            // Other clouds do not change the grants installed in this cloud.
+            if platform != Platform::Aws {
+                set.platforms.aws = None;
+            }
+            if platform != Platform::Gcp {
+                set.platforms.gcp = None;
+            }
+            if platform != Platform::Azure {
+                set.platforms.azure = None;
+            }
+            let reference = PermissionSetReference::Inline(set);
+            if !sets.contains(&reference) {
+                sets.push(reference);
+            }
         }
-        if platform != Platform::Gcp {
-            set.platforms.gcp = None;
-        }
-        if platform != Platform::Azure {
-            set.platforms.azure = None;
-        }
-        if !sets.contains(&set) {
-            sets.push(set);
-        }
+        captured.0.insert(scope.clone(), sets);
     }
     for (_, entry) in stack.resources_mut() {
         if let Some(management) = entry.config.downcast_mut::<RemoteStackManagement>() {
-            management.management_permission_sets = Some(sets.clone());
+            management.management_permission_sets = Some(captured.clone());
         }
     }
     Ok(())
