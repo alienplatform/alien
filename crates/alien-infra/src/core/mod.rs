@@ -33,6 +33,11 @@ mod aws_vm_load_balancer;
 #[cfg(feature = "aws")]
 pub use aws_vm_load_balancer::AwsVmLoadBalancer;
 
+#[cfg(feature = "aws")]
+mod aws_vm_frontend;
+#[cfg(feature = "aws")]
+pub use aws_vm_frontend::{AwsPreparedVmFrontend, AwsVmFrontend, AwsVmFrontendPlan};
+
 pub mod state_utils;
 pub use state_utils::*;
 
