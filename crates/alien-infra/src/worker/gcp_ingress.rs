@@ -239,7 +239,7 @@ impl GcpWorkerIngress {
                 GcpRecordedHttpsIngress {
                     health_check: None,
                     backend: child(recorded.backend, &backend_description),
-                    url_map: child(recorded.url_map, &map_description),
+                    url_map: Some(child(recorded.url_map, &map_description)),
                     proxy: child(recorded.proxy, &proxy_description),
                     address: child(recorded.address, &address_description),
                     frontend: child(recorded.frontend, &frontend_description),

@@ -90,10 +90,10 @@ pub struct GcpRecordedIngressChild<'a> {
 /// Explicit handoff of a previously recorded global HTTPS graph. The graph's
 /// references, ownership descriptions and immutable IDs are verified before
 /// this controller can change or delete any of its children.
-pub struct GcpRecordedHttpsIngress<'a> {
+pub struct GcpRecordedProxyIngress<'a> {
     pub health_check: Option<GcpRecordedIngressChild<'a>>,
     pub backend: GcpRecordedIngressChild<'a>,
-    pub url_map: GcpRecordedIngressChild<'a>,
+    pub url_map: Option<GcpRecordedIngressChild<'a>>,
     pub proxy: GcpRecordedIngressChild<'a>,
     pub address: GcpRecordedIngressChild<'a>,
     pub frontend: GcpRecordedIngressChild<'a>,
@@ -102,6 +102,9 @@ pub struct GcpRecordedHttpsIngress<'a> {
     pub managed_certificate: Option<GcpRecordedIngressChild<'a>>,
     pub certificate_references: &'a [String],
 }
+
+/// Compatibility name for the recorded HTTPS handoff.
+pub type GcpRecordedHttpsIngress<'a> = GcpRecordedProxyIngress<'a>;
 
 /// Saved intent covers partial creates and lost responses. A random lifetime
 /// token distinguishes this instance from same-named leftovers.
@@ -313,6 +316,14 @@ impl Child {
 }
 
 impl GcpProxyIngressState {
+    fn load_balancing_scheme(&self) -> LoadBalancingScheme {
+        match (self.scope, self.tcp_port.is_some()) {
+            (GcpHttpsIngressScope::RegionalPrivate, _) => LoadBalancingScheme::InternalManaged,
+            (GcpHttpsIngressScope::GlobalPublic, true) => LoadBalancingScheme::ExternalManaged,
+            (GcpHttpsIngressScope::GlobalPublic, false) => LoadBalancingScheme::External,
+        }
+    }
+
     pub fn new(plan: &GcpHttpsIngressPlan<'_>) -> Self {
         Self {
             tcp_port: plan.frontend.tcp_port(),
@@ -340,14 +351,21 @@ impl GcpProxyIngressState {
         recorded: GcpRecordedHttpsIngress<'_>,
     ) -> Result<Self> {
         let mut state = Self::new(plan);
-        if plan.frontend.tcp_port().is_some()
-            || plan.scope != GcpHttpsIngressScope::GlobalPublic
+        let tcp = plan.frontend.tcp_port().is_some();
+        if plan.scope != GcpHttpsIngressScope::GlobalPublic
             || plan.firewall.is_some()
             || plan.health_check.is_some() != recorded.health_check.is_some()
-            || recorded.certificate_references.is_empty()
+            || (!tcp && (recorded.certificate_references.is_empty() || recorded.url_map.is_none()))
+            || (tcp
+                && (recorded.url_map.is_some()
+                    || recorded.managed_certificate.is_some()
+                    || !recorded.certificate_references.is_empty()
+                    || plan.backend.protocol != Some(BackendServiceProtocol::Tcp)
+                    || plan.health_check.is_none()
+                    || state.tcp_port == Some(0)))
         {
             return Err(AlienError::new(
-                state.error(plan.resource_id, "Invalid recorded global HTTPS graph"),
+                state.error(plan.resource_id, "Invalid recorded global proxy graph"),
             ));
         }
         let references = recorded.certificate_references;
@@ -357,11 +375,11 @@ impl GcpProxyIngressState {
                 recorded.backend,
             ),
             (
-                Child::UrlMap(recorded.url_map.name.to_string()),
-                recorded.url_map,
-            ),
-            (
-                Child::HttpsProxy(recorded.proxy.name.to_string()),
+                if tcp {
+                    Child::TcpProxy(recorded.proxy.name.to_string())
+                } else {
+                    Child::HttpsProxy(recorded.proxy.name.to_string())
+                },
                 recorded.proxy,
             ),
             (
@@ -373,6 +391,9 @@ impl GcpProxyIngressState {
                 recorded.frontend,
             ),
         ];
+        if let Some(child) = recorded.url_map {
+            children.push((Child::UrlMap(child.name.to_string()), child));
+        }
         if let Some(child) = recorded.health_check {
             children.push((Child::HealthCheck(child.name.to_string()), child));
         }
@@ -451,44 +472,58 @@ impl GcpProxyIngressState {
                         desired.group.as_deref().and_then(resource_path) == Some(group)
                     })
             });
+        let proxy_matches = if tcp {
+            contains_desired(
+                &live["tcpProxy"],
+                &serde_json::json!({"service": expected_backend, "proxyHeader": "NONE"}),
+            )
+        } else {
+            contains_desired(
+                &live["urlMap"],
+                &serde_json::json!({"defaultService":expected_backend}),
+            ) && only_recorded_backend(&live["urlMap"], &expected_backend)
+                && contains_desired(
+                    &live["httpsProxy"],
+                    &serde_json::json!({"urlMap":state.url("urlMaps", &state.child_name("urlMap")), "sslCertificates":references}),
+                )
+        };
+        let proxy_url = if tcp {
+            state.url("targetTcpProxies", &state.child_name("tcpProxy"))
+        } else {
+            state.url("targetHttpsProxies", &state.child_name("httpsProxy"))
+        };
+        let port = state.tcp_port.unwrap_or(443).to_string();
+        let port_range = format!("{port}-{port}");
         if !known_groups
             || groups.is_empty()
             || !contains_desired(
                 &live["backend"],
                 &serde_json::json!({
                     "protocol": plan.backend.protocol.as_ref().unwrap_or(&BackendServiceProtocol::Http),
-                    "loadBalancingScheme":"EXTERNAL"
+                    "loadBalancingScheme":state.load_balancing_scheme()
                 }),
             )
             || !live["backend"]
                 .get("healthChecks")
                 .map(|live| contains_desired(live, &serde_json::json!(health_checks)))
                 .unwrap_or(health_checks.is_empty())
-            || !contains_desired(
-                &live["urlMap"],
-                &serde_json::json!({"defaultService":expected_backend}),
-            )
-            || !only_recorded_backend(&live["urlMap"], &expected_backend)
-            || !contains_desired(
-                &live["httpsProxy"],
-                &serde_json::json!({"urlMap":state.url("urlMaps", &state.child_name("urlMap")), "sslCertificates":references}),
-            )
+            || !proxy_matches
             || !contains_desired(
                 &live["address"],
                 &serde_json::json!({"addressType":"EXTERNAL"}),
             )
             || !contains_desired(
                 &live["frontend"],
-                &serde_json::json!({"target":state.url("targetHttpsProxies", &state.child_name("httpsProxy")), "IPAddress":address, "IPProtocol":"TCP", "loadBalancingScheme":"EXTERNAL"}),
+                &serde_json::json!({"target":proxy_url, "IPAddress":address, "IPProtocol":"TCP", "loadBalancingScheme":state.load_balancing_scheme()}),
             )
-            || !matches!(
-                live["frontend"].get("portRange").and_then(Value::as_str),
-                Some("443" | "443-443")
-            )
+            || !live["frontend"]
+                .get("portRange")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == port || value == port_range)
         {
             return Err(AlienError::new(state.error(
                 plan.resource_id,
-                "Recorded HTTPS graph has foreign or inconsistent references",
+                "Recorded proxy graph has foreign or inconsistent references",
             )));
         }
         state.address = Some(address.to_string());
@@ -797,7 +832,7 @@ impl GcpProxyIngressState {
                     // A handed-off serverless graph can already serve HTTPS.
                     // Access changes must preserve its recorded backend protocol.
                     desired.protocol.get_or_insert(BackendServiceProtocol::Http);
-                    desired.load_balancing_scheme = Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External });
+                    desired.load_balancing_scheme = Some(self.load_balancing_scheme());
                     desired.health_checks = if plan.health_check.is_some() {
                         vec![self.url("healthChecks", &self.child_name("healthCheck"))]
                     } else {
@@ -925,7 +960,7 @@ impl GcpProxyIngressState {
                             live.as_ref().and_then(|live| live.get("portRange")).and_then(Value::as_str)
                                 .filter(|value| *value == port || *value == range).unwrap_or(&port).to_string()
                         }),
-                        load_balancing_scheme: Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External }),
+                        load_balancing_scheme: Some(self.load_balancing_scheme()),
                         network: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.network.clone()),
                         subnetwork: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.subnetwork.clone()),
                         target: Some(if self.tcp_port.is_some() { self.url("targetTcpProxies", &self.child_name("tcpProxy")) } else { self.url("targetHttpsProxies", &self.child_name("httpsProxy")) }),

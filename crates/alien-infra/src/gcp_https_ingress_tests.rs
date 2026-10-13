@@ -707,7 +707,7 @@ async fn recorded_global_graph_handoff_preserves_frontend_rotates_and_cleans_up(
     let recorded = || GcpRecordedHttpsIngress {
         health_check: None,
         backend: record("backend"),
-        url_map: record("url"),
+        url_map: Some(record("url")),
         proxy: record("proxy"),
         address: record("address"),
         frontend: record("frontend"),
@@ -878,4 +878,78 @@ async fn tcp_protocol_change_is_rejected_before_provider_mutation() {
     changed.frontend = GcpIngressFrontend::Tcp { port: 5433 };
     assert!(state.reconcile(&client, changed).await.is_err());
     assert!(state.children.is_empty());
+}
+
+#[tokio::test]
+async fn recorded_tcp_graph_handoff_keeps_ids_and_rejects_proxy_replacement() {
+    let scope = GcpHttpsIngressScope::GlobalPublic;
+    let store = Arc::new(Mutex::new(Provider::default()));
+    let client = provider(&store);
+    let mut original = GcpProxyIngressState::new(&tcp_plan(scope));
+    let mut complete = false;
+    for _ in 0..40 {
+        complete = original.reconcile(&client, tcp_plan(scope)).await.unwrap();
+        if complete {
+            break;
+        }
+    }
+    assert!(complete);
+    let objects = store.lock().unwrap().objects.clone();
+    let name = original.name();
+    let owner = original.owner();
+    let record = |kind: &str| GcpRecordedIngressChild {
+        name: &name,
+        description: &owner,
+        provider_id: objects[&format!("{kind}/{name}")]["id"].as_str(),
+    };
+    let mut adopted = GcpProxyIngressState::from_recorded_global(
+        &client,
+        &tcp_plan(scope),
+        GcpRecordedProxyIngress {
+            health_check: Some(record("health")),
+            backend: record("backend"),
+            url_map: None,
+            proxy: record("tcpProxy"),
+            address: record("address"),
+            frontend: record("frontend"),
+            managed_certificate: None,
+            certificate_references: &[],
+        },
+    )
+    .await
+    .unwrap();
+    adopted = checkpoint(&adopted);
+    let before = store.lock().unwrap().mutations;
+    assert!(adopted.reconcile(&client, tcp_plan(scope)).await.unwrap());
+    assert_eq!(store.lock().unwrap().mutations, before);
+    assert_eq!(store.lock().unwrap().objects, objects);
+    store
+        .lock()
+        .unwrap()
+        .objects
+        .get_mut(&format!("tcpProxy/{name}"))
+        .unwrap()["id"] = json!("replacement");
+    let error = adopted
+        .reconcile(&client, tcp_plan(scope))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("replaced"));
+    assert_eq!(store.lock().unwrap().mutations, before);
+    let mut refused = false;
+    for _ in 0..20 {
+        match adopted.delete(&client, "api").await {
+            Ok(done) => assert!(!done, "must refuse the replaced proxy"),
+            Err(error) => {
+                assert!(error.to_string().contains("replaced"));
+                refused = true;
+                break;
+            }
+        }
+        adopted = checkpoint(&adopted);
+    }
+    assert!(refused);
+    assert_eq!(
+        store.lock().unwrap().objects[&format!("tcpProxy/{name}")]["id"],
+        "replacement"
+    );
 }
