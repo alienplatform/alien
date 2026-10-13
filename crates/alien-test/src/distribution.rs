@@ -1233,7 +1233,10 @@ async fn run_cloudformation_aws(
     // include management permissions and exceed that limit; use the same S3
     // template URL path as a customer launching from the dashboard.
     let template_bucket = if fs::metadata(&template_path).await?.len() > 51_200 {
-        let bucket = format!("{stack_name}-template");
+        let bucket = format!(
+            "{stack_name}-{}-template",
+            target.account_id.as_deref().unwrap_or("test")
+        );
         let mut create_bucket = Command::new("aws");
         create_bucket.args([
             "s3",
