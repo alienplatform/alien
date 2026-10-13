@@ -199,6 +199,17 @@ locals {
         principalId                  = azurerm_user_assigned_identity.management.principal_id
         clientId                     = azurerm_user_assigned_identity.management.client_id
         managementPermissionsApplied = true
+        installedManagementGrants = {
+          "*" = [
+            "003e2de05249c30192c162e6a9bea22cc8b509b22bd26a5c8cf04086dd7d3dad",
+            "276400857b9952cccc502b81c7f9469c3958c2bbef3ac4b84460c0fc97b6d911",
+            "45032e1d96ab4f0ffc748f9f8b0792f75c5b93b81e6e86a4f396b4662f7f7adc",
+            "569b9b998b3e3349070f4e250ba6db1fb16fbfdee9da15fe1dd1ae9ec60c9e64",
+            "81b142bfcf0182d2875051cbfeaa4c0ed83a00fa0e6df25412fc277e85feb0d7",
+            "d04dde2d09de95d797298d45b5bd5fb2a20fa3e36dd101b859a7a362a325be72",
+            "dedd1e525342fa872ee358ada23f412732076832b84323a41600c97d786f108f"
+          ]
+        }
       }
     }
   ]
@@ -281,6 +292,7 @@ resource "azurerm_role_definition" "management_management_role" {
       "Microsoft.Network/loadBalancers/read",
       "Microsoft.Network/networkSecurityGroups/read",
       "Microsoft.Network/publicIPAddresses/read",
+      "Microsoft.Network/virtualNetworks/checkIpAddressAvailability/read",
       "Microsoft.Network/virtualNetworks/read",
       "Microsoft.Network/virtualNetworks/subnets/read",
       "Microsoft.ServiceBus/namespaces/queues/delete",

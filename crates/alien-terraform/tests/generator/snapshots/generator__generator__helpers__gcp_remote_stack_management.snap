@@ -203,6 +203,12 @@ locals {
         serviceAccountEmail          = google_service_account.management.email
         serviceAccountUniqueId       = google_service_account.management.unique_id
         managementPermissionsApplied = true
+        installedManagementGrants = {
+          "*" = [
+            "a282620d648668621a67ddee05d00aa7d886621bb88d6672647cfd855aac47e1",
+            "ab458c82343d26d1131559da3770e468b3c0387ce45ba026710ef53143ff60cc"
+          ]
+        }
       }
     }
   ]

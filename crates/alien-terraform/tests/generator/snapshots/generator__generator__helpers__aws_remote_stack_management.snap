@@ -168,6 +168,12 @@ locals {
         roleName                     = aws_iam_role.management.name
         roleArn                      = aws_iam_role.management.arn
         managementPermissionsApplied = true
+        installedManagementGrants = {
+          "*" = [
+            "8f1dd3566943a79227651505f82c0f77bdb874dd2095610a1397c4fe129a0376",
+            "e6aaf1c9c62a24857ff69229d28bb99c586095ffff44d782b4c7ca6f368c0d5b"
+          ]
+        }
       }
     }
   ]

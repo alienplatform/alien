@@ -124,9 +124,15 @@ pub(crate) fn validate_installed_management_permissions(
         };
         if !applied.as_ref().is_some_and(|installed| {
             expected.iter().all(|(scope, grants)| {
-                installed
-                    .get(scope)
-                    .is_some_and(|available| grants.iter().all(|grant| available.contains(grant)))
+                grants.iter().all(|grant| {
+                    installed
+                        .get(scope)
+                        .is_some_and(|available| available.contains(grant))
+                        || (scope != "*"
+                            && installed
+                                .get("*")
+                                .is_some_and(|available| available.contains(grant)))
+                })
             })
         }) {
             return Err(AlienError::new(ErrorData::SetupRequired {
@@ -333,15 +339,26 @@ mod tests {
                         InitialSetupAuthority::ImportedHandoff,
                     )
                     .unwrap();
+                    let mut scoped = stack.clone();
+                    let mut profile = stack.management().profile().unwrap().clone();
+                    if let Some(global) = profile.0.shift_remove("*") {
+                        profile.0.insert("pending-storage".to_string(), global);
+                    }
+                    scoped.permissions.management = ManagementPermissions::Override(profile);
+                    validate_installed_management_permissions(
+                        &scoped,
+                        &state,
+                        InitialSetupAuthority::ImportedHandoff,
+                    )
+                    .unwrap();
                     let mut expanded = stack.clone();
                     let mut profile = stack.management().profile().unwrap().clone();
-                    let grants = profile
-                        .0
-                        .values()
-                        .find(|grants| !grants.is_empty())
-                        .unwrap()
-                        .clone();
-                    profile.0.insert("new-resource-scope".to_string(), grants);
+                    profile.0.insert(
+                        "new-resource-scope".to_string(),
+                        vec![alien_core::PermissionSetReference::from_name(
+                            "worker/provision",
+                        )],
+                    );
                     expanded.permissions.management = ManagementPermissions::Override(profile);
                     assert_eq!(
                         validate_installed_management_permissions(

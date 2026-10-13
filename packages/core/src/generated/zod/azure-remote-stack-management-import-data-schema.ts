@@ -11,6 +11,9 @@ import * as z from "zod";
 export const AzureRemoteStackManagementImportDataSchema = z.object({
     "clientId": z.string().describe("Management UAMI client id (used by the manager to call AAD)."),
 "identityId": z.string().describe("Management UAMI resource id."),
+"installedManagementGrants": z.object({
+    
+    }).catchall(z.array(z.string())).describe("Per-scope revisions of the management grants installed by this setup artifact.").nullish(),
 "managementPermissionsApplied": z.boolean().describe("Whether the management role assignments were applied by the\ngenerated stack."),
 "principalId": z.string().describe("Management UAMI principal id."),
 "resourceGroup": z.string().describe("Resource group containing the management identity."),

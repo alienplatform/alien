@@ -628,16 +628,22 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS RemoteStackManagement ImportData.",
     "properties": {
+      "installedManagementGrants": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": "Per-scope revisions of the management grants installed by this setup artifact.",
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "managementPermissionsApplied": {
         "description": "Whether the management inline policy was attached by the generated stack.",
         "type": "boolean"
-      },
-      "managementPermissionsRevision": {
-        "description": "Revision of the management grants actually installed by this setup artifact.",
-        "type": [
-          "string",
-          "null"
-        ]
       },
       "remoteBindingsRoleArn": {
         "description": "Setup-owned role used only for opted-in remote binding data access.",
@@ -1245,16 +1251,22 @@ expression: schemas
         "description": "Management UAMI resource id.",
         "type": "string"
       },
+      "installedManagementGrants": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": "Per-scope revisions of the management grants installed by this setup artifact.",
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "managementPermissionsApplied": {
         "description": "Whether the management role assignments were applied by the generated stack.",
         "type": "boolean"
-      },
-      "managementPermissionsRevision": {
-        "description": "Revision of the management grants actually installed by this setup artifact.",
-        "type": [
-          "string",
-          "null"
-        ]
       },
       "principalId": {
         "description": "Management UAMI principal id.",
@@ -1965,16 +1977,22 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "GCP RemoteStackManagement ImportData — cross-project service account the manager impersonates.",
     "properties": {
+      "installedManagementGrants": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": "Per-scope revisions of the management grants installed by this setup artifact.",
+        "type": [
+          "object",
+          "null"
+        ]
+      },
       "managementPermissionsApplied": {
         "description": "Whether the management role binding was attached by the generated stack.",
         "type": "boolean"
-      },
-      "managementPermissionsRevision": {
-        "description": "Revision of the management grants actually installed by this setup artifact.",
-        "type": [
-          "string",
-          "null"
-        ]
       },
       "projectId": {
         "description": "Project ID containing the management service account.",
