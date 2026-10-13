@@ -1212,11 +1212,13 @@ dependencies = [
 name = "alien-preflights"
 version = "3.3.32"
 dependencies = [
+ "alien-aws-clients",
  "alien-core",
  "alien-error",
  "alien-permissions",
  "async-trait",
  "indexmap 2.14.1",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
