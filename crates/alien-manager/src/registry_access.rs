@@ -298,6 +298,12 @@ pub async fn reconcile_registry_access(
 
     let (repo_ids, refused_any) = repository_access(artifact_registry.as_ref(), state, project_id);
     if repo_ids.is_empty() {
+        if refused_any {
+            state
+                .runtime_metadata
+                .get_or_insert_with(RuntimeMetadata::default)
+                .registry_access_granted = false;
+        }
         return;
     }
     let sandbox_declared = declares_sandbox(state);
@@ -1550,6 +1556,74 @@ mod tests {
             assert_eq!(repositories, expected);
             assert_eq!(refused, owner != PROJECT);
         }
+    }
+
+    /// Accepts a persisted stack fixture as well as the default release for local validation.
+    #[test]
+    fn legacy_release_fixture_has_no_other_project_grants() {
+        let stack = match std::env::var("REGISTRY_ACCESS_VALIDATION_STACK") {
+            Ok(path) => {
+                serde_json::from_slice::<Stack>(&std::fs::read(path).expect("stack fixture read"))
+                    .expect("stack fixture parses")
+            }
+            Err(std::env::VarError::NotPresent) => worker_stack(
+                "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_other:v1",
+            ),
+            Err(error) => panic!("invalid stack fixture path: {error}"),
+        };
+        let project = std::env::var("REGISTRY_ACCESS_VALIDATION_PROJECT")
+            .unwrap_or_else(|_| PROJECT.to_string());
+        let prefix = std::env::var("REGISTRY_ACCESS_VALIDATION_PREFIX")
+            .unwrap_or_else(|_| "alien-artifacts".to_string());
+        let registry = TestArtifactRegistry {
+            prefix,
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        let state = aws_state_with_stack(stack);
+        let (repositories, refused) = repository_access(&registry, &state, &project);
+        println!("legacy repository_access repositories={repositories:?} refused={refused}");
+        assert!(repositories.is_empty());
+        assert!(refused);
+    }
+
+    #[tokio::test]
+    async fn refused_legacy_images_clear_the_complete_marker_without_writing_a_grant() {
+        let registry = Arc::new(TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        });
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifacts",
+            registry,
+        });
+        let mut state = aws_state_with_stack(worker_stack(
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_other:v1",
+        ));
+        let metadata = state.runtime_metadata.as_mut().expect("prepared stack");
+        metadata.registry_access_granted = true;
+        metadata.registry_access = Some(RegistryAccess {
+            repositories: vec!["alien-artifacts-prj_other".to_string()],
+            service_types: vec!["worker".to_string()],
+        });
+        reconcile_registry_access(
+            &Some(provider),
+            &HashMap::new(),
+            "dep_test",
+            PROJECT,
+            &mut state,
+        )
+        .await;
+        let metadata = state.runtime_metadata.expect("metadata retained");
+        assert!(!metadata.registry_access_granted);
+        assert_eq!(
+            metadata
+                .registry_access
+                .expect("cleanup receipt retained")
+                .repositories,
+            vec!["alien-artifacts-prj_other"]
+        );
     }
 
     fn worker_stack(image: &str) -> Stack {
