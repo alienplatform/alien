@@ -6,7 +6,7 @@ use crate::quotas::{
 };
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
-    ec2::{DescribeInternetGatewaysRequest, DescribeVpcsRequest},
+    ec2::{DescribeAddressesResponse, DescribeInternetGatewaysRequest, DescribeVpcsRequest},
     AwsCredentialProvider, Ec2Api, Ec2Client, ServiceQuotasApi, ServiceQuotasClient,
 };
 use alien_core::{
@@ -63,6 +63,11 @@ impl RuntimeCheck for CloudQuotasCheck {
                 "Internet gateways per Region",
                 internet_gateway_demand(stack, stack_state),
             ),
+            (
+                "L-0263D0A3",
+                "EC2-VPC Elastic IP addresses per Region",
+                elastic_ip_demand(stack, stack_state),
+            ),
         ];
         if demands
             .iter()
@@ -99,10 +104,11 @@ impl RuntimeCheck for CloudQuotasCheck {
             }
             let outcome = match demand {
                 Some(demand) => {
-                    let observation = if code == "L-F678F1CE" {
-                        read_vpc_observation(&ec2, &quotas).await
-                    } else {
-                        read_internet_gateway_observation(&ec2, &quotas).await
+                    let observation = match code {
+                        "L-F678F1CE" => read_vpc_observation(&ec2, &quotas).await,
+                        "L-A4707A72" => read_internet_gateway_observation(&ec2, &quotas).await,
+                        "L-0263D0A3" => read_elastic_ip_observation(&ec2, &quotas).await,
+                        _ => None,
                     };
                     evaluate(demand, observation)
                 }
@@ -121,6 +127,81 @@ impl RuntimeCheck for CloudQuotasCheck {
         }
         Ok(result)
     }
+}
+
+/// Each created network provisions one public NAT gateway, regardless of AZ count.
+/// Only a completed network with a NAT output proves that its address is held.
+fn elastic_ip_demand(stack: &Stack, state: &StackState) -> Option<QuotaDemand> {
+    let mut demand = QuotaDemand {
+        peak: 0.0,
+        held: 0.0,
+    };
+    for (id, entry) in &stack.resources {
+        if !entry
+            .config
+            .downcast_ref::<Network>()
+            .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
+        {
+            continue;
+        }
+        demand.peak += 1.0;
+        let Some(current) = state.resources.get(id) else {
+            continue;
+        };
+        if current.status == ResourceStatus::Deleted {
+            continue;
+        }
+        if current.status == ResourceStatus::Running
+            && current
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<NetworkOutputs>())
+                .is_some_and(|outputs| !outputs.network_id.is_empty() && outputs.has_nat_gateway)
+        {
+            demand.held += 1.0;
+        } else if current.status != ResourceStatus::Pending || current.internal_state.is_some() {
+            return None;
+        }
+    }
+    Some(demand)
+}
+
+/// Preserve the provider's exclusions: ALB/service-managed and BYOIP addresses
+/// consume no customer EC2-VPC allocation quota; customer NAT addresses do.
+fn elastic_ip_usage(response: DescribeAddressesResponse) -> Option<f64> {
+    let addresses = response.addresses_set?.items;
+    if addresses.iter().any(|address| address.domain.is_none()) {
+        return None;
+    }
+    Some(
+        addresses
+            .into_iter()
+            .filter(|address| {
+                address.domain.as_deref() == Some("vpc")
+                    && address.service_managed.as_deref().is_none_or(str::is_empty)
+                    && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
+            })
+            .count() as f64,
+    )
+}
+
+async fn read_elastic_ip_observation(
+    ec2: &dyn Ec2Api,
+    quotas: &dyn ServiceQuotasApi,
+) -> Option<QuotaObservation> {
+    let quota = quotas
+        .get_service_quota("ec2", "L-0263D0A3")
+        .await
+        .ok()?
+        .quota?;
+    if quota.quota_code.as_deref() != Some("L-0263D0A3")
+        || quota.service_code.as_deref() != Some("ec2")
+    {
+        return None;
+    }
+    let limit = quota.value?;
+    let used = elastic_ip_usage(ec2.describe_addresses().await.ok()?)?;
+    Some(QuotaObservation { used, limit })
 }
 
 /// A complete managed network holds one IGW. A VPC output alone does not prove that
@@ -315,6 +396,118 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build()
+    }
+
+    #[tokio::test]
+    async fn elastic_ip_read_preserves_provider_exclusions_and_applied_limit() {
+        let mut quotas = MockServiceQuotasApi::new();
+        quotas
+            .expect_get_service_quota()
+            .times(1)
+            .withf(|service, code| service == "ec2" && code == "L-0263D0A3")
+            .returning(|_, _| {
+                Ok(serde_json::from_str::<GetServiceQuotaResponse>(
+                    r#"{"Quota":{"ServiceCode":"ec2","QuotaCode":"L-0263D0A3","Value":2}}"#,
+                )
+                .unwrap())
+            });
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses().times(1).returning(|| {
+            Ok(serde_json::from_str::<DescribeAddressesResponse>(
+                r#"{
+                "addressesSet":{"item":[
+                    {"domain":"vpc","publicIpv4Pool":"amazon","serviceManaged":"alb"},
+                    {"domain":"vpc","serviceManaged":"future-service"},
+                    {"domain":"vpc","publicIpv4Pool":"ipv4pool-ec2-owned"},
+                    {"domain":"standard"},
+                    {"domain":"vpc","associationId":"eipassoc-nat"},
+                    {"domain":"vpc","publicIpv4Pool":"amazon","serviceManaged":""}
+                ]}}
+            "#,
+            )
+            .unwrap())
+        });
+        let observation = read_elastic_ip_observation(&ec2, &quotas).await.unwrap();
+        assert_eq!(
+            observation,
+            QuotaObservation {
+                used: 2.0,
+                limit: 2.0
+            }
+        );
+        assert!(evaluate(
+            QuotaDemand {
+                peak: 1.0,
+                held: 0.0
+            },
+            Some(observation)
+        )
+        .blocks());
+        let identity = aws_network_quota_identity("eu-west-1", "L-0263D0A3", "Elastic IPs");
+        assert_eq!(identity.service, "ec2");
+        assert!(identity
+            .increase_url
+            .ends_with("/services/ec2/quotas/L-0263D0A3"));
+    }
+
+    #[test]
+    fn missing_elastic_ip_usage_is_unknown_and_empty_usage_is_zero() {
+        for json in [r#"{}"#, r#"{"addressesSet":{"item":[{}]}}"#] {
+            assert_eq!(elastic_ip_usage(serde_json::from_str(json).unwrap()), None);
+        }
+        assert_eq!(
+            elastic_ip_usage(serde_json::from_str(r#"{"addressesSet":{"item":[]}}"#).unwrap()),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn elastic_ip_credit_requires_a_completed_nat_and_noop_skips_headroom() {
+        let stack = stack();
+        let mut state = StackState::new(Platform::Aws);
+        assert_eq!(
+            elastic_ip_demand(&stack, &state).unwrap().additional(),
+            Some(1.0)
+        );
+        let mut current = StackResourceState::new_pending(
+            "network".into(),
+            stack.resources["network"].config.clone(),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        current.outputs = Some(ResourceOutputs::new(NetworkOutputs {
+            network_id: "vpc-test".into(),
+            availability_zones: 2,
+            has_public_subnets: true,
+            has_nat_gateway: false,
+            cidr: None,
+        }));
+        state.resources.insert("network".into(), current);
+        assert_eq!(elastic_ip_demand(&stack, &state), None);
+        state.resources.get_mut("network").unwrap().outputs =
+            Some(ResourceOutputs::new(NetworkOutputs {
+                network_id: "vpc-test".into(),
+                availability_zones: 2,
+                has_public_subnets: true,
+                has_nat_gateway: true,
+                cidr: None,
+            }));
+        let demand = elastic_ip_demand(&stack, &state).unwrap();
+        assert_eq!(demand.additional(), Some(0.0));
+        assert!(!evaluate(
+            demand,
+            Some(QuotaObservation {
+                used: 8.0,
+                limit: 5.0
+            })
+        )
+        .blocks());
+        state.resources.get_mut("network").unwrap().status = ResourceStatus::Deleted;
+        assert_eq!(
+            elastic_ip_demand(&stack, &state).unwrap().additional(),
+            Some(1.0)
+        );
     }
 
     #[test]

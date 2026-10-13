@@ -19,14 +19,15 @@ pub struct QuotaIdentity {
 
 /// Identity shared by early network checks and deploy-time quota errors.
 pub fn aws_network_quota_identity(region: &str, code: &str, name: &str) -> QuotaIdentity {
+    let service = if code == "L-0263D0A3" { "ec2" } else { "vpc" };
     QuotaIdentity {
         platform: Platform::Aws,
-        service: "vpc".into(),
+        service: service.into(),
         provider_id: code.into(),
         name: name.into(),
         scope: region.into(),
         increase_url: format!(
-            "https://{region}.console.aws.amazon.com/servicequotas/home?region={region}#!/services/vpc/quotas/{code}"
+            "https://{region}.console.aws.amazon.com/servicequotas/home?region={region}#!/services/{service}/quotas/{code}"
         ),
     }
 }
