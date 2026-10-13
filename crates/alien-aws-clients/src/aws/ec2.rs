@@ -5062,7 +5062,8 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
-        describe.assert_hits(1);
+        // EC2 discovery retains the existing eventual-consistency retry policy.
+        describe.assert_hits(4);
     }
 
     #[tokio::test]
