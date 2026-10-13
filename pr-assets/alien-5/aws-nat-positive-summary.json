@@ -1,0 +1,13 @@
+{
+  "commit": "158d298d6638631ec3dd4a5b3b3ed8d119a713b0",
+  "deployExitCode": 0,
+  "status": "running",
+  "error": null,
+  "region": "eu-west-1",
+  "resolvedNatZone": "eu-west-1a",
+  "quotaCode": "L-FE5A380F",
+  "appliedLimit": 5.0,
+  "activeNatBefore": 0,
+  "availableOwnedNatAfter": 1,
+  "natMatchesPersistedPlacement": true
+}
