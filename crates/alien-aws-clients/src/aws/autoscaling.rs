@@ -706,6 +706,13 @@ impl AutoScalingApi for AutoScalingClient {
             }
         }
 
+        if let Some(include_deleted_groups) = request.include_deleted_groups {
+            form_data.insert(
+                "IncludeDeletedGroups".to_string(),
+                include_deleted_groups.to_string(),
+            );
+        }
+
         if let Some(ref next_token) = request.next_token {
             form_data.insert("NextToken".to_string(), next_token.clone());
         }
@@ -998,6 +1005,9 @@ pub struct DescribeAutoScalingGroupsRequest {
 /// Request to describe Auto Scaling scaling activities.
 #[derive(Debug, Clone, Serialize, Builder, Default)]
 pub struct DescribeScalingActivitiesRequest {
+    /// Include activity history for deleted Auto Scaling groups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_deleted_groups: Option<bool>,
     /// The name of the Auto Scaling group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_scaling_group_name: Option<String>,
