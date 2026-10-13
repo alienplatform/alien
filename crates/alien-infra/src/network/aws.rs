@@ -43,6 +43,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use alien_preflights::quotas::aws_network_quota_identity;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -52,6 +53,24 @@ use tracing::{debug, info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+
+/// Do not retry a known quota shortfall: capacity must change before a retry can help.
+fn network_quota_error(
+    error: AlienError<CloudClientErrorData>,
+    quota: alien_preflights::quotas::QuotaIdentity,
+) -> AlienError {
+    if let Some(CloudClientErrorData::QuotaExceeded { message }) = &error.error {
+        let message = format!(
+            "{} ({}, {}): {}. Request an increase: {}",
+            quota.name, quota.provider_id, quota.scope, message, quota.increase_url,
+        );
+        error
+            .context(ErrorData::CloudQuotaExceeded { quota, message })
+            .into_generic()
+    } else {
+        error.into_generic()
+    }
+}
 
 fn is_security_group_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -3065,8 +3084,14 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
+            .map_err(|error| {
+                network_quota_error(
+                    error,
+                    aws_network_quota_identity(&aws_cfg.region, "L-F678F1CE", "VPCs per Region"),
+                )
+            })
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to create VPC".to_string(),
+                message: "Failed to create VPC".into(),
                 resource_id: Some(config.id.clone()),
             })?;
 
@@ -3212,8 +3237,18 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
+            .map_err(|error| {
+                network_quota_error(
+                    error,
+                    aws_network_quota_identity(
+                        &aws_cfg.region,
+                        "L-A4707A72",
+                        "Internet gateways per Region",
+                    ),
+                )
+            })
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to create Internet Gateway".to_string(),
+                message: "Failed to create Internet Gateway".into(),
                 resource_id: Some(config.id.clone()),
             })?;
 
@@ -5958,6 +5993,52 @@ mod controller_state_tests {
             availability_zones: vec!["us-east-1a".to_string(), "us-east-1b".to_string()],
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn internet_gateway_quota_race_preserves_identity_and_does_not_retry() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_create_internet_gateway()
+            .times(1)
+            .returning(|_| {
+                Err(AlienError::new(CloudClientErrorData::QuotaExceeded {
+                    message: "The maximum number of internet gateways has been reached".into(),
+                }))
+            });
+        ec2.expect_attach_internet_gateway().times(0);
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                internet_gateway_create_token: Some("attempt-1".into()),
+                wait_for_create_lookup_iterations: CREATE_LOOKUP_MAX_POLLS,
+                ..after_vpc(AwsNetworkState::CreatingInternetGateway)
+            },
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        let error = executor.step().await.expect_err("quota race must fail");
+        assert!(
+            !error.retryable,
+            "a filled quota must not consume create retries"
+        );
+        let cause = error.source.as_ref().expect("quota cause");
+        assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
+        let quota: alien_preflights::quotas::QuotaIdentity =
+            serde_json::from_value(cause.context["quota"].clone()).expect("typed quota identity");
+        assert_eq!(
+            quota,
+            aws_network_quota_identity(&quota.scope, "L-A4707A72", "Internet gateways per Region")
+        );
+        assert!(!quota.scope.is_empty());
+        assert!(cause.message.contains(&quota.increase_url));
+        assert!(cause
+            .message
+            .contains("maximum number of internet gateways"));
+        assert_eq!(controller(&executor).vpc_id.as_deref(), Some("vpc-1"));
+        assert_eq!(controller(&executor).internet_gateway_id, None);
     }
 
     #[tokio::test]

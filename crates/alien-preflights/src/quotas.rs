@@ -17,6 +17,20 @@ pub struct QuotaIdentity {
     pub increase_url: String,
 }
 
+/// Identity shared by early network checks and deploy-time quota errors.
+pub fn aws_network_quota_identity(region: &str, code: &str, name: &str) -> QuotaIdentity {
+    QuotaIdentity {
+        platform: Platform::Aws,
+        service: "vpc".into(),
+        provider_id: code.into(),
+        name: name.into(),
+        scope: region.into(),
+        increase_url: format!(
+            "https://{region}.console.aws.amazon.com/servicequotas/home?region={region}#!/services/vpc/quotas/{code}"
+        ),
+    }
+}
+
 /// Additional capacity required at the peak of this deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::quotas::{
-    evaluate, QuotaDemand, QuotaIdentity, QuotaObservation, QuotaOutcome, QuotaResult,
+    aws_network_quota_identity, evaluate, QuotaDemand, QuotaObservation, QuotaOutcome, QuotaResult,
 };
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
@@ -80,7 +80,7 @@ impl RuntimeCheck for CloudQuotasCheck {
                     record(
                         &mut result,
                         QuotaResult {
-                            quota: network_quota_identity(&config.region, code, name),
+                            quota: aws_network_quota_identity(&config.region, code, name),
                             outcome: QuotaOutcome::Unknown {
                                 reason: "could not initialize AWS quota read credentials".into(),
                             },
@@ -114,23 +114,12 @@ impl RuntimeCheck for CloudQuotasCheck {
             record(
                 &mut result,
                 QuotaResult {
-                    quota: network_quota_identity(&config.region, code, name),
+                    quota: aws_network_quota_identity(&config.region, code, name),
                     outcome,
                 },
             );
         }
         Ok(result)
-    }
-}
-
-fn network_quota_identity(region: &str, code: &str, name: &str) -> QuotaIdentity {
-    QuotaIdentity {
-        platform: Platform::Aws,
-        service: "vpc".into(),
-        provider_id: code.into(),
-        name: name.into(),
-        scope: region.into(),
-        increase_url: format!("https://{region}.console.aws.amazon.com/servicequotas/home?region={region}#!/services/vpc/quotas/{code}"),
     }
 }
 
@@ -307,6 +296,7 @@ fn record(result: &mut CheckResult, quota_result: QuotaResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quotas::QuotaIdentity;
     use alien_aws_clients::{
         ec2::{DescribeInternetGatewaysResponse, DescribeVpcsResponse, MockEc2Api},
         service_quotas::{GetServiceQuotaResponse, MockServiceQuotasApi},
@@ -514,7 +504,7 @@ mod tests {
             record(
                 &mut result,
                 QuotaResult {
-                    quota: network_quota_identity("eu-west-1", code, name),
+                    quota: aws_network_quota_identity("eu-west-1", code, name),
                     outcome: QuotaOutcome::Fail {
                         used: 5.0,
                         limit: 5.0,
