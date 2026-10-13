@@ -3719,7 +3719,7 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let previous = ctx.previous_resource_config::<Worker>()?;
-        if worker_config.get_permissions() == previous.get_permissions()
+        if worker_config.permissions == previous.permissions
             && worker_config.memory_mb == previous.memory_mb
             && worker_config.timeout_seconds == previous.timeout_seconds
             && worker_config.environment == previous.environment
@@ -4958,6 +4958,16 @@ impl AwsWorkerController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        let public_enabled = !worker.public_endpoints.is_empty()
+            && ctx.deployment_config.stack_settings.endpoint_access.internet_enabled();
+        let public_present = self.api_id.is_some() || self.rest_api_id.is_some() || self.url.is_some();
+        Ok(public_enabled != public_present
+            || self.retiring_public_permission.is_some()
+            || self.private_worker.needs_update(ctx, worker)?)
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.arn.as_ref().map(|arn| {
             // Map the load balancer endpoint for DNS management
@@ -5468,6 +5478,128 @@ mod tests {
         AwsWorkerState,
     };
     use alien_core::standard_resource_tags;
+
+    #[tokio::test]
+    async fn retiring_public_ingress_reloads_without_mutating_lambda_or_triggers() {
+        let worker = function_public_ingress();
+        let mut controller = AwsWorkerController::mock_ready("test-public-func");
+        controller.state = AwsWorkerState::UpdateRetiringPublicIngress;
+        controller.api_id = Some("ownedapi".into());
+        controller.event_source_mappings = vec!["retained-queue".into()];
+        controller.s3_permission_statement_ids = vec!["retained-storage".into()];
+        controller.eventbridge_permission_statement_ids = vec!["retained-schedule".into()];
+        let retained_arn = controller.arn.clone();
+        let grant_present = Arc::new(Mutex::new(true));
+        let mut lambda = MockLambdaApi::new();
+        let world = grant_present.clone();
+        lambda.expect_get_policy().times(2).returning(move |function, _| {
+            assert_eq!(function, "arn:aws:lambda:us-east-1:123456789012:function:test-public-func");
+            let mut statements = vec![serde_json::json!({"Sid":"retained-storage","Effect":"Allow","Principal":{"Service":"s3.amazonaws.com"}})];
+            if *world.lock().unwrap() {
+                statements.push(serde_json::json!({"Sid":"ApiGatewayInvoke","Effect":"Allow",
+                    "Principal":{"Service":"apigateway.amazonaws.com"},"Action":"lambda:InvokeFunction","Resource":function,
+                    "Condition":{"ArnLike":{"AWS:SourceArn":"arn:aws:execute-api:us-east-1:123456789012:ownedapi/*"}}}));
+            }
+            Ok(serde_json::from_value(serde_json::json!({"Policy":serde_json::json!({"Statement":statements}).to_string(),"RevisionId":"revision-owned"})).unwrap())
+        });
+        let world = grant_present.clone();
+        lambda.expect_remove_permission().times(1).returning(move |_, request| {
+            assert_eq!(request.statement_id,"ApiGatewayInvoke");
+            assert_eq!(request.revision_id.as_deref(),Some("revision-owned"));
+            *world.lock().unwrap() = false;
+            Err(AlienError::new(CloudClientErrorData::Timeout { message:"permission removed; reply lost".into() }))
+        });
+        let mut api = MockApiGatewayV2Api::new();
+        api.expect_delete_api().times(1).returning(|api| { assert_eq!(api,"ownedapi"); Ok(()) });
+        let lambda = Arc::new(lambda);
+        let api = Arc::new(api);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider.expect_get_aws_lambda_client().returning(move |_| Ok(lambda.clone()));
+        provider.expect_get_aws_apigatewayv2_client().returning(move |_| Ok(api.clone()));
+        let provider = Arc::new(provider);
+        let mut lost_reply = false;
+        for _ in 0..10 {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone()).controller(controller)
+                .platform(Platform::Aws).service_provider(provider.clone())
+                .stack_settings(StackSettings { endpoint_access: alien_core::EndpointAccess::Private, ..Default::default() })
+                .build().await.unwrap();
+            match executor.step().await {
+                Ok(_) => {},
+                Err(error) => { assert!(!lost_reply); assert!(error.retryable); lost_reply = true; }
+            }
+            let current = executor.internal_state::<AwsWorkerController>().unwrap();
+            controller = serde_json::from_value(serialize_controller(current).unwrap()).unwrap();
+            assert_eq!(controller.arn, retained_arn);
+            assert_eq!(controller.event_source_mappings,vec!["retained-queue"]);
+            assert_eq!(controller.s3_permission_statement_ids,vec!["retained-storage"]);
+            assert_eq!(controller.eventbridge_permission_statement_ids,vec!["retained-schedule"]);
+            if controller.state == AwsWorkerState::Ready { break; }
+        }
+        assert!(lost_reply);
+        assert_eq!(controller.state,AwsWorkerState::Ready);
+        assert!(controller.api_id.is_none());
+        assert!(controller.url.is_none());
+        assert!(controller.retiring_public_permission.is_none());
+        assert!(!*grant_present.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn access_only_runtime_phases_skip_lambda_mutations_but_environment_changes_apply() {
+        for mode in [alien_core::EndpointAccess::Internet, alien_core::EndpointAccess::Private, alien_core::EndpointAccess::Both] {
+            let baseline = SingleControllerExecutor::builder()
+                .resource(function_public_ingress()).controller(AwsWorkerController::mock_ready("test-public-func"))
+                .platform(Platform::Aws).service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .stack_settings(StackSettings { endpoint_access: mode, ..Default::default() })
+                .build().await.unwrap();
+            let accepted = baseline.with_context(|ctx| ctx.desired_resource_config::<Worker>().unwrap().clone());
+            for phase in [AwsWorkerState::UpdateConfigStart, AwsWorkerState::UpdateEnvVarsWithSelfBinding] {
+                let worker = accepted.clone();
+                let mut controller = AwsWorkerController::mock_ready("test-public-func");
+                controller.state = phase.clone();
+                let original_arn = controller.arn.clone();
+                let original_url = controller.url.clone();
+                // Strict provider has no expectations: even acquiring a cloud
+                // client would fail this access-only retry boundary.
+                let mut executor = SingleControllerExecutor::builder()
+                    .resource(worker.clone()).previous_resource(worker).controller(controller)
+                    .platform(Platform::Aws).service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                    .stack_settings(StackSettings { endpoint_access: mode, ..Default::default() })
+                    .build().await.unwrap();
+                executor.with_context(|ctx| {
+                    assert_eq!(ctx.desired_resource_config::<Worker>().unwrap(), ctx.previous_resource_config::<Worker>().unwrap(), "access-only fixture must use the accepted configuration");
+                });
+                executor.step().await.unwrap();
+                let state = executor.internal_state::<AwsWorkerController>().unwrap();
+                assert_eq!(state.arn, original_arn);
+                assert_eq!(state.url, original_url);
+                assert_eq!(state.state, if phase == AwsWorkerState::UpdateConfigStart {
+                    AwsWorkerState::UpdateConfigWaitForActive
+                } else { AwsWorkerState::UpdateEventSourceMappings });
+            }
+            let previous = accepted;
+            let mut desired = previous.clone();
+            desired.environment.insert("NEW_VALUE".into(), "updated".into());
+            let mut lambda = MockLambdaApi::new();
+            lambda.expect_update_function_configuration().times(1).returning(|arn, request| {
+                assert_eq!(arn, "arn:aws:lambda:us-east-1:123456789012:function:test-public-func");
+                assert_eq!(request.environment.unwrap().variables.unwrap()["NEW_VALUE"], "updated");
+                Ok(create_successful_function_response("test-public-func"))
+            });
+            let lambda = Arc::new(lambda);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider.expect_get_aws_lambda_client().returning(move |_| Ok(lambda.clone()));
+            let mut controller = AwsWorkerController::mock_ready("test-public-func");
+            controller.state = AwsWorkerState::UpdateConfigStart;
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(desired).previous_resource(previous).controller(controller)
+                .platform(Platform::Aws).service_provider(Arc::new(provider))
+                .stack_settings(StackSettings { endpoint_access: mode, ..Default::default() })
+                .build().await.unwrap();
+            executor.step().await.unwrap();
+            assert_eq!(executor.internal_state::<AwsWorkerController>().unwrap().state, AwsWorkerState::UpdateConfigWaitForActive);
+        }
+    }
 
     #[tokio::test]
     async fn private_setup_failure_precedes_parent_create_and_code_updates() {

@@ -9,6 +9,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::aws_private_ingress::{
     validate_worker_setup, PrivateIngressClients, PrivateIngressPlan, PrivateWorkerIngress,
@@ -24,6 +25,8 @@ pub(crate) struct AwsPrivateWorker {
     graph: Option<PrivateWorkerIngress>,
     certificates: AwsAcmImports,
     pub endpoints: HashMap<String, PublicEndpointOutput>,
+    #[serde(default)]
+    applied_fingerprint: Option<String>,
 }
 
 struct Domains {
@@ -38,7 +41,48 @@ enum Certificate {
     Managed(ImportCertificateRequest),
 }
 
+impl Domains {
+    fn fingerprint(&self) -> String {
+        let certificate = match &self.certificate {
+            Certificate::Existing(arn) => serde_json::json!(["existing", arn]),
+            Certificate::Managed(request) => {
+                serde_json::json!(["managed", request.certificate, request.certificate_chain])
+            }
+        };
+        let mut names = self.outputs.keys().collect::<Vec<_>>();
+        names.sort();
+        let public_configuration = serde_json::json!([self.hosts, names, certificate]);
+        format!(
+            "{:x}",
+            Sha256::digest(public_configuration.to_string().as_bytes())
+        )
+    }
+}
+
 impl AwsPrivateWorker {
+    pub fn needs_update(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+    ) -> Result<bool> {
+        if worker.public_endpoints.is_empty()
+            || !ctx
+                .deployment_config
+                .stack_settings
+                .endpoint_access
+                .private_enabled()
+        {
+            return Ok(self.graph.is_some()
+                || !self.certificates.is_empty()
+                || !self.endpoints.is_empty());
+        }
+        let Some(domains) = resolve_domains(ctx, worker)? else {
+            return Ok(true);
+        };
+        Ok(self.graph.is_none()
+            || self.applied_fingerprint.as_deref() != Some(&domains.fingerprint()))
+    }
+
     pub async fn prepare(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -58,6 +102,7 @@ impl AwsPrivateWorker {
         let Some(domains) = resolve_domains(ctx, &worker)? else {
             return Ok(false);
         };
+        let fingerprint = domains.fingerprint();
         let network = ctx.require_dependency::<AwsNetworkController>(&ResourceRef::new(
             Network::RESOURCE_TYPE,
             "default-network",
@@ -128,12 +173,16 @@ impl AwsPrivateWorker {
         {
             return Ok(false);
         }
+        if domains.dns_ready {
+            self.applied_fingerprint = Some(fingerprint);
+        }
         Ok(domains.dns_ready)
     }
 
     pub async fn delete(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         if self.graph.is_none() && self.certificates.is_empty() {
             self.endpoints.clear();
+            self.applied_fingerprint = None;
             return Ok(true);
         }
         let aws = ctx.get_aws_config()?;
@@ -157,6 +206,7 @@ impl AwsPrivateWorker {
             }
             self.graph = None;
             self.endpoints.clear();
+            self.applied_fingerprint = None;
             return Ok(false);
         }
         let acm = ctx.service_provider.get_aws_acm_client(aws).await?;
