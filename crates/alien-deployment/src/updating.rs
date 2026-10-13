@@ -102,7 +102,7 @@ pub async fn handle_update_pending(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.clone().ok_or_else(|| {
+    let mut stack_state = current.stack_state.clone().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for update".to_string(),
         })
@@ -127,9 +127,12 @@ pub async fn handle_update_pending(
             .target_release
             .as_ref()
             .and_then(|release| release.release_id.clone());
+        crate::initial_setup::retry_failed_setup_resources(&mut stack_state, &metadata, &config)?;
         next.status = DeploymentStatus::InitialSetup;
+        next.stack_state = Some(stack_state);
         next.runtime_metadata = Some(metadata);
         next.error = None;
+        next.retry_requested = false;
         return Ok(DeploymentStepResult {
             state: next,
             suggested_delay_ms: None,

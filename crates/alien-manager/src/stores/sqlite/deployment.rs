@@ -1162,7 +1162,19 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .value(Deployments::DesiredReleaseId, release_id)
                 .value(Deployments::Status, "update-pending")
                 .value(Deployments::NextStepAfter, Option::<String>::None)
-                .and_where(Expr::col(Deployments::Status).is_in(eligible_statuses));
+                .cond_where(
+                    sea_query::Cond::any()
+                        .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
+                        // Only the persisted installed grant permits a release to retry
+                        // setup work. A requested setting must not authorize manual setup.
+                        .add(
+                            sea_query::Cond::all()
+                                .add(Expr::col(Deployments::Status).eq("initial-setup-failed"))
+                                .add(Expr::cust(
+                                    "json_extract(runtime_metadata, '$.automaticSetup') = 1",
+                                )),
+                        ),
+                );
 
             if let Some(p) = platform {
                 query.and_where(Expr::col(Deployments::Platform).eq(p.as_str()));

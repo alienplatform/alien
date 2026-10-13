@@ -566,6 +566,85 @@ async fn update_status() {
 }
 
 #[tokio::test]
+async fn corrective_release_reaches_only_installed_automatic_setup_failures() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let mut deployments = Vec::new();
+    for (name, grant) in [("automatic", true), ("manual", false)] {
+        let dep = create_test_deployment_with_settings(
+            &store,
+            &group_id,
+            name,
+            Platform::Aws,
+            StackSettings {
+                setup_management: alien_core::SetupManagement::Automatic,
+                ..Default::default()
+            },
+        )
+        .await;
+        // Report setup results through the store; only one requested grant was installed.
+        store
+            .reconcile(
+                &test_subject(),
+                ReconcileData {
+                    deployment_id: dep.id.clone(),
+                    session: "setup".to_string(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: DeploymentStatus::InitialSetupFailed,
+                        platform: Platform::Aws,
+                        current_release: None,
+                        target_release: None,
+                        stack_state: None,
+                        error: None,
+                        environment_info: None,
+                        runtime_metadata: Some(RuntimeMetadata {
+                            automatic_setup: grant,
+                            ..Default::default()
+                        }),
+                        retry_requested: false,
+                        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    },
+                    update_heartbeat: false,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .unwrap();
+        deployments.push((dep.id, grant));
+    }
+    store
+        .set_desired_release(&test_subject(), "corrective-release", Some(Platform::Aws))
+        .await
+        .unwrap();
+    for (id, grant) in deployments {
+        let dep = store
+            .get_deployment(&test_subject(), &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            dep.status,
+            if grant {
+                "update-pending"
+            } else {
+                "initial-setup-failed"
+            }
+        );
+        assert_eq!(
+            dep.desired_release_id.as_deref(),
+            grant.then_some("corrective-release")
+        );
+    }
+}
+
+#[tokio::test]
 async fn set_desired_release() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
