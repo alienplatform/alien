@@ -435,7 +435,7 @@ mod tests {
             !error.retryable,
             "refresh the snapshot before another update"
         );
-        read.assert_calls_async(1).await;
-        write.assert_calls_async(1).await;
+        read.assert_hits_async(1).await;
+        write.assert_hits_async(1).await;
     }
 }
