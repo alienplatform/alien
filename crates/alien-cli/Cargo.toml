@@ -22,6 +22,7 @@ platform = ["dep:oauth2", "dep:open"]
 [dependencies]
 bon = { workspace = true }
 alien-core = { workspace = true }
+alien-client-config = { workspace = true, features = ["aws"] }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
 alien-terraform = { workspace = true }

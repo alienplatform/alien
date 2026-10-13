@@ -437,6 +437,7 @@ dependencies = [
  "alien-bindings",
  "alien-build",
  "alien-cli-common",
+ "alien-client-config",
  "alien-cloudformation",
  "alien-commands",
  "alien-commands-client",
