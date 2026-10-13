@@ -15,6 +15,29 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
             vec!["installed-revision".to_string()],
         )])),
     };
+    for applied in [false, true] {
+        let mut legacy_data = serde_json::to_value(&data).unwrap();
+        legacy_data["managementPermissionsApplied"] = json!(applied);
+        if applied {
+            legacy_data
+                .as_object_mut()
+                .unwrap()
+                .remove("installedManagementGrants");
+        }
+        let imported = run_through_registry(
+            &RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Aws,
+            legacy_data,
+            &entry,
+            "us-east-1",
+            &aws_management_config(),
+        );
+        assert_eq!(
+            internal_state(&imported)["installedManagementGrants"],
+            serde_json::Value::Null,
+            "unapplied grants and legacy imports must not claim installed permissions",
+        );
+    }
     let state = run_through_registry(
         &RemoteStackManagement::RESOURCE_TYPE,
         Platform::Aws,
@@ -67,6 +90,29 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
             vec!["installed-revision".to_string()],
         )])),
     };
+    for applied in [false, true] {
+        let mut legacy_data = serde_json::to_value(&data).unwrap();
+        legacy_data["managementPermissionsApplied"] = json!(applied);
+        if applied {
+            legacy_data
+                .as_object_mut()
+                .unwrap()
+                .remove("installedManagementGrants");
+        }
+        let imported = run_through_registry(
+            &RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Gcp,
+            legacy_data,
+            &entry,
+            "us-central1",
+            &gcp_management_config(),
+        );
+        assert_eq!(
+            internal_state(&imported)["installedManagementGrants"],
+            serde_json::Value::Null,
+            "unapplied grants and legacy imports must not claim installed permissions",
+        );
+    }
     let state = run_through_registry(
         &RemoteStackManagement::RESOURCE_TYPE,
         Platform::Gcp,
@@ -107,6 +153,29 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         management_permissions_applied: true,
         installed_management_grants: Some(std::collections::BTreeMap::from([("*".to_string(), vec!["installed-revision".to_string()])])),
     };
+    for applied in [false, true] {
+        let mut legacy_data = serde_json::to_value(&data).unwrap();
+        legacy_data["managementPermissionsApplied"] = json!(applied);
+        if applied {
+            legacy_data
+                .as_object_mut()
+                .unwrap()
+                .remove("installedManagementGrants");
+        }
+        let imported = run_through_registry(
+            &RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Azure,
+            legacy_data,
+            &entry,
+            "eastus",
+            &azure_management_config(),
+        );
+        assert_eq!(
+            internal_state(&imported)["installedManagementGrants"],
+            serde_json::Value::Null,
+            "unapplied grants and legacy imports must not claim installed permissions",
+        );
+    }
     let state = run_through_registry(
         &RemoteStackManagement::RESOURCE_TYPE,
         Platform::Azure,
