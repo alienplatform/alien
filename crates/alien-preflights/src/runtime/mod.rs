@@ -12,6 +12,8 @@ pub mod cloud_quotas;
 #[cfg(feature = "runtime-checks")]
 pub mod gcp_compute;
 #[cfg(feature = "runtime-checks")]
+pub mod gcp_iam;
+#[cfg(feature = "runtime-checks")]
 pub use cloud_quotas::CloudQuotasCheck;
 
 // TODO: Implement runtime checks

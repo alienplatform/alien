@@ -24,5 +24,6 @@ runtime-checks = ["dep:alien-aws-clients", "dep:alien-gcp-clients", "dep:reqwest
 openapi = ["utoipa", "alien-core/openapi"]
 
 [dev-dependencies]
+alien-gcp-clients = { workspace = true, features = ["test-utils"] }
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
 tokio-test = "0.4"

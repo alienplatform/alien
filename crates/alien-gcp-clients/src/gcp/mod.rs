@@ -20,6 +20,7 @@ pub mod pubsub;
 pub mod resource_manager;
 pub mod secret_manager;
 pub mod service_usage;
+pub mod service_usage_quotas;
 
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};

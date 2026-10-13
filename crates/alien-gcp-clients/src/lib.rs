@@ -1,4 +1,5 @@
 pub mod gcp;
+pub use gcp::service_usage_quotas::{ServiceUsageQuotasApi, ServiceUsageQuotasClient};
 pub use gcp::*;
 
 // Re-export commonly used types for convenience
