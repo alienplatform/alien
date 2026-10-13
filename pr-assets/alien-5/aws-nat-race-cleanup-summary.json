@@ -1,0 +1,7 @@
+{
+  "destroyExitCode": 0,
+  "taggedResourcesAbsent": true,
+  "activeNatGateways": 0,
+  "baselineVpcIgwSubnetEipSetsRestored": true,
+  "quotaOverrides": null
+}
