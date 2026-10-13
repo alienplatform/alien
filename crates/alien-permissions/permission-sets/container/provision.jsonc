@@ -771,8 +771,7 @@
           "actions": [
             "acm:AddTagsToCertificate",
             "acm:DeleteCertificate",
-            "acm:DescribeCertificate",
-            "acm:ListTagsForCertificate"
+            "acm:DescribeCertificate"
           ]
         },
         "binding": {
@@ -794,6 +793,25 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
+          }
+        }
+      },
+      {
+        // ImportCertificate has no idempotency key. Recovery must inspect every candidate's
+        // attempt tag: skipping a denied metadata read could miss our own lost-response
+        // import and create a duplicate or report cleanup complete prematurely.
+        // This grants tag metadata only; certificate export and all mutations remain scoped.
+        "label": "read-tls-certificate-tags",
+        "description": "Read regional ACM certificate ownership metadata for import recovery.",
+        "grant": {
+          "actions": ["acm:ListTagsForCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
           }
         }
       },
