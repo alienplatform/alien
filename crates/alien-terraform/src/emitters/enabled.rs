@@ -112,6 +112,22 @@ pub fn gate_any(block: &mut Block, input_ids: &[String]) -> Result<()> {
     }
 }
 
+/// Select an import value using the same deployer input as its resource.
+pub fn when_enabled(
+    input_id: Option<&str>,
+    value: Expression,
+    when_disabled: Expression,
+) -> Expression {
+    match input_id {
+        Some(input_id) => Expression::Conditional(Box::new(Conditional::new(
+            expr::raw(gate_variable(input_id)),
+            value,
+            when_disabled,
+        ))),
+        None => value,
+    }
+}
+
 /// The registration list the manager consumes, one entry per resource.
 ///
 /// A resource the deployer declined contributes no entry at all. It does not
@@ -130,14 +146,11 @@ pub fn registration_list(entries: Vec<(Option<String>, Expression)>) -> Expressi
     let mut concat = FuncCall::builder(Identifier::sanitized("concat"));
     for (gate, entry) in entries {
         let single = Expression::Array(vec![entry]);
-        concat = concat.arg(match gate {
-            Some(input_id) => Expression::Conditional(Box::new(Conditional::new(
-                expr::raw(gate_variable(&input_id)),
-                single,
-                Expression::Array(Vec::new()),
-            ))),
-            None => single,
-        });
+        concat = concat.arg(when_enabled(
+            gate.as_deref(),
+            single,
+            Expression::Array(Vec::new()),
+        ));
     }
     Expression::FuncCall(Box::new(concat.build()))
 }

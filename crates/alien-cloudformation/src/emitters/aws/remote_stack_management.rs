@@ -70,10 +70,17 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             fields.push((
                 "installedManagementGrants",
                 CfExpression::object(revision.into_iter().map(|(scope, grants)| {
-                    (
-                        scope,
+                    let enabled_when = ctx
+                        .stack
+                        .resources
+                        .get(&scope)
+                        .and_then(|entry| entry.enabled_when.as_deref());
+                    let value = crate::emitters::enabled::when_enabled(
+                        enabled_when,
                         CfExpression::list(grants.into_iter().map(CfExpression::from)),
-                    )
+                        CfExpression::list(Vec::<CfExpression>::new()),
+                    );
+                    (scope, value)
                 })),
             ));
         }

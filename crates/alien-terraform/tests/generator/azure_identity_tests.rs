@@ -209,6 +209,13 @@ fn azure_management_assignment_follows_the_gates_of_its_only_contributors() {
         .build();
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    super::helpers::assert_management_receipt_gates(
+        &module,
+        &[
+            ("jobs", "input_jobs_enabled"),
+            ("audit", "input_audit_enabled"),
+        ],
+    );
     let rendered = module
         .iter()
         .map(|(_, contents)| contents)

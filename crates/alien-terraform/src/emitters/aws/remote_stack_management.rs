@@ -187,10 +187,17 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             fields.push((
                 "installedManagementGrants",
                 expr::object(revision.into_iter().map(|(scope, grants)| {
-                    (
-                        scope,
+                    let enabled_when = ctx
+                        .stack
+                        .resources
+                        .get(&scope)
+                        .and_then(|entry| entry.enabled_when.as_deref());
+                    let value = crate::emitters::enabled::when_enabled(
+                        enabled_when,
                         Expression::Array(grants.into_iter().map(Expression::String).collect()),
-                    )
+                        Expression::Array(Vec::new()),
+                    );
+                    (scope, value)
                 })),
             ));
         }

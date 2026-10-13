@@ -9,6 +9,8 @@ use alien_core::{Stack, StackInputDefinition, StackSettings};
 use alien_terraform::{
     generate_terraform_module, ModuleFiles, TerraformOptions, TerraformTarget, TfRegistry,
 };
+use hcl::eval::{Context, Evaluate};
+use hcl::expr::{Expression, ObjectKey};
 use indexmap::IndexMap;
 
 #[allow(dead_code)]
@@ -186,6 +188,72 @@ pub fn assert_terraform_variable_plan_invalid_contains(
         }
         test_utils::LinterStatus::Skipped(reason) => {
             panic!("terraform plan was skipped for {context}\nreason: {reason}");
+        }
+    }
+}
+
+/// Evaluate the actual rendered receipt for every combination of installer inputs.
+pub fn assert_management_receipt_gates(module: &ModuleFiles, scopes: &[(&str, &str)]) {
+    fn find(expression: &Expression) -> Option<&Expression> {
+        match expression {
+            Expression::Object(fields) => fields.iter().find_map(|(key, value)| {
+                let is_receipt = match key {
+                    ObjectKey::Identifier(name) => name.as_str() == "installedManagementGrants",
+                    ObjectKey::Expression(Expression::String(name)) => {
+                        name == "installedManagementGrants"
+                    }
+                    _ => false,
+                };
+                if is_receipt {
+                    Some(value)
+                } else {
+                    find(value)
+                }
+            }),
+            Expression::Array(items) => items.iter().find_map(find),
+            Expression::FuncCall(call) => call.args.iter().find_map(find),
+            Expression::Conditional(condition) => {
+                find(&condition.true_expr).or_else(|| find(&condition.false_expr))
+            }
+            _ => None,
+        }
+    }
+    let receipt = module
+        .iter()
+        .find_map(|(_, contents)| {
+            let body: hcl::Body = hcl::from_str(contents).expect("rendered HCL parses");
+            body.blocks()
+                .filter(|block| block.identifier() == "locals")
+                .flat_map(|block| block.body().attributes())
+                .find_map(|attribute| find(attribute.expr()).cloned())
+        })
+        .expect("management registration receipt exists");
+    for mask in 0..(1usize << scopes.len()) {
+        let variables = scopes
+            .iter()
+            .enumerate()
+            .map(|(index, (_, input))| {
+                (
+                    input.to_string(),
+                    serde_json::Value::Bool(mask & (1 << index) != 0),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let mut context = Context::new();
+        context.declare_var("var", hcl::to_value(variables).expect("input variables"));
+        let actual = receipt.evaluate(&context).expect("receipt evaluates");
+        let actual = actual.as_object().expect("receipt map");
+        for (index, (scope, _)) in scopes.iter().enumerate() {
+            let grants = actual
+                .get(*scope)
+                .expect("scope exists")
+                .as_array()
+                .expect("grant list");
+            assert_eq!(
+                !grants.is_empty(),
+                mask & (1 << index) != 0,
+                "{scope} receipt must reflect its own installer input, mask {mask}"
+            );
         }
     }
 }

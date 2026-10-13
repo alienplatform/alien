@@ -13,7 +13,8 @@ use super::helpers::{
 };
 use alien_cloudformation::{CfExpression, CfTemplate, CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    Kv, Queue, ResourceLifecycle, ServiceAccount, Stack, StackInputKind, StackSettings,
+    Kv, ManagementPermissions, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
+    ServiceAccount, Stack, StackInputKind, StackSettings, Worker, WorkerCode,
 };
 use std::collections::HashMap;
 
@@ -386,5 +387,50 @@ fn the_outputs_fallback_omits_a_declined_resource() {
             })
             .collect();
         assert_eq!(ids, expected, "gate {answer} registers exactly what exists");
+    }
+}
+
+#[test]
+fn management_receipt_follows_the_optional_resource() {
+    let stack = Stack::new("gated-management".to_string())
+        .inputs(vec![gate()])
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("store", ["worker/dispatch-command"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Worker::new("store".to_string())
+                .code(WorkerCode::Image {
+                    image: "registry.example.com/jobs:1".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+            "storeEnabled",
+        )
+        .build();
+    let (template, yaml) = render(&stack, "optional management grant receipt");
+    insta::assert_snapshot!("optional_management_receipt", yaml);
+    for enabled in [false, true] {
+        let payload = resolve(
+            registration_payload(&template),
+            &HashMap::from([(GATE_CONDITION, enabled)]),
+            Declined::Removed,
+        )
+        .expect("registration resolves");
+        let value = serde_json::to_value(payload).expect("registration serializes");
+        let management = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "management")
+            .unwrap();
+        let grants = management["importData"]["installedManagementGrants"]["store"]
+            .as_array()
+            .expect("installed grant list");
+        assert_eq!(!grants.is_empty(), enabled);
     }
 }

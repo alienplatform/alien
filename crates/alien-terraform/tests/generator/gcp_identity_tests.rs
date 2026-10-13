@@ -218,6 +218,7 @@ fn gcp_emits_no_ungated_management_grant_for_a_gated_worker() {
         .build();
 
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    super::helpers::assert_management_receipt_gates(&module, &[("jobs", "input_jobs_enabled")]);
     let rendered = module
         .iter()
         .map(|(_, contents)| contents)

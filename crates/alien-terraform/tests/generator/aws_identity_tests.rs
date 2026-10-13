@@ -122,6 +122,7 @@ fn aws_management_grants_for_a_gated_resource_carry_its_gate() {
         .build();
 
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    super::helpers::assert_management_receipt_gates(&module, &[("jobs", "input_jobs_enabled")]);
     let mut main = String::new();
     for (_, contents) in module.iter() {
         main.push_str(contents);
