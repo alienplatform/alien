@@ -2,10 +2,28 @@
 
 use crate::quotas::QuotaObservation;
 use alien_aws_clients::{
-    ec2::{DescribeNatGatewaysRequest, DescribeSubnetsRequest},
+    ec2::{DescribeAvailabilityZonesResponse, DescribeNatGatewaysRequest, DescribeSubnetsRequest},
     Ec2Api, ServiceQuotasApi,
 };
 use std::collections::{HashMap, HashSet};
+
+/// Select the direct Network controller's subnet placement in provider order.
+/// The first selected zone owns its single NAT gateway. Keep selection before
+/// dropping unnamed entries: filling those gaps from later entries would change
+/// the existing controller's placement. An empty result cannot resolve placement.
+pub fn select_network_availability_zones(
+    response: DescribeAvailabilityZonesResponse,
+    requested: u8,
+) -> Vec<String> {
+    response
+        .availability_zone_info
+        .map(|set| set.items)
+        .unwrap_or_default()
+        .into_iter()
+        .take(requested as usize)
+        .filter_map(|zone| zone.zone_name)
+        .collect()
+}
 
 /// Read the applied per-AZ limit and join gateway subnet IDs to provider AZ names.
 /// Placement must be resolved by the caller; response ordering is not a placement contract.
@@ -106,6 +124,33 @@ mod tests {
     use crate::quotas::{evaluate, QuotaDemand, QuotaOutcome};
     use alien_aws_clients::{ec2::MockEc2Api, service_quotas::MockServiceQuotasApi};
     use serde_json::json;
+
+    #[test]
+    fn placement_preserves_provider_order_and_does_not_fill_unnamed_slots() {
+        let response = || {
+            serde_json::from_value(json!({"availabilityZoneInfo": {"item": [
+                {"zoneName": "eu-west-1b"}, {}, {"zoneName": "eu-west-1a"}
+            ]}}))
+            .unwrap()
+        };
+        assert_eq!(
+            select_network_availability_zones(response(), 1),
+            ["eu-west-1b"]
+        );
+        assert_eq!(
+            select_network_availability_zones(response(), 2),
+            ["eu-west-1b"]
+        );
+        assert_eq!(
+            select_network_availability_zones(response(), 3),
+            ["eu-west-1b", "eu-west-1a"]
+        );
+        assert!(select_network_availability_zones(response(), 0).is_empty());
+        assert!(
+            select_network_availability_zones(serde_json::from_value(json!({})).unwrap(), 2)
+                .is_empty()
+        );
+    }
 
     fn quotas() -> MockServiceQuotasApi {
         let mut quotas = MockServiceQuotasApi::new();

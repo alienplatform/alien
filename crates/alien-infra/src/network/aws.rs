@@ -48,7 +48,10 @@ use alien_preflights::{
         aws_nat_gateway_quota_identity, aws_network_quota_identity, evaluate, QuotaDemand,
         QuotaOutcome,
     },
-    runtime::{aws_nat::read_nat_gateway_observation, cloud_quotas::read_elastic_ip_observation},
+    runtime::{
+        aws_nat::{read_nat_gateway_observation, select_network_availability_zones},
+        cloud_quotas::read_elastic_ip_observation,
+    },
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -3037,14 +3040,7 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let zones: Vec<String> = az_response
-                .availability_zone_info
-                .map(|set| set.items)
-                .unwrap_or_default()
-                .into_iter()
-                .take(availability_zones as usize)
-                .filter_map(|az| az.zone_name)
-                .collect();
+            let zones = select_network_availability_zones(az_response, availability_zones);
 
             if zones.is_empty() {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
