@@ -108,6 +108,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
 struct ProcessOptions {
     max_steps: usize,
     require_heartbeats_enabled: bool,
+    defer_skipped_release: bool,
 }
 
 impl ProcessOptions {
@@ -115,6 +116,7 @@ impl ProcessOptions {
         Self {
             max_steps: MAX_STEPS_PER_TICK,
             require_heartbeats_enabled: false,
+            defer_skipped_release: false,
         }
     }
 
@@ -122,6 +124,7 @@ impl ProcessOptions {
         Self {
             max_steps: MAX_STEPS_PER_HEARTBEAT,
             require_heartbeats_enabled: true,
+            defer_skipped_release: false,
         }
     }
 }
@@ -335,6 +338,7 @@ impl DeploymentLoop {
         // no caller passthrough is available.
         let caller = Subject::system();
 
+        let deferred_releases = Mutex::new(Vec::new());
         for batch_index in 0..MAX_ACQUIRE_BATCHES_PER_TICK {
             let session = uuid::Uuid::new_v4().to_string();
 
@@ -361,13 +365,25 @@ impl DeploymentLoop {
                     );
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
-                            self.process_deployment(
-                                item.deployment,
-                                item.execution_claim,
-                                &session,
-                                ProcessOptions::deployment_tick(),
-                            )
-                            .await;
+                            let deployment_id = item.deployment.id.clone();
+                            let claim = item.execution_claim.clone();
+                            let deferred = self
+                                .process_deployment(
+                                    item.deployment,
+                                    item.execution_claim,
+                                    &session,
+                                    ProcessOptions {
+                                        defer_skipped_release: true,
+                                        ..ProcessOptions::deployment_tick()
+                                    },
+                                )
+                                .await;
+                            if deferred {
+                                deferred_releases
+                                    .lock()
+                                    .expect("deferred releases poisoned")
+                                    .push((deployment_id, session.clone(), claim));
+                            }
                         })
                         .await;
                 }
@@ -375,6 +391,22 @@ impl DeploymentLoop {
                     error!(error = %e, "Failed to acquire deployments");
                     break;
                 }
+            }
+        }
+
+        // Keep skipped retries leased until the remaining batches have had a
+        // chance to acquire other work. Return every lease before the tick ends
+        // so a setup-capable driver can consume the preserved retry.
+        for (deployment_id, session, claim) in deferred_releases
+            .into_inner()
+            .expect("deferred releases poisoned")
+        {
+            if let Err(error) = self
+                .deployment_store
+                .release(&caller, &deployment_id, &session, claim)
+                .await
+            {
+                error!(%deployment_id, %error, "Failed to release skipped deployment lock");
             }
         }
 
@@ -406,7 +438,7 @@ impl DeploymentLoop {
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
-    ) {
+    ) -> bool {
         let deployment_id = deployment.id.clone();
 
         // Always release the lock when we are done, even on error.
@@ -422,6 +454,10 @@ impl DeploymentLoop {
             );
         }
 
+        if options.defer_skipped_release && matches!(result, Ok(true)) {
+            return true;
+        }
+
         // Release lock unconditionally. Loop context, no inbound caller.
         let caller = Subject::system();
         if let Err(e) = self
@@ -435,6 +471,7 @@ impl DeploymentLoop {
                 "Failed to release deployment lock"
             );
         }
+        false
     }
 
     async fn process_deployment_inner(
@@ -443,7 +480,7 @@ impl DeploymentLoop {
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
-    ) -> Result<(), AlienError> {
+    ) -> Result<bool, AlienError> {
         let deployment_id = deployment.id.clone();
         let stack_settings = deployment
             .stack_settings
@@ -457,7 +494,7 @@ impl DeploymentLoop {
                 deployment_id = %deployment_id,
                 "Skipping pull-mode deployment — handled by alien-operator"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let status = parse_status(&deployment.status);
@@ -467,7 +504,7 @@ impl DeploymentLoop {
                 deployment_id = %deployment_id,
                 "Skipping heartbeat because heartbeats are disabled for this deployment"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // 1. Get the release for this deployment.
@@ -536,7 +573,7 @@ impl DeploymentLoop {
             )
             .await
             .map_err(|error| error.into_generic())?;
-            return Ok(());
+            return Ok(false);
         }
 
         // 2. Resolve credentials for the target platform and lifecycle phase.
@@ -588,7 +625,7 @@ impl DeploymentLoop {
                     )
                     .await?;
                 }
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -606,12 +643,15 @@ impl DeploymentLoop {
                 self.checkpoint_without_step(
                     &deployment_id,
                     session,
-                    recorded_state,
+                    DeploymentState {
+                        error: deployment_record_error(&deployment.error),
+                        ..recorded_state
+                    },
                     execution_claim,
                 )
                 .await?;
             }
-            return Ok(());
+            return Ok(deployment.retry_requested);
         }
         let client_config = resolved_credentials.client_config;
 
@@ -845,7 +885,7 @@ impl DeploymentLoop {
         }
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
-        runner_result.map(|_| ()).map_err(|e| e.into_generic())
+        runner_result.map(|_| false).map_err(|e| e.into_generic())
     }
 
     async fn checkpoint_without_step(
@@ -1308,7 +1348,9 @@ mod tests {
     use crate::traits::deployment_store::{
         CreateDeploymentParams, DeploymentFilter, DeploymentRecord, SuppliedStacks,
     };
-    use crate::traits::{CredentialResolver, DeploymentStore, ResolvedCredentials, ServerBindings};
+    use crate::traits::{
+        CredentialResolver, DeploymentStore, ReleaseStore, ResolvedCredentials, ServerBindings,
+    };
     use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
     use alien_commands::{dispatchers::NullCommandDispatcher, InMemoryCommandRegistry};
     use async_trait::async_trait;
@@ -1354,7 +1396,10 @@ mod tests {
         }
     }
 
-    struct RuntimeOnlyCredentials;
+    #[derive(Default)]
+    struct RuntimeOnlyCredentials {
+        visits: Mutex<Vec<String>>,
+    }
 
     #[async_trait]
     impl CredentialResolver for RuntimeOnlyCredentials {
@@ -1371,6 +1416,7 @@ mod tests {
             &self,
             deployment: &DeploymentRecord,
         ) -> Result<ResolvedCredentials, AlienError> {
+            self.visits.lock().unwrap().push(deployment.id.clone());
             Ok(ResolvedCredentials {
                 client_config: self.resolve(deployment).await?,
                 has_provision_capability: false,
@@ -1435,6 +1481,12 @@ mod tests {
         assert_eq!(acquired.len(), 1);
         let mut item = acquired.remove(0);
         assert!(item.deployment.retry_requested);
+        let saved_error =
+            serde_json::to_value(alien_error::AlienError::new(alien_error::GenericError {
+                message: "Saved quota failure".to_string(),
+            }))
+            .unwrap();
+        item.deployment.error = Some(saved_error.clone());
         item.deployment.desired_release_id = Some("rel_test".to_string());
         item.deployment.supplied_stacks = Some(SuppliedStacks {
             desired: Some(
@@ -1461,9 +1513,9 @@ mod tests {
         let runner = DeploymentLoop::new(
             Arc::new(crate::config::ManagerConfig::default()),
             store.clone(),
-            Arc::new(SqliteReleaseStore::new(db)),
-            Arc::new(RuntimeOnlyCredentials),
-            bindings,
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(RuntimeOnlyCredentials::default()),
+            bindings.clone(),
             None,
         );
         runner
@@ -1480,6 +1532,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.status, "preflights-failed");
+        assert_eq!(stored.error, Some(saved_error));
         assert!(
             stored.retry_requested,
             "skipping setup must not consume the CLI's retry"
@@ -1496,6 +1549,96 @@ mod tests {
             "CLI must acquire after the incapable manager releases"
         );
         assert!(cli[0].deployment.retry_requested);
+        store
+            .release(
+                &caller,
+                &deployment.id,
+                "cli-session",
+                cli[0].execution_claim.clone(),
+            )
+            .await
+            .unwrap();
+        let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let release = releases
+            .create_release(
+                &caller,
+                crate::traits::release_store::CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([(
+                        Platform::Aws,
+                        serde_json::from_value(serde_json::json!({"id":"retry", "resources":{}}))
+                            .unwrap(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut ids = vec![deployment.id.clone()];
+        for index in 0..4 {
+            let other = store
+                .create_deployment(
+                    &caller,
+                    CreateDeploymentParams {
+                        name: format!("retry-race-{index}"),
+                        deployment_group_id: "dg_test".to_string(),
+                        platform: Platform::Aws,
+                        deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings {
+                            deployment_model: alien_core::DeploymentModel::Push,
+                            ..Default::default()
+                        },
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            ids.push(other.id);
+        }
+        for id in &ids {
+            db.execute(&format!("UPDATE deployments SET status = 'preflights-failed', desired_release_id = '{}' WHERE id = '{}'", release.id, id)).await.unwrap();
+            store.set_retry_requested(&caller, id).await.unwrap();
+        }
+        let credentials = Arc::new(RuntimeOnlyCredentials::default());
+        let runner = DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            releases,
+            credentials.clone(),
+            bindings,
+            None,
+        );
+        runner.tick().await;
+        let mut visits = credentials.visits.lock().unwrap().clone();
+        visits.sort();
+        ids.sort();
+        assert_eq!(
+            visits, ids,
+            "each queued retry must be visited once without starving the fifth deployment"
+        );
+        let filter = DeploymentFilter {
+            deployment_ids: Some(ids.clone()),
+            statuses: Some(vec!["preflights-failed".to_string()]),
+            ..Default::default()
+        };
+        let cli = store
+            .acquire(&caller, "cli-after-tick", &filter, 5)
+            .await
+            .unwrap();
+        assert_eq!(
+            cli.len(),
+            5,
+            "all skipped leases must be returned before tick exits"
+        );
+        assert!(cli.iter().all(|item| item.deployment.retry_requested));
     }
 
     /// A deployment that turned telemetry off gets no log endpoint from this manager, as the
