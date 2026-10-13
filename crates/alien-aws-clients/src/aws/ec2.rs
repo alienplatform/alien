@@ -23,7 +23,7 @@ use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use alien_error::ContextError;
+use alien_error::{AlienError, ContextError};
 use async_trait::async_trait;
 use bon::Builder;
 use form_urlencoded;
@@ -34,6 +34,9 @@ use std::collections::HashMap;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
+
+mod vpc_endpoints;
+pub use vpc_endpoints::*;
 
 // ---------------------------------------------------------------------------
 // EC2 Error Response Parsing
@@ -76,6 +79,20 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
     async fn create_vpc(&self, request: CreateVpcRequest) -> Result<CreateVpcResponse>;
     async fn delete_vpc(&self, vpc_id: &str) -> Result<()>;
     async fn modify_vpc_attribute(&self, request: ModifyVpcAttributeRequest) -> Result<()>;
+
+    // Interface VPC endpoints
+    async fn create_interface_vpc_endpoint(
+        &self,
+        request: CreateInterfaceVpcEndpointRequest,
+    ) -> Result<CreateVpcEndpointResponse>;
+    async fn describe_vpc_endpoints(
+        &self,
+        request: DescribeVpcEndpointsRequest,
+    ) -> Result<DescribeVpcEndpointsResponse>;
+    async fn delete_vpc_endpoints(
+        &self,
+        endpoint_ids: &[String],
+    ) -> Result<DeleteVpcEndpointsResponse>;
 
     // Subnet Operations
     async fn describe_subnets(
@@ -525,6 +542,10 @@ impl Ec2Client {
             // Resource not found errors
             "InvalidVpcID.NotFound" | "InvalidVpc.NotFound" => ErrorData::RemoteResourceNotFound {
                 resource_type: "VPC".into(),
+                resource_name: resource.into(),
+            },
+            "InvalidVpcEndpointId.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "VpcEndpoint".into(),
                 resource_name: resource.into(),
             },
             "InvalidSubnetID.NotFound" | "InvalidSubnet.NotFound" => {
@@ -1175,6 +1196,84 @@ impl Ec2Api for Ec2Client {
     // ---------------------------------------------------------------------------
     // NAT Gateway Operations
     // ---------------------------------------------------------------------------
+
+    async fn create_interface_vpc_endpoint(
+        &self,
+        request: CreateInterfaceVpcEndpointRequest,
+    ) -> Result<CreateVpcEndpointResponse> {
+        if request.client_token.is_empty()
+            || request.client_token.len() > 64
+            || !request.client_token.is_ascii()
+        {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                message: "An interface endpoint create requires a nonempty ASCII idempotency token of at most 64 bytes".into(),
+                field_name: Some("clientToken".into()),
+            }));
+        }
+        let mut form = HashMap::from([
+            ("Action".into(), "CreateVpcEndpoint".into()),
+            ("Version".into(), "2016-11-15".into()),
+            ("VpcEndpointType".into(), "Interface".into()),
+            ("VpcId".into(), request.vpc_id.clone()),
+            ("ServiceName".into(), request.service_name),
+            ("ClientToken".into(), request.client_token),
+            (
+                "PrivateDnsEnabled".into(),
+                request.private_dns_enabled.to_string(),
+            ),
+            ("PolicyDocument".into(), request.policy_document),
+        ]);
+        for (index, id) in request.subnet_ids.iter().enumerate() {
+            form.insert(format!("SubnetId.{}", index + 1), id.clone());
+        }
+        for (index, id) in request.security_group_ids.iter().enumerate() {
+            form.insert(format!("SecurityGroupId.{}", index + 1), id.clone());
+        }
+        if let Some(tags) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form, tags);
+        }
+        self.send_form(form, "CreateVpcEndpoint", &request.vpc_id)
+            .await
+    }
+
+    async fn describe_vpc_endpoints(
+        &self,
+        request: DescribeVpcEndpointsRequest,
+    ) -> Result<DescribeVpcEndpointsResponse> {
+        let mut form = HashMap::from([
+            ("Action".into(), "DescribeVpcEndpoints".into()),
+            ("Version".into(), "2016-11-15".into()),
+        ]);
+        for (index, id) in request.vpc_endpoint_ids.iter().flatten().enumerate() {
+            form.insert(format!("VpcEndpointId.{}", index + 1), id.clone());
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form, filters);
+        }
+        if let Some(limit) = request.max_results {
+            form.insert("MaxResults".into(), limit.to_string());
+        }
+        if let Some(token) = request.next_token {
+            form.insert("NextToken".into(), token);
+        }
+        self.send_form(form, "DescribeVpcEndpoints", "VpcEndpoint")
+            .await
+    }
+
+    async fn delete_vpc_endpoints(
+        &self,
+        endpoint_ids: &[String],
+    ) -> Result<DeleteVpcEndpointsResponse> {
+        let mut form = HashMap::from([
+            ("Action".into(), "DeleteVpcEndpoints".into()),
+            ("Version".into(), "2016-11-15".into()),
+        ]);
+        for (index, id) in endpoint_ids.iter().enumerate() {
+            form.insert(format!("VpcEndpointId.{}", index + 1), id.clone());
+        }
+        self.send_form(form, "DeleteVpcEndpoints", "VpcEndpoint")
+            .await
+    }
 
     async fn create_nat_gateway(
         &self,
@@ -4798,6 +4897,173 @@ mod tests {
     use crate::ServiceOverrides;
     use alien_core::{AwsClientConfig, AwsCredentials};
     use httpmock::prelude::*;
+
+    fn interface_endpoint_request() -> CreateInterfaceVpcEndpointRequest {
+        CreateInterfaceVpcEndpointRequest::builder()
+            .vpc_id("vpc-test".into())
+            .service_name("com.amazonaws.us-east-1.execute-api".into())
+            .subnet_ids(vec!["subnet-a".into(), "subnet-b".into()])
+            .security_group_ids(vec!["sg-test".into()])
+            .client_token("generation-1".into())
+            .private_dns_enabled(false)
+            .policy_document(r#"{"Version":"2012-10-17","Statement":[]}"#.into())
+            .tag_specifications(vec![TagSpecification::builder()
+                .resource_type("vpc-endpoint".into())
+                .tags(vec![Tag::builder()
+                    .key("Name".into())
+                    .value("generation-1".into())
+                    .build()])
+                .build()])
+            .build()
+    }
+
+    #[tokio::test]
+    async fn interface_endpoint_create_preserves_explicit_network_policy_and_ownership() {
+        let server = MockServer::start_async().await;
+        let create = server.mock(|when, then| {
+            when.method(POST).body_contains("Action=CreateVpcEndpoint")
+                .body_contains("VpcEndpointType=Interface").body_contains("VpcId=vpc-test")
+                .body_contains("ClientToken=generation-1").body_contains("PrivateDnsEnabled=false")
+                .body_contains("ServiceName=com.amazonaws.us-east-1.execute-api")
+                .body_contains("SubnetId.1=subnet-a").body_contains("SubnetId.2=subnet-b")
+                .body_contains("SecurityGroupId.1=sg-test")
+                .body_contains("PolicyDocument=%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%5D%7D")
+                .body_contains("TagSpecification.1.ResourceType=vpc-endpoint")
+                .body_contains("TagSpecification.1.Tag.1.Key=Name")
+                .body_contains("TagSpecification.1.Tag.1.Value=generation-1");
+            then.status(200).body(r#"<CreateVpcEndpointResponse>
+                <clientToken>generation-1</clientToken><vpcEndpoint>
+                <vpcEndpointId>vpce-test</vpcEndpointId><vpcEndpointType>Interface</vpcEndpointType>
+                <vpcId>vpc-test</vpcId><serviceName>com.amazonaws.us-east-1.execute-api</serviceName>
+                <state>pending</state><privateDnsEnabled>false</privateDnsEnabled>
+                <ownerId>123456789012</ownerId><requesterManaged>false</requesterManaged>
+                <subnetIdSet><item>subnet-a</item><item>subnet-b</item></subnetIdSet>
+                <networkInterfaceIdSet><item>eni-test</item></networkInterfaceIdSet>
+                <groupSet><item><groupId>sg-test</groupId></item></groupSet>
+                <dnsEntrySet><item><dnsName>vpce-test.execute-api.example.test</dnsName><hostedZoneId>ZTEST</hostedZoneId></item></dnsEntrySet>
+                <tagSet><item><key>Name</key><value>generation-1</value></item></tagSet>
+                </vpcEndpoint></CreateVpcEndpointResponse>"#);
+        });
+        let response = client(&server)
+            .create_interface_vpc_endpoint(interface_endpoint_request())
+            .await
+            .unwrap();
+        create.assert_hits(1);
+        assert_eq!(response.client_token.as_deref(), Some("generation-1"));
+        let endpoint = response.vpc_endpoint;
+        assert_eq!(endpoint.vpc_endpoint_id, "vpce-test");
+        assert_eq!(endpoint.state, "pending");
+        assert_eq!(endpoint.private_dns_enabled, Some(false));
+        assert_eq!(endpoint.owner_id.as_deref(), Some("123456789012"));
+        assert_eq!(endpoint.requester_managed, Some(false));
+        assert_eq!(
+            endpoint.subnet_id_set.unwrap().items,
+            ["subnet-a", "subnet-b"]
+        );
+        assert_eq!(
+            endpoint.network_interface_id_set.unwrap().items,
+            ["eni-test"]
+        );
+        assert_eq!(
+            endpoint.group_set.unwrap().items[0].group_id.as_deref(),
+            Some("sg-test")
+        );
+        assert_eq!(
+            endpoint.dns_entry_set.unwrap().items[0].dns_name,
+            "vpce-test.execute-api.example.test"
+        );
+        assert_eq!(endpoint.tag_set.unwrap().items[0].value, "generation-1");
+    }
+
+    #[tokio::test]
+    async fn interface_endpoint_discovery_preserves_page_tokens_and_delete_failures() {
+        let server = MockServer::start_async().await;
+        let describe = server.mock(|when, then| {
+            when.method(POST).body_contains("Action=DescribeVpcEndpoints")
+                .body_contains("VpcEndpointId.1=vpce-test").body_contains("NextToken=page-2")
+                .body_contains("MaxResults=5").body_contains("Filter.1.Name=vpc-id")
+                .body_contains("Filter.1.Value.1=vpc-test");
+            then.status(200).body("<DescribeVpcEndpointsResponse><vpcEndpointSet/><nextToken>page-3</nextToken></DescribeVpcEndpointsResponse>");
+        });
+        let response = client(&server)
+            .describe_vpc_endpoints(
+                DescribeVpcEndpointsRequest::builder()
+                    .vpc_endpoint_ids(vec!["vpce-test".into()])
+                    .next_token("page-2".into())
+                    .max_results(5)
+                    .filters(vec![Filter::builder()
+                        .name("vpc-id".into())
+                        .values(vec!["vpc-test".into()])
+                        .build()])
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert!(response.vpc_endpoint_set.items.is_empty());
+        assert_eq!(response.next_token.as_deref(), Some("page-3"));
+        describe.assert_hits(1);
+        let delete = server.mock(|when, then| {
+            when.method(POST).body_contains("Action=DeleteVpcEndpoints").body_contains("VpcEndpointId.1=vpce-test");
+            then.status(200).body("<DeleteVpcEndpointsResponse><unsuccessful><item><resourceId>vpce-test</resourceId><error><code>UnauthorizedOperation</code><message>denied</message></error></item></unsuccessful></DeleteVpcEndpointsResponse>");
+        });
+        let response = client(&server)
+            .delete_vpc_endpoints(&["vpce-test".into()])
+            .await
+            .unwrap();
+        assert_eq!(
+            response.unsuccessful.items.len(),
+            1,
+            "HTTP success is not deletion success"
+        );
+        assert_eq!(response.unsuccessful.items[0].resource_id, "vpce-test");
+        assert_eq!(
+            response.unsuccessful.items[0].error.code,
+            "UnauthorizedOperation"
+        );
+        delete.assert_hits(1);
+    }
+
+    #[tokio::test]
+    async fn interface_endpoint_create_requires_token_and_retries_with_the_same_token() {
+        let server = MockServer::start_async().await;
+        let create = server.mock(|when, then| {
+            when.method(POST).body_contains("Action=CreateVpcEndpoint").body_contains("ClientToken=generation-1");
+            then.status(503).body("<Response><Errors><Error><Code>Unavailable</Code><Message>uncertain create</Message></Error></Errors></Response>");
+        });
+        let mut request = interface_endpoint_request();
+        request.client_token.clear();
+        let error = client(&server)
+            .create_interface_vpc_endpoint(request)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_INPUT");
+        create.assert_hits(0);
+        let error = client(&server)
+            .create_interface_vpc_endpoint(interface_endpoint_request())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+        create.assert_hits(4);
+    }
+
+    #[tokio::test]
+    async fn interface_endpoint_native_absence_maps_to_not_found() {
+        let server = MockServer::start_async().await;
+        let describe = server.mock(|when, then| {
+            when.method(POST).body_contains("Action=DescribeVpcEndpoints");
+            then.status(400).body("<Response><Errors><Error><Code>InvalidVpcEndpointId.NotFound</Code><Message>absent</Message></Error></Errors></Response>");
+        });
+        let error = client(&server)
+            .describe_vpc_endpoints(
+                DescribeVpcEndpointsRequest::builder()
+                    .vpc_endpoint_ids(vec!["vpce-test".into()])
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
+        describe.assert_hits(1);
+    }
 
     #[tokio::test]
     async fn modify_volume_decodes_in_progress_conflict_from_aws_http_response() {
