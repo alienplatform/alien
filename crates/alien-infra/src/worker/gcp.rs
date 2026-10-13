@@ -6688,6 +6688,7 @@ mod tests {
         pub(super) objects: HashMap<(String, String), NetworkEndpointGroup>,
         pub(super) mutations: usize,
         pub(super) lose_create: bool,
+        pub(super) deny_recovery_reads: bool,
         deny_delete: bool,
     }
 
@@ -6695,11 +6696,18 @@ mod tests {
         let store = cloud.clone();
         mock.expect_get_region_network_endpoint_group()
             .returning(move |region, name| {
+                let store = store.lock().unwrap();
+                if store.deny_recovery_reads
+                    && !store.lose_create
+                    && store.objects.contains_key(&(region.clone(), name.clone()))
+                {
+                    return Err(AlienError::new(CloudClientErrorData::AuthenticationError {
+                        message: "NEG recovery read denied until explicit retry".to_string(),
+                    }));
+                }
                 store
-                    .lock()
-                    .unwrap()
                     .objects
-                    .get(&(region, name))
+                    .get(&(region, name.clone()))
                     .cloned()
                     .ok_or_else(|| {
                         AlienError::new(CloudClientErrorData::RemoteResourceNotFound {

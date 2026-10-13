@@ -10,6 +10,7 @@ pub(crate) struct Provider {
     pub(crate) objects: BTreeMap<String, Value>,
     pub(crate) mutations: usize,
     pub(crate) lose_backend_response: bool,
+    pub(crate) deny_backend_recovery_reads: bool,
     fail_certificate_delete: bool,
 }
 
@@ -28,6 +29,15 @@ fn read<T: DeserializeOwned>(
     name: &str,
 ) -> alien_client_core::Result<T> {
     let store = store.lock().unwrap();
+    if kind == "backend"
+        && store.deny_backend_recovery_reads
+        && !store.lose_backend_response
+        && store.objects.contains_key(&format!("{kind}/{name}"))
+    {
+        return Err(AlienError::new(ClientErrorData::AuthenticationError {
+            message: "backend recovery read denied until explicit retry".to_string(),
+        }));
+    }
     let value = store
         .objects
         .get(&format!("{kind}/{name}"))

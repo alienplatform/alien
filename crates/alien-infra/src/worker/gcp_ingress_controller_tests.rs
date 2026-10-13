@@ -37,6 +37,36 @@ enum Fault {
     LostBackendRetry,
     LostNegRetry,
     LegacyServiceHandoff,
+    LegacyGraphHandoff,
+}
+
+// Reconstruct the previous controller's persisted graph ownership and provider
+// descriptions from a real fixture graph, preserving every immutable child ID
+// and reference. Legacy workers used HTTPS backends and native public ingress.
+fn restore_legacy_https_graph(
+    controller: &mut GcpWorkerController,
+    cloud: &mut Provider,
+    id: &str,
+) {
+    let mut child = |kind: &str, description: &str| {
+        let (key, value) = cloud
+            .objects
+            .iter_mut()
+            .find(|(key, _)| key.starts_with(&format!("{kind}/")))
+            .unwrap();
+        value["description"] = serde_json::json!(format!("{description} {id}"));
+        if kind == "backend" {
+            value["protocol"] = serde_json::json!("HTTPS");
+        }
+        key.split_once('/').unwrap().1.to_string()
+    };
+    controller.backend_service_name = Some(child("backend", "Backend service for worker"));
+    controller.url_map_name = Some(child("url", "URL map for worker"));
+    controller.target_https_proxy_name = Some(child("proxy", "HTTPS proxy for worker"));
+    controller.global_address_name = Some(child("address", "Global IP for worker"));
+    controller.forwarding_rule_name = Some(child("frontend", "Forwarding rule for worker"));
+    controller.ssl_certificate_name = Some(child("certificate", "SSL certificate for worker"));
+    controller.global_address_ip = controller.ingress.public.as_ref().unwrap().address.clone();
 }
 
 #[rstest]
@@ -94,6 +124,16 @@ enum Fault {
     EndpointAccess::Both,
     Fault::LegacyServiceHandoff
 )]
+#[case::legacy_https_graph_adds_private(
+    EndpointAccess::Internet,
+    EndpointAccess::Both,
+    Fault::LegacyGraphHandoff
+)]
+#[case::legacy_https_graph_becomes_private(
+    EndpointAccess::Internet,
+    EndpointAccess::Private,
+    Fault::LegacyGraphHandoff
+)]
 #[tokio::test]
 async fn access_changes_preserve_service_revision_and_retained_frontends(
     #[case] initial: EndpointAccess,
@@ -103,8 +143,11 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
     let pending_dns = fault == Fault::PendingDns;
     let fail_then_delete = matches!(fault, Fault::LostBackendResponse | Fault::LostNegResponse);
     let retry_lost_response = matches!(fault, Fault::LostBackendRetry | Fault::LostNegRetry);
-    let expected_patches =
-        usize::from(!fail_then_delete && initial.internet_enabled() != desired.internet_enabled());
+    let expected_patches = usize::from(
+        !fail_then_delete
+            && (initial.internet_enabled() != desired.internet_enabled()
+                || fault == Fault::LegacyGraphHandoff),
+    );
     let services = Arc::new(Mutex::new(Services::default()));
     let mut run = MockCloudRunApi::new();
     let store = services.clone();
@@ -170,7 +213,9 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
     let graphs = Arc::new(Mutex::new(Provider::default()));
     graphs.lock().unwrap().lose_backend_response =
         matches!(fault, Fault::LostBackendResponse | Fault::LostBackendRetry);
+    graphs.lock().unwrap().deny_backend_recovery_reads = fault == Fault::LostBackendRetry;
     let negs = Arc::new(Mutex::new(NegCloud::default()));
+    negs.lock().unwrap().deny_recovery_reads = fault == Fault::LostNegRetry;
     negs.lock().unwrap().lose_create =
         matches!(fault, Fault::LostNegResponse | Fault::LostNegRetry);
     let mut compute = provider(&graphs);
@@ -219,7 +264,10 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
     let mut previous_worker = worker.clone();
     for (index, access) in [initial, desired].into_iter().enumerate() {
         if index == 1 {
-            if fault == Fault::LegacyServiceHandoff {
+            if matches!(
+                fault,
+                Fault::LegacyServiceHandoff | Fault::LegacyGraphHandoff
+            ) {
                 // Previous-version Cloud Run checkpoints and setup imports have
                 // no create token. Preserve their actual service identity on upgrade.
                 controller.service_owner = None;
@@ -235,6 +283,39 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                     .remove("alien-create-token");
                 controller =
                     serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            }
+            if fault == Fault::LegacyGraphHandoff {
+                restore_legacy_https_graph(
+                    &mut controller,
+                    &mut graphs.lock().unwrap(),
+                    &worker.id,
+                );
+                let mut cloud = negs.lock().unwrap();
+                assert_eq!(cloud.objects.len(), 1);
+                cloud.objects.values_mut().next().unwrap().description =
+                    Some(format!("Serverless NEG for worker {}", worker.id));
+                services.lock().unwrap().live.as_mut().unwrap().ingress =
+                    Some(CloudRunIngress::IngressTrafficAll);
+                retained = graphs
+                    .lock()
+                    .unwrap()
+                    .objects
+                    .iter()
+                    .filter(|(name, _)| name.starts_with("frontend/"))
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect();
+                // Remove fields absent from the old release, rather than saving
+                // a new owner alongside the old graph's ownership fields.
+                let mut checkpoint = serde_json::to_value(controller).unwrap();
+                for field in [
+                    "ingress",
+                    "ingressNegs",
+                    "serviceOwner",
+                    "nativePublicAccess",
+                ] {
+                    checkpoint.as_object_mut().unwrap().remove(field);
+                }
+                controller = serde_json::from_value(checkpoint).unwrap();
             }
             controller.state = GcpWorkerState::UpdateStart;
             if pending_dns {
@@ -280,39 +361,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             });
         }
         if fail_then_delete || retry_lost_response {
-            let mut failed = false;
-            for _ in 0..200 {
-                if executor.step().await.is_err() {
-                    failed = true;
-                    break;
-                }
-            }
-            assert!(failed, "lost backend response was not exercised");
-            if matches!(fault, Fault::LostBackendResponse | Fault::LostBackendRetry) {
-                assert!(!graphs.lock().unwrap().lose_backend_response);
-                assert!(graphs
-                    .lock()
-                    .unwrap()
-                    .objects
-                    .keys()
-                    .any(|name| name.starts_with("backend/")));
-            } else {
-                assert!(!negs.lock().unwrap().lose_create);
-                assert_eq!(negs.lock().unwrap().objects.len(), 1);
-            }
-            controller = serde_json::from_value(
-                serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap())
-                    .unwrap(),
-            )
-            .unwrap();
-            assert!(matches!(
-                controller.state,
-                GcpWorkerState::ReconcilingWorkerIngress
-            ));
             if retry_lost_response {
-                // Persist the actual post-mutation handler checkpoint as a terminal
-                // failure, then exercise the same retry -> plan -> step path as runtime.
-                // The single-controller harness itself has no failure/backoff storage.
                 let (mut stack, config, client_config) = executor.with_context(|ctx| {
                     (
                         ctx.desired_stack.clone(),
@@ -321,8 +370,11 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                     )
                 });
                 let mut state = executor.stack_state().clone();
-                // The generic harness labels explicit dependencies Live. In a
-                // deployment this network was handed off by setup as Frozen.
+                state.resources.get_mut(&worker.id).unwrap().config =
+                    stack.resources[&worker.id].config.clone();
+                state.resources.get_mut(&worker.id).unwrap().previous_config = None;
+                // The generic fixture labels explicit dependencies Live. Runtime
+                // receives this network from setup as Frozen.
                 stack
                     .resources
                     .get_mut("default-network")
@@ -333,16 +385,43 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                     .get_mut("default-network")
                     .unwrap()
                     .lifecycle = Some(ResourceLifecycle::Frozen);
-                let saved = state.resources.get_mut(&worker.id).unwrap();
-                saved
-                    .set_last_failed_controller(Some(Box::new(controller.clone())))
+                let runtime = StackExecutor::builder(&stack, client_config)
+                    .deployment_config(&config)
+                    .service_provider(provider.clone())
+                    .step_running_resources(false)
+                    .lifecycle_filter(vec![ResourceLifecycle::Live])
+                    .step_out_of_scope_resources(false)
+                    .build()
                     .unwrap();
-                let mut terminal = controller.clone();
-                terminal.transition_to_failure();
-                saved.status = terminal.get_status();
-                saved
-                    .set_internal_controller(Some(Box::new(terminal)))
-                    .unwrap();
+                // After the committed create's response is lost, recovery reads
+                // keep failing until the real executor exhausts its retry budget.
+                // It owns terminal and post-mutation resume checkpoint storage.
+                for _ in 0..200 {
+                    state = runtime.step(state).await.unwrap().next_state;
+                    if state.resources[&worker.id].status == ResourceStatus::ProvisionFailed {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    state.resources[&worker.id].status,
+                    ResourceStatus::ProvisionFailed
+                );
+                assert!(state.resources[&worker.id].error.is_some());
+                assert_eq!(state.resources[&worker.id].retry_attempt, 10);
+                graphs.lock().unwrap().deny_backend_recovery_reads = false;
+                negs.lock().unwrap().deny_recovery_reads = false;
+                let failed: GcpWorkerController = state.resources[&worker.id]
+                    .get_last_failed_controller()
+                    .unwrap()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<GcpWorkerController>()
+                    .unwrap()
+                    .clone();
+                assert!(matches!(
+                    failed.state,
+                    GcpWorkerState::ReconcilingWorkerIngress
+                ));
                 state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
                 assert_eq!(state.retry_failed().unwrap(), vec![worker.id.clone()]);
                 let resumed = state.resources[&worker.id]
@@ -352,14 +431,6 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                     resumed.state,
                     GcpWorkerState::ReconcilingWorkerIngress
                 ));
-                let runtime = StackExecutor::builder(&stack, client_config)
-                    .deployment_config(&config)
-                    .service_provider(provider.clone())
-                    .step_running_resources(false)
-                    .lifecycle_filter(vec![ResourceLifecycle::Live])
-                    .step_out_of_scope_resources(false)
-                    .build()
-                    .unwrap();
                 let plan = runtime.plan(&state).unwrap();
                 assert!(plan.creates.is_empty());
                 assert!(
@@ -390,6 +461,36 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                 );
                 assert_eq!(services.lock().unwrap().creates, 1);
                 assert_eq!(services.lock().unwrap().patches, 0);
+            } else {
+                let mut failed = false;
+                for _ in 0..200 {
+                    if executor.step().await.is_err() {
+                        failed = true;
+                        break;
+                    }
+                }
+                assert!(failed, "lost create response was not exercised");
+                controller = serde_json::from_value(
+                    serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(matches!(
+                    controller.state,
+                    GcpWorkerState::ReconcilingWorkerIngress
+                ));
+            }
+            if matches!(fault, Fault::LostBackendResponse | Fault::LostBackendRetry) {
+                assert!(!graphs.lock().unwrap().lose_backend_response);
+                assert!(graphs
+                    .lock()
+                    .unwrap()
+                    .objects
+                    .keys()
+                    .any(|name| name.starts_with("backend/")));
+            } else {
+                assert!(!negs.lock().unwrap().lose_create);
+                assert_eq!(negs.lock().unwrap().objects.len(), 1);
             }
             break;
         }
