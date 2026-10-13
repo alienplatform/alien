@@ -504,11 +504,7 @@ async fn proxy_push(
         let mut query = query;
         // Mount parameters apply only to the upload-init POST.
         if method == axum::http::Method::POST && oci.rest == "blobs/uploads/" {
-            if let Err(refused) =
-                restrict_mount_source(&state, &subject, &oci.repo, &mut query).await
-            {
-                return refused;
-            }
+            restrict_mount_source(&state, &subject, &oci.repo, &mut query).await;
         } else {
             strip_mount_params(&mut query);
         }
@@ -536,14 +532,14 @@ const MOUNT_ORIGIN_PARAM: &str = "origin";
 
 /// A mount is forwarded only when `mount` is a valid digest and `from` names a repository on the
 /// target's registry route that the caller may pull. `origin` is always dropped: the upstream
-/// resolves `from` among its own repositories. A refused source stops the request before upstream.
-/// Malformed mount parameters become a plain upload, as the registry does after a failed mount.
+/// resolves `from` among its own repositories. Any other mount is forwarded as a plain upload, as
+/// the registry does after a failed mount.
 async fn restrict_mount_source(
     state: &AppState,
     subject: &Subject,
     repo_name: &str,
     query: &mut HashMap<String, String>,
-) -> Result<(), Response> {
+) {
     // Only the spec's lowercase keys are checked, so other casings are dropped first.
     strip_mount_params_except(query, &[MOUNT_PARAM, MOUNT_SOURCE_PARAM]);
     let source = match (query.get(MOUNT_PARAM), query.get(MOUNT_SOURCE_PARAM)) {
@@ -559,12 +555,21 @@ async fn restrict_mount_source(
         }
         _ => None,
     };
-    if let Some(source) = source {
-        validate_pull_access(state, subject, &source).await?;
-    } else {
+    let pullable = match source {
+        Some(source) => match validate_pull_access(state, subject, &source).await {
+            Ok(()) => true,
+            Err(refused) => {
+                if refused.status().is_server_error() {
+                    warn!(%source, status = %refused.status(), "Mount source check failed; forwarding a plain upload");
+                }
+                false
+            }
+        },
+        None => false,
+    };
+    if !pullable {
         strip_mount_params(query);
     }
-    Ok(())
 }
 
 /// Whether `source` is a valid repository name on the same registry route as `repo_name`.
