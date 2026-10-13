@@ -1,7 +1,10 @@
 use super::CloudRunTestContext;
 use alien_client_core::ErrorData;
-use alien_gcp_clients::cloudrun::{CloudRunApi, Ingress, Service};
+use alien_gcp_clients::cloudrun::{CloudRunApi, CloudRunClient, Ingress, Service};
 use alien_gcp_clients::longrunning::{Operation, OperationResult};
+use alien_gcp_clients::{
+    GcpClientConfig, GcpClientConfigExt, GcpCredentials, GcpImpersonationConfig,
+};
 use reqwest::Client;
 use std::{collections::HashMap, env, time::Duration};
 use test_context::test_context;
@@ -133,7 +136,36 @@ async fn access_only_updates_preserve_identity_revision_and_fence_stale_writes(
     // Do not use the context's unconditional name-based fallback cleanup. A
     // replacement must never be deleted after this test's identity check fails.
     let observed: Result<(), String> = async {
+        if let Ok(email) = env::var("ALIEN_TEST_CLOUDRUN_RUNTIME_SERVICE_ACCOUNT") {
+            let source = GcpClientConfig {
+                project_id: ctx.project_id.clone(), region: ctx.location.clone(),
+                credentials: GcpCredentials::ServiceAccountKey {
+                    json: env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").map_err(|error| error.to_string())?,
+                },
+                service_overrides: None, project_number: None,
+            };
+            let runtime = source.impersonate(GcpImpersonationConfig {
+                service_account_email: email, ..Default::default()
+            }).await.map_err(|error| error.to_string())?;
+            // All Cloud Run commands, polls and cleanup below use the restricted
+            // identity. Source credentials only mint its refreshable token.
+            ctx.client = CloudRunClient::new(Client::new(), runtime.clone());
+            let bearer = runtime.get_bearer_token("https://cloudresourcemanager.googleapis.com/")
+                .await.map_err(|error| error.to_string())?;
+            let status = Client::builder().timeout(Duration::from_secs(10)).build()
+                .map_err(|error| error.to_string())?
+                .post(format!("https://cloudresourcemanager.googleapis.com/v1/projects/{}:getIamPolicy", ctx.project_id))
+                .bearer_auth(bearer).json(&serde_json::json!({})).send().await
+                .map_err(|error| error.to_string())?.status();
+            if status.as_u16() != 403 {
+                return Err(format!("Restricted runtime project IAM read expected403, got {status}"));
+            }
+            println!("Verified restricted runtime cannot read project IAM policy");
+        }
         let mut service = ctx.create_basic_service(name.clone());
+        if let Ok(email) = env::var("ALIEN_TEST_CLOUDRUN_EXECUTION_SERVICE_ACCOUNT") {
+            service.template.as_mut().ok_or("Probe service has no template")?.service_account = Some(email);
+        }
         service.ingress = Some(Ingress::IngressTrafficAll);
         service.invoker_iam_disabled = Some(true);
         service.labels = Some(HashMap::from([
