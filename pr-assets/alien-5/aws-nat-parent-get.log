@@ -1,0 +1,9 @@
+$ alien deployments get <deployment>
+Showing deployment q5-vpc
+ID [ID REDACTED]
+Status initial-setup
+Platform aws
+Group [ID REDACTED]
+Created 2026-10-13T18:38:29.004038842+00:00
+Updated 2026-10-13T18:41:40.793377976+00:00
+Desired release [ID REDACTED]

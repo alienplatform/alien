@@ -1,0 +1,19 @@
+{
+  "productionCommit": "aa42e2f38f988ce3bd905ef47b7ee4056dc46a3c",
+  "statusAtBound": "initial-setup",
+  "providerError": "NatGatewayLimitExceeded",
+  "retryable": true,
+  "observedRetryAttempt": 5,
+  "retryExhaustionObserved": false,
+  "cloudObjectCounts": {
+    "Vpcs": 1,
+    "InternetGateways": 1,
+    "Subnets": 4,
+    "RouteTables": 2,
+    "Addresses": 1,
+    "NatGateways": 0,
+    "SecurityGroups": 0
+  },
+  "deployCliInterrupted": true,
+  "getCliShowsQuotaDiagnostic": false
+}
