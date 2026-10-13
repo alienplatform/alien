@@ -1,0 +1,45 @@
+{
+  "status": "preflights-failed",
+  "error": {
+    "code": "PREFLIGHT_CHECKS_FAILED",
+    "message": "Preflight checks failed",
+    "source": {
+      "code": "VALIDATION_FAILED",
+      "message": "Validation failed with 1 errors and 0 warnings",
+      "context": {
+        "error_count": 1,
+        "warning_count": 0,
+        "results": [
+          {
+            "checkDescription": "Cloud quotas have room for additional deployment demand",
+            "code": "CLOUD_QUOTAS",
+            "errors": [
+              "EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): used 5, applied limit 5, additional needed 1. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3"
+            ],
+            "quotaResults": [
+              {
+                "outcome": {
+                  "limit": 5.0,
+                  "needed": 1.0,
+                  "status": "fail",
+                  "used": 5.0
+                },
+                "quota": {
+                  "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3",
+                  "name": "EC2-VPC Elastic IP addresses per Region",
+                  "platform": "aws",
+                  "providerId": "L-0263D0A3",
+                  "scope": "eu-west-1",
+                  "service": "ec2"
+                }
+              }
+            ],
+            "status": "failed",
+            "success": false,
+            "warnings": []
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "deployExitCode": 0,
+  "destroyExitCode": 0,
+  "sameSavedRecordSucceeded": true,
+  "taggedResourcesAbsent": true,
+  "activeNatGateways": 0,
+  "awsRetainedDeletedNatRecords": 3,
+  "eipFillersDeletedAndVerified": 5,
+  "baselineIdentitySets": {
+    "Vpcs": {
+      "before": [
+        "baseline-vpcs-1"
+      ],
+      "after": [
+        "baseline-vpcs-1"
+      ]
+    },
+    "InternetGateways": {
+      "before": [
+        "baseline-internetgateways-1"
+      ],
+      "after": [
+        "baseline-internetgateways-1"
+      ]
+    },
+    "Addresses": {
+      "before": [],
+      "after": []
+    }
+  }
+}
