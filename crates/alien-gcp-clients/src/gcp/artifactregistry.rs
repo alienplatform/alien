@@ -287,7 +287,13 @@ impl ArtifactRegistryApi for ArtifactRegistryClient {
         );
 
         self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &repository_id)
+            .execute_request(
+                Method::GET,
+                &path,
+                Some(vec![("options.requestedPolicyVersion", "3".to_string())]),
+                Option::<()>::None,
+                &repository_id,
+            )
             .await
     }
 

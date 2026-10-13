@@ -1002,6 +1002,7 @@ mod tests {
             }
             let repository = path.rsplit('/').next().unwrap();
             if let Some(name) = repository.strip_suffix(":getIamPolicy") {
+                assert_eq!(uri.query(), Some("options.requestedPolicyVersion=3"));
                 return (StatusCode::OK, Json(state.policies.get(name).cloned().unwrap_or(json!({"etag":"original", "bindings":[{"role":"roles/viewer", "members":["user:keep@example.com"]}]}))));
             }
             if let Some(name) = repository.strip_suffix(":setIamPolicy") {
