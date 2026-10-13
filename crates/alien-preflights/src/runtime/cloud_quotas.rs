@@ -6,8 +6,8 @@ use crate::quotas::{
 };
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
-    ec2::DescribeVpcsRequest, AwsCredentialProvider, Ec2Api, Ec2Client, ServiceQuotasApi,
-    ServiceQuotasClient,
+    ec2::{DescribeInternetGatewaysRequest, DescribeVpcsRequest},
+    AwsCredentialProvider, Ec2Api, Ec2Client, ServiceQuotasApi, ServiceQuotasClient,
 };
 use alien_core::{
     ClientConfig, DeploymentConfig, Network, NetworkOutputs, NetworkSettings, Platform,
@@ -52,62 +52,155 @@ impl RuntimeCheck for CloudQuotasCheck {
             result.status = Some(CheckStatus::Unknown);
             return Ok(result);
         };
-        let identity = QuotaIdentity {
-            platform: Platform::Aws,
-            service: "vpc".into(),
-            provider_id: "L-F678F1CE".into(),
-            name: "VPCs per Region".into(),
-            scope: config.region.clone(),
-            increase_url: format!(
-                "https://{}.console.aws.amazon.com/servicequotas/home?region={}#!/services/vpc/quotas/L-F678F1CE",
-                config.region, config.region,
+        let demands = [
+            (
+                "L-F678F1CE",
+                "VPCs per Region",
+                vpc_demand(stack, stack_state),
             ),
-        };
-        let Some(demand) = vpc_demand(stack, stack_state) else {
-            record(
-                &mut result,
-                QuotaResult {
-                    quota: identity,
-                    outcome: QuotaOutcome::Unknown {
-                        reason: "a network is partially provisioned; held VPC demand is uncertain"
-                            .into(),
-                    },
-                },
-            );
-            return Ok(result);
-        };
-        // A no-op needs no cloud read, even when the account is already full.
-        if demand.additional() == Some(0.0) {
+            (
+                "L-A4707A72",
+                "Internet gateways per Region",
+                internet_gateway_demand(stack, stack_state),
+            ),
+        ];
+        if demands
+            .iter()
+            .all(|(_, _, demand)| demand.is_some_and(|demand| demand.additional() == Some(0.0)))
+        {
             return Ok(result);
         }
         let credentials = match AwsCredentialProvider::from_config(config.clone()).await {
             Ok(credentials) => credentials,
             Err(_) => {
-                record(
-                    &mut result,
-                    QuotaResult {
-                        quota: identity,
-                        outcome: QuotaOutcome::Unknown {
-                            reason: "could not initialize AWS quota read credentials".into(),
+                for (code, name, demand) in demands {
+                    if demand.is_some_and(|demand| demand.additional() == Some(0.0)) {
+                        continue;
+                    }
+                    record(
+                        &mut result,
+                        QuotaResult {
+                            quota: network_quota_identity(&config.region, code, name),
+                            outcome: QuotaOutcome::Unknown {
+                                reason: "could not initialize AWS quota read credentials".into(),
+                            },
                         },
-                    },
-                );
+                    );
+                }
                 return Ok(result);
             }
         };
         let client = reqwest::Client::new();
         let ec2 = Ec2Client::new(client.clone(), credentials.clone());
         let quotas = ServiceQuotasClient::new(client, credentials);
-        let observation = read_vpc_observation(&ec2, &quotas).await;
-        record(
-            &mut result,
-            QuotaResult {
-                quota: identity,
-                outcome: evaluate(demand, observation),
-            },
-        );
+        for (code, name, demand) in demands {
+            if demand.is_some_and(|demand| demand.additional() == Some(0.0)) {
+                continue;
+            }
+            let outcome = match demand {
+                Some(demand) => {
+                    let observation = if code == "L-F678F1CE" {
+                        read_vpc_observation(&ec2, &quotas).await
+                    } else {
+                        read_internet_gateway_observation(&ec2, &quotas).await
+                    };
+                    evaluate(demand, observation)
+                }
+                None => QuotaOutcome::Unknown {
+                    reason: "a network is partially provisioned; held quota demand is uncertain"
+                        .into(),
+                },
+            };
+            record(
+                &mut result,
+                QuotaResult {
+                    quota: network_quota_identity(&config.region, code, name),
+                    outcome,
+                },
+            );
+        }
         Ok(result)
     }
+}
+
+fn network_quota_identity(region: &str, code: &str, name: &str) -> QuotaIdentity {
+    QuotaIdentity {
+        platform: Platform::Aws,
+        service: "vpc".into(),
+        provider_id: code.into(),
+        name: name.into(),
+        scope: region.into(),
+        increase_url: format!("https://{region}.console.aws.amazon.com/servicequotas/home?region={region}#!/services/vpc/quotas/{code}"),
+    }
+}
+
+/// A complete managed network holds one IGW. A VPC output alone does not prove that
+/// the later gateway create succeeded, so partial setup remains non-blocking Unknown.
+fn internet_gateway_demand(stack: &Stack, state: &StackState) -> Option<QuotaDemand> {
+    let demand = vpc_demand(stack, state)?;
+    for (id, entry) in &stack.resources {
+        if !entry
+            .config
+            .downcast_ref::<Network>()
+            .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
+        {
+            continue;
+        }
+        if let Some(current) = state.resources.get(id) {
+            if current.status != ResourceStatus::Deleted
+                && current.outputs.is_some()
+                && current.status != ResourceStatus::Running
+            {
+                return None;
+            }
+        }
+    }
+    Some(demand)
+}
+
+async fn read_internet_gateway_observation(
+    ec2: &dyn Ec2Api,
+    quotas: &dyn ServiceQuotasApi,
+) -> Option<QuotaObservation> {
+    let quota = quotas
+        .get_service_quota("vpc", "L-A4707A72")
+        .await
+        .ok()?
+        .quota?;
+    if quota.quota_code.as_deref() != Some("L-A4707A72")
+        || quota.service_code.as_deref() != Some("vpc")
+    {
+        return None;
+    }
+    let limit = quota.value?;
+    let mut identities = HashSet::new();
+    let mut next_token = None;
+    let mut seen_tokens = HashSet::new();
+    loop {
+        let response = ec2
+            .describe_internet_gateways(DescribeInternetGatewaysRequest {
+                next_token,
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        for gateway in response.internet_gateway_set?.items {
+            let id = gateway.internet_gateway_id.filter(|id| !id.is_empty())?;
+            if !identities.insert(id) {
+                return None;
+            }
+        }
+        next_token = response.next_token.filter(|token| !token.is_empty());
+        match &next_token {
+            None => break,
+            Some(token) if !seen_tokens.insert(token.clone()) => return None,
+            Some(_) => {}
+        }
+    }
+    Some(QuotaObservation {
+        used: identities.len() as f64,
+        limit,
+    })
 }
 
 /// Demand derives from OSS config; only proven held objects receive credit.
@@ -215,7 +308,7 @@ fn record(result: &mut CheckResult, quota_result: QuotaResult) {
 mod tests {
     use super::*;
     use alien_aws_clients::{
-        ec2::{DescribeVpcsResponse, MockEc2Api},
+        ec2::{DescribeInternetGatewaysResponse, DescribeVpcsResponse, MockEc2Api},
         service_quotas::{GetServiceQuotaResponse, MockServiceQuotasApi},
     };
     use alien_core::{ResourceLifecycle, ResourceOutputs, StackResourceState};
@@ -319,6 +412,122 @@ mod tests {
             Some(observation)
         )
         .blocks());
+    }
+
+    #[tokio::test]
+    async fn internet_gateway_usage_includes_detached_gateways_and_all_pages() {
+        let mut quotas = MockServiceQuotasApi::new();
+        quotas
+            .expect_get_service_quota()
+            .times(1)
+            .withf(|service, code| service == "vpc" && code == "L-A4707A72")
+            .returning(|_, _| {
+                Ok(serde_json::from_str::<GetServiceQuotaResponse>(
+                    r#"{"Quota":{"ServiceCode":"vpc","QuotaCode":"L-A4707A72","Value":2}}"#,
+                )
+                .unwrap())
+            });
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_internet_gateways().times(1)
+            .withf(|request| request.next_token.is_none())
+            .returning(|_| Ok(serde_json::from_str::<DescribeInternetGatewaysResponse>(
+                r#"{"internetGatewaySet":{"item":[{"internetGatewayId":"igw-attached","attachmentSet":{"item":[{"vpcId":"vpc-a","state":"available"}]}}]},"nextToken":"two"}"#
+            ).unwrap()));
+        ec2.expect_describe_internet_gateways()
+            .times(1)
+            .withf(|request| request.next_token.as_deref() == Some("two"))
+            .returning(|_| {
+                Ok(serde_json::from_str::<DescribeInternetGatewaysResponse>(
+                    r#"{"internetGatewaySet":{"item":[{"internetGatewayId":"igw-detached"}]}}"#,
+                )
+                .unwrap())
+            });
+        assert_eq!(
+            read_internet_gateway_observation(&ec2, &quotas).await,
+            Some(QuotaObservation {
+                used: 2.0,
+                limit: 2.0
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn incomplete_or_repeated_gateway_pages_are_unknown() {
+        for response in [
+            r#"{}"#,
+            r#"{"internetGatewaySet":{"item":[{}]}}"#,
+            r#"{"internetGatewaySet":{"item":[{"internetGatewayId":"igw-a"},{"internetGatewayId":"igw-a"}]}}"#,
+            r#"{"internetGatewaySet":{"item":[]},"nextToken":"repeated"}"#,
+        ] {
+            let mut quotas = MockServiceQuotasApi::new();
+            quotas.expect_get_service_quota().returning(|_, _| {
+                Ok(serde_json::from_str::<GetServiceQuotaResponse>(
+                    r#"{"Quota":{"ServiceCode":"vpc","QuotaCode":"L-A4707A72","Value":2}}"#,
+                )
+                .unwrap())
+            });
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_describe_internet_gateways().returning(move |_| {
+                Ok(serde_json::from_str::<DescribeInternetGatewaysResponse>(response).unwrap())
+            });
+            assert!(read_internet_gateway_observation(&ec2, &quotas)
+                .await
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn gateway_credit_requires_completed_network_and_shortfalls_accumulate() {
+        let stack = stack();
+        let mut state = StackState::new(Platform::Aws);
+        assert_eq!(
+            internet_gateway_demand(&stack, &state)
+                .unwrap()
+                .additional(),
+            Some(1.0)
+        );
+        let mut current = StackResourceState::new_pending(
+            "network".into(),
+            stack.resources["network"].config.clone(),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Provisioning;
+        current.outputs = Some(ResourceOutputs::new(NetworkOutputs {
+            network_id: "vpc-test".into(),
+            availability_zones: 2,
+            has_public_subnets: true,
+            has_nat_gateway: false,
+            cidr: None,
+        }));
+        state.resources.insert("network".into(), current);
+        assert!(internet_gateway_demand(&stack, &state).is_none());
+        state.resources.get_mut("network").unwrap().status = ResourceStatus::Running;
+        assert_eq!(
+            internet_gateway_demand(&stack, &state)
+                .unwrap()
+                .additional(),
+            Some(0.0)
+        );
+        let mut result = CheckResult::success();
+        for (code, name) in [("L-F678F1CE", "VPCs"), ("L-A4707A72", "Internet gateways")] {
+            record(
+                &mut result,
+                QuotaResult {
+                    quota: network_quota_identity("eu-west-1", code, name),
+                    outcome: QuotaOutcome::Fail {
+                        used: 5.0,
+                        limit: 5.0,
+                        needed: 1.0,
+                    },
+                },
+            );
+        }
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 2);
+        assert_eq!(result.quota_results.len(), 2);
+        assert!(result.errors[0].contains("L-F678F1CE"));
+        assert!(result.errors[1].contains("L-A4707A72"));
     }
 
     #[tokio::test]
