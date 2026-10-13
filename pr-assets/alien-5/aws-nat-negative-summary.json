@@ -1,0 +1,8 @@
+{
+  "status": "initial-setup-failed",
+  "quota": "L-FE5A380F",
+  "scope": "eu-west-1a",
+  "networkVpcCreated": false,
+  "vpcIgwSubnetEipSetsUnchanged": true,
+  "deploymentWideZeroCreationClaimed": false
+}

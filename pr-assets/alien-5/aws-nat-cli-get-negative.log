@@ -1,0 +1,12 @@
+$ alien deployments get <deployment>
+Showing deployment q5-vpc
+ID [ID REDACTED]
+Status initial-setup-failed
+Platform aws
+Group [ID REDACTED]
+Created 2026-10-13T18:37:21.240482702+00:00
+Updated 2026-10-13T18:37:26.729883970+00:00
+Desired release [ID REDACTED]
+Deployment failed: 1 resource error(s), 0 interrupted, 1 total
+Failed resources:
+  - default-network: Cloud quota exceeded: NAT gateways per Availability Zone (L-FE5A380F, eu-west-1 / eu-west-1a): used 5, applied limit 5, additional demand 1. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-FE5A380F.
