@@ -1,0 +1,10 @@
+Read-only Compute Engine reader/evaluator probe
+Implementation b7e4b0bef · region us-east4
+$ cargo run -p alien-preflights --features runtime-checks --example q5_gcp_probe
+
+CPUS_ALL_REGIONS ([project]): unknown; current usage or applied quota is unavailable
+N2_CPUS ([project]/us-east4): pass; used 0, applied limit 200, needed 2
+
+N2 quota passed; absent global metric warned without blocking.
+No cloud writes or quota overrides. This probe does not deploy a stack.
+Target OAuth token used with sandbox CA trusted explicitly.
