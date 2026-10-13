@@ -36,6 +36,14 @@ pub trait LoadBalancerApi: Send + Sync + std::fmt::Debug {
         load_balancer: &LoadBalancer,
     ) -> Result<LoadBalancerOperationResult>;
 
+    /// Create a new resource without overwriting an existing generation.
+    async fn create_load_balancer_if_absent(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancer: &LoadBalancer,
+    ) -> Result<LoadBalancerOperationResult>;
+
     /// Get a load balancer by name
     async fn get_load_balancer(
         &self,
@@ -100,6 +108,53 @@ pub struct AzureLoadBalancerClient {
 }
 
 impl AzureLoadBalancerClient {
+    async fn write_load_balancer(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancer: &LoadBalancer,
+        create_only: bool,
+    ) -> Result<LoadBalancerOperationResult> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url =
+            self.base.build_url(
+                &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
+                &self.token_cache.config().subscription_id, resource_group_name, load_balancer_name
+            ),
+                Some(vec![("api-version", Self::API_VERSION.into())]),
+            );
+
+        let body = serde_json::to_string(load_balancer)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Failed to serialize load balancer: {}", load_balancer_name),
+            })?;
+
+        let mut builder = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        if create_only {
+            builder = builder.header("If-None-Match", "*");
+        }
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdateLoadBalancer",
+                load_balancer_name,
+            )
+            .await
+    }
+
     /// API version for Azure Load Balancer resources
     const API_VERSION: &'static str = "2024-05-01";
 
@@ -258,43 +313,24 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
         load_balancer_name: &str,
         load_balancer: &LoadBalancer,
     ) -> Result<LoadBalancerOperationResult> {
-        let bearer_token = self
-            .token_cache
-            .get_bearer_token_with_scope("https://management.azure.com/.default")
-            .await?;
-
-        let url =
-            self.base.build_url(
-                &format!(
-                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, load_balancer_name
-            ),
-                Some(vec![("api-version", Self::API_VERSION.into())]),
-            );
-
-        let body = serde_json::to_string(load_balancer)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
-                message: format!("Failed to serialize load balancer: {}", load_balancer_name),
-            })?;
-
-        let builder = AzureRequestBuilder::new(Method::PUT, url)
-            .content_type_json()
-            .content_length(&body)
-            .body(body);
-
-        let req = builder.build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
-
-        self.base
-            .execute_request_with_long_running_support(
-                signed,
-                "CreateOrUpdateLoadBalancer",
-                load_balancer_name,
-            )
-            .await
+        self.write_load_balancer(
+            resource_group_name,
+            load_balancer_name,
+            load_balancer,
+            false,
+        )
+        .await
     }
 
+    async fn create_load_balancer_if_absent(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancer: &LoadBalancer,
+    ) -> Result<LoadBalancerOperationResult> {
+        self.write_load_balancer(resource_group_name, load_balancer_name, load_balancer, true)
+            .await
+    }
     async fn get_load_balancer(
         &self,
         resource_group_name: &str,
@@ -450,6 +486,12 @@ mod tests {
                 .query_param("api-version", "2024-05-01").header("If-Match", "W/\"snapshot\"");
             then.status(412).json_body(json!({"error":{"code":"PreconditionFailed", "message":"Snapshot changed"}}));
         }).await;
+        let create = server.mock_async(|when, then| {
+            when.method(PUT).path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb")
+                .query_param("api-version", "2024-05-01").header("If-None-Match", "*")
+                .header("Authorization", "Bearer test-token");
+            then.status(412).json_body(json!({"error":{"code":"PreconditionFailed","message":"Resource already exists"}}));
+        }).await;
         let config = AzureClientConfig {
             subscription_id: "sub".to_string(),
             tenant_id: "tenant".to_string(),
@@ -493,6 +535,19 @@ mod tests {
             "{deletion}"
         );
         assert!(!deletion.retryable);
+        let creation = client
+            .create_load_balancer_if_absent("rg", "lb", &LoadBalancer::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                creation.error,
+                Some(ErrorData::RemoteResourceConflict { .. })
+            ),
+            "{creation}"
+        );
+        assert!(!creation.retryable);
+        create.assert_hits_async(1).await;
         delete.assert_hits_async(1).await;
         read.assert_hits_async(1).await;
         write.assert_hits_async(1).await;

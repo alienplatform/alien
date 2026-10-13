@@ -160,6 +160,14 @@ pub trait NetworkApi: Send + Sync + std::fmt::Debug {
         public_ip_address: &PublicIpAddress,
     ) -> Result<PublicIpAddressOperationResult>;
 
+    /// Create a new resource without overwriting an existing generation.
+    async fn create_public_ip_address_if_absent(
+        &self,
+        resource_group_name: &str,
+        public_ip_address_name: &str,
+        public_ip_address: &PublicIpAddress,
+    ) -> Result<PublicIpAddressOperationResult>;
+
     /// Get a public IP address by name
     async fn get_public_ip_address(
         &self,
@@ -225,6 +233,53 @@ pub struct AzureNetworkClient {
 }
 
 impl AzureNetworkClient {
+    async fn write_public_ip_address(
+        &self,
+        resource_group_name: &str,
+        public_ip_address_name: &str,
+        public_ip_address: &PublicIpAddress,
+        create_only: bool,
+    ) -> Result<PublicIpAddressOperationResult> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}",
+                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+
+        let body = serde_json::to_string(public_ip_address)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize public IP address: {}",
+                    public_ip_address_name
+                ),
+            })?;
+
+        let mut builder = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        if create_only {
+            builder = builder.header("If-None-Match", "*");
+        }
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdatePublicIpAddress",
+                public_ip_address_name,
+            )
+            .await
+    }
+
     async fn delete_public_ip_address_with_etag(
         &self,
         resource_group_name: &str,
@@ -237,7 +292,7 @@ impl AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -296,7 +351,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -338,7 +393,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -427,7 +482,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -463,7 +518,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name, subnet_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -499,7 +554,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name, subnet_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -553,7 +608,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/virtualNetworks/{}/subnets/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, virtual_network_name, subnet_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -713,43 +768,29 @@ impl NetworkApi for AzureNetworkClient {
         public_ip_address_name: &str,
         public_ip_address: &PublicIpAddress,
     ) -> Result<PublicIpAddressOperationResult> {
-        let bearer_token = self
-            .token_cache
-            .get_bearer_token_with_scope("https://management.azure.com/.default")
-            .await?;
-
-        let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
-                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
-
-        let body = serde_json::to_string(public_ip_address)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
-                message: format!(
-                    "Failed to serialize public IP address: {}",
-                    public_ip_address_name
-                ),
-            })?;
-
-        let builder = AzureRequestBuilder::new(Method::PUT, url)
-            .content_type_json()
-            .content_length(&body)
-            .body(body);
-
-        let req = builder.build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
-
-        self.base
-            .execute_request_with_long_running_support(
-                signed,
-                "CreateOrUpdatePublicIpAddress",
-                public_ip_address_name,
-            )
-            .await
+        self.write_public_ip_address(
+            resource_group_name,
+            public_ip_address_name,
+            public_ip_address,
+            false,
+        )
+        .await
     }
 
+    async fn create_public_ip_address_if_absent(
+        &self,
+        resource_group_name: &str,
+        public_ip_address_name: &str,
+        public_ip_address: &PublicIpAddress,
+    ) -> Result<PublicIpAddressOperationResult> {
+        self.write_public_ip_address(
+            resource_group_name,
+            public_ip_address_name,
+            public_ip_address,
+            true,
+        )
+        .await
+    }
     async fn get_public_ip_address(
         &self,
         resource_group_name: &str,
@@ -761,7 +802,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -845,7 +886,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, network_security_group_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -887,7 +928,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, network_security_group_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -947,7 +988,7 @@ impl NetworkApi for AzureNetworkClient {
             .await?;
 
         let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}", 
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}",
                      &self.token_cache.config().subscription_id, resource_group_name, network_security_group_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
@@ -987,6 +1028,12 @@ mod tests {
                 .header("If-Match", "W/\"snapshot\"");
             then.status(412).json_body(json!({"error":{"code":"PreconditionFailed","message":"Snapshot changed"}}));
         }).await;
+        let create = server.mock_async(|when, then| {
+            when.method(PUT).path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip")
+                .query_param("api-version", "2024-05-01").header("If-None-Match", "*")
+                .header("Authorization", "Bearer test-token");
+            then.status(412).json_body(json!({"error":{"code":"PreconditionFailed","message":"Resource already exists"}}));
+        }).await;
         let config = AzureClientConfig {
             subscription_id: "sub".to_string(),
             tenant_id: "tenant".to_string(),
@@ -1011,6 +1058,19 @@ mod tests {
             !error.retryable,
             "Refresh ownership and ETag before retrying"
         );
+        let creation = client
+            .create_public_ip_address_if_absent("rg", "pip", &PublicIpAddress::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                creation.error,
+                Some(ErrorData::RemoteResourceConflict { .. })
+            ),
+            "{creation}"
+        );
+        assert!(!creation.retryable);
+        create.assert_hits_async(1).await;
         delete.assert_hits_async(1).await;
     }
 }
