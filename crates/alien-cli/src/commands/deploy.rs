@@ -35,8 +35,8 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_manager_api::SdkResultExt as _;
 use alien_infra::ClientConfigExt;
+use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::types::DeploymentUpdateOperationStatus;
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt as _;
@@ -2007,8 +2007,7 @@ async fn deploy_task_with_environment(
             | DeploymentStatus::ProvisioningFailed
             | DeploymentStatus::UpdateFailed
             | DeploymentStatus::RefreshFailed
-    )
-    {
+    ) {
         if ctx.is_platform() {
             request_deployment_retry(
                 &base_url,

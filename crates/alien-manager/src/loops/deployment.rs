@@ -108,7 +108,6 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
 struct ProcessOptions {
     max_steps: usize,
     require_heartbeats_enabled: bool,
-    defer_skipped_release: bool,
 }
 
 impl ProcessOptions {
@@ -116,7 +115,6 @@ impl ProcessOptions {
         Self {
             max_steps: MAX_STEPS_PER_TICK,
             require_heartbeats_enabled: false,
-            defer_skipped_release: false,
         }
     }
 
@@ -124,7 +122,6 @@ impl ProcessOptions {
         Self {
             max_steps: MAX_STEPS_PER_HEARTBEAT,
             require_heartbeats_enabled: true,
-            defer_skipped_release: false,
         }
     }
 }
@@ -322,7 +319,7 @@ impl DeploymentLoop {
 
     /// One iteration of the deployment loop.
     async fn tick(&self) {
-        let filter = DeploymentFilter {
+        let mut filter = DeploymentFilter {
             statuses: Some(manager_candidate_statuses()),
             platforms: if self.config.targets.is_empty() {
                 None
@@ -338,7 +335,7 @@ impl DeploymentLoop {
         // no caller passthrough is available.
         let caller = Subject::system();
 
-        let deferred_releases = Mutex::new(Vec::new());
+        let skipped_ids = Mutex::new(Vec::new());
         for batch_index in 0..MAX_ACQUIRE_BATCHES_PER_TICK {
             let session = uuid::Uuid::new_v4().to_string();
 
@@ -366,47 +363,57 @@ impl DeploymentLoop {
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
                             let deployment_id = item.deployment.id.clone();
-                            let claim = item.execution_claim.clone();
-                            let deferred = self
+                            let skipped = self
                                 .process_deployment(
                                     item.deployment,
                                     item.execution_claim,
                                     &session,
-                                    ProcessOptions {
-                                        defer_skipped_release: true,
-                                        ..ProcessOptions::deployment_tick()
-                                    },
+                                    ProcessOptions::deployment_tick(),
                                 )
                                 .await;
-                            if deferred {
-                                deferred_releases
+                            if skipped {
+                                skipped_ids
                                     .lock()
-                                    .expect("deferred releases poisoned")
-                                    .push((deployment_id, session.clone(), claim));
+                                    .expect("skipped IDs poisoned")
+                                    .push(deployment_id);
                             }
                         })
                         .await;
+                    let skipped = skipped_ids.lock().expect("skipped IDs poisoned").clone();
+                    if !skipped.is_empty() {
+                        // Snapshot remaining candidates only after the first skipped retry.
+                        // ID filtering prevents re-acquisition without holding a CLI's lease
+                        // across unrelated work. New arrivals can wait for the next tick.
+                        if filter.deployment_ids.is_none() {
+                            match self
+                                .deployment_store
+                                .list_deployments(&caller, &filter)
+                                .await
+                            {
+                                Ok(candidates) => {
+                                    filter.deployment_ids =
+                                        Some(candidates.into_iter().map(|item| item.id).collect());
+                                }
+                                Err(error) => {
+                                    error!(%error, "Failed to list remaining deployment candidates");
+                                    break;
+                                }
+                            }
+                        }
+                        let ids = filter
+                            .deployment_ids
+                            .as_mut()
+                            .expect("candidate IDs set above");
+                        ids.retain(|id| !skipped.contains(id));
+                        if ids.is_empty() {
+                            break;
+                        }
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to acquire deployments");
                     break;
                 }
-            }
-        }
-
-        // Keep skipped retries leased until the remaining batches have had a
-        // chance to acquire other work. Return every lease before the tick ends
-        // so a setup-capable driver can consume the preserved retry.
-        for (deployment_id, session, claim) in deferred_releases
-            .into_inner()
-            .expect("deferred releases poisoned")
-        {
-            if let Err(error) = self
-                .deployment_store
-                .release(&caller, &deployment_id, &session, claim)
-                .await
-            {
-                error!(%deployment_id, %error, "Failed to release skipped deployment lock");
             }
         }
 
@@ -454,10 +461,6 @@ impl DeploymentLoop {
             );
         }
 
-        if options.defer_skipped_release && matches!(result, Ok(true)) {
-            return true;
-        }
-
         // Release lock unconditionally. Loop context, no inbound caller.
         let caller = Subject::system();
         if let Err(e) = self
@@ -471,7 +474,7 @@ impl DeploymentLoop {
                 "Failed to release deployment lock"
             );
         }
-        false
+        matches!(result, Ok(true))
     }
 
     async fn process_deployment_inner(
@@ -1320,9 +1323,8 @@ mod tests {
         gcp_credential_handoff_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff, supplied_release_stacks, with_environment_snapshot,
-        worker_commands_push_env_vars, DeploymentLoop, ProcessOptions, RunnerConfigSources,
-        GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
+        DeploymentLoop, ProcessOptions, RunnerConfigSources, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1399,6 +1401,7 @@ mod tests {
     #[derive(Default)]
     struct RuntimeOnlyCredentials {
         visits: Mutex<Vec<String>>,
+        fifth_visit_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     }
 
     #[async_trait]
@@ -1416,7 +1419,17 @@ mod tests {
             &self,
             deployment: &DeploymentRecord,
         ) -> Result<ResolvedCredentials, AlienError> {
-            self.visits.lock().unwrap().push(deployment.id.clone());
+            let visit_count = {
+                let mut visits = self.visits.lock().unwrap();
+                visits.push(deployment.id.clone());
+                visits.len()
+            };
+            if visit_count == 5 {
+                if let Some((entered, resume)) = &self.fifth_visit_gate {
+                    entered.notify_one();
+                    resume.notified().await;
+                }
+            }
             Ok(ResolvedCredentials {
                 client_config: self.resolve(deployment).await?,
                 has_provision_capability: false,
@@ -1607,7 +1620,12 @@ mod tests {
             db.execute(&format!("UPDATE deployments SET status = 'preflights-failed', desired_release_id = '{}' WHERE id = '{}'", release.id, id)).await.unwrap();
             store.set_retry_requested(&caller, id).await.unwrap();
         }
-        let credentials = Arc::new(RuntimeOnlyCredentials::default());
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let credentials = Arc::new(RuntimeOnlyCredentials {
+            fifth_visit_gate: Some((entered.clone(), resume.clone())),
+            ..Default::default()
+        });
         let runner = DeploymentLoop::new(
             Arc::new(crate::config::ManagerConfig::default()),
             store.clone(),
@@ -1616,7 +1634,45 @@ mod tests {
             bindings,
             None,
         );
-        runner.tick().await;
+        let tick = tokio::spawn(async move { runner.tick().await });
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .expect("fifth deployment must be reached");
+        // The fifth credential lookup stands in for unrelated slow cloud work.
+        // Earlier skipped retries must already be available to the CLI.
+        let earlier_ids = credentials.visits.lock().unwrap()[..4].to_vec();
+        let earlier_filter = DeploymentFilter {
+            deployment_ids: Some(earlier_ids),
+            statuses: Some(vec!["preflights-failed".to_string()]),
+            ..Default::default()
+        };
+        let earlier = store
+            .acquire(&caller, "cli-during-tick", &earlier_filter, 4)
+            .await
+            .unwrap();
+        let earlier_count = earlier.len();
+        for item in earlier {
+            assert!(item.deployment.retry_requested);
+            store
+                .set_retry_requested(&caller, &item.deployment.id)
+                .await
+                .unwrap();
+            store
+                .release(
+                    &caller,
+                    &item.deployment.id,
+                    "cli-during-tick",
+                    item.execution_claim,
+                )
+                .await
+                .unwrap();
+        }
+        resume.notify_one();
+        tick.await.unwrap();
+        assert_eq!(
+            earlier_count, 4,
+            "skipped retries must be acquirable while unrelated work is still blocked"
+        );
         let mut visits = credentials.visits.lock().unwrap().clone();
         visits.sort();
         ids.sort();
