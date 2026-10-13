@@ -15,6 +15,10 @@ import {
   DeploymentCredentialRotationEvent$inboundSchema,
 } from "./deploymentcredentialrotationevent.js";
 import {
+  DeploymentEndpointHealthChangedEvent,
+  DeploymentEndpointHealthChangedEvent$inboundSchema,
+} from "./deploymentendpointhealthchangedevent.js";
+import {
   DeploymentGroupMovedEvent,
   DeploymentGroupMovedEvent$inboundSchema,
 } from "./deploymentgroupmovedevent.js";
@@ -1721,6 +1725,7 @@ export type EventListItemResponseDataLoadingConfiguration = {
 };
 
 export type EventListItemResponseDataUnion =
+  | DeploymentEndpointHealthChangedEvent
   | DeploymentGroupMovedEvent
   | EventListItemResponseDataLoadingConfiguration
   | EventListItemResponseDataFinished
@@ -1923,6 +1928,7 @@ export type EventListItemResponse = {
    */
   debugSessionId?: string | null | undefined;
   data:
+    | DeploymentEndpointHealthChangedEvent
     | DeploymentGroupMovedEvent
     | EventListItemResponseDataLoadingConfiguration
     | EventListItemResponseDataFinished
@@ -4278,6 +4284,7 @@ export const EventListItemResponseDataUnion$inboundSchema: z.ZodType<
   EventListItemResponseDataUnion,
   unknown
 > = z.union([
+  DeploymentEndpointHealthChangedEvent$inboundSchema,
   DeploymentGroupMovedEvent$inboundSchema,
   z.lazy(() => EventListItemResponseDataLoadingConfiguration$inboundSchema),
   z.lazy(() => EventListItemResponseDataFinished$inboundSchema),
@@ -4493,6 +4500,7 @@ export const EventListItemResponse$inboundSchema: z.ZodType<
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
+    DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventListItemResponseDataLoadingConfiguration$inboundSchema),
     z.lazy(() => EventListItemResponseDataFinished$inboundSchema),

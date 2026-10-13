@@ -18,6 +18,7 @@ export type ListEventsGlobals = {
 
 export const ListEventsInclude = {
   ReleaseCreatedAt: "releaseCreatedAt",
+  EndpointHealth: "endpointHealth",
 } as const;
 export type ListEventsInclude = ClosedEnum<typeof ListEventsInclude>;
 
@@ -35,7 +36,7 @@ export type ListEventsRequest = {
    */
   releaseId?: string | undefined;
   /**
-   * Optional fields to include: releaseCreatedAt
+   * Optional additions: releaseCreatedAt metadata and endpointHealth events. Health events are opt-in for compatibility with existing clients.
    */
   include?: Array<ListEventsInclude> | undefined;
   /**
