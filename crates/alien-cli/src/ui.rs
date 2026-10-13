@@ -551,6 +551,7 @@ mod event_tests {
             success: errors.is_empty(),
             errors: errors.iter().map(ToString::to_string).collect(),
             warnings: Vec::new(),
+            quota_results: Vec::new(),
         };
         let error = Err::<(), _>(AlienError::new(
             alien_preflights::error::ErrorData::ValidationFailed {
