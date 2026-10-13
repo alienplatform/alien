@@ -43,6 +43,22 @@ pub trait LoadBalancerApi: Send + Sync + std::fmt::Debug {
         load_balancer_name: &str,
     ) -> Result<LoadBalancer>;
 
+    /// Read the complete provider document, preserving fields unknown to the typed model.
+    async fn get_load_balancer_document(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+    ) -> Result<Value>;
+
+    /// Update a complete snapshot only while its provider ETag still matches.
+    async fn update_load_balancer_if_match(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancer: &Value,
+        etag: &str,
+    ) -> Result<OperationResult<Value>>;
+
     /// Get health for the backends serving a load-balancing rule.
     async fn get_load_balancing_rule_health(
         &self,
@@ -133,6 +149,86 @@ impl AzureLoadBalancerClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl LoadBalancerApi for AzureLoadBalancerClient {
+    async fn get_load_balancer_document(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+    ) -> Result<Value> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                load_balancer_name
+            ),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+        let request = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "GetLoadBalancer", load_balancer_name)
+            .await?;
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: "Decode complete load balancer document".to_string(),
+                url,
+                http_status: 200,
+                http_response_text: None,
+                http_request_text: None,
+            })
+    }
+
+    async fn update_load_balancer_if_match(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancer: &Value,
+        etag: &str,
+    ) -> Result<OperationResult<Value>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                load_balancer_name
+            ),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+        let body = serde_json::to_string(load_balancer)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: "Encode complete load balancer snapshot".to_string(),
+            })?;
+        let request = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .header("If-Match", etag)
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "UpdateLoadBalancer",
+                load_balancer_name,
+            )
+            .await
+    }
+
     async fn get_load_balancing_rule_health(
         &self,
         resource_group_name: &str,
@@ -281,5 +377,65 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
                 load_balancer_name,
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AzureClientConfig, AzureCredentials};
+    use alien_core::AzureServiceOverrides;
+    use httpmock::prelude::*;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn complete_snapshot_preserves_provider_fields_and_rejects_stale_update() {
+        let server = MockServer::start_async().await;
+        let body = json!({"etag":"W/\"snapshot\"", "providerExtension": {"keep":true},
+            "properties":{"backendAddressPools":[{"name":"backend", "properties":{"loadBalancerBackendAddresses":[{"name":"replica", "properties":{"ipAddress":"10.0.0.4"}}]}}]}});
+        let read = server.mock_async(|when, then| {
+            when.method(GET).path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb")
+                .query_param("api-version", "2024-05-01").header("Authorization", "Bearer test-token");
+            then.status(200).json_body(body.clone());
+        }).await;
+        let write = server.mock_async(|when, then| {
+            when.method(PUT).path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb")
+                .query_param("api-version", "2024-05-01").header("If-Match", "W/\"snapshot\"").json_body(body.clone());
+            then.status(412).json_body(json!({"error":{"code":"PreconditionFailed", "message":"Snapshot changed"}}));
+        }).await;
+        let config = AzureClientConfig {
+            subscription_id: "sub".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: Some(AzureServiceOverrides {
+                endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+            }),
+        };
+        let client = AzureLoadBalancerClient::new(Client::new(), AzureTokenCache::new(config));
+        let snapshot = client.get_load_balancer_document("rg", "lb").await.unwrap();
+        assert_eq!(snapshot, body);
+        let error = client
+            .update_load_balancer_if_match(
+                "rg",
+                "lb",
+                &snapshot,
+                snapshot["etag"].as_str().unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
+            "{error}"
+        );
+        assert!(
+            !error.retryable,
+            "refresh the snapshot before another update"
+        );
+        read.assert_calls_async(1).await;
+        write.assert_calls_async(1).await;
     }
 }
