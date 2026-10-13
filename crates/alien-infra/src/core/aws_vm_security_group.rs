@@ -217,6 +217,53 @@ impl AwsVmSecurityGroup {
         }))
     }
 
+    /// Delete an owned group after its consumers and their service interfaces
+    /// have drained. The receipt remains until a subsequent read proves absence.
+    pub async fn step_delete(&mut self, ec2: &dyn Ec2Api) -> Result<bool> {
+        self.delete_inner(ec2)
+            .await
+            .map_err(crate::preserve_composite_cleanup_error)
+    }
+
+    async fn delete_inner(&mut self, ec2: &dyn Ec2Api) -> Result<bool> {
+        if self
+            .compute_groups
+            .as_ref()
+            .is_some_and(|groups| !groups.is_empty())
+        {
+            return Err(
+                self.invalid("recorded compute ingress must be retired before group deletion")
+            );
+        }
+        let Some(id) = self.recover(ec2).await? else {
+            return Ok(true);
+        };
+        self.record_delete_attempt();
+        match ec2.delete_security_group(&id).await {
+            Ok(()) => Ok(false),
+            Err(error)
+                if matches!(
+                    &error.error,
+                    Some(ClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error)
+                if matches!(
+                    &error.error,
+                    Some(ClientErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+                message: "Delete owned ingress security group".into(),
+                resource_id: Some(self.resource.clone()),
+            }),
+        }
+    }
+
     /// Record the delete boundary before sending the exact-ID request.
     pub fn record_delete_attempt(&mut self) {
         self.delete_attempted = true;
@@ -494,5 +541,54 @@ pub(crate) mod tests {
                 .expect_err("unknown create progress")
                 .retryable
         );
+    }
+    #[tokio::test]
+    async fn owned_delete_waits_for_absence_after_dependency_and_lost_reply() {
+        let mut ec2 = MockEc2Api::new();
+        let stored = mock_discovery(&mut ec2);
+        let world = stored.clone();
+        ec2.expect_create_security_group()
+            .times(1)
+            .returning(move |request| {
+                *world.lock().unwrap() = Some(request);
+                Ok(alien_aws_clients::ec2::CreateSecurityGroupResponse {
+                    group_id: Some("sg-alb".into()),
+                })
+            });
+        let world = stored.clone();
+        let calls = Arc::new(Mutex::new(0));
+        let count = calls.clone();
+        ec2.expect_delete_security_group()
+            .times(2)
+            .returning(move |id| {
+                assert_eq!(id, "sg-alb");
+                let mut count = count.lock().unwrap();
+                *count += 1;
+                if *count == 1 {
+                    return Err(AlienError::new(ClientErrorData::RemoteResourceConflict {
+                        message: "DependencyViolation".into(),
+                        resource_type: "SecurityGroup".into(),
+                        resource_name: id.into(),
+                    }));
+                }
+                *world.lock().unwrap() = None;
+                Err(AlienError::new(ClientErrorData::Timeout {
+                    message: "delete committed; reply lost".into(),
+                }))
+            });
+        let mut receipt = AwsVmSecurityGroup::new("vpc-test".into(), "test", "api");
+        assert!(receipt.step_prepare(&ec2).await.unwrap().is_none());
+        assert_eq!(
+            receipt.step_prepare(&ec2).await.unwrap().as_deref(),
+            Some("sg-alb")
+        );
+        assert!(!receipt.step_delete(&ec2).await.unwrap());
+        assert!(receipt.id.is_some());
+        receipt = serde_json::from_value(serde_json::to_value(receipt).unwrap()).unwrap();
+        let error = receipt.step_delete(&ec2).await.unwrap_err();
+        assert!(error.retryable);
+        receipt = serde_json::from_value(serde_json::to_value(receipt).unwrap()).unwrap();
+        assert!(receipt.step_delete(&ec2).await.unwrap());
+        assert_eq!(*calls.lock().unwrap(), 2);
     }
 }
