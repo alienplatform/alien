@@ -1035,7 +1035,17 @@ static CATALOG: &[InstanceTypeSpec] = &[
         ephemeral_storage_bytes: 20 * GI,
         gpu: None,
     },
-    // General Purpose (Dv5-series, up to 16 vCPU)
+    // General Purpose (Dsv4/Dsv5-series, up to 16 vCPU)
+    InstanceTypeSpec {
+        name: "Standard_D2s_v4",
+        platform: Platform::Azure,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
     InstanceTypeSpec {
         name: "Standard_D2s_v5",
         platform: Platform::Azure,

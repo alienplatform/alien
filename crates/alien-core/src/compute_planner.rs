@@ -39,6 +39,15 @@ pub struct ContainerResourcePlan {
     pub cpu: ResourceSpec,
     /// Effective per-replica memory reservation and limit.
     pub memory: ResourceSpec,
+    /// Effective persistent capacity per replica, in GiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_size_gib: Option<u32>,
+    /// Installed capacity, or the provider minimum for a new volume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_volume_size_gib: Option<u32>,
+    /// Maximum supported capacity for this provider, in GiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_volume_size_gib: Option<u32>,
 }
 
 /// Planner output for one compute pool.
@@ -110,6 +119,72 @@ pub fn plan_compute_with_state(
         &mut resolved_stack,
         selected_settings,
     )?;
+    let (minimum, maximum) = match platform {
+        Platform::Gcp => (10, 65536),
+        Platform::Azure => (1, 32767),
+        _ => (1, 65536),
+    };
+    for (id, entry) in &resolved_stack.resources {
+        let Some(storage) = entry
+            .config
+            .downcast_ref::<Container>()
+            .and_then(|container| container.persistent_storage.as_ref())
+        else {
+            continue;
+        };
+        let size = crate::container_resources::parse_volume_size_gib(&storage.size)
+            .map_err(|reason| crate::container_resources::invalid(id, "volumeSizeGib", &reason))?;
+        if size < minimum || size > maximum {
+            return Err(AlienError::new(
+                ErrorData::ContainerResourceSelectionInvalid {
+                    resource_id: id.clone(),
+                    dimension: "volumeSizeGib".into(),
+                    reason: format!(
+                        "capacity for {platform} must be between {minimum} and {maximum} GiB"
+                    ),
+                },
+            ));
+        }
+    }
+    if let Some(previous_state) = previous_state {
+        for (id, entry) in &resolved_stack.resources {
+            let desired = entry
+                .config
+                .downcast_ref::<Container>()
+                .and_then(|container| container.persistent_storage.as_ref());
+            let previous = previous_state
+                .resources
+                .get(id)
+                .and_then(|resource| resource.config.downcast_ref::<Container>())
+                .and_then(|container| container.persistent_storage.as_ref());
+            if previous.is_some() && desired.is_none() {
+                return Err(crate::container_resources::invalid(
+                    id,
+                    "volumeSizeGib",
+                    "removing installed persistent storage is unsupported",
+                ));
+            }
+            if let (Some(desired), Some(previous)) = (desired, previous) {
+                if desired.mount_path != previous.mount_path {
+                    return Err(crate::container_resources::invalid(
+                        id,
+                        "volumeSizeGib",
+                        "changing an installed persistent storage mount path is unsupported",
+                    ));
+                }
+                let target = crate::container_resources::parse_volume_size_gib(&desired.size);
+                let installed = crate::container_resources::parse_volume_size_gib(&previous.size);
+                if let (Ok(target), Ok(installed)) = (target, installed) {
+                    if target < installed {
+                        return Err(AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
+                            resource_id: id.clone(), dimension: "volumeSizeGib".into(),
+                            reason: format!("existing volumes cannot shrink from {installed} to {target} GiB"),
+                        }));
+                    }
+                }
+            }
+        }
+    }
     let stack = &resolved_stack;
     let mut groups = collect_workload_groups(stack)?;
     merge_explicit_compute_groups(stack, &mut groups)?;
@@ -256,17 +331,45 @@ pub fn plan_compute_with_state(
     let mut containers: Vec<_> = stack
         .resources
         .values()
-        .filter_map(|entry| {
-            let container = entry.config.downcast_ref::<Container>()?;
-            let choices = container.resource_choices.clone()?;
-            Some(ContainerResourcePlan {
+        .filter_map(|entry| entry.config.downcast_ref::<Container>())
+        .filter(|container| {
+            container.resource_choices.is_some() || container.persistent_storage.is_some()
+        })
+        .map(|container| {
+            let capacity = |storage: &crate::PersistentStorage| {
+                crate::container_resources::parse_volume_size_gib(&storage.size).map_err(|reason| {
+                    crate::container_resources::invalid(&container.id, "volumeSizeGib", &reason)
+                })
+            };
+            let volume_size_gib = container
+                .persistent_storage
+                .as_ref()
+                .map(capacity)
+                .transpose()?;
+            let installed = previous_state
+                .and_then(|state| state.resources.get(&container.id))
+                .and_then(|resource| resource.config.downcast_ref::<Container>())
+                .and_then(|container| container.persistent_storage.as_ref())
+                .map(capacity)
+                .transpose()?;
+            Ok(ContainerResourcePlan {
                 container_id: container.id.clone(),
-                choices,
+                choices: container.resource_choices.clone().unwrap_or_default(),
                 cpu: container.cpu.clone(),
                 memory: container.memory.clone(),
+                volume_size_gib,
+                minimum_volume_size_gib: volume_size_gib
+                    .map(|_| installed.unwrap_or(if platform == Platform::Gcp { 10 } else { 1 })),
+                maximum_volume_size_gib: volume_size_gib.map(|_| {
+                    if platform == Platform::Azure {
+                        32767
+                    } else {
+                        65536
+                    }
+                }),
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ErrorData>>()?;
     containers.sort_by(|a, b| a.container_id.cmp(&b.container_id));
     Ok(ComputePlan { pools, containers })
 }
@@ -1193,6 +1296,254 @@ mod tests {
                 serde_json::from_value(serde_json::json!({"containers": selection})).unwrap();
             let error = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap_err();
             assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        }
+    }
+
+    #[test]
+    fn deployment_volume_selection_is_applied_without_changing_release_defaults() {
+        let mut release = stack_with_container();
+        release
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage = Some(crate::PersistentStorage {
+            size: "20Gi".into(),
+            mount_path: "/data".into(),
+            backups: crate::VolumeBackups::default(),
+        });
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 40}}
+        }))
+        .unwrap();
+        let mut deployment = release.clone();
+        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings))
+            .unwrap();
+        let volume = |stack: &Stack| {
+            stack.resources["api"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap()
+                .persistent_storage
+                .as_ref()
+                .unwrap()
+                .size
+                .clone()
+        };
+        assert_eq!(volume(&deployment), "40Gi");
+        assert_eq!(volume(&release), "20Gi");
+        let mut equivalent = release.clone();
+        equivalent
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage
+            .as_mut()
+            .unwrap()
+            .size = "1Ti".into();
+        let same_capacity: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 1024}}
+        }))
+        .unwrap();
+        crate::container_resources::resolve_container_resources(
+            &mut equivalent,
+            Some(&same_capacity),
+        )
+        .unwrap();
+        assert_eq!(
+            volume(&equivalent),
+            "1Ti",
+            "equivalent selections preserve PVC quantities"
+        );
+        crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings))
+            .unwrap();
+        assert_eq!(volume(&deployment), "40Gi");
+        let smaller_initial: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 10}}
+        }))
+        .unwrap();
+        crate::container_resources::resolve_container_resources(
+            &mut release.clone(),
+            Some(&smaller_initial),
+        )
+        .unwrap();
+        let mut installed = StackState::new(Platform::Aws);
+        installed.resources.insert(
+            "api".into(),
+            crate::StackResourceState::new_pending(
+                "Container".into(),
+                deployment.resources["api"].config.clone(),
+                None,
+                vec![],
+            ),
+        );
+        let shrinking: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 30}}
+        }))
+        .unwrap();
+        let error =
+            plan_compute_with_state(&release, Platform::Aws, Some(&shrinking), Some(&installed))
+                .unwrap_err();
+        assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+        assert!(error.to_string().contains("cannot shrink from 40 to 30"));
+        let imported: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": "40"}}
+        }))
+        .unwrap();
+        assert_eq!(imported.containers["api"].volume_size_gib, Some(40));
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("4294967296"),
+        ] {
+            assert!(
+                serde_json::from_value::<ComputeSettings>(serde_json::json!({
+                    "containers": {"api": {"volumeSizeGib": value}}
+                }))
+                .is_err()
+            );
+        }
+        for (platform, size) in [(Platform::Gcp, 9), (Platform::Azure, 32768)] {
+            let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "containers": {"api": {"volumeSizeGib": size}}
+            }))
+            .unwrap();
+            let error = plan_compute(&release, platform, Some(&invalid)).unwrap_err();
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+            assert!(error.to_string().contains("must be between"));
+        }
+        for size in [0, 65537] {
+            let invalid: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "containers": {"api": {"volumeSizeGib": size}}
+            }))
+            .unwrap();
+            assert_eq!(
+                crate::container_resources::resolve_container_resources(
+                    &mut release.clone(),
+                    Some(&invalid)
+                )
+                .unwrap_err()
+                .code,
+                "CONTAINER_RESOURCE_SELECTION_INVALID"
+            );
+        }
+        assert_eq!(
+            crate::container_resources::resolve_container_resources(
+                &mut stack_with_container(),
+                Some(&settings)
+            )
+            .unwrap_err()
+            .code,
+            "CONTAINER_RESOURCE_SELECTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn installed_storage_cannot_be_removed_or_remounted_on_any_provider() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+        ] {
+            let mut release = stack_with_container();
+            release
+                .resources
+                .get_mut("api")
+                .unwrap()
+                .config
+                .downcast_mut::<Container>()
+                .unwrap()
+                .persistent_storage = Some(crate::PersistentStorage {
+                size: "20Gi".into(),
+                mount_path: "/data".into(),
+                backups: crate::VolumeBackups::default(),
+            });
+            let mut installed = StackState::new(platform);
+            installed.resources.insert(
+                "api".into(),
+                crate::StackResourceState::new_pending(
+                    "Container".into(),
+                    release.resources["api"].config.clone(),
+                    None,
+                    vec![],
+                ),
+            );
+            for remove in [false, true] {
+                let mut desired = release.clone();
+                let storage = &mut desired
+                    .resources
+                    .get_mut("api")
+                    .unwrap()
+                    .config
+                    .downcast_mut::<Container>()
+                    .unwrap()
+                    .persistent_storage;
+                if remove {
+                    *storage = None;
+                } else {
+                    storage.as_mut().unwrap().mount_path = "/other".into();
+                }
+                let error = plan_compute_with_state(&desired, platform, None, Some(&installed))
+                    .unwrap_err();
+                assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+                assert!(
+                    error.to_string().contains(if remove {
+                        "removing installed"
+                    } else {
+                        "mount path"
+                    }),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn release_volume_defaults_obey_provider_bounds_without_a_selection() {
+        for (platform, size) in [(Platform::Gcp, "5Gi"), (Platform::Azure, "40000Gi")] {
+            let mut stack = stack_with_container();
+            stack
+                .resources
+                .get_mut("api")
+                .unwrap()
+                .config
+                .downcast_mut::<Container>()
+                .unwrap()
+                .persistent_storage = Some(crate::PersistentStorage {
+                size: size.into(),
+                mount_path: "/data".into(),
+                backups: crate::VolumeBackups::default(),
+            });
+            let error = plan_compute(&stack, platform, None).unwrap_err();
+            assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+            assert!(error.to_string().contains("must be between"));
+        }
+    }
+
+    #[test]
+    fn volume_capacity_parsing_rejects_overflow_and_preserves_legacy_units() {
+        use crate::container_resources::parse_volume_size_gib;
+        for (value, size) in [
+            ("20Gi", 20),
+            ("20GiB", 20),
+            ("20GB", 20),
+            ("1Ti", 1024),
+            ("1TB", 1000),
+            ("1.5Ti", 1536),
+            ("1536Mi", 2),
+            ("0.5Gi", 1),
+            ("1073741824", 1),
+        ] {
+            assert_eq!(parse_volume_size_gib(value).unwrap(), size);
+        }
+        for value in ["0Gi", "-1Gi", "NaNGi", "4294967295Ti", "65537Gi"] {
+            assert!(parse_volume_size_gib(value).is_err(), "{value}");
         }
     }
 

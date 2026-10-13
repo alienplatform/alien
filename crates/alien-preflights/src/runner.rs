@@ -577,6 +577,7 @@ mod setup_update_authorization_tests {
                 "removed".into(),
                 ContainerResourceSelection {
                     cpu: Some(4.into()),
+                    volume_size_gib: None,
                     memory: Some("8Gi".into()),
                 },
             )]

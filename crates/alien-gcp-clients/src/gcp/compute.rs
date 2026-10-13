@@ -589,6 +589,15 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/insert
     async fn insert_disk(&self, zone: String, disk: Disk) -> Result<Operation>;
 
+    /// Expands a disk without detaching it. Capacity is in GiB.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/resize
+    async fn resize_disk(
+        &self,
+        zone: String,
+        disk_name: String,
+        size_gib: u32,
+    ) -> Result<Operation>;
+
     /// Deletes a disk.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/delete
     async fn delete_disk(&self, zone: String, disk_name: String) -> Result<Operation>;
@@ -616,8 +625,11 @@ pub trait ComputeApi: Send + Sync + Debug {
 
     /// Gets a regional resource policy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/get
-    async fn get_resource_policy(&self, region: String, policy_name: String)
-        -> Result<ResourcePolicy>;
+    async fn get_resource_policy(
+        &self,
+        region: String,
+        policy_name: String,
+    ) -> Result<ResourcePolicy>;
 
     /// Creates a regional resource policy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/insert
@@ -2007,6 +2019,27 @@ impl ComputeApi for ComputeClient {
         let resource_name = disk.name.clone().unwrap_or_default();
         self.base
             .execute_request(Method::POST, &path, None, Some(disk), &resource_name)
+            .await
+    }
+
+    async fn resize_disk(
+        &self,
+        zone: String,
+        disk_name: String,
+        size_gib: u32,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/disks/{}/resize",
+            self.project_id, zone, disk_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({"sizeGb": size_gib.to_string()})),
+                &disk_name,
+            )
             .await
     }
 
@@ -6539,10 +6572,7 @@ mod tests {
                     token: "test-token".to_string(),
                 },
                 service_overrides: Some(GcpServiceOverrides {
-                    endpoints: std::collections::HashMap::from([(
-                        "compute".to_string(),
-                        endpoint,
-                    )]),
+                    endpoints: std::collections::HashMap::from([("compute".to_string(), endpoint)]),
                 }),
                 project_number: None,
             },
