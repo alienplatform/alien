@@ -359,7 +359,13 @@ impl GcpWorkerIngress {
                 .address
                 .as_deref()
                 .ok_or_else(|| invalid(&worker.id, "Confirmed worker ingress has no address"))?;
-            *outputs = domains.confirmed_endpoints(address);
+            let confirmed = domains.confirmed_endpoints(address);
+            if *outputs != confirmed {
+                *outputs = confirmed;
+                // DNS metadata predates this target publication. Checkpoint it
+                // before narrowing the service or retiring its retained path.
+                return Ok(false);
+            }
             *fingerprint = Some(domains.fingerprint());
         }
         // Publish confirmed addresses and wait for DNS before narrowing Cloud

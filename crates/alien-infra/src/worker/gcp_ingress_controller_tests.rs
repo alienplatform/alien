@@ -32,6 +32,7 @@ struct Services {
 enum Fault {
     None,
     PendingDns,
+    StaleDns,
     LostBackendResponse,
     LostNegResponse,
     LostBackendRetry,
@@ -78,6 +79,8 @@ fn restore_legacy_https_graph(
 #[case(EndpointAccess::Private, EndpointAccess::Internet, Fault::None)]
 #[case::private_dns_pending(EndpointAccess::Internet, EndpointAccess::Both, Fault::PendingDns)]
 #[case::public_dns_pending(EndpointAccess::Private, EndpointAccess::Both, Fault::PendingDns)]
+#[case::private_dns_stale(EndpointAccess::Internet, EndpointAccess::Private, Fault::StaleDns)]
+#[case::public_dns_stale(EndpointAccess::Private, EndpointAccess::Internet, Fault::StaleDns)]
 #[case::delete_after_lost_public_backend(
     EndpointAccess::Internet,
     EndpointAccess::Internet,
@@ -494,7 +497,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             }
             break;
         }
-        if index == 1 && pending_dns {
+        if index == 1 && matches!(fault, Fault::PendingDns | Fault::StaleDns) {
             let mut waiting = false;
             for _ in 0..200 {
                 executor.step().await.unwrap();
@@ -517,6 +520,21 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             );
             for (name, frontend) in &retained {
                 assert_eq!(graphs.lock().unwrap().objects.get(name), Some(frontend));
+            }
+            if fault == Fault::StaleDns {
+                let domain = metadata.resources.get_mut(&worker.id).unwrap();
+                if !initial.private_enabled() {
+                    domain.private_endpoints.get_mut("api").unwrap().dns_status =
+                        DnsRecordStatus::Pending;
+                } else {
+                    domain.dns_status = DnsRecordStatus::Pending;
+                }
+                executor.set_domain_metadata(metadata.clone());
+                executor.step().await.unwrap();
+                assert_eq!(services.lock().unwrap().patches, 0);
+                for (name, frontend) in &retained {
+                    assert_eq!(graphs.lock().unwrap().objects.get(name), Some(frontend));
+                }
             }
             let domain = metadata.resources.get_mut(&worker.id).unwrap();
             domain.dns_status = DnsRecordStatus::Active;
