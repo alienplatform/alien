@@ -2500,3 +2500,87 @@ async fn imported_installations_cannot_request_automatic_setup() {
         .unwrap();
     assert!(deployments.is_empty());
 }
+
+#[tokio::test]
+async fn automatic_registration_requires_approval_and_defers_application_resources() {
+    for approved in [false, true] {
+        let fixture = make_fixture(Some(stack_with_storage("archive"))).await;
+        let release_id = fixture.release_id.clone().unwrap();
+        let settings = StackSettings {
+            setup_management: if approved {
+                alien_core::SetupManagement::Automatic
+            } else {
+                alien_core::SetupManagement::Manual
+            },
+            ..StackSettings::default()
+        };
+        let reserved = fixture
+            .deployment_store
+            .create_with_state(
+                &alien_manager::auth::Subject::system(),
+                CreateImportedDeploymentParams {
+                    name: "own-application".into(),
+                    deployment_group_id: fixture.deployment_group_id.clone(),
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: settings,
+                    stack_state: StackState::new(Platform::Aws),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata::default(),
+                    status: "pending".into(),
+                    current_release_id: None,
+                    desired_release_id: None,
+                    import_source: Some(ImportSourceKind::CloudFormation),
+                    setup_metadata: Some(
+                        serde_json::json!({ "setupReservation": { "releaseId": release_id } }),
+                    ),
+                    setup_target: "aws".into(),
+                    setup_fingerprint: "test".into(),
+                    setup_fingerprint_version: 1,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut request = aws_remote_management_import_request(
+            "own-application",
+            "us-east-1",
+            "management",
+            "123456789012",
+        );
+        request.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+        if !approved {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+            continue;
+        }
+        assert_eq!(status, StatusCode::OK, "{body:#}");
+        let installed = fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(installed.status, "initial-setup");
+        let metadata = installed.runtime_metadata.unwrap();
+        assert!(metadata.automatic_setup);
+        assert_eq!(
+            metadata.initial_setup_authority,
+            alien_core::InitialSetupAuthority::DirectSetup
+        );
+        assert!(metadata
+            .prepared_stack
+            .unwrap()
+            .resources
+            .contains_key("archive"));
+        let state = installed.stack_state.unwrap();
+        assert!(state.resources.contains_key("management"));
+        assert!(
+            !state.resources.contains_key("archive"),
+            "Application infrastructure must be created after registration using installed access"
+        );
+    }
+}
