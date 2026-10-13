@@ -173,9 +173,15 @@ impl AwsPrivateWorker {
         let Some(frontend) = graph.step_prepare(&clients, &certificate).await? else {
             return Ok(false);
         };
-        self.endpoints = domains.outputs;
-        for output in self.endpoints.values_mut() {
+        let mut endpoints = domains.outputs;
+        for output in endpoints.values_mut() {
             output.load_balancer_endpoint = Some(frontend.endpoint.clone());
+        }
+        if self.endpoints != endpoints {
+            self.endpoints = endpoints;
+            // Persist the target before consuming DNS readiness. The metadata
+            // in this step was read before the DNS reconciler could see it.
+            return Ok(false);
         }
         // Publish the healthy target before waiting for DNS. Keep every listener
         // certificate reference until rotation has been observed on the provider.
