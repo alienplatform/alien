@@ -35,6 +35,7 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_manager_api::SdkResultExt as _;
 use alien_infra::ClientConfigExt;
 use alien_platform_api::types::DeploymentUpdateOperationStatus;
 use alien_platform_api::Client as SdkClient;
@@ -1996,25 +1997,38 @@ async fn deploy_task_with_environment(
         ExistingDeploymentPlan::InitialSetup | ExistingDeploymentPlan::SetupUpdate { .. }
     );
 
-    // A local retry flag does not make a failed platform operation claimable.
+    // A local retry flag does not make a failed deployment claimable.
     // Validate the resume configuration first, then requeue with the same
     // authority that will acquire execution. The API rejects a live contender.
-    if ctx.is_platform()
-        && matches!(
-            current.status,
-            DeploymentStatus::PreflightsFailed
-                | DeploymentStatus::InitialSetupFailed
-                | DeploymentStatus::ProvisioningFailed
-                | DeploymentStatus::UpdateFailed
-                | DeploymentStatus::RefreshFailed
-        )
+    if matches!(
+        current.status,
+        DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+    )
     {
-        request_deployment_retry(
-            &base_url,
-            setup_token.as_deref().unwrap_or(deployment_token),
-            &tracked_deployment.deployment_id,
-        )
-        .await?;
+        if ctx.is_platform() {
+            request_deployment_retry(
+                &base_url,
+                setup_token.as_deref().unwrap_or(deployment_token),
+                &tracked_deployment.deployment_id,
+            )
+            .await?;
+        } else {
+            lock_client
+                .retry_deployment()
+                .id(&tracked_deployment.deployment_id)
+                .send()
+                .await
+                .into_sdk_error()
+                .await
+                .context(ErrorData::ApiRequestFailed {
+                    message: "retrying deployment before resuming setup".to_string(),
+                    url: None,
+                })?;
+        }
     }
     steps.activate(2, Some("Waiting for execution ownership".to_string()));
 
