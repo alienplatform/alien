@@ -11,10 +11,9 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        availability_zone_names, az_condition, first_or_null, get_azs, required_logical_id,
-        resource_config, select, subnet_refs, tags, CONDITION_HAS_VPC_CIDR,
-        PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS, PARAM_SECURITY_GROUP_IDS,
-        PARAM_VPC_CIDR,
+        availability_zone_names, az_condition, existing_security_group_id, get_azs,
+        list_parameter_value, required_logical_id, resource_config, select, subnet_refs, tags,
+        CONDITION_HAS_VPC_CIDR, PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS, PARAM_VPC_CIDR,
     },
     template::{CfExpression, CfResource},
 };
@@ -55,16 +54,13 @@ impl CfEmitter for AwsNetworkEmitter {
                 ("vpcId", CfExpression::ref_("VpcId")),
                 (
                     "publicSubnetIds",
-                    CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                    list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
                 ),
                 (
                     "privateSubnetIds",
-                    CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                    list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
                 ),
-                (
-                    "securityGroupId",
-                    first_or_null(CfExpression::ref_(PARAM_SECURITY_GROUP_IDS)),
-                ),
+                ("securityGroupId", existing_security_group_id()),
                 ("availabilityZones", CfExpression::list([])),
                 ("isByoVpc", CfExpression::from(true)),
             ]),
@@ -112,16 +108,13 @@ impl CfEmitter for AwsNetworkEmitter {
                             ("vpcId", CfExpression::ref_("VpcId")),
                             (
                                 "publicSubnetIds",
-                                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                                list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
                             ),
                             (
                                 "privateSubnetIds",
-                                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                                list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
                             ),
-                            (
-                                "securityGroupId",
-                                first_or_null(CfExpression::ref_(PARAM_SECURITY_GROUP_IDS)),
-                            ),
+                            ("securityGroupId", existing_security_group_id()),
                             ("availabilityZones", CfExpression::list([])),
                             ("isByoVpc", CfExpression::from(true)),
                         ]);

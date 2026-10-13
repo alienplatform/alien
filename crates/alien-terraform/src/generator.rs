@@ -3368,9 +3368,9 @@ fn stack_settings_expression(
     }}) : var.network_mode == "use-existing" ? jsonencode({{
       type             = "byo-vpc-aws"
       vpcId            = var.vpc_id
-      publicSubnetIds  = var.public_subnet_ids
-      privateSubnetIds = var.private_subnet_ids
-      securityGroupIds = var.security_group_ids
+      publicSubnetIds  = compact([for id in var.public_subnet_ids : trimspace(id)])
+      privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)])
+      securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)])
     }}) : jsonencode({{
       type = "use-default"
     }})

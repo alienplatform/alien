@@ -1543,10 +1543,10 @@ fn shared_eks_subnet_ids_expr(ctx: &EmitContext<'_>, private: bool) -> String {
     let kind = if private { "private" } else { "public" };
     let subnets = match &network.settings {
         alien_core::NetworkSettings::Create { .. } => format!(
-            "var.network_mode == \"create-new\" ? aws_subnet.{label}_{kind}[*].id : var.network_mode == \"use-existing\" ? var.{kind}_subnet_ids : data.aws_subnets.{label}_default[0].ids"
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_{kind}[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.{kind}_subnet_ids : trimspace(id)]) : data.aws_subnets.{label}_default[0].ids"
         ),
         alien_core::NetworkSettings::UseDefault => format!("data.aws_subnets.{label}_default.ids"),
-        alien_core::NetworkSettings::ByoVpcAws { .. } => format!("var.{label}_{kind}_subnet_ids"),
+        alien_core::NetworkSettings::ByoVpcAws { .. } => format!("compact([for id in var.{label}_{kind}_subnet_ids : trimspace(id)])"),
         _ => "[]".to_string(),
     };
     subnets
@@ -1554,7 +1554,7 @@ fn shared_eks_subnet_ids_expr(ctx: &EmitContext<'_>, private: bool) -> String {
 
 fn public_subnet_ids_expr(label: &str) -> String {
     format!(
-        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.public_subnet_ids : trimspace(id)]) : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
     )
 }
 
@@ -1566,7 +1566,7 @@ fn private_subnet_ids_expr(label: &str) -> String {
     // proper private/public split they should switch to `create-new` or
     // `use-existing`.
     format!(
-        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : var.network_mode == \"use-default\" ? data.aws_subnets.{label}_default[0].ids : []) : []"
     )
 }
 

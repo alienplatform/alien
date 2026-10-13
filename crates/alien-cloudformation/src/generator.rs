@@ -1,5 +1,5 @@
 use crate::{
-    emitters::enabled,
+    emitters::{aws::helpers::list_parameter_value, enabled},
     inline_policy::{consolidate_role_inline_policies, expression_references},
     registry::CfRegistry,
     template::{
@@ -761,6 +761,9 @@ fn add_stack_input_parameters(
                 ),
             }));
         }
+        if input.kind == StackInputKind::StringList {
+            add_list_parameter_condition(template, &parameter_name);
+        }
         template
             .parameters
             .insert(parameter_name, stack_input_parameter(input));
@@ -833,7 +836,11 @@ fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpressio
     CfExpression::object(inputs.iter().map(|input| {
         (
             input.id.clone(),
-            CfExpression::ref_(stack_input_parameter_name(input)),
+            if input.kind == StackInputKind::StringList {
+                list_parameter_value(&stack_input_parameter_name(input))
+            } else {
+                CfExpression::ref_(stack_input_parameter_name(input))
+            },
         )
     }))
 }
@@ -1781,6 +1788,16 @@ fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
     );
 }
 
+fn add_list_parameter_condition(template: &mut CfTemplate, parameter: &str) {
+    template.conditions.insert(
+        format!("Has{parameter}"),
+        CfExpression::not(CfExpression::equals(
+            CfExpression::join("", CfExpression::ref_(parameter)),
+            CfExpression::from(""),
+        )),
+    );
+}
+
 fn add_standard_conditions(
     template: &mut CfTemplate,
     stack: &Stack,
@@ -1788,6 +1805,15 @@ fn add_standard_conditions(
     supports_custom_domain: bool,
     target: CloudFormationTarget,
 ) {
+    for parameter in [
+        PARAM_PUBLIC_SUBNET_IDS,
+        PARAM_PRIVATE_SUBNET_IDS,
+        PARAM_SECURITY_GROUP_IDS,
+    ] {
+        if template.parameters.contains_key(parameter) {
+            add_list_parameter_condition(template, parameter);
+        }
+    }
     let has_created_network = stack_has_created_network(stack, settings.setup_management);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -2884,15 +2910,15 @@ fn network_expression(
                     ("vpc_id", CfExpression::ref_(PARAM_VPC_ID)),
                     (
                         "public_subnet_ids",
-                        CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                        list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
                     ),
                     (
                         "private_subnet_ids",
-                        CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                        list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
                     ),
                     (
                         "security_group_ids",
-                        CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+                        list_parameter_value(PARAM_SECURITY_GROUP_IDS),
                     ),
                 ]);
                 if restricts_network_mode(stack, target) {

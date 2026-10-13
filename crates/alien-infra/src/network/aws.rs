@@ -1002,7 +1002,9 @@ pub struct AwsNetworkController {
     pub(crate) eip_allocation_id: Option<String>,
 
     // Subnets
+    #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,
+    #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
     pub private_subnet_ids: Vec<String>,
 
     // Route Tables
@@ -1014,6 +1016,7 @@ pub struct AwsNetworkController {
     // security group (which admits 5432 only from this stack SG — see
     // permission-sets/postgres/provision.jsonc) can reference it without
     // re-discovering it by tag (mirrors the already-public GCP `subnetwork_self_link`).
+    #[serde(default, deserialize_with = "alien_core::network_ids::deserialize_optional_id")]
     pub security_group_id: Option<String>,
 
     // Metadata
@@ -2845,6 +2848,7 @@ impl AwsNetworkController {
                     .chain(private_subnet_ids)
                     .cloned()
                     .collect();
+                require_existing_subnet_ids(&requested_subnet_ids, &config.id)?;
                 let response = ec2_client
                     .describe_subnets(
                         DescribeSubnetsRequest::builder()
@@ -2904,12 +2908,13 @@ impl AwsNetworkController {
         let config = ctx.desired_resource_config::<Network>()?;
         let aws_config = ctx.get_aws_config()?;
         let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
-        let requested_subnet_ids = self
+        let requested_subnet_ids: Vec<String> = self
             .public_subnet_ids
             .iter()
             .chain(&self.private_subnet_ids)
             .cloned()
             .collect();
+        require_existing_subnet_ids(&requested_subnet_ids, &config.id)?;
         let response = ec2_client
             .describe_subnets(
                 DescribeSubnetsRequest::builder()
@@ -4356,11 +4361,12 @@ impl AwsNetworkController {
         {
             let aws_config = ctx.get_aws_config()?;
             let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
-            let requested_subnet_ids = public_subnet_ids
+            let requested_subnet_ids: Vec<String> = public_subnet_ids
                 .iter()
                 .chain(private_subnet_ids)
                 .cloned()
                 .collect();
+            require_existing_subnet_ids(&requested_subnet_ids, &config.id)?;
             let response = ec2_client
                 .describe_subnets(
                     DescribeSubnetsRequest::builder()
@@ -5412,6 +5418,18 @@ impl AwsNetworkController {
 /// test drives the real handlers through `SingleControllerExecutor` with a mocked EC2 API.
 /// `SingleControllerExecutor::step` keeps what a failed handler wrote to `self`, like the
 /// real executor, so a failed step followed by another step is a retry.
+/// Existing networks must name at least one subnet. An empty `DescribeSubnets`
+/// filter would list every subnet in the account instead of the network's own.
+fn require_existing_subnet_ids(subnet_ids: &[String], resource_id: &str) -> Result<()> {
+    if subnet_ids.is_empty() {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Existing AWS networks require at least one subnet ID".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod controller_state_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5430,7 +5448,7 @@ mod controller_state_tests {
     use super::*;
     use crate::core::{
         controller_test::{assert_polling_delays, SingleControllerExecutor},
-        MockPlatformServiceProvider, ResourceController,
+        MockPlatformServiceProvider, ResourceController, StackResourceStateExt,
     };
 
     const PREFIX: &str = "test";
@@ -6038,6 +6056,98 @@ mod controller_state_tests {
             };
             assert_eq!(controller(&executor).state, expected_state);
         }
+    }
+
+    #[tokio::test]
+    async fn imported_network_checkpoint_discovers_only_real_subnets() {
+        for (public, private, expected_public) in [
+            (vec!["", "  "], vec![" subnet-private ", ""], false),
+            (vec![" subnet-public ", ""], vec![""], true),
+        ] {
+            let id = if expected_public {
+                "subnet-public"
+            } else {
+                "subnet-private"
+            };
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_describe_subnets().times(1).returning(move |request| {
+                assert_eq!(request.subnet_ids, Some(vec![id.to_string()]));
+                Ok(parse(json!({"subnetSet": {"item": [{"subnetId": id, "availabilityZone": "us-east-1b"}]}})))
+            });
+            // This is the checkpoint written by the previous version, including its
+            // blank SG and subnet sentinels. Reload it just as a failed-state retry does.
+            let mut checkpoint = crate::core::serialize_controller(&after_vpc(
+                AwsNetworkState::DiscoveringSubnetFailureDomains,
+            ))
+            .unwrap();
+            checkpoint["publicSubnetIds"] = json!(public);
+            checkpoint["privateSubnetIds"] = json!(private);
+            checkpoint["securityGroupId"] = json!("");
+            checkpoint["isByoVpc"] = json!(true);
+            let mut failed = alien_core::StackResourceState::new_pending(
+                "network".into(),
+                alien_core::Resource::new(network(None)),
+                None,
+                vec![],
+            );
+            failed.status = ResourceStatus::ProvisionFailed;
+            failed.last_failed_state = Some(checkpoint);
+            assert!(failed
+                .retry_failed()
+                .expect("retry loads the old checkpoint"));
+            assert_eq!(failed.status, ResourceStatus::Provisioning);
+            let restored = failed
+                .get_internal_controller_typed::<AwsNetworkController>()
+                .unwrap();
+            let mut executor = executor(ec2, restored, None).await;
+            executor
+                .step()
+                .await
+                .expect("imported subnet discovery succeeds");
+            let state = controller(&executor);
+            assert_eq!(state.state, AwsNetworkState::Ready);
+            assert_eq!(state.availability_zones, ["us-east-1b"]);
+            assert_eq!(
+                state.public_subnet_ids,
+                if expected_public {
+                    vec![id.to_string()]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(
+                state.private_subnet_ids,
+                if expected_public {
+                    vec![]
+                } else {
+                    vec![id.to_string()]
+                }
+            );
+            assert!(state.security_group_id.is_none());
+            let outputs = state.build_outputs().unwrap();
+            assert_eq!(
+                serde_json::to_value(outputs).unwrap()["hasPublicSubnets"]
+                    .as_bool()
+                    .unwrap(),
+                expected_public
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn imported_network_without_subnets_does_not_enumerate_the_account() {
+        let mut checkpoint = crate::core::serialize_controller(&after_vpc(
+            AwsNetworkState::DiscoveringSubnetFailureDomains,
+        ))
+        .unwrap();
+        checkpoint["publicSubnetIds"] = json!([""]);
+        checkpoint["privateSubnetIds"] = json!(["  "]);
+        let mut executor = executor(MockEc2Api::new(), parse(checkpoint), None).await;
+        let error = executor
+            .step()
+            .await
+            .expect_err("empty subnet topology must fail locally");
+        assert!(error.to_string().contains("at least one subnet ID"));
     }
 
     // ─────────────── Subnets ───────────────

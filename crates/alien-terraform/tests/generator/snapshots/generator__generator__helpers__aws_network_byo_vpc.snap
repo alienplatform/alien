@@ -241,7 +241,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = compact([for id in var.public_subnet_ids : trimspace(id)]), privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)]), securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)]) }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -252,11 +252,11 @@ locals {
         internetGatewayId   = null
         natGatewayId        = null
         eipAllocationId     = null
-        publicSubnetIds     = var.default_network_public_subnet_ids
-        privateSubnetIds    = var.default_network_private_subnet_ids
+        publicSubnetIds     = compact([for id in var.default_network_public_subnet_ids : trimspace(id)])
+        privateSubnetIds    = compact([for id in var.default_network_private_subnet_ids : trimspace(id)])
         publicRouteTableId  = null
         privateRouteTableId = null
-        securityGroupId     = try(var.default_network_security_group_ids[0], null)
+        securityGroupId     = try(compact([for id in var.default_network_security_group_ids : trimspace(id)])[0], null)
         availabilityZones   = data.aws_availability_zones.available.names
         isByoVpc            = true
       }

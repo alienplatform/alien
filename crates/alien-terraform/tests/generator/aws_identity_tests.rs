@@ -16,7 +16,10 @@ use alien_core::{
     Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
-use hcl::expr::{BinaryOperator, Operation};
+use hcl::{
+    eval::{Context, Evaluate, FuncDef, ParamType},
+    expr::{BinaryOperator, Operation},
+};
 use serde_json::Value;
 
 #[test]
@@ -1509,6 +1512,47 @@ fn evaluate_connector(expression: &hcl::Expression, network_mode: &str) -> Value
             ),
             other => panic!("the parity test cannot evaluate {other:?}"),
         },
+        hcl::Expression::FuncCall(_) => {
+            let mut context = Context::new();
+            context.declare_var(
+                "var",
+                hcl::to_value(serde_json::json!({
+                    "private_subnet_ids": EXISTING_SUBNETS,
+                    "default_network_private_subnet_ids": EXISTING_SUBNETS,
+                }))
+                .unwrap(),
+            );
+            context.declare_func(
+                "trimspace",
+                FuncDef::new(
+                    |args| Ok(args[0].as_str().unwrap().trim().to_string().into()),
+                    [ParamType::String],
+                ),
+            );
+            context.declare_func(
+                "compact",
+                FuncDef::new(
+                    |args| {
+                        Ok(hcl::Value::Array(
+                            args[0]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .filter(|id| !id.as_str().unwrap().is_empty())
+                                .cloned()
+                                .collect(),
+                        ))
+                    },
+                    [ParamType::array_of(ParamType::String)],
+                ),
+            );
+            serde_json::to_value(
+                expression
+                    .evaluate(&context)
+                    .expect("evaluate normalized subnet expression"),
+            )
+            .unwrap()
+        }
         hcl::Expression::Traversal(_) => match expression.to_string().as_str() {
             "local.resource_prefix" => Value::from(PARITY_PREFIX),
             "var.network_mode" => Value::from(network_mode),
