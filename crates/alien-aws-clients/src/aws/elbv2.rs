@@ -18,6 +18,9 @@
 //! ).await?;
 //! ```
 
+mod rules;
+pub use rules::*;
+
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
@@ -117,6 +120,13 @@ pub trait Elbv2Api: Send + Sync + std::fmt::Debug {
     ) -> Result<ModifyListenerResponse>;
     async fn delete_listener(&self, listener_arn: &str) -> Result<()>;
 
+    // Listener rule operations. Mutations are single-attempt so durable callers
+    // can reconcile an uncertain reply against the observed rule.
+    async fn create_rule(&self, request: CreateRuleRequest) -> Result<CreateRuleResponse>;
+    async fn describe_rules(&self, request: DescribeRulesRequest) -> Result<DescribeRulesResponse>;
+    async fn modify_rule(&self, request: ModifyRuleRequest) -> Result<ModifyRuleResponse>;
+    async fn delete_rule(&self, rule_arn: &str) -> Result<()>;
+
     // Tag Operations
     /// Reads the tags of up to 20 load balancers, target groups or listeners.
     async fn describe_tags(&self, resource_arns: Vec<String>) -> Result<DescribeTagsResponse>;
@@ -138,6 +148,101 @@ impl Elbv2Client {
         Self {
             client,
             credentials,
+        }
+    }
+
+    fn add_actions(form_data: &mut HashMap<String, String>, prefix: &str, actions: &[Action]) {
+        for (i, action) in actions.iter().enumerate() {
+            let idx = i + 1;
+            form_data.insert(
+                format!("{prefix}.member.{}.Type", idx),
+                action.action_type.clone(),
+            );
+
+            if let Some(ref tg_arn) = action.target_group_arn {
+                form_data.insert(
+                    format!("{prefix}.member.{}.TargetGroupArn", idx),
+                    tg_arn.clone(),
+                );
+            }
+
+            if let Some(order) = action.order {
+                form_data.insert(format!("{prefix}.member.{}.Order", idx), order.to_string());
+            }
+
+            if let Some(ref forward_config) = action.forward_config {
+                if let Some(ref target_groups) = forward_config.target_groups {
+                    for (j, tg) in target_groups.iter().enumerate() {
+                        let tg_idx = j + 1;
+                        form_data.insert(
+                            format!("{prefix}.member.{}.ForwardConfig.TargetGroups.member.{}.TargetGroupArn", idx, tg_idx),
+                            tg.target_group_arn.clone(),
+                        );
+                        if let Some(weight) = tg.weight {
+                            form_data.insert(
+                                format!("{prefix}.member.{}.ForwardConfig.TargetGroups.member.{}.Weight", idx, tg_idx),
+                                weight.to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+
+            if let Some(ref redirect_config) = action.redirect_config {
+                form_data.insert(
+                    format!("{prefix}.member.{}.RedirectConfig.StatusCode", idx),
+                    redirect_config.status_code.clone(),
+                );
+                if let Some(ref protocol) = redirect_config.protocol {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.RedirectConfig.Protocol", idx),
+                        protocol.clone(),
+                    );
+                }
+                if let Some(ref port) = redirect_config.port {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.RedirectConfig.Port", idx),
+                        port.clone(),
+                    );
+                }
+                if let Some(ref host) = redirect_config.host {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.RedirectConfig.Host", idx),
+                        host.clone(),
+                    );
+                }
+                if let Some(ref path) = redirect_config.path {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.RedirectConfig.Path", idx),
+                        path.clone(),
+                    );
+                }
+                if let Some(ref query) = redirect_config.query {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.RedirectConfig.Query", idx),
+                        query.clone(),
+                    );
+                }
+            }
+
+            if let Some(ref fixed_response) = action.fixed_response_config {
+                form_data.insert(
+                    format!("{prefix}.member.{}.FixedResponseConfig.StatusCode", idx),
+                    fixed_response.status_code.clone(),
+                );
+                if let Some(ref content_type) = fixed_response.content_type {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.FixedResponseConfig.ContentType", idx),
+                        content_type.clone(),
+                    );
+                }
+                if let Some(ref message_body) = fixed_response.message_body {
+                    form_data.insert(
+                        format!("{prefix}.member.{}.FixedResponseConfig.MessageBody", idx),
+                        message_body.clone(),
+                    );
+                }
+            }
         }
     }
 
@@ -335,6 +440,15 @@ impl Elbv2Client {
             // Listener not found
             "ListenerNotFound" | "ListenerNotFoundException" => ErrorData::RemoteResourceNotFound {
                 resource_type: "Listener".into(),
+                resource_name: resource.into(),
+            },
+            "RuleNotFound" | "RuleNotFoundException" => ErrorData::RemoteResourceNotFound {
+                resource_type: "Rule".into(),
+                resource_name: resource.into(),
+            },
+            "PriorityInUse" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Rule".into(),
                 resource_name: resource.into(),
             },
             // Already exists
@@ -924,111 +1038,7 @@ impl Elbv2Api for Elbv2Client {
         form_data.insert("Port".to_string(), request.port.to_string());
         form_data.insert("Protocol".to_string(), request.protocol.clone());
 
-        // Add default actions
-        for (i, action) in request.default_actions.iter().enumerate() {
-            let idx = i + 1;
-            form_data.insert(
-                format!("DefaultActions.member.{}.Type", idx),
-                action.action_type.clone(),
-            );
-
-            if let Some(ref tg_arn) = action.target_group_arn {
-                form_data.insert(
-                    format!("DefaultActions.member.{}.TargetGroupArn", idx),
-                    tg_arn.clone(),
-                );
-            }
-
-            if let Some(order) = action.order {
-                form_data.insert(
-                    format!("DefaultActions.member.{}.Order", idx),
-                    order.to_string(),
-                );
-            }
-
-            if let Some(ref forward_config) = action.forward_config {
-                if let Some(ref target_groups) = forward_config.target_groups {
-                    for (j, tg) in target_groups.iter().enumerate() {
-                        let tg_idx = j + 1;
-                        form_data.insert(
-                            format!("DefaultActions.member.{}.ForwardConfig.TargetGroups.member.{}.TargetGroupArn", idx, tg_idx),
-                            tg.target_group_arn.clone(),
-                        );
-                        if let Some(weight) = tg.weight {
-                            form_data.insert(
-                                format!("DefaultActions.member.{}.ForwardConfig.TargetGroups.member.{}.Weight", idx, tg_idx),
-                                weight.to_string(),
-                            );
-                        }
-                    }
-                }
-            }
-
-            if let Some(ref redirect_config) = action.redirect_config {
-                form_data.insert(
-                    format!("DefaultActions.member.{}.RedirectConfig.StatusCode", idx),
-                    redirect_config.status_code.clone(),
-                );
-                if let Some(ref protocol) = redirect_config.protocol {
-                    form_data.insert(
-                        format!("DefaultActions.member.{}.RedirectConfig.Protocol", idx),
-                        protocol.clone(),
-                    );
-                }
-                if let Some(ref port) = redirect_config.port {
-                    form_data.insert(
-                        format!("DefaultActions.member.{}.RedirectConfig.Port", idx),
-                        port.clone(),
-                    );
-                }
-                if let Some(ref host) = redirect_config.host {
-                    form_data.insert(
-                        format!("DefaultActions.member.{}.RedirectConfig.Host", idx),
-                        host.clone(),
-                    );
-                }
-                if let Some(ref path) = redirect_config.path {
-                    form_data.insert(
-                        format!("DefaultActions.member.{}.RedirectConfig.Path", idx),
-                        path.clone(),
-                    );
-                }
-                if let Some(ref query) = redirect_config.query {
-                    form_data.insert(
-                        format!("DefaultActions.member.{}.RedirectConfig.Query", idx),
-                        query.clone(),
-                    );
-                }
-            }
-
-            if let Some(ref fixed_response) = action.fixed_response_config {
-                form_data.insert(
-                    format!(
-                        "DefaultActions.member.{}.FixedResponseConfig.StatusCode",
-                        idx
-                    ),
-                    fixed_response.status_code.clone(),
-                );
-                if let Some(ref content_type) = fixed_response.content_type {
-                    form_data.insert(
-                        format!(
-                            "DefaultActions.member.{}.FixedResponseConfig.ContentType",
-                            idx
-                        ),
-                        content_type.clone(),
-                    );
-                }
-                if let Some(ref message_body) = fixed_response.message_body {
-                    form_data.insert(
-                        format!(
-                            "DefaultActions.member.{}.FixedResponseConfig.MessageBody",
-                            idx
-                        ),
-                        message_body.clone(),
-                    );
-                }
-            }
-        }
+        Self::add_actions(&mut form_data, "DefaultActions", &request.default_actions);
 
         if let Some(ref ssl_policy) = request.ssl_policy {
             form_data.insert("SslPolicy".to_string(), ssl_policy.clone());
@@ -1120,23 +1130,65 @@ impl Elbv2Api for Elbv2Client {
         }
 
         if let Some(ref default_actions) = request.default_actions {
-            for (i, action) in default_actions.iter().enumerate() {
-                let idx = i + 1;
-                form_data.insert(
-                    format!("DefaultActions.member.{}.Type", idx),
-                    action.action_type.clone(),
-                );
-                if let Some(ref tg_arn) = action.target_group_arn {
-                    form_data.insert(
-                        format!("DefaultActions.member.{}.TargetGroupArn", idx),
-                        tg_arn.clone(),
-                    );
-                }
-            }
+            Self::add_actions(&mut form_data, "DefaultActions", default_actions);
         }
 
         self.send_form(form_data, "ModifyListener", &request.listener_arn)
             .await
+    }
+
+    async fn create_rule(&self, request: CreateRuleRequest) -> Result<CreateRuleResponse> {
+        let mut form = rules::rule_form("CreateRule");
+        form.insert("ListenerArn".into(), request.listener_arn.clone());
+        form.insert("Priority".into(), request.priority.to_string());
+        rules::add_conditions(&mut form, &request.conditions);
+        Self::add_actions(&mut form, "Actions", &request.actions);
+        rules::add_transforms(&mut form, &request.transforms);
+        Self::add_tags(&mut form, &request.tags);
+        self.send_rule_mutation(form, "CreateRule", &request.listener_arn)
+            .await
+    }
+
+    async fn describe_rules(&self, request: DescribeRulesRequest) -> Result<DescribeRulesResponse> {
+        let mut form = rules::rule_form("DescribeRules");
+        if let Some(listener) = request.listener_arn {
+            form.insert("ListenerArn".into(), listener);
+        }
+        for (index, arn) in request.rule_arns.iter().enumerate() {
+            form.insert(format!("RuleArns.member.{}", index + 1), arn.clone());
+        }
+        if let Some(marker) = request.marker {
+            form.insert("Marker".into(), marker);
+        }
+        if let Some(size) = request.page_size {
+            form.insert("PageSize".into(), size.to_string());
+        }
+        self.send_form(form, "DescribeRules", "Rule").await
+    }
+
+    async fn modify_rule(&self, request: ModifyRuleRequest) -> Result<ModifyRuleResponse> {
+        let mut form = rules::rule_form("ModifyRule");
+        form.insert("RuleArn".into(), request.rule_arn.clone());
+        if let Some(conditions) = request.conditions {
+            rules::add_conditions(&mut form, &conditions);
+        }
+        if let Some(actions) = request.actions {
+            Self::add_actions(&mut form, "Actions", &actions);
+        }
+        if let Some(transforms) = request.transforms {
+            rules::add_transforms(&mut form, &transforms);
+        }
+        if let Some(reset) = request.reset_transforms {
+            form.insert("ResetTransforms".into(), reset.to_string());
+        }
+        self.send_rule_mutation(form, "ModifyRule", &request.rule_arn)
+            .await
+    }
+
+    async fn delete_rule(&self, rule_arn: &str) -> Result<()> {
+        let mut form = rules::rule_form("DeleteRule");
+        form.insert("RuleArn".into(), rule_arn.into());
+        self.send_form_no_body(form, "DeleteRule", rule_arn).await
     }
 
     async fn describe_tags(&self, resource_arns: Vec<String>) -> Result<DescribeTagsResponse> {
@@ -2167,9 +2219,10 @@ mod wire_tests {
             form.get("Attributes.member.1.Value").map(String::as_str),
             Some("true")
         );
-        assert!(form
-            .get("LoadBalancerArn")
-            .is_some_and(|arn| arn.contains("loadbalancer/net/example/abc")));
+        assert!(
+            form.get("LoadBalancerArn")
+                .is_some_and(|arn| arn.contains("loadbalancer/net/example/abc"))
+        );
         assert_eq!(form.len(), 5);
     }
 }
@@ -2182,8 +2235,7 @@ mod describe_tags_tests {
     use std::collections::HashMap;
 
     const LOAD_BALANCER_ARN: &str = "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/my-load-balancer/50dc6c495c0c9188";
-    const TARGET_GROUP_ARN: &str =
-        "arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067";
+    const TARGET_GROUP_ARN: &str = "arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067";
 
     /// The DescribeTags response example from the Elastic Load Balancing API reference.
     const DOCS_RESPONSE: &str = r#"<DescribeTagsResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
