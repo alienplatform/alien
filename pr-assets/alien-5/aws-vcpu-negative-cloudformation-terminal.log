@@ -1,0 +1,8 @@
+$ AWS_REGION=eu-west-1 alien render --format cloudformation --stack negative-alien.json --stack-settings settings.yaml --output negative-cloudformation --check-quotas
+Configuration error: VALIDATION_FAILED: Validation failed with 1 errors and 0 warnings
+Cause:
+  - Validation failed with 1 errors and 0 warnings
+Failed checks:
+  - Running On-Demand vCPUs (L-1216C47A, eu-west-1): used 0, applied limit 16, additional needed 40. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A
+
+Exit code: 1

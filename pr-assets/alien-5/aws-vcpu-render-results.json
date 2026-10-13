@@ -1,0 +1,34 @@
+[
+  {
+    "scenario": "negative",
+    "format": "cloudformation",
+    "exit": 1,
+    "outputExists": false,
+    "quotaShortfall": true,
+    "limitation": null
+  },
+  {
+    "scenario": "negative",
+    "format": "terraform",
+    "exit": 1,
+    "outputExists": false,
+    "quotaShortfall": true,
+    "limitation": null
+  },
+  {
+    "scenario": "positive",
+    "format": "cloudformation",
+    "exit": 1,
+    "outputExists": false,
+    "quotaShortfall": false,
+    "limitation": "Quota passes; OSS binary lacks compute emitter. No positive deployment claimed."
+  },
+  {
+    "scenario": "positive",
+    "format": "terraform",
+    "exit": 1,
+    "outputExists": false,
+    "quotaShortfall": false,
+    "limitation": "Quota passes; OSS binary lacks compute emitter. No positive deployment claimed."
+  }
+]

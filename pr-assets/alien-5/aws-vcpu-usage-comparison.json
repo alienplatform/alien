@@ -1,0 +1,15 @@
+{
+  "region": "us-east-2",
+  "quota": "L-1216C47A",
+  "inventoryUsed": 30.0,
+  "appliedLimit": 32.0,
+  "cloudWatchReferenceUsed": 30.0,
+  "cloudWatchReferenceStatus": "Complete",
+  "productReads": [
+    "ec2:DescribeInstances",
+    "ec2:DescribeInstanceTypes",
+    "servicequotas:GetServiceQuota"
+  ],
+  "productCloudWatchReads": false,
+  "cloudMutations": 0
+}

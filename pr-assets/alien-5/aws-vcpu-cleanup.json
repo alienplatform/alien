@@ -1,0 +1,10 @@
+{
+  "destroyExitCode": 0,
+  "ownedRoles": 0,
+  "ownedAutoScalingGroups": 0,
+  "ownedLaunchTemplates": 0,
+  "localFixtureStopped": true,
+  "finalDeletedApiSnapshotCaptured": false,
+  "quotaOverrideUsed": false,
+  "negativeHadAdditionalBackendPrerequisite": true
+}

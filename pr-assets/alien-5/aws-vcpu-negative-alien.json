@@ -1,0 +1,1 @@
+{"id": "q5-compute", "resources": {"compute": {"config": {"type": "compute-cluster", "id": "compute", "capacityGroups": [{"groupId": "general", "instanceType": "m7g.xlarge", "minSize": 0, "maxSize": 10}]}, "lifecycle": "frozen", "dependencies": []}}}

@@ -1,0 +1,11 @@
+Real AWS E2E target · us-east-2 · L-1216C47A
+
+Rust quota reader (EC2 inventory + public default vCPU metadata):
+  used = 30 vCPUs; applied limit = 32 vCPUs
+
+Independent local reference (aws cloudwatch get-metric-data):
+  AWS/Usage ResourceCount; Class=Standard/OnDemand
+  status = Complete; latest value = 30 vCPUs
+
+Exact usage match. Product performs no CloudWatch read.
+No cloud resources created or quotas changed.
