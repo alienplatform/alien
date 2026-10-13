@@ -43,10 +43,22 @@ impl CfEmitter for AwsKeyEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
         let logical_id = required_logical_id(ctx)?;
-        Ok(CfExpression::object([(
-            "keyArn",
-            CfExpression::get_att(logical_id, "Arn"),
-        )]))
+        Ok(CfExpression::object([
+            ("keyArn", CfExpression::get_att(logical_id, "Arn")),
+            (
+                "availabilityProbe",
+                CfExpression::from(
+                    ctx.stack
+                        .management()
+                        .profile()
+                        .and_then(|profile| profile.0.get(ctx.resource_id))
+                        .is_some_and(|refs| {
+                            refs.iter()
+                                .any(|reference| reference.id() == "key/availability")
+                        }),
+                ),
+            ),
+        ]))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {

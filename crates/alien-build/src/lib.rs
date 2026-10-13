@@ -21,6 +21,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
+use command_output::image_build_error_with_output;
 use dockdash::{Image as DockDashImage, Layer as DockDashLayer, PullPolicy};
 use error::{DockdashResultExt, ErrorData, Result};
 use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
@@ -3682,52 +3683,79 @@ async fn pull_and_export_image(
             reason: "Failed to create container directory for export".to_string(),
         })?;
 
-    // The classic Docker image store exports Docker archives, not OCI archives.
-    // Reuse the Dockerfile exporter so both image stores produce the same format.
-    let source = tempfile::tempdir()
-        .into_alien_error()
-        .context(ErrorData::ImageBuildFailed {
-            resource_name: container_name.to_string(),
-            reason: "Failed to create image export context".to_string(),
-            build_output: None,
-        })?;
-    fs::write(
-        source.path().join("Dockerfile"),
-        "ARG SOURCE_IMAGE\nFROM ${SOURCE_IMAGE}\n",
-    )
-    .await
-    .into_alien_error()
-    .context(ErrorData::ImageBuildFailed {
-        resource_name: container_name.to_string(),
-        reason: "Failed to write image export Dockerfile".to_string(),
-        build_output: None,
-    })?;
-    let exporter = toolchain::docker::DockerToolchain {
-        dockerfile: None,
-        build_args: Some(HashMap::from([(
-            "SOURCE_IMAGE".to_string(),
-            image.to_string(),
-        )])),
-        target: None,
-    };
+    // Pull the image for each target architecture
     for target in targets {
-        exporter
-            .build_with_contexts(
-                &toolchain::ToolchainContext {
-                    src_dir: source.path().to_path_buf(),
-                    build_dir: container_dir.clone(),
-                    cache_store: None,
-                    cache_prefix: String::new(),
-                    build_target: target,
-                    runtime_platform_name: settings.platform.runtime_platform().to_string(),
-                    debug_mode: settings.debug_mode,
-                    pull_base_images: true,
-                    workload: toolchain::WorkloadKind::Container,
-                },
-                &[],
-                false,
-            )
-            .await?;
+        let arch_str = match target.to_dockdash_arch() {
+            dockdash::Arch::Amd64 => "amd64",
+            dockdash::Arch::ARM64 => "arm64",
+            _ => "amd64", // Fallback for other architectures
+        };
+        let platform_str = format!("linux/{}", arch_str);
+
+        info!("Pulling image '{}' for platform {}", image, platform_str);
+
+        // Pull the image with specific platform
+        let pull_output = Command::new("docker")
+            .args(&["pull", "--platform", &platform_str, image])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImageBuildFailed {
+                resource_name: container_name.to_string(),
+                reason: "Failed to execute docker pull".to_string(),
+                build_output: None,
+            })?;
+
+        if !pull_output.status.success() {
+            return Err(image_build_error_with_output(
+                container_name,
+                format!("docker pull failed for image '{}'", image),
+                &pull_output,
+            ));
+        }
+
+        info!("Successfully pulled image '{}' for {}", image, platform_str);
+
+        // Export to OCI tarball
+        let target_filename = format!("{}.oci.tar", target.runtime_platform_id());
+        let output_tarball = container_dir.join(&target_filename);
+
+        info!("Exporting to OCI tarball: {}", output_tarball.display());
+
+        let save_output = Command::new("docker")
+            .args(&["save", "-o", &output_tarball.to_string_lossy(), image])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImageBuildFailed {
+                resource_name: container_name.to_string(),
+                reason: "Failed to execute docker save".to_string(),
+                build_output: None,
+            })?;
+
+        if !save_output.status.success() {
+            return Err(image_build_error_with_output(
+                container_name,
+                "docker save failed",
+                &save_output,
+            ));
+        }
+
+        // Flatten the saved archive to a single image manifest before the OCI reader sees it.
+        crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
+            &output_tarball,
+            arch_str,
+        )?;
+
+        info!(
+            "Successfully exported {} to {}",
+            image,
+            output_tarball.display()
+        );
     }
 
     // Compute content hash
@@ -4585,7 +4613,7 @@ mod tests {
         let err = result.unwrap_err();
         let err_str = err.to_string();
         assert!(
-            err_str.contains("docker buildx build failed") || err_str.contains("not found"),
+            err_str.contains("docker pull failed") || err_str.contains("not found"),
             "Error should identify the image resolution failure: {}",
             err_str
         );

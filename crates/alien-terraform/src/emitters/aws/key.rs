@@ -8,7 +8,7 @@ use crate::{
     expr,
 };
 use alien_core::{
-    Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result, import::EmitContext,
+    import::EmitContext, Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_permissions::BindingTarget;
 use hcl::{expr::Expression, structure::Block};
@@ -83,19 +83,32 @@ impl TfEmitter for AwsKeyEmitter {
 
         if let Some(management_label) = management_label(ctx) {
             let profile = ctx.stack.management().profile();
-            for permission in profile.and_then(|profile| profile.0.get(ctx.resource_id)).into_iter().flatten() {
-                let permission_set = permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                    .ok_or_else(|| alien_error::AlienError::new(alien_core::ErrorData::GenericError {
-                        message: format!("Unknown Key management permission '{}'", permission.id()),
-                    }))?;
+            for permission in profile
+                .and_then(|profile| profile.0.get(ctx.resource_id))
+                .into_iter()
+                .flatten()
+            {
+                let permission_set = permission
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                    .ok_or_else(|| {
+                        alien_error::AlienError::new(alien_core::ErrorData::GenericError {
+                            message: format!(
+                                "Unknown Key management permission '{}'",
+                                permission.id()
+                            ),
+                        })
+                    })?;
                 let context = aws_terraform_permission_context()
                     .with_resource_name(format!("${{terraform_data.{label}_key_identity.output}}"));
                 let suffix = iam_policy_name_sanitize(&permission_set.id);
                 emit_iam_role_policy_for_target_with_label(
-                    &mut fragment, management_label, &permission_set,
+                    &mut fragment,
+                    management_label,
+                    &permission_set,
                     &format!("{management_label}_{label}_{suffix}"),
                     &format!("management-{}-{suffix}", ctx.resource_id),
-                    &context, BindingTarget::Resource,
+                    &context,
+                    BindingTarget::Resource,
                 )?;
             }
         }
@@ -131,7 +144,22 @@ impl TfEmitter for AwsKeyEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([("keyArn", key_arn(label))]))
+        Ok(expr::object([
+            ("keyArn", key_arn(label)),
+            (
+                "availabilityProbe",
+                Expression::Bool(
+                    ctx.stack
+                        .management()
+                        .profile()
+                        .and_then(|profile| profile.0.get(ctx.resource_id))
+                        .is_some_and(|refs| {
+                            refs.iter()
+                                .any(|reference| reference.id() == "key/availability")
+                        }),
+                ),
+            ),
+        ]))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {

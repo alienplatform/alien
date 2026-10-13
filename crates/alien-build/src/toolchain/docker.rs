@@ -6,6 +6,7 @@ use alien_core::AlienEvent;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::File;
@@ -330,7 +331,6 @@ impl DockerToolchain {
         &self,
         context: &ToolchainContext,
         additional_contexts: &[(&str, &Path)],
-        requires_execution: bool,
     ) -> Result<ToolchainOutput> {
         let dockerfile_name = self.dockerfile.as_deref().unwrap_or("Dockerfile");
 
@@ -373,17 +373,13 @@ impl DockerToolchain {
         let platform_str = format!("linux/{}", arch_str);
 
         let builder = Self::select_builder().await?;
-        // An image-only FROM export never executes target instructions and works
-        // across architectures without emulation. Dockerfile builds can run code.
-        if requires_execution {
-            if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
-                if builder.owned {
-                    if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
-                        warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
-                    }
+        if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
+            if builder.owned {
+                if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
+                    warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
                 }
-                return Err(error);
             }
+            return Err(error);
         }
 
         let mut args = vec![
@@ -540,7 +536,7 @@ impl DockerToolchain {
 #[async_trait]
 impl Toolchain for DockerToolchain {
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
-        self.build_with_contexts(context, &[], true).await
+        self.build_with_contexts(context, &[]).await
     }
 
     fn dev_command(&self, _src_dir: &Path) -> Vec<String> {
@@ -589,7 +585,7 @@ impl DockerToolchain {
         const SMALL_BLOB_BYTES: u64 = 1 << 20;
         let mut index: Option<Value> = None;
         let mut blobs: HashMap<String, Value> = HashMap::new();
-        let mut has_docker_manifest = false;
+        let mut saved_manifest = None;
 
         let archive_file =
             File::open(tarball_path)
@@ -616,7 +612,7 @@ impl DockerToolchain {
             if path == "index.json" {
                 index = Some(read_entry_json(&mut entry)?);
             } else if path == "manifest.json" {
-                has_docker_manifest = true;
+                saved_manifest = Some(read_entry_json(&mut entry)?);
             } else if path.starts_with("blobs/") && entry.size() <= SMALL_BLOB_BYTES {
                 // Only descriptors are stored by digest; key small blobs by "sha256:<hex>".
                 if let Some(digest) = blob_path_to_digest(&path) {
@@ -627,11 +623,14 @@ impl DockerToolchain {
             }
         }
 
-        // No index.json means `docker save` produced something unusable — fail here with a
-        // precise message instead of letting it surface as an opaque read error downstream.
-        let index = index.ok_or_else(|| {
-            AlienError::new(docker_read_error("OCI tarball is missing index.json"))
-        })?;
+        let Some(index) = index else {
+            let saved_manifest = saved_manifest.ok_or_else(|| {
+                AlienError::new(docker_read_error(
+                    "Image archive has neither an OCI index nor a Docker manifest",
+                ))
+            })?;
+            return convert_docker_archive(tarball_path, target_arch, &saved_manifest);
+        };
 
         let chosen = select_image_manifest_descriptor(&index, &blobs, target_arch)?;
         let new_index = if index_points_only_at(&index, &chosen) {
@@ -643,7 +642,7 @@ impl DockerToolchain {
                 "manifests": [chosen.clone()],
             }))
         };
-        let docker_manifest = if has_docker_manifest {
+        let docker_manifest = if saved_manifest.is_some() {
             None
         } else {
             Some(docker_manifest_for_descriptor(&chosen, &blobs)?)
@@ -676,6 +675,161 @@ impl DockerToolchain {
             docker_manifest_bytes.as_deref(),
         )
     }
+}
+
+/// Convert a classic `docker save` archive without executing or altering the image.
+/// Keep the original config (including ONBUILD) and stream layers instead of buffering them.
+fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Result<()> {
+    let failure = || docker_read_error("Invalid single-image Docker archive");
+    let images = saved
+        .as_array()
+        .filter(|images| images.len() == 1)
+        .ok_or_else(|| AlienError::new(failure()))?;
+    let config_path = images[0]["Config"]
+        .as_str()
+        .ok_or_else(|| AlienError::new(failure()))?;
+    let layers = images[0]["Layers"]
+        .as_array()
+        .ok_or_else(|| AlienError::new(failure()))?
+        .iter()
+        .map(|layer| layer.as_str().ok_or_else(|| AlienError::new(failure())))
+        .collect::<Result<Vec<_>>>()?;
+    let mut descriptors = HashMap::new();
+    let source = File::open(path).into_alien_error().context(failure())?;
+    let mut archive = tar::Archive::new(source);
+    for entry in archive.entries().into_alien_error().context(failure())? {
+        let mut entry = entry.into_alien_error().context(failure())?;
+        let name = entry
+            .path()
+            .into_alien_error()
+            .context(failure())?
+            .to_string_lossy()
+            .into_owned();
+        if name != config_path && !layers.contains(&name.as_str()) {
+            continue;
+        }
+        if !entry.header().entry_type().is_file() || descriptors.contains_key(&name) {
+            return Err(AlienError::new(failure()));
+        }
+        let size = entry.size();
+        let mut digest = Sha256::new();
+        if name == config_path {
+            if size > 1 << 20 {
+                return Err(AlienError::new(failure()));
+            }
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .into_alien_error()
+                .context(failure())?;
+            let config: Value = serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(failure())?;
+            if config["architecture"] != target_arch || config["os"] != "linux" {
+                return Err(AlienError::new(docker_read_error(
+                    "Saved image does not match the requested platform",
+                )));
+            }
+            digest.update(&bytes);
+        } else {
+            std::io::copy(&mut entry, &mut digest)
+                .into_alien_error()
+                .context(failure())?;
+        }
+        descriptors.insert(name.clone(), json!({
+            "mediaType": if name == config_path { "application/vnd.oci.image.config.v1+json" } else { "application/vnd.oci.image.layer.v1.tar" },
+            "digest": format!("sha256:{:x}", digest.finalize()), "size": size,
+        }));
+    }
+    let config = descriptors
+        .get(config_path)
+        .ok_or_else(|| AlienError::new(failure()))?;
+    let layer_descriptors = layers
+        .iter()
+        .map(|name| {
+            descriptors
+                .get(*name)
+                .cloned()
+                .ok_or_else(|| AlienError::new(failure()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let manifest = serde_json::to_vec(&json!({
+        "schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": config, "layers": layer_descriptors,
+    }))
+    .into_alien_error()
+    .context(failure())?;
+    let manifest_digest = format!("sha256:{:x}", Sha256::digest(&manifest));
+    let index = json!({"schemaVersion": 2, "manifests": [{
+        "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": manifest_digest,
+        "size": manifest.len(), "platform": {"os":"linux", "architecture":target_arch},
+    }]});
+    let blob_path = |descriptor: &Value| {
+        descriptor["digest"]
+            .as_str()
+            .and_then(digest_to_blob_path)
+            .ok_or_else(|| AlienError::new(failure()))
+    };
+    let docker_manifest = json!([{"Config": blob_path(config)?, "RepoTags": images[0]["RepoTags"],
+        "Layers": layer_descriptors.iter().map(blob_path).collect::<Result<Vec<_>>>()?}]);
+    let temporary = path.with_extension("tar.normalizing");
+    let mut builder = tar::Builder::new(
+        File::create(&temporary)
+            .into_alien_error()
+            .context(failure())?,
+    );
+    let mut archive = tar::Archive::new(File::open(path).into_alien_error().context(failure())?);
+    for entry in archive.entries().into_alien_error().context(failure())? {
+        let mut entry = entry.into_alien_error().context(failure())?;
+        let name = entry
+            .path()
+            .into_alien_error()
+            .context(failure())?
+            .to_string_lossy()
+            .into_owned();
+        if let Some(descriptor) = descriptors.get(&name) {
+            let mut header = entry.header().clone();
+            builder
+                .append_data(&mut header, blob_path(descriptor)?, &mut entry)
+                .into_alien_error()
+                .context(failure())?;
+        }
+    }
+    for (name, bytes) in [
+        (
+            digest_to_blob_path(&manifest_digest).ok_or_else(|| AlienError::new(failure()))?,
+            manifest,
+        ),
+        (
+            "index.json".to_string(),
+            serde_json::to_vec(&index)
+                .into_alien_error()
+                .context(failure())?,
+        ),
+        (
+            "oci-layout".to_string(),
+            br#"{"imageLayoutVersion":"1.0.0"}"#.to_vec(),
+        ),
+        (
+            "manifest.json".to_string(),
+            serde_json::to_vec(&docker_manifest)
+                .into_alien_error()
+                .context(failure())?,
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(bytes.len() as u64);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, name, bytes.as_slice())
+            .into_alien_error()
+            .context(failure())?;
+    }
+    builder.finish().into_alien_error().context(failure())?;
+    std::fs::rename(temporary, path)
+        .into_alien_error()
+        .context(failure())
 }
 
 /// Build the read-side error variant used while normalizing the OCI archive.
@@ -935,6 +1089,79 @@ mod tests {
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn saved_image_preserves_config_and_layers_without_running_onbuild() {
+        if !docker_available() {
+            eprintln!("Docker is unavailable");
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let tag = format!("alien-export-onbuild-{}", rand::random::<u64>());
+        std::fs::write(dir.path().join("payload"), "original layer").unwrap();
+        std::fs::write(dir.path().join("Dockerfile"),
+            "FROM scratch\nCOPY payload /payload\nONBUILD RUN false\nONBUILD COPY missing /missing\nCMD [\"/payload\"]\n").unwrap();
+        let build = Command::new("docker")
+            .args(["build", "--platform", "linux/amd64", "-t", &tag])
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let inspect = Command::new("docker")
+            .args(["image", "inspect", "--format", "{{.Id}}", &tag])
+            .output()
+            .unwrap();
+        assert!(inspect.status.success());
+        let original_id = String::from_utf8(inspect.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        let archive_path = dir.path().join("image.tar");
+        let save = Command::new("docker")
+            .args(["save", "-o"])
+            .arg(&archive_path)
+            .arg(&tag)
+            .output()
+            .unwrap();
+        assert!(save.status.success());
+        DockerToolchain::normalize_oci_archive(&archive_path, "amd64").unwrap();
+        let image = Image::from_tarball(&archive_path).unwrap();
+        assert_eq!(image.get_metadata().unwrap().cmd.unwrap(), vec!["/payload"]);
+        let mut archive = tar::Archive::new(File::open(&archive_path).unwrap());
+        let config_path = digest_to_blob_path(&original_id).unwrap();
+        let mut config = Vec::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            if entry.path().unwrap().as_ref() == Path::new(&config_path) {
+                entry.read_to_end(&mut config).unwrap();
+            }
+        }
+        assert_eq!(format!("sha256:{:x}", Sha256::digest(&config)), original_id);
+        let value: Value = serde_json::from_slice(&config).unwrap();
+        assert_eq!(
+            value["config"]["OnBuild"],
+            json!(["RUN false", "COPY missing /missing"])
+        );
+        let load = Command::new("docker")
+            .args(["load", "-i"])
+            .arg(&archive_path)
+            .output()
+            .unwrap();
+        assert!(
+            load.status.success(),
+            "{}",
+            String::from_utf8_lossy(&load.stderr)
+        );
+        let cleanup = Command::new("docker")
+            .args(["image", "rm", &tag])
+            .output()
+            .unwrap();
+        assert!(cleanup.status.success());
     }
 
     #[test]

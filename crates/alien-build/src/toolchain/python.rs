@@ -201,7 +201,7 @@ impl Toolchain for PythonToolchain {
             build_args: None,
             target: None,
         }
-        .build_with_contexts(context, &contexts, true)
+        .build_with_contexts(context, &contexts)
         .await;
 
         if let Err(error) = fs::remove_dir_all(&inputs.root).await {

@@ -47,12 +47,10 @@ fn aws_key_package_is_valid_and_retained() {
         .get("detach-retained-keys.sh")
         .expect("retained Key detach operation");
     assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key[0]'"));
-    assert!(
-        module
-            .get("README.md")
-            .unwrap()
-            .contains("terraform destroy")
-    );
+    assert!(module
+        .get("README.md")
+        .unwrap()
+        .contains("terraform destroy"));
     assert_terraform_valid(&module, "aws_key_package");
 }
 
@@ -75,7 +73,7 @@ fn retained_key_detach_operation_is_idempotent_and_narrow() {
     fs::write(&detach_path, module.get("detach-retained-keys.sh").unwrap()).unwrap();
     fs::write(
         temp.path().join("state"),
-        "aws_kms_key.customer_key[0]\naws_iam_role.unrelated\n",
+        "aws_kms_key.customer_key\naws_kms_key.customer_key[0]\naws_iam_role.unrelated\n",
     )
     .unwrap();
     let terraform_path = temp.path().join("terraform");
@@ -109,7 +107,7 @@ fn retained_key_detach_operation_is_idempotent_and_narrow() {
     );
     assert_eq!(
         fs::read_to_string(temp.path().join("log")).unwrap(),
-        "aws_kms_key.customer_key[0]\n"
+        "aws_kms_key.customer_key\naws_kms_key.customer_key[0]\n"
     );
 }
 

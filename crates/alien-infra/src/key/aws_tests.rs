@@ -132,6 +132,7 @@ async fn revoked_key_suspends_dependents_and_resumes_same_resources() {
             .import(
                 AwsKeyImportData {
                     key_arn: KEY_ARN.to_string(),
+                    availability_probe: true,
                 },
                 &ctx,
             )
@@ -145,6 +146,39 @@ async fn revoked_key_suspends_dependents_and_resumes_same_resources() {
         .values()
         .all(|resource| resource.status == ResourceStatus::Running));
     let original_outputs = state.resources["key-suspension-storage"].outputs.clone();
+
+    // An upgraded manager must accept both old import payloads and persisted
+    // controllers without making Encrypt calls that their setup never granted.
+    availability.store(2, Ordering::SeqCst);
+    let legacy_import: AwsKeyImportData =
+        serde_json::from_value(serde_json::json!({ "keyArn": KEY_ARN })).unwrap();
+    let mut legacy_persisted = state.resources[&key.id].clone();
+    legacy_persisted
+        .internal_state
+        .as_mut()
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("availabilityProbe");
+    for legacy_key in [
+        AwsKeyImporter.import(legacy_import, &ctx).unwrap(),
+        legacy_persisted,
+    ] {
+        let mut legacy = state.clone();
+        legacy.resources.insert(key.id.clone(), legacy_key);
+        let refreshed = executor.step(legacy).await.unwrap().next_state;
+        assert_eq!(refreshed.resources[&key.id].status, ResourceStatus::Running);
+        assert_eq!(
+            refreshed.resources[&key.id]
+                .outputs
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<KeyOutputs>()
+                .unwrap()
+                .available,
+            Some(true)
+        );
+    }
 
     availability.store(1, Ordering::SeqCst);
     state = executor.step(state).await.unwrap().next_state;

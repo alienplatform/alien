@@ -20,6 +20,9 @@ use crate::{
 
 #[controller]
 pub struct AwsKeyController {
+    // Older installations have only DescribeKey permission until setup is rerun.
+    #[serde(default)]
+    pub(crate) availability_probe: bool,
     #[serde(default)]
     pub(crate) available: Option<bool>,
     pub(crate) key_arn: Option<String>,
@@ -53,7 +56,8 @@ impl AwsKeyController {
             .service_provider
             .get_aws_kms_client(ctx.get_aws_config()?)
             .await?;
-        let metadata = client.describe_key(key_arn)
+        let metadata = client
+            .describe_key(key_arn)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to read AWS KMS key metadata".to_string(),
@@ -67,7 +71,10 @@ impl AwsKeyController {
             }));
         }
         let mut usable = metadata.key_state == "Enabled" && metadata.enabled;
-        if usable && metadata.origin.as_deref() == Some("EXTERNAL_KEY_STORE") {
+        if usable
+            && self.availability_probe
+            && metadata.origin.as_deref() == Some("EXTERNAL_KEY_STORE")
+        {
             // DescribeKey cannot observe the external customer's key. Encrypting
             // public probe text exercises the gateway without permitting data reads.
             usable = alien_aws_clients::kms::probe_external_key(client.as_ref(), key_arn)
@@ -79,9 +86,7 @@ impl AwsKeyController {
         }
         self.available = Some(usable);
         let (health, lifecycle) = match metadata.key_state.as_str() {
-            "Enabled" if usable => {
-                (ObservedHealth::Healthy, ProviderLifecycleState::Running)
-            }
+            "Enabled" if usable => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
             "Enabled" | "Disabled" => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
             "PendingDeletion" | "PendingReplicaDeletion" => {
                 (ObservedHealth::Unhealthy, ProviderLifecycleState::Deleting)
@@ -99,7 +104,8 @@ impl AwsKeyController {
                 status: KeyHeartbeatStatus {
                     health,
                     lifecycle,
-                    message: (self.available != Some(true)).then(|| "customer key unavailable".to_string()),
+                    message: (self.available != Some(true))
+                        .then(|| "customer key unavailable".to_string()),
                 },
                 key_arn: metadata.arn,
                 key_state: metadata.key_state,
@@ -183,6 +189,7 @@ impl ResourceImporter for AwsKeyImporter {
             AwsKeyController {
                 state: AwsKeyState::Ready,
                 available: None,
+                availability_probe: data.availability_probe,
                 key_arn: Some(data.key_arn),
                 region: Some(ctx.region.to_string()),
                 _internal_stay_count: None,

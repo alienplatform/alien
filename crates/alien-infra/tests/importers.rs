@@ -995,6 +995,7 @@ fn key_handoff_preserves_provider_identity_and_remote_binding() {
         (
             Platform::Aws,
             serde_json::to_value(AwsKeyImportData {
+                availability_probe: true,
                 key_arn: "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555".to_string(),
             })
             .unwrap(),
