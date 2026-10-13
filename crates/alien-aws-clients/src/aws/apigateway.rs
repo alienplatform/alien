@@ -1029,6 +1029,7 @@ pub struct RestMethod {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestStage {
+    pub tags: Option<HashMap<String, String>>,
     pub stage_name: Option<String>,
     pub deployment_id: Option<String>,
 }
