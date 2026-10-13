@@ -117,12 +117,14 @@ impl DistributionArtifactCleanup {
             DistributionArtifactCleanup::CloudFormation {
                 stack_name,
                 region,
+                template_bucket,
                 workdir,
                 ..
             } => {
                 let workdir = workdir.map(TempDir::keep);
                 format!(
-                    "CloudFormation stack '{stack_name}' in '{region}' was retained{}",
+                    "CloudFormation stack '{stack_name}' in '{region}' was retained{}{}",
+                    recovery_template_bucket_suffix(template_bucket.as_deref()),
                     workdir
                         .as_ref()
                         .map(|path| format!("; workdir: {}", path.display()))
@@ -172,7 +174,8 @@ impl DistributionArtifactCleanup {
                 if let Err(error) = run_command(cmd, "aws cloudformation delete-stack").await {
                     let workdir = workdir.map(TempDir::keep);
                     anyhow::bail!(
-                        "CloudFormation cleanup failed to start deletion for stack '{stack_name}' in '{region}': {error}{}",
+                        "CloudFormation cleanup failed to start deletion for stack '{stack_name}' in '{region}': {error}{}{}",
+                        recovery_template_bucket_suffix(template_bucket.as_deref()),
                         recovery_workdir_suffix(workdir.as_deref())
                     );
                 }
@@ -218,9 +221,20 @@ impl DistributionArtifactCleanup {
                         .map(|error| error.to_string())
                         .unwrap_or_else(|| "stack deletion did not complete".to_string());
                     anyhow::bail!(
-                        "CloudFormation stack '{stack_name}' in '{region}' was retained after cleanup failed: {error}{}",
+                        "CloudFormation stack '{stack_name}' in '{region}' was retained after cleanup failed: {error}{}{}",
+                        recovery_template_bucket_suffix(template_bucket.as_deref()),
                         recovery_workdir_suffix(workdir.as_deref())
                     );
+                }
+
+                // Once the stack is gone, its template can be removed even if
+                // a separately retained application resource needs recovery.
+                if let Some(bucket) = template_bucket {
+                    remove_cloudformation_template_bucket(&bucket, &region, &env)
+                        .await
+                        .with_context(|| {
+                            format!("Template bucket s3://{bucket} still needs cleanup")
+                        })?;
                 }
 
                 if let Err(error) =
@@ -236,10 +250,6 @@ impl DistributionArtifactCleanup {
                         "CloudFormation stack '{stack_name}' was deleted, but retained resources [{retained_ids}] still need cleanup: {error}{}",
                         recovery_workdir_suffix(workdir.as_deref())
                     );
-                }
-
-                if let Some(bucket) = template_bucket {
-                    remove_cloudformation_template_bucket(&bucket, &region, &env).await?;
                 }
 
                 Ok(())
@@ -345,6 +355,14 @@ impl DistributionArtifactCleanup {
 fn recovery_workdir_suffix(workdir: Option<&Path>) -> String {
     workdir
         .map(|path| format!("; workdir retained at {}", path.display()))
+        .unwrap_or_default()
+}
+
+fn recovery_template_bucket_suffix(bucket: Option<&str>) -> String {
+    bucket
+        .map(|bucket| {
+            format!("; template bucket s3://{bucket} must be removed after stack recovery")
+        })
         .unwrap_or_default()
 }
 
