@@ -611,6 +611,18 @@ impl DeploymentLoop {
                 platform = ?deployment.platform,
                 "Skipping bootstrap phase because resolved credentials cannot provision"
             );
+            // Acquisition consumes the persisted retry. If we cannot run setup,
+            // return it while we still own the lease so a setup-capable driver
+            // can acquire the same failed deployment after we release it.
+            if deployment.retry_requested {
+                self.checkpoint_without_step(
+                    &deployment_id,
+                    session,
+                    recorded_state,
+                    execution_claim,
+                )
+                .await?;
+            }
             return Ok(());
         }
         let client_config = resolved_credentials.client_config;
@@ -1247,7 +1259,8 @@ mod tests {
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
         should_wait_for_credential_handoff, supplied_release_stacks, with_environment_snapshot,
-        worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        worker_commands_push_env_vars, DeploymentLoop, ProcessOptions,
+        GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1262,12 +1275,21 @@ mod tests {
     use alien_error::AlienError;
     use chrono::Utc;
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tempfile::TempDir;
 
+    use crate::auth::Subject;
     use crate::error::ErrorData;
-    use crate::traits::deployment_store::{DeploymentRecord, SuppliedStacks};
+    #[cfg(feature = "sqlite")]
+    use crate::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore};
+    use crate::traits::deployment_store::{
+        CreateDeploymentParams, DeploymentFilter, DeploymentRecord, SuppliedStacks,
+    };
+    use crate::traits::{CredentialResolver, DeploymentStore, ResolvedCredentials, ServerBindings};
+    use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+    use alien_commands::{dispatchers::NullCommandDispatcher, InMemoryCommandRegistry};
+    use async_trait::async_trait;
 
     fn deployment_record(
         status: DeploymentStatus,
@@ -1308,6 +1330,150 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    struct RuntimeOnlyCredentials;
+
+    #[async_trait]
+    impl CredentialResolver for RuntimeOnlyCredentials {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Local {
+                state_directory: "unused".to_string(),
+            })
+        }
+
+        async fn resolve_with_capability(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<ResolvedCredentials, AlienError> {
+            Ok(ResolvedCredentials {
+                client_config: self.resolve(deployment).await?,
+                has_provision_capability: false,
+            })
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn skipped_bootstrap_preserves_retry_for_cli_acquisition() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let caller = Subject::system();
+        let deployment = store
+            .create_deployment(
+                &caller,
+                CreateDeploymentParams {
+                    name: "retry-race".to_string(),
+                    deployment_group_id: "dg_test".to_string(),
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings {
+                        deployment_model: alien_core::DeploymentModel::Push,
+                        ..Default::default()
+                    },
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        db.execute(&format!(
+            "UPDATE deployments SET status = 'preflights-failed' WHERE id = '{}'",
+            deployment.id
+        ))
+        .await
+        .unwrap();
+        store
+            .set_retry_requested(&caller, &deployment.id)
+            .await
+            .unwrap();
+        let filter = DeploymentFilter {
+            deployment_ids: Some(vec![deployment.id.clone()]),
+            statuses: Some(vec!["preflights-failed".to_string()]),
+            deployment_model: Some(alien_core::DeploymentModel::Push),
+            ..Default::default()
+        };
+        let mut acquired = store
+            .acquire(&caller, "manager-session", &filter, 1)
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), 1);
+        let mut item = acquired.remove(0);
+        assert!(item.deployment.retry_requested);
+        item.deployment.desired_release_id = Some("rel_test".to_string());
+        item.deployment.supplied_stacks = Some(SuppliedStacks {
+            desired: Some(
+                serde_json::from_value(serde_json::json!({"id": "retry", "resources": {}}))
+                    .unwrap(),
+            ),
+            current: None,
+        });
+        let bindings = Arc::new(ServerBindings {
+            kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+            command_storage: Arc::new(
+                LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                    .unwrap(),
+            ),
+            command_dispatcher: Arc::new(NullCommandDispatcher),
+            command_registry: Arc::new(InMemoryCommandRegistry::default()),
+            artifact_registry: None,
+            bindings_provider: None,
+            target_bindings_providers: Default::default(),
+            registry_routing_table: Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+            ),
+        });
+        let runner = DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            Arc::new(SqliteReleaseStore::new(db)),
+            Arc::new(RuntimeOnlyCredentials),
+            bindings,
+            None,
+        );
+        runner
+            .process_deployment(
+                item.deployment,
+                item.execution_claim,
+                "manager-session",
+                ProcessOptions::deployment_tick(),
+            )
+            .await;
+        let stored = store
+            .get_deployment(&caller, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, "preflights-failed");
+        assert!(
+            stored.retry_requested,
+            "skipping setup must not consume the CLI's retry"
+        );
+        assert!(stored.locked_by.is_none());
+        assert!(stored.stack_state.is_none());
+        let cli = store
+            .acquire(&caller, "cli-session", &filter, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            cli.len(),
+            1,
+            "CLI must acquire after the incapable manager releases"
+        );
+        assert!(cli[0].deployment.retry_requested);
     }
 
     /// A deployment that turned telemetry off gets no log endpoint from this manager, as the
