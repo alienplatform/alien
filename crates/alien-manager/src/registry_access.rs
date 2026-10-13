@@ -705,53 +705,57 @@ fn repository_access(
         return (repo_ids, refused);
     }
 
-    // No per-project path to hold a sandbox to here: a GCP sandbox pulls the agents image Alien
-    // publishes under the shared prefix, and GAR binds IAM at the repository, so every grant on
-    // this platform opens the same shared repository. AWS narrows its own grant per project.
-    let (matches, refused) =
-        has_image_in_repository_prefix(state, &prefix, sandbox_source, project_id);
-    if !matches {
-        return (Vec::new(), refused);
+    if matches!(platform, Some(Platform::Gcp)) {
+        return gcp_repository_access(state, &prefix, project_id, sandbox_source);
     }
-
-    let repo_ids = HashSet::from([prefix]);
-    let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
-    repo_ids.sort();
-    (repo_ids, refused)
+    (Vec::new(), false)
 }
 
-fn has_image_in_repository_prefix(
+fn gcp_repository_access(
     state: &DeploymentState,
     prefix: &str,
-    sandbox_source: SandboxImageSource,
     project_id: &str,
-) -> (bool, bool) {
-    let mut found = false;
+    sandbox_source: SandboxImageSource,
+) -> (Vec<String>, bool) {
+    let Some((cloud_project, repository_prefix)) = prefix.split_once('/') else {
+        return (Vec::new(), false);
+    };
+    let mut repositories = HashSet::new();
     let mut refused = false;
     let mut collect = |stack: &Stack| {
-        for (_id, entry) in stack.resources() {
+        for (resource_id, entry) in stack.resources() {
             let Some(image) = resource_image_reference(entry, sandbox_source) else {
                 continue;
             };
-            if !image_repository_matches_prefix(image, prefix) {
-                continue;
-            }
-            let Some(repository) = image_repository_path(image) else {
+            let Some(repository_path) = image_repository_path(image) else {
                 continue;
             };
-            let suffix = repository
-                .strip_prefix(prefix)
-                .unwrap_or_default()
-                .trim_start_matches(['/', '-']);
-            let owner = suffix.split('/').next().unwrap_or_default();
-            if owner.starts_with("prj_") && owner != project_id {
+            let Some(path) = repository_path.strip_prefix(&format!("{cloud_project}/")) else {
+                continue;
+            };
+            let repository = path.split('/').next().unwrap_or_default();
+            if repository == format!("{repository_prefix}-shared") {
+                repositories.insert(format!("{cloud_project}/{repository}"));
+            } else if let Some(owner) =
+                alien_core::gar_repository::project_id_for_path(path, repository_prefix)
+            {
+                if owner == project_id {
+                    repositories.insert(format!("{cloud_project}/{repository}"));
+                } else {
+                    refused = true;
+                    warn!(
+                        project_id,
+                        resource_id, "Refusing an image repository belonging to another project"
+                    );
+                }
+            } else if repository == repository_prefix
+                || repository.starts_with(&format!("{repository_prefix}-p"))
+            {
+                refused = true;
                 warn!(
                     project_id,
-                    "Refusing registry access for an image outside its project's repository"
+                    resource_id, "Image repository requires migration before direct pull access"
                 );
-                refused = true;
-            } else {
-                found = true;
             }
         }
     };
@@ -768,7 +772,9 @@ fn has_image_in_repository_prefix(
     {
         collect(stack);
     }
-    (found, refused)
+    let mut repositories: Vec<_> = repositories.into_iter().collect();
+    repositories.sort();
+    (repositories, refused)
 }
 
 /// The principals a GCP grant names: Cloud Run always, and the sandbox agent when a release
@@ -1003,14 +1009,6 @@ fn ecr_repository_from_image(image: &str, prefix: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn image_repository_matches_prefix(image: &str, prefix: &str) -> bool {
-    image_repository_path(image).is_some_and(|repository| {
-        repository == prefix
-            || repository.starts_with(&format!("{prefix}-"))
-            || repository.starts_with(&format!("{prefix}/"))
-    })
 }
 
 fn image_repository_path(image: &str) -> Option<String> {
@@ -1539,22 +1537,47 @@ mod tests {
     }
 
     #[test]
-    fn gar_refuses_another_project_reference_but_own_images_still_need_the_shared_grant() {
+    fn gar_grants_only_the_encoded_project_repository() {
         let registry = TestArtifactRegistry {
             prefix: "vendor/artifacts".to_string(),
             fail_remove: false,
             removed_repository_is_gone: false,
         };
         for (owner, expected) in [
-            (PROJECT, vec!["vendor/artifacts".to_string()]),
+            (
+                PROJECT,
+                vec![format!(
+                    "vendor/{}",
+                    alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap()
+                )],
+            ),
             ("prj_other", Vec::new()),
         ] {
             let state = gcp_state_with_stack(worker_stack(&format!(
-                "region-docker.pkg.dev/vendor/artifacts/{owner}/worker:v1"
+                "region-docker.pkg.dev/vendor/{}/{owner}/worker:v1",
+                alien_core::gar_repository::project_repository("artifacts", owner).unwrap()
             )));
             let (repositories, refused) = repository_access(&registry, &state, PROJECT);
             assert_eq!(repositories, expected);
             assert_eq!(refused, owner != PROJECT);
+        }
+    }
+
+    #[test]
+    fn pre_cutover_gcp_releases_never_open_the_mixed_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for path in [format!("{PROJECT}/worker"), "agents".to_string()] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "manager.example.com/vendor/artifacts/{path}:v1"
+            )));
+            assert_eq!(
+                repository_access(&registry, &state, PROJECT),
+                (vec![], true)
+            );
         }
     }
 
@@ -1784,13 +1807,17 @@ mod tests {
             fail_remove: false,
             removed_repository_is_gone: false,
         };
-        let state = gcp_state_with_stack(worker_stack(
-            "manager.example.com/test-project/alien-artifacts/test-worker:abc123",
-        ));
+        let state = gcp_state_with_stack(worker_stack(&format!(
+            "manager.example.com/test-project/{}/{PROJECT}/worker:abc123",
+            alien_core::gar_repository::project_repository("alien-artifacts", PROJECT).unwrap()
+        )));
 
         assert_eq!(
             repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts".to_string()]
+            vec![format!(
+                "test-project/{}",
+                alien_core::gar_repository::project_repository("alien-artifacts", PROJECT).unwrap()
+            )]
         );
     }
 
@@ -2508,13 +2535,13 @@ mod tests {
             removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(sandbox_stack_with_code(
-            "manager.example.com/test-project/alien-artifacts/agents:abc123",
+            "manager.example.com/test-project/alien-artifacts-shared/agents:abc123",
             None,
         ));
 
         assert_eq!(
             repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts".to_string()],
+            vec!["test-project/alien-artifacts-shared".to_string()],
             "a GCP sandbox pulls its container from Alien's registry, so it earns the grant"
         );
     }

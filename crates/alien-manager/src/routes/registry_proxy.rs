@@ -115,6 +115,13 @@ impl RegistryRoutingTable {
     /// decides whether to allow the push.
     pub fn project_id_for_repo<'a>(&self, repo_name: &'a str) -> Option<&'a str> {
         let route = self.resolve(repo_name)?;
+        if route.platform == Platform::Gcp {
+            let (project, prefix) = route.prefix.split_once('/')?;
+            let path = repo_name.strip_prefix(&format!("{project}/"))?;
+            if path.starts_with(&format!("{prefix}-p")) {
+                return alien_core::gar_repository::project_id_for_path(path, prefix);
+            }
+        }
         project_id_after_prefix(repo_name, route.prefix.as_str())
     }
 
@@ -2512,6 +2519,33 @@ mod tests {
         ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Sandbox>> {
             Err(route_test_error(binding_name))
         }
+    }
+
+    #[test]
+    fn gar_encoded_repository_paths_require_the_matching_original_project_id() {
+        let table = RegistryRoutingTable::new(vec![registry_route(
+            "vendor/artifacts",
+            Platform::Gcp,
+            "gcp",
+        )])
+        .unwrap();
+        let own = alien_core::gar_repository::project_repository("artifacts", "prj_A").unwrap();
+        assert_eq!(
+            table.project_id_for_repo(&format!("vendor/{own}/prj_A/worker")),
+            Some("prj_A")
+        );
+        assert_eq!(
+            table.project_id_for_repo(&format!("vendor/{own}/prj_a/worker")),
+            None
+        );
+        assert_eq!(
+            table.project_id_for_repo("vendor/artifacts/prj_A/worker"),
+            Some("prj_A")
+        );
+        assert_eq!(
+            table.project_id_for_repo("vendor/artifacts-shared/agents"),
+            Some("shared")
+        );
     }
 
     #[test]
