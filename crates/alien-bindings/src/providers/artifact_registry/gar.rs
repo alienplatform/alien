@@ -10,12 +10,13 @@ use alien_core::bindings::ArtifactRegistryBinding;
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::iam::IamPolicy;
 use alien_gcp_clients::{
-    artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
+    artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient, Repository, RepositoryFormat},
+    longrunning::{Operation, OperationResult},
     GcpClientConfig, GcpClientConfigExt as _,
 };
 use async_trait::async_trait;
 use chrono;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// The Google-managed service agent a compute service pulls as.
 ///
@@ -162,22 +163,87 @@ impl GarArtifactRegistry {
         })
     }
 
-    /// Extracts a name segment from a repo ID or routable name.
-    /// If `repo_id` is empty, returns the binding's configured `repository_name`
-    /// (the GAR repository resource, used for IAM operations).
-    fn extract_repo_name(&self, repo_id: &str) -> Result<String> {
-        if repo_id.is_empty() {
-            return Ok(self.repository_name.clone());
-        }
-        if let Some(name) = repo_id.split('/').last() {
-            Ok(name.to_string())
-        } else {
-            Err(AlienError::new(ErrorData::BindingConfigInvalid {
+    fn project_repository_name(&self, project_id: &str) -> Result<String> {
+        alien_core::gar_repository::project_repository(&self.repository_name, project_id)
+            .ok_or_else(|| AlienError::new(ErrorData::BindingConfigInvalid {
                 env_var: binding_env_var(&self.binding_name),
                 binding_name: self.binding_name.clone(),
-                reason: format!("Invalid repository ID format: {}", repo_id),
+                reason: "GAR project repository name must fit 63 lowercase letters, digits and hyphens".to_string(),
             }))
+    }
+
+    /// IAM operations name GAR resources, never paths inside a mixed repository.
+    fn iam_repository_name(&self, repo_id: &str) -> Result<String> {
+        let path = repo_id
+            .strip_prefix(&format!("{}/", self.project_id))
+            .unwrap_or(repo_id);
+        let repository = path.split('/').next().unwrap_or_default();
+        let shared = format!("{}-shared", self.repository_name);
+        if repository == self.repository_name
+            || repository == shared
+            || (repository.starts_with(&format!("{}-p", self.repository_name))
+                && repository.len() <= 63
+                && repository
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        {
+            return Ok(repository.to_string());
         }
+        Err(AlienError::new(ErrorData::BindingConfigInvalid {
+            env_var: binding_env_var(&self.binding_name),
+            binding_name: self.binding_name.clone(),
+            reason: "IAM repository is outside this binding's namespace".to_string(),
+        }))
+    }
+
+    /// Observe GAR's asynchronous creation; failed reads return immediately.
+    async fn await_repository_creation(
+        &self,
+        repository: &str,
+        mut operation: Operation,
+    ) -> Result<()> {
+        for _ in 0..60 {
+            if operation.done == Some(true) {
+                if let Some(OperationResult::Error { error }) = operation.result {
+                    return Err(AlienError::new(ErrorData::RemoteResourceConflict {
+                        operation_context: "creating image repository".to_string(),
+                        resource_type: "repository".to_string(),
+                        resource_name: repository.to_string(),
+                        conflict_reason: format!(
+                            "GAR creation operation failed with code {}",
+                            error.code
+                        ),
+                    }));
+                }
+                return Ok(());
+            }
+            let name = operation.name.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::RemoteResourceConflict {
+                    operation_context: "creating image repository".to_string(),
+                    resource_type: "repository".to_string(),
+                    resource_name: repository.to_string(),
+                    conflict_reason: "creation operation has no name".to_string(),
+                })
+            })?;
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            operation = self
+                .client
+                .get_operation(self.project_id.clone(), self.location.clone(), name)
+                .await
+                .map_err(|error| {
+                    map_cloud_client_error(
+                        error,
+                        "Failed to observe repository creation".to_string(),
+                        Some(repository.to_string()),
+                    )
+                })?;
+        }
+        Err(AlienError::new(ErrorData::RemoteResourceConflict {
+            operation_context: "creating image repository".to_string(),
+            resource_type: "repository".to_string(),
+            resource_name: repository.to_string(),
+            conflict_reason: "creation did not finish within 60 seconds".to_string(),
+        }))
     }
 
     /// Internal helper to add or remove members from IAM policy bindings
@@ -193,7 +259,7 @@ impl GarArtifactRegistry {
         // Find or create the artifactregistry.reader binding
         let mut binding_index = None;
         for (i, binding) in current_policy.bindings.iter().enumerate() {
-            if binding.role == reader_role {
+            if binding.role == reader_role && binding.condition.is_none() {
                 binding_index = Some(i);
                 break;
             }
@@ -228,17 +294,16 @@ impl GarArtifactRegistry {
                 }
             }
         } else {
-            // Remove members
-            if let Some(i) = binding_index {
-                let binding = &mut current_policy.bindings[i];
-                binding.members.retain(|member| !members.contains(member));
-
-                // Remove empty binding
-                if binding.members.is_empty() {
-                    current_policy.bindings.remove(i);
+            // Remove the selected members from every reader binding, retaining other
+            // members and their conditions. A conditional binding is not a new grant target.
+            for binding in &mut current_policy.bindings {
+                if binding.role == reader_role {
+                    binding.members.retain(|member| !members.contains(member));
                 }
             }
-            // If no binding exists, nothing to remove
+            current_policy
+                .bindings
+                .retain(|binding| !binding.members.is_empty());
         }
 
         // Set the updated policy with the original etag for optimistic concurrency control
@@ -276,33 +341,96 @@ impl ArtifactRegistry for GarArtifactRegistry {
         format!("{}/{}", self.project_id, self.repository_name)
     }
 
-    async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
-        // In GAR, the binding's GAR repository (e.g., "alien-artifacts") IS the registry.
-        // Image paths within it (e.g., "prj_abc123") are created automatically on first push.
-        // No GAR API call needed — the GAR repository is created by alien-infra at provisioning time.
-        // Underscores are valid in image paths (OCI distribution spec allows [a-z0-9._-/]).
-        let routable_name = format!("{}/{}", self.upstream_repository_prefix(), repo_name);
+    async fn create_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        let repository = self.project_repository_name(project_id)?;
+        let existing = self
+            .client
+            .get_repository(
+                self.project_id.clone(),
+                self.location.clone(),
+                repository.clone(),
+            )
+            .await;
+        match existing {
+            Ok(_) => {}
+            Err(error) if error.http_status_code == Some(404) => {
+                let result = self
+                    .client
+                    .create_repository(
+                        self.project_id.clone(),
+                        self.location.clone(),
+                        repository.clone(),
+                        Repository {
+                            format: Some(RepositoryFormat::Docker),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                match result {
+                    Ok(operation) => {
+                        self.await_repository_creation(&repository, operation)
+                            .await?
+                    }
+                    Err(error) if error.http_status_code == Some(409) => {}
+                    Err(error) => {
+                        return Err(map_cloud_client_error(
+                            error,
+                            "Failed to create project image repository".to_string(),
+                            Some(repository.clone()),
+                        ))
+                    }
+                }
+                // A concurrent creator may still be finishing. Never return an unusable push path.
+                self.client
+                    .get_repository(
+                        self.project_id.clone(),
+                        self.location.clone(),
+                        repository.clone(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        map_cloud_client_error(
+                            error,
+                            "Project image repository is not ready".to_string(),
+                            Some(repository.clone()),
+                        )
+                    })?;
+            }
+            Err(error) => {
+                return Err(map_cloud_client_error(
+                    error,
+                    "Failed to read project image repository".to_string(),
+                    Some(repository.clone()),
+                ))
+            }
+        }
         Ok(RepositoryResponse {
-            name: routable_name,
+            name: format!("{}/{repository}/{project_id}", self.project_id),
             uri: None,
             created_at: None,
         })
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        // Image paths within a GAR repository are implicit — no GAR API call needed.
-        // Just return the routable name, same as create_repository.
-        let image_path = self.extract_repo_name(repo_id)?;
-        let routable_name = format!("{}/{}", self.upstream_repository_prefix(), image_path);
-        let repository_uri = format!(
-            "{}-docker.pkg.dev/{}/{}",
-            self.location, self.project_id, image_path
-        );
-
+        let name = self.iam_repository_name(repo_id)?;
+        let repository = self
+            .client
+            .get_repository(self.project_id.clone(), self.location.clone(), name.clone())
+            .await
+            .map_err(|error| {
+                map_cloud_client_error(
+                    error,
+                    "Failed to read image repository".to_string(),
+                    Some(name.clone()),
+                )
+            })?;
         Ok(RepositoryResponse {
-            name: routable_name,
-            uri: Some(repository_uri),
-            created_at: None,
+            name: repo_id.to_string(),
+            uri: Some(format!(
+                "{}-docker.pkg.dev/{}/{}",
+                self.location, self.project_id, name
+            )),
+            created_at: repository.create_time,
         })
     }
 
@@ -311,13 +439,14 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        // Cross-account access in GAR is enforced via IAM bindings on the
-        // *parent* repository (the GAR resource provisioned by alien-infra),
-        // not on individual image paths. `repo_id` may name an image path
-        // within the parent (it's the routable name from `create_repository`),
-        // but IAM ops always target the parent registry.
-        let _ = repo_id; // The image path doesn't have its own IAM scope.
-        let repo_name = self.repository_name.clone();
+        let repo_name = self.iam_repository_name(repo_id)?;
+        if repo_name == self.repository_name {
+            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&self.binding_name),
+                binding_name: self.binding_name.clone(),
+                reason: "The legacy mixed repository accepts no new reader grants".to_string(),
+            }));
+        }
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
@@ -425,9 +554,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        // IAM ops target the parent registry. See `add_cross_account_access`.
-        let _ = repo_id;
-        let repo_name = self.repository_name.clone();
+        let repo_name = self.iam_repository_name(repo_id)?;
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
@@ -484,9 +611,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {
-        // IAM ops target the parent registry. See `add_cross_account_access`.
-        let _ = repo_id;
-        let repo_name = self.repository_name.clone();
+        let repo_name = self.iam_repository_name(repo_id)?;
 
         info!(
             repo_name = %repo_name,
@@ -685,30 +810,50 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
-        // No-op, mirroring `create_repository`/`get_repository`.
-        //
-        // In GAR, image paths within the parent repository are implicit —
-        // they materialise on first push, and there's no "delete a path"
-        // operation in the GAR API. The parent repository itself is owned
-        // by `alien-infra` (provisioned at deployment time), not by the
-        // binding; deleting it would tear down the whole registry every
-        // user shares.
-        //
-        // Garbage collection of unused image data is a separate concern,
-        // achievable via `deletePackage` if/when needed. Not done here
-        // because the test pattern `create → ... → delete` should be
-        // idempotent and side-effect-free at the registry-resource level.
-        debug!(
-            repo_id = %repo_id,
-            "GCP Artifact Registry delete_repository: no-op (image paths are implicit)"
-        );
-        Ok(())
+        let repository = self.iam_repository_name(repo_id)?;
+        if repository == self.repository_name
+            || repository == format!("{}-shared", self.repository_name)
+        {
+            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&self.binding_name),
+                binding_name: self.binding_name.clone(),
+                reason: "Only project repositories can be deleted through this binding".to_string(),
+            }));
+        }
+        match self
+            .client
+            .delete_repository(
+                self.project_id.clone(),
+                self.location.clone(),
+                repository.clone(),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error) if error.http_status_code == Some(404) => Ok(()),
+            Err(error) => Err(map_cloud_client_error(
+                error,
+                "Failed to delete project image repository".to_string(),
+                Some(repository),
+            )),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        extract::State,
+        http::{Method, StatusCode, Uri},
+        response::IntoResponse,
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     /// Pins the member spelling, not the agent domains themselves: both sides of this assertion
     /// come from the same constants, so a wrong domain fails against GCP rather than here. What it
@@ -813,5 +958,181 @@ mod tests {
             members,
             vec!["serviceAccount:management@test-project.iam.gserviceaccount.com"]
         );
+    }
+    #[tokio::test]
+    async fn project_provisioning_and_reader_changes_use_distinct_gar_resources() {
+        use alien_core::{GcpCredentials, GcpServiceOverrides};
+        #[derive(Default)]
+        struct ApiState {
+            repositories: HashMap<String, Value>,
+            policies: HashMap<String, Value>,
+            writes: Vec<String>,
+        }
+        async fn api(
+            State(state): State<Arc<Mutex<ApiState>>>,
+            method: Method,
+            uri: Uri,
+            body: String,
+        ) -> impl IntoResponse {
+            let mut state = state.lock().unwrap();
+            let path = uri.path();
+            if path.contains("/operations/") {
+                return (StatusCode::OK, Json(json!({"name":path, "done":true})));
+            }
+            if method == Method::POST && path.ends_with("/repositories") {
+                let name = uri
+                    .query()
+                    .unwrap()
+                    .strip_prefix("repositoryId=")
+                    .unwrap()
+                    .to_string();
+                let input: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(input["format"], "DOCKER");
+                state
+                    .repositories
+                    .insert(name.clone(), json!({"name": name, "format": "DOCKER"}));
+                return (
+                    StatusCode::OK,
+                    Json(
+                        json!({"name":"projects/vendor/locations/region/operations/create-project-repository", "done":false}),
+                    ),
+                );
+            }
+            let repository = path.rsplit('/').next().unwrap();
+            if let Some(name) = repository.strip_suffix(":getIamPolicy") {
+                return (StatusCode::OK, Json(state.policies.get(name).cloned().unwrap_or(json!({"etag":"original", "bindings":[{"role":"roles/viewer", "members":["user:keep@example.com"]}]}))));
+            }
+            if let Some(name) = repository.strip_suffix(":setIamPolicy") {
+                let input: Value = serde_json::from_str(&body).unwrap();
+                let mut policy = input["policy"].clone();
+                let expected = state
+                    .policies
+                    .get(name)
+                    .map(|p| p["etag"].clone())
+                    .unwrap_or(json!("original"));
+                assert_eq!(
+                    policy["etag"], expected,
+                    "IAM writes preserve concurrency checks"
+                );
+                policy["etag"] = json!(format!("revision-{}", state.writes.len()));
+                state.policies.insert(name.to_string(), policy.clone());
+                state.writes.push(name.to_string());
+                return (StatusCode::OK, Json(policy));
+            }
+            match state.repositories.get(repository) {
+                Some(repository) => (StatusCode::OK, Json(repository.clone())),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error":{"code":404,"message":"repository absent"}})),
+                ),
+            }
+        }
+        let state = Arc::new(Mutex::new(ApiState::default()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(api).with_state(state.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = GcpClientConfig {
+            project_id: "vendor".to_string(),
+            region: "region".to_string(),
+            project_number: None,
+            credentials: GcpCredentials::AccessToken {
+                token: "synthetic-local-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+            }),
+        };
+        let registry = GarArtifactRegistry {
+            client: ArtifactRegistryClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                config.clone(),
+            ),
+            binding_name: "artifacts".to_string(),
+            project_id: "vendor".to_string(),
+            location: "region".to_string(),
+            repository_name: "artifacts".to_string(),
+            pull_service_account_email: None,
+            push_service_account_email: None,
+            gcp_config: config,
+        };
+        let own = registry.create_repository("prj_A").await.unwrap();
+        let other = registry.create_repository("prj_a").await.unwrap();
+        assert_ne!(own.name, other.name);
+        assert_eq!(
+            registry.create_repository("prj_A").await.unwrap().name,
+            own.name
+        );
+        let access = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+            project_numbers: vec!["123456789012".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox],
+            service_account_emails: vec!["management@target.iam.gserviceaccount.com".to_string()],
+        });
+        registry
+            .add_cross_account_access(&own.name, access.clone())
+            .await
+            .unwrap();
+        let own_resource = own.name.split('/').nth(1).unwrap();
+        {
+            let state = state.lock().unwrap();
+            assert!(state.writes.iter().all(|name| name == own_resource));
+            assert_eq!(state.policies.len(), 1);
+            let readers = state.policies[own_resource]["bindings"][1]["members"]
+                .as_array()
+                .unwrap();
+            assert_eq!(readers.len(), 3);
+            assert!(readers.contains(&json!(
+                "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com"
+            )));
+            assert!(readers.contains(&json!(
+                "serviceAccount:service-123456789012@gcp-sa-vertex-sandbox.iam.gserviceaccount.com"
+            )));
+        }
+        assert!(registry
+            .add_cross_account_access("vendor/artifacts/prj_A", access.clone())
+            .await
+            .is_err());
+        registry
+            .remove_cross_account_access(&own.name, access.clone())
+            .await
+            .unwrap();
+        registry
+            .remove_cross_account_access(&own.name, access)
+            .await
+            .unwrap();
+        {
+            let state = state.lock().unwrap();
+            assert_eq!(
+                state.policies[own_resource]["bindings"],
+                json!([{"role":"roles/viewer", "members":["user:keep@example.com"]}])
+            );
+            assert!(!state
+                .policies
+                .contains_key(other.name.split('/').nth(1).unwrap()));
+        }
+        {
+            let mut state = state.lock().unwrap();
+            state.policies.insert("artifacts".to_string(), json!({"etag":"legacy", "bindings":[
+                {"role":"roles/artifactregistry.reader", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com", "user:keep@example.com"]}
+            ]}));
+        }
+        let cleanup = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+            project_numbers: vec!["123456789012".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox],
+            service_account_emails: Vec::new(),
+        });
+        registry
+            .remove_cross_account_access("vendor/artifacts", cleanup.clone())
+            .await
+            .unwrap();
+        registry
+            .remove_cross_account_access("vendor/artifacts", cleanup)
+            .await
+            .unwrap();
+        assert_eq!(
+            state.lock().unwrap().policies["artifacts"]["bindings"][0]["members"],
+            json!(["user:keep@example.com"])
+        );
+        server.abort();
     }
 }
