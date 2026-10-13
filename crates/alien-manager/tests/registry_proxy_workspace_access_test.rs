@@ -17,7 +17,7 @@ use alien_manager::providers::OssAuthz;
 use alien_manager::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore};
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, CreateReleaseParams,
-    DeploymentStore, ReleaseStore,
+    DeploymentStore, ProjectRecord, ProjectStore, ReleaseStore,
 };
 use async_trait::async_trait;
 
@@ -92,6 +92,28 @@ impl AuthValidator for TwoWorkspaceValidator {
             scope,
             role,
             bearer_token: token.to_string(),
+        }))
+    }
+}
+
+/// `prj_a`, `prj_c` and `prj_d` belong to `ws_a`, `prj_b` to `ws_b`; no other project exists.
+struct TwoWorkspaceProjects;
+
+#[async_trait]
+impl ProjectStore for TwoWorkspaceProjects {
+    async fn get_project(
+        &self,
+        _caller: &Subject,
+        project_id: &str,
+    ) -> Result<Option<ProjectRecord>, AlienError> {
+        let workspace_id = match project_id {
+            "prj_a" | "prj_c" | "prj_d" => "ws_a",
+            "prj_b" => "ws_b",
+            _ => return Ok(None),
+        };
+        Ok(Some(ProjectRecord {
+            id: project_id.to_string(),
+            workspace_id: workspace_id.to_string(),
         }))
     }
 }
@@ -206,6 +228,7 @@ async fn setup() -> Setup {
         state_dir,
         Arc::new(TwoWorkspaceValidator),
         Arc::new(OssAuthz),
+        Arc::new(TwoWorkspaceProjects),
     )
     .await;
     Setup {

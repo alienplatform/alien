@@ -5,9 +5,10 @@ use std::time::Duration;
 use alien_error::AlienError;
 use alien_manager::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
-use alien_manager::providers::OssAuthz;
+use alien_manager::providers::{OssAuthz, SingleWorkspaceProjects};
 use alien_manager::traits::{
-    AuthValidator, DeploymentGroupRecord, DeploymentRecord, ReleaseRecord, TelemetrySignal,
+    AuthValidator, DeploymentGroupRecord, DeploymentRecord, ProjectRecord, ProjectStore,
+    ReleaseRecord, TelemetrySignal,
 };
 use alien_manager::AlienManagerBuilder;
 use async_trait::async_trait;
@@ -84,12 +85,12 @@ impl AuthValidator for TestValidator {
     }
 }
 
-/// Push is allowed on the caller's own project only. `OssAuthz` cannot model this: it is
-/// single-project and ignores the project id.
+/// Push is allowed on the caller's own project only, for every project-bound token including a
+/// deployment's, which `OssAuthz` does not let push. Pulls follow `OssAuthz`.
 struct TestAuthz;
 
 impl Authz for TestAuthz {
-    fn can_push_image(&self, s: &Subject, project_id: &str, _repo_name: &str) -> bool {
+    fn can_push_image(&self, s: &Subject, project: &ProjectRecord, _repo_name: &str) -> bool {
         match &s.scope {
             Scope::Project { project_id: pid }
             | Scope::Deployment {
@@ -97,9 +98,12 @@ impl Authz for TestAuthz {
             }
             | Scope::DeploymentGroup {
                 project_id: pid, ..
-            } => pid == project_id,
+            } => pid == &project.id,
             _ => false,
         }
+    }
+    fn can_pull_image(&self, s: &Subject, project: &ProjectRecord, repo_name: &str) -> bool {
+        OssAuthz.can_pull_image(s, project, repo_name)
     }
     fn can_create_release(&self, s: &Subject, p: &str) -> bool {
         OssAuthz.can_create_release(s, p)
@@ -274,18 +278,21 @@ pub async fn start_manager_with_binding(registry_url: String, binding_env: &str)
         tempfile::tempdir().unwrap(),
         Arc::new(TestValidator),
         Arc::new(TestAuthz),
+        Arc::new(SingleWorkspaceProjects),
     )
     .await
 }
 
-/// A manager authenticating with `validator` and authorizing with `authz`, whose database lives
-/// in `state_dir` (`test.db`), so a test can create deployments and releases before it starts.
+/// A manager authenticating with `validator` and authorizing with `authz` on the projects
+/// `projects` resolves, whose database lives in `state_dir` (`test.db`), so a test can create
+/// deployments and releases before it starts.
 pub async fn start_manager_with_auth(
     registry_url: String,
     binding_env: &str,
     state_dir: tempfile::TempDir,
     validator: Arc<dyn AuthValidator>,
     authz: Arc<dyn Authz>,
+    projects: Arc<dyn ProjectStore>,
 ) -> Manager {
     let binding = alien_core::bindings::ArtifactRegistryBinding::local(registry_url, None);
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
@@ -325,6 +332,7 @@ pub async fn start_manager_with_auth(
     let manager = AlienManagerBuilder::new(config)
         .auth_validator(validator)
         .authz(authz)
+        .project_store(projects)
         .bindings_provider(bindings_provider)
         .with_standalone_defaults(&toml_config)
         .await

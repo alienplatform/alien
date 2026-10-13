@@ -177,6 +177,7 @@ async fn build() -> Fixture {
     let state = AppState {
         deployment_store: deployment_store.clone(),
         release_store,
+        project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
         token_store: token_store.clone(),
         auth_validator,
         authz,
