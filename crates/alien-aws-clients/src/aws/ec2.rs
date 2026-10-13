@@ -615,9 +615,15 @@ impl Ec2Client {
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
+            // Preserve this native code: callers must distinguish a lost
+            // security-group create response from a genuinely invalid VPC.
+            "InvalidGroup.Duplicate" => ErrorData::RemoteResourceConflict {
+                message: format!("InvalidGroup.Duplicate: {message}"),
+                resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
             "InvalidVpcState"
             | "InvalidSubnetID.DuplicateSubnet"
-            | "InvalidGroup.Duplicate"
             | "InvalidPermission.Duplicate"
             | "InvalidLaunchTemplateName.AlreadyExistsException" => {
                 ErrorData::RemoteResourceConflict {
@@ -4265,6 +4271,23 @@ mod error_mapping_tests {
              <RequestID>r</RequestID></Response>"
         );
         Ec2Client::map_ec2_error(StatusCode::BAD_REQUEST, &body, "op", "sg-1", None)
+    }
+
+    #[test]
+    fn security_group_duplicate_retains_the_native_error_code() {
+        let duplicate = Ec2Client::map_ec2_error(
+            StatusCode::BAD_REQUEST,
+            "<Response><Errors><Error><Code>InvalidGroup.Duplicate</Code><Message>The security group already exists</Message></Error></Errors><RequestID>test</RequestID></Response>",
+            "CreateSecurityGroup", "attempt", None,
+        );
+        assert!(
+            matches!(duplicate, Some(ErrorData::RemoteResourceConflict { message, .. })
+            if message == "InvalidGroup.Duplicate: The security group already exists")
+        );
+        assert!(
+            matches!(mapped("InvalidVpcState"), Some(ErrorData::RemoteResourceConflict { message, .. })
+            if !message.contains("InvalidGroup.Duplicate"))
+        );
     }
 
     #[test]
