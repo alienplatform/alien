@@ -445,7 +445,11 @@ fn get_real_service_account_email() -> Option<String> {
 
 // Helper function to generate unique repository names
 fn generate_unique_repo_name(provider_name: &str) -> String {
-    format!("alien-test-{}-{}", provider_name, Uuid::new_v4().simple())
+    if provider_name == "gcp" {
+        format!("prj_{}", &Uuid::new_v4().simple().to_string()[..28])
+    } else {
+        format!("alien-test-{}-{}", provider_name, Uuid::new_v4().simple())
+    }
 }
 
 // Helper function to wait for repository to be ready (for async operations like GCP)
@@ -1427,10 +1431,25 @@ async fn test_get_nonexistent_repository_returns_404(
     let provider_name = ctx.provider_name();
 
     // Use a repository name that definitely doesn't exist
-    let nonexistent_repo = format!("alien-test-nonexistent-{}", Uuid::new_v4().simple());
+    let nonexistent_repo = if provider_name == "gcp" {
+        let prefix = artifact_registry.upstream_repository_prefix();
+        let (cloud_project, namespace) = prefix.split_once('/').expect("GAR prefix");
+        let project_id = generate_unique_repo_name(provider_name);
+        let repository = alien_core::gar_repository::project_repository(namespace, &project_id)
+            .expect("valid GAR repository name");
+        format!("{cloud_project}/{repository}/{project_id}")
+    } else {
+        format!("alien-test-nonexistent-{}", Uuid::new_v4().simple())
+    };
     let expected_repo_name = if provider_name == "aws" {
         // AWS ECR bindings apply a repository prefix in tests.
         format!("test-{}", nonexistent_repo)
+    } else if provider_name == "gcp" {
+        nonexistent_repo
+            .split('/')
+            .nth(1)
+            .expect("GAR repository")
+            .to_string()
     } else {
         nonexistent_repo.clone()
     };
@@ -1443,11 +1462,11 @@ async fn test_get_nonexistent_repository_returns_404(
     // Try to get a repository that doesn't exist
     let result = artifact_registry.get_repository(&nonexistent_repo).await;
 
-    // ACR and GAR repositories are implicit (image paths under a fixed parent
-    // registry) — there is no discrete repository resource to 404 on, and
+    // ACR repositories are implicit image paths under a fixed parent registry;
+    // there is no discrete repository resource to 404 on, and
     // get_repository documents that it returns the routable name without a
     // cloud call. Assert that contract instead of a not-found error.
-    if provider_name == "azure" || provider_name == "gcp" {
+    if provider_name == "azure" {
         let response = result.unwrap_or_else(|e| {
             panic!(
                 "[{}] get_repository is implicit for this provider and must succeed: {:?}",

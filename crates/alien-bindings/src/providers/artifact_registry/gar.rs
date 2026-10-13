@@ -198,21 +198,22 @@ impl GarArtifactRegistry {
         }))
     }
 
-    /// Observe GAR's asynchronous creation; failed reads return immediately.
-    async fn await_repository_creation(
+    /// Observe GAR's asynchronous operation; failed reads return immediately.
+    async fn await_repository_operation(
         &self,
         repository: &str,
         mut operation: Operation,
+        operation_context: &str,
     ) -> Result<()> {
         for _ in 0..60 {
             if operation.done == Some(true) {
                 if let Some(OperationResult::Error { error }) = operation.result {
                     return Err(AlienError::new(ErrorData::RemoteResourceConflict {
-                        operation_context: "creating image repository".to_string(),
+                        operation_context: operation_context.to_string(),
                         resource_type: "repository".to_string(),
                         resource_name: repository.to_string(),
                         conflict_reason: format!(
-                            "GAR creation operation failed with code {}",
+                            "GAR repository operation failed with code {}",
                             error.code
                         ),
                     }));
@@ -221,10 +222,10 @@ impl GarArtifactRegistry {
             }
             let name = operation.name.clone().ok_or_else(|| {
                 AlienError::new(ErrorData::RemoteResourceConflict {
-                    operation_context: "creating image repository".to_string(),
+                    operation_context: operation_context.to_string(),
                     resource_type: "repository".to_string(),
                     resource_name: repository.to_string(),
-                    conflict_reason: "creation operation has no name".to_string(),
+                    conflict_reason: "repository operation has no name".to_string(),
                 })
             })?;
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -235,16 +236,16 @@ impl GarArtifactRegistry {
                 .map_err(|error| {
                     map_cloud_client_error(
                         error,
-                        "Failed to observe repository creation".to_string(),
+                        format!("Failed to observe {operation_context}"),
                         Some(repository.to_string()),
                     )
                 })?;
         }
         Err(AlienError::new(ErrorData::RemoteResourceConflict {
-            operation_context: "creating image repository".to_string(),
+            operation_context: operation_context.to_string(),
             resource_type: "repository".to_string(),
             resource_name: repository.to_string(),
-            conflict_reason: "creation did not finish within 60 seconds".to_string(),
+            conflict_reason: "repository operation did not finish within 60 seconds".to_string(),
         }))
     }
 
@@ -378,8 +379,12 @@ impl ArtifactRegistry for GarArtifactRegistry {
                     .await;
                 match result {
                     Ok(operation) => {
-                        self.await_repository_creation(&repository, operation)
-                            .await?
+                        self.await_repository_operation(
+                            &repository,
+                            operation,
+                            "creating image repository",
+                        )
+                        .await?
                     }
                     Err(error) if error.http_status_code == Some(409) => {}
                     Err(error) => {
@@ -450,13 +455,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
         access: CrossAccountAccess,
     ) -> Result<()> {
         let repo_name = self.iam_repository_name(repo_id)?;
-        if repo_name == self.repository_name {
-            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(&self.binding_name),
-                binding_name: self.binding_name.clone(),
-                reason: "The legacy mixed repository accepts no new reader grants".to_string(),
-            }));
-        }
+        // The manager selects eligible resources; standalone projects use the base repository.
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
@@ -839,7 +838,10 @@ impl ArtifactRegistry for GarArtifactRegistry {
             )
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(operation) => {
+                self.await_repository_operation(&repository, operation, "deleting image repository")
+                    .await
+            }
             Err(error) if error.http_status_code == Some(404) => Ok(()),
             Err(error) => Err(map_cloud_client_error(
                 error,
@@ -977,6 +979,8 @@ mod tests {
             repositories: HashMap<String, Value>,
             policies: HashMap<String, Value>,
             writes: Vec<String>,
+            pending_deletion: Option<String>,
+            deletion_fails: bool,
         }
         async fn api(
             State(state): State<Arc<Mutex<ApiState>>>,
@@ -987,6 +991,18 @@ mod tests {
             let mut state = state.lock().unwrap();
             let path = uri.path();
             if path.contains("/operations/") {
+                if path.ends_with("delete-project-repository") {
+                    let repository = state.pending_deletion.take().expect("delete was requested");
+                    if state.deletion_fails {
+                        return (
+                            StatusCode::OK,
+                            Json(
+                                json!({"name":path, "done":true, "error":{"code":9,"message":"repository busy"}}),
+                            ),
+                        );
+                    }
+                    state.repositories.remove(&repository);
+                }
                 return (StatusCode::OK, Json(json!({"name":path, "done":true})));
             }
             if method == Method::POST && path.ends_with("/repositories") {
@@ -1029,6 +1045,15 @@ mod tests {
                 state.policies.insert(name.to_string(), policy.clone());
                 state.writes.push(name.to_string());
                 return (StatusCode::OK, Json(policy));
+            }
+            if method == Method::DELETE && state.repositories.contains_key(repository) {
+                state.pending_deletion = Some(repository.to_string());
+                return (
+                    StatusCode::OK,
+                    Json(
+                        json!({"name":"projects/vendor/locations/region/operations/delete-project-repository", "done":false}),
+                    ),
+                );
             }
             match state.repositories.get(repository) {
                 Some(repository) => (StatusCode::OK, Json(repository.clone())),
@@ -1105,16 +1130,12 @@ mod tests {
                 "serviceAccount:service-123456789012@gcp-sa-vertex-sandbox.iam.gserviceaccount.com"
             )));
         }
-        assert!(registry
-            .add_cross_account_access("vendor/artifacts/prj_b", access.clone())
-            .await
-            .is_err());
         registry
             .remove_cross_account_access(&own.name, access.clone())
             .await
             .unwrap();
         registry
-            .remove_cross_account_access(&own.name, access)
+            .remove_cross_account_access(&own.name, access.clone())
             .await
             .unwrap();
         {
@@ -1127,6 +1148,46 @@ mod tests {
                 .policies
                 .contains_key(other.name.split('/').nth(1).unwrap()));
         }
+        registry
+            .add_cross_account_access("vendor/artifacts", access.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.lock().unwrap().policies["artifacts"]["bindings"][1]["members"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        registry.delete_repository(&own.name).await.unwrap();
+        assert!(!state
+            .lock()
+            .unwrap()
+            .repositories
+            .contains_key(own_resource));
+        assert_eq!(
+            registry
+                .get_repository(&own.name)
+                .await
+                .unwrap_err()
+                .http_status_code,
+            Some(404)
+        );
+        registry.delete_repository(&own.name).await.unwrap();
+        assert_eq!(
+            registry.create_repository("prj_b").await.unwrap().name,
+            own.name
+        );
+        state.lock().unwrap().deletion_fails = true;
+        assert_eq!(
+            registry
+                .delete_repository(&other.name)
+                .await
+                .unwrap_err()
+                .code,
+            "REMOTE_RESOURCE_CONFLICT"
+        );
+        assert!(registry.get_repository(&other.name).await.is_ok());
         {
             let mut state = state.lock().unwrap();
             state.policies.insert("artifacts".to_string(), json!({"etag":"legacy", "bindings":[
