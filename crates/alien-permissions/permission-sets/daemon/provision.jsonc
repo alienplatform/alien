@@ -4,6 +4,23 @@
   "platforms": {
     "aws": [
       {
+        // DescribeSubnets supports only Resource: "*". This grant reads regional
+        // VPC/AZ metadata; it does not grant network mutations or data access.
+        "label": "inspect-ingress-subnets",
+        "description": "Verify ingress subnets belong to the deployment VPC and span distinct availability zones.",
+        "grant": { "actions": ["ec2:DescribeSubnets"] },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": { "StringEquals": { "aws:RequestedRegion": "${awsRegion}" } }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": { "StringEquals": { "aws:RequestedRegion": "${awsRegion}" } }
+          }
+        }
+      },
+      {
         "label": "create-public-load-balancer",
         "description": "Create ALB resources for public daemon endpoints.",
         "grant": {
