@@ -730,7 +730,9 @@ impl GcpHttpsIngressState {
                     let mut desired = plan.backend.clone();
                     desired.name = Some(name.clone());
                     desired.description = Some(description.clone());
-                    desired.protocol = Some(BackendServiceProtocol::Http);
+                    // A handed-off serverless graph can already serve HTTPS.
+                    // Access changes must preserve its recorded backend protocol.
+                    desired.protocol.get_or_insert(BackendServiceProtocol::Http);
                     desired.load_balancing_scheme = Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External });
                     desired.health_checks = if plan.health_check.is_some() {
                         vec![self.url("healthChecks", &self.child_name("healthCheck"))]
