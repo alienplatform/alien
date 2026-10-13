@@ -9,7 +9,7 @@ use alien_aws_clients::ecs::{
     TaskDefinitionRequest, TaskDefinitionResponse,
 };
 use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -25,6 +25,7 @@ pub(super) struct GatewayTask {
     account_id: String,
     region: String,
     request: RegisterTaskDefinitionRequest,
+    registration_permitted: bool,
     registration_attempted: bool,
     revisions: BTreeSet<String>,
     delete_requested: BTreeSet<String>,
@@ -106,6 +107,7 @@ impl GatewayTask {
             account_id,
             region,
             request,
+            registration_permitted: false,
             registration_attempted: false,
             revisions: BTreeSet::new(),
             delete_requested: BTreeSet::new(),
@@ -118,6 +120,12 @@ impl GatewayTask {
     pub async fn step_create(&mut self, ecs: &dyn EcsApi) -> Result<Option<String>> {
         if self.retiring {
             return Err(invalid("A retiring gateway task cannot be reused"));
+        }
+        if !self.registration_permitted {
+            // Checkpoint intent before a registration can commit. Cleanup must retain
+            // this generation even when the process dies before saving the reply.
+            self.registration_permitted = true;
+            return Ok(None);
         }
         let found = self.inventory(ecs).await?;
         if let Some(arn) = found.first() {
@@ -155,7 +163,7 @@ impl GatewayTask {
 
     async fn delete_inner(&mut self, ecs: &dyn EcsApi) -> Result<bool> {
         self.retiring = true;
-        if !self.registration_attempted {
+        if !self.registration_permitted {
             return Ok(true);
         }
         let found = self.inventory(ecs).await?;
@@ -324,8 +332,30 @@ impl GatewayTask {
         {
             return Err(invalid("Gateway task execution boundary changed"));
         }
+        if task.requires_compatibilities != self.request.requires_compatibilities
+            || !task.runtime_platform.as_ref().is_some_and(|platform| {
+                platform.cpu_architecture == "X86_64" && platform.operating_system_family == "LINUX"
+            })
+        {
+            return Err(invalid("Gateway task runtime platform changed"));
+        }
         let actual = &task.container_definitions[0];
-        if actual.name != expected.name
+        let ports: BTreeSet<_> = actual
+            .port_mappings
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|port| port.protocol.as_deref().unwrap_or("tcp") == "tcp")
+            .map(|port| port.container_port)
+            .collect();
+        if ports != BTreeSet::from([i32::from(GATEWAY_HTTP_PORT), i32::from(GATEWAY_HEALTH_PORT)])
+            || actual.port_mappings.as_ref().map(Vec::len) != Some(2)
+        {
+            return Err(invalid("Gateway task listener ports changed"));
+        }
+        if actual.essential != Some(true)
+            || actual.stop_timeout != Some(120)
+            || actual.name != expected.name
             || actual.image != expected.image
             || actual.entry_point != expected.entry_point
             || actual.command != expected.command
@@ -424,6 +454,8 @@ mod tests {
     async fn lost_registration_reply_recovers_after_reload_without_another_registration() {
         let mut owner = owner();
         let mut ecs = MockEcsApi::new();
+        assert!(owner.step_create(&ecs).await.unwrap().is_none());
+        owner = reload(&owner);
         inventory(&mut ecs, vec![]);
         ecs.expect_register_task_definition()
             .times(1)
@@ -446,8 +478,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn persisted_pre_call_intent_is_not_forgotten_after_a_process_crash() {
+        let mut owner = owner();
+        let mut ecs = MockEcsApi::new();
+        assert!(owner.step_create(&ecs).await.unwrap().is_none());
+        owner = reload(&owner);
+        assert!(!owner.registration_attempted);
+        inventory(&mut ecs, vec![]);
+        assert!(!owner.step_delete(&ecs).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn uncertain_registration_cannot_be_forgotten_by_cleanup() {
         let mut owner = owner();
+        owner.registration_permitted = true;
         owner.registration_attempted = true;
         let mut ecs = MockEcsApi::new();
         inventory(&mut ecs, vec![]);
@@ -459,6 +503,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_rejects_foreign_generation_before_mutation() {
         let mut owner = owner();
+        owner.registration_permitted = true;
         owner.registration_attempted = true;
         let mut foreign = response(&owner, 1, "ACTIVE");
         foreign
@@ -486,6 +531,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_keeps_identity_on_lost_delete_and_waits_for_inventory_absence() {
         let mut owner = owner();
+        owner.registration_permitted = true;
         owner.registration_attempted = true;
         let task = response(&owner, 1, "INACTIVE");
         let arn = task.task_definition.task_definition_arn.clone();
