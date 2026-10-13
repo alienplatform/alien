@@ -158,7 +158,7 @@ fn validate_daemon_public_endpoints(
         has_http |= endpoint.protocol == ExposeProtocol::Http;
         has_tcp |= endpoint.protocol == ExposeProtocol::Tcp;
         if endpoint.protocol == ExposeProtocol::Tcp
-            && !matches!(platform, Platform::Aws | Platform::Gcp)
+            && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
         {
             failures.push(format!(
                 "Daemon '{}': TCP endpoints are not supported on {platform}",
@@ -484,7 +484,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 result.success,
-                matches!(platform, Platform::Aws | Platform::Gcp),
+                matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure),
                 "{platform}: {:?}",
                 result.errors
             );

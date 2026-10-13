@@ -536,8 +536,8 @@
     ],
     "azure": [
       {
-        "label": "manage-public-application-gateway",
-        "description": "Create, update, inspect, and delete Azure public IPs, identities, role assignments, and Application Gateways for daemon public endpoints.",
+        "label": "manage-endpoint-ingress",
+        "description": "Create, inspect, update, and delete Azure endpoint load balancers, public IPs, identities, role assignments, and Application Gateways.",
         "grant": {
           "actions": [
             // Ingress validation is required even with heartbeats disabled.
@@ -554,6 +554,10 @@
             "Microsoft.Authorization/roleAssignments/read",
             "Microsoft.Authorization/roleAssignments/write",
             "Microsoft.Authorization/roleAssignments/delete",
+            "Microsoft.Network/loadBalancers/write",
+            "Microsoft.Network/loadBalancers/read",
+            "Microsoft.Network/loadBalancers/delete",
+            "Microsoft.Network/loadBalancers/loadBalancingRules/health/action",
             "Microsoft.Network/publicIPAddresses/write",
             "Microsoft.Network/publicIPAddresses/read",
             "Microsoft.Network/publicIPAddresses/delete"
