@@ -37,6 +37,10 @@ pub struct Postgres {
     #[builder(default)]
     #[serde(default)]
     pub high_availability: bool,
+    /// Key used to encrypt database storage, snapshots, and performance data.
+    /// Cannot be changed after creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<ResourceRef>,
     /// Cloud backend selector; None resolves to the platform default. The field
     /// exists so a single per-cloud controller can dispatch on it without a later
     /// schema change — the registry allows only one controller per (resource, cloud).
@@ -134,7 +138,7 @@ impl ResourceDefinition for Postgres {
         // The network dependency is added by infrastructure preflights on cloud platforms and
         // is irrelevant on Local; cloud controllers reach the network via
         // require_dependency() at runtime, so nothing is declared statically here.
-        Vec::new()
+        self.encryption_key.iter().cloned().collect()
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
@@ -153,6 +157,14 @@ impl ResourceDefinition for Postgres {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
                 reason: "the 'id' field is immutable".to_string(),
+            }));
+        }
+
+        if self.encryption_key != new_pg.encryption_key {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'encryptionKey' field is immutable once the resource exists"
+                    .to_string(),
             }));
         }
 

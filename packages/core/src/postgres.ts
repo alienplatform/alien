@@ -3,6 +3,7 @@ import {
   PostgresSchema,
   type ResourceType,
 } from "./generated/index.js"
+import { encryptionKeyRef } from "./key.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { Postgres as PostgresConfig, PostgresOutputs } from "./generated/index.js"
@@ -89,6 +90,12 @@ export class Postgres extends ResourceBuilder {
    */
   public highAvailability(value = true): this {
     this._config.highAvailability = value
+    return this
+  }
+
+  /** Uses a Key in the same stack to encrypt database storage and snapshots. Immutable after creation. */
+  public encryptionKey(key: Resource): this {
+    this._config.encryptionKey = encryptionKeyRef(key)
     return this
   }
 

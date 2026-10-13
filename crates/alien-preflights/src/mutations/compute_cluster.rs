@@ -253,8 +253,12 @@ impl StackMutation for ComputeClusterMutation {
                     .and_then(ComputePoolSelection::failure_domains)
                     .cloned();
                 match &mut selection {
-                    ComputePoolSelection::Fixed { failure_domains, .. }
-                    | ComputePoolSelection::Autoscale { failure_domains, .. } => {
+                    ComputePoolSelection::Fixed {
+                        failure_domains, ..
+                    }
+                    | ComputePoolSelection::Autoscale {
+                        failure_domains, ..
+                    } => {
                         *failure_domains = domains;
                     }
                 }
@@ -1110,7 +1114,11 @@ fn build_categorized_capacity_groups(
             }),
             min_size: 0,
             // Machines groups need a concrete capacity bound.
-            max_size: if platform == Platform::Machines { 10 } else { 0 },
+            max_size: if platform == Platform::Machines {
+                10
+            } else {
+                0
+            },
             scale_policy: None,
             nested_virtualization: None,
         }]),
@@ -1783,6 +1791,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),
@@ -2044,6 +2053,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),
@@ -2105,6 +2115,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),

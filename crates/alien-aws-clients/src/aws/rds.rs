@@ -47,6 +47,8 @@ pub struct CreateDbSubnetGroupRequest {
 
 #[derive(Debug, Clone)]
 pub struct CreateDbClusterRequest {
+    /// Immutable KMS key ARN used for storage and inherited by cluster snapshots.
+    pub kms_key_id: Option<String>,
     pub identifier: String,
     pub engine_version: String,
     pub master_username: String,
@@ -79,6 +81,8 @@ pub struct DeleteDbClusterRequest {
 
 #[derive(Debug, Clone)]
 pub struct CreateDbInstanceRequest {
+    /// Customer key for Performance Insights; enables Insights when provided.
+    pub performance_insights_kms_key_id: Option<String>,
     pub identifier: String,
     pub cluster_identifier: String,
     pub engine_version: String,
@@ -253,6 +257,9 @@ fn create_db_cluster_form(r: &CreateDbClusterRequest) -> HashMap<String, String>
         r.backup_retention_days.to_string(),
     );
     form.insert("StorageEncrypted".into(), "true".into());
+    if let Some(key) = &r.kms_key_id {
+        form.insert("KmsKeyId".into(), key.clone());
+    }
     tag_members(&mut form, &r.tags);
     form
 }
@@ -296,6 +303,10 @@ fn create_db_instance_form(r: &CreateDbInstanceRequest) -> HashMap<String, Strin
     // flag) so the guarantee holds regardless of the subnet group, matching GCP (`ipv4Enabled=false`)
     // and Azure (`publicNetworkAccess=Disabled`) rather than relying on the subnet group's default.
     form.insert("PubliclyAccessible".into(), "false".into());
+    if let Some(key) = &r.performance_insights_kms_key_id {
+        form.insert("EnablePerformanceInsights".into(), "true".into());
+        form.insert("PerformanceInsightsKMSKeyId".into(), key.clone());
+    }
     form
 }
 
@@ -601,6 +612,7 @@ mod tests {
 
     fn cluster_request() -> CreateDbClusterRequest {
         CreateDbClusterRequest {
+            kms_key_id: None,
             identifier: "stack-db".into(),
             engine_version: "17.4".into(),
             master_username: "alien".into(),
@@ -680,6 +692,7 @@ mod tests {
     #[test]
     fn create_instance_uses_serverless_class_and_is_never_public() {
         let form = create_db_instance_form(&CreateDbInstanceRequest {
+            performance_insights_kms_key_id: None,
             identifier: "stack-db-1".into(),
             cluster_identifier: "stack-db".into(),
             engine_version: "17.4".into(),
