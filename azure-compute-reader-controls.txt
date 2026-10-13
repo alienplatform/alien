@@ -1,0 +1,17 @@
+Real Azure target — read-only Rust config/reader controls
+No deployment attempted; cloud writes: 0
+
+
+Negative: Standard_D2s_v5, max 1
+VM SKU availability (sku/Standard_D2s_v5, [SUBSCRIPTION REDACTED]/eastus): used 0, applied limit 0, additional needed 1. Request an increase: https://portal.azure.com/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/overview
+Compute vCPUs (standardDSv5Family, [SUBSCRIPTION REDACTED]/eastus): used 0, applied limit 0, additional needed 2. Request an increase: https://portal.azure.com/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/overview
+
+Negative: Standard_F2s_v2, max 6
+VM SKU availability (sku/Standard_F2s_v2, [SUBSCRIPTION REDACTED]/eastus): used 0, applied limit 0, additional needed 1. Request an increase: https://portal.azure.com/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/overview
+Compute vCPUs (cores, [SUBSCRIPTION REDACTED]/eastus): used 6, applied limit 10, additional needed 12. Request an increase: https://portal.azure.com/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/overview
+Compute vCPUs (standardFSv2Family, [SUBSCRIPTION REDACTED]/eastus): used 0, applied limit 10, additional needed 12. Request an increase: https://portal.azure.com/#view/Microsoft_Azure_Capacity/QuotaMenuBlade/~/overview
+
+Regional-only controls: used 6 / applied limit 10
+Demand 0 => Pass; demand 2 => Pass
+
+Actual deployment / parent / UI proof remains open.
