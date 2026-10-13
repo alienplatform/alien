@@ -231,6 +231,7 @@
           "actions": [
             "Microsoft.Compute/disks/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/attachDetachDataDisks/action",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read"
           ]
         },
