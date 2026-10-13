@@ -476,6 +476,20 @@ impl GcpWorkerController {
         }
     }
 
+    async fn validate_worker_setup(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+    ) -> Result<()> {
+        // A declared network must not silently become a worker without VPC
+        // access: retained native invocation URLs rely on that connection.
+        self.get_vpc_access(ctx)?;
+        if self.uses_shared_worker_ingress(ctx, worker) {
+            GcpWorkerIngress::validate_setup(ctx, worker).await?;
+        }
+        Ok(())
+    }
+
     async fn reconcile_worker_ingress(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -742,10 +756,8 @@ impl GcpWorkerController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
+        self.validate_worker_setup(ctx, cfg).await?;
         self.ingress.active = self.uses_shared_worker_ingress(ctx, cfg);
-        if self.ingress.active {
-            GcpWorkerIngress::validate_setup(ctx, cfg).await?;
-        }
         info!(name=%cfg.id, "Initiating Cloud Run service creation");
 
         // Product limitation: Only allow at most one queue trigger per worker
@@ -2540,6 +2552,7 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
+        self.validate_worker_setup(ctx, cfg).await?;
 
         if self.uses_shared_worker_ingress(ctx, cfg)
             || cfg.public_endpoints.is_empty()
@@ -2698,6 +2711,7 @@ impl GcpWorkerController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
+        self.validate_worker_setup(ctx, cfg).await?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         let shared_ingress = self.uses_shared_worker_ingress(ctx, cfg);
         self.ingress.active = shared_ingress;
@@ -5268,16 +5282,18 @@ impl GcpWorkerController {
         let network_state =
             ctx.require_dependency::<crate::network::GcpNetworkController>(&network_ref)?;
 
-        // Only configure VPC access if we have network and subnetwork names
-        let network_name = match &network_state.network_name {
-            Some(name) => name.clone(),
-            None => return Ok(None),
+        let required_name = |value: &Option<String>, field: &str| {
+            value.as_ref().filter(|name| !name.is_empty()).cloned().ok_or_else(|| {
+                AlienError::new(ErrorData::SetupRequired {
+                    message: format!(
+                        "Worker VPC access requires the setup-owned {field}. Update network setup registration before deploying the worker."
+                    ),
+                    resource_id: Some(ctx.desired_config.id().to_string()),
+                })
+            })
         };
-
-        let subnetwork_name = match &network_state.subnetwork_name {
-            Some(name) => name.clone(),
-            None => return Ok(None),
-        };
+        let network_name = required_name(&network_state.network_name, "network name")?;
+        let subnetwork_name = required_name(&network_state.subnetwork_name, "subnet name")?;
 
         // Build Direct VPC Egress configuration using network interfaces
         let network_interface = NetworkInterface::builder()

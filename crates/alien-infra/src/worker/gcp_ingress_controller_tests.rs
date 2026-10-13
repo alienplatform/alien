@@ -571,10 +571,8 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             access.private_enabled()
         );
         let live = services.lock().unwrap().live.clone().unwrap();
-        let binding: alien_core::bindings::WorkerBinding = serde_json::from_value(
-            controller.get_binding_params().unwrap().unwrap(),
-        )
-        .unwrap();
+        let binding: alien_core::bindings::WorkerBinding =
+            serde_json::from_value(controller.get_binding_params().unwrap().unwrap()).unwrap();
         let alien_core::bindings::WorkerBinding::CloudRun(binding) = binding else {
             panic!("expected Cloud Run binding");
         };
@@ -761,4 +759,56 @@ async fn handed_off_legacy_service_refuses_replacement_at_resumed_handlers(
         error.message.contains("replaced"),
         "unexpected error: {error}"
     );
+}
+
+#[rstest]
+#[case(GcpWorkerState::CreateStart)]
+#[case(GcpWorkerState::UpdateImportingSslCertificate)]
+#[case(GcpWorkerState::UpdateStart)]
+#[tokio::test]
+async fn incomplete_network_setup_fails_before_worker_mutations(#[case] state: GcpWorkerState) {
+    for missing in ["network", "subnet", "proxy"] {
+        let worker = function_public_ingress();
+        let mut controller = GcpWorkerController::mock_ready("test-api");
+        controller.state = state.clone();
+        let mut network = GcpNetworkController::mock_ready("default-network");
+        match missing {
+            "network" => network.network_name = None,
+            "subnet" => network.subnetwork_name = Some(String::new()),
+            "proxy" => network.proxy_subnet_self_link = None,
+            _ => unreachable!(),
+        }
+        // No provider calls are allowed, including certificate, NEG and
+        // frontend mutations at the earliest create/update entry points.
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .previous_resource(worker)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(
+                Arc::new(MockCloudRunApi::new()),
+                None,
+            ))
+            .with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                network,
+            )
+            .stack_settings(StackSettings {
+                endpoint_access: EndpointAccess::Both,
+                ..Default::default()
+            })
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.unwrap_err();
+        assert!(
+            error.message.contains("setup"),
+            "unexpected {missing} error: {error}"
+        );
+    }
 }
