@@ -174,6 +174,14 @@ pub trait NetworkApi: Send + Sync + std::fmt::Debug {
         public_ip_address_name: &str,
     ) -> Result<OperationResult<()>>;
 
+    /// Delete only the public IP snapshot whose ownership was verified.
+    async fn delete_public_ip_address_if_match(
+        &self,
+        resource_group_name: &str,
+        public_ip_address_name: &str,
+        etag: &str,
+    ) -> Result<OperationResult<()>>;
+
     // -------------------------------------------------------------------------
     // Network Security Group Operations
     // -------------------------------------------------------------------------
@@ -217,6 +225,40 @@ pub struct AzureNetworkClient {
 }
 
 impl AzureNetworkClient {
+    async fn delete_public_ip_address_with_etag(
+        &self,
+        resource_group_name: &str,
+        public_ip_address_name: &str,
+        etag: Option<&str>,
+    ) -> Result<OperationResult<()>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
+                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+
+        let mut builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
+        if let Some(etag) = etag {
+            builder = builder.header("If-Match", etag);
+        }
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "DeletePublicIpAddress",
+                public_ip_address_name,
+            )
+            .await
+    }
+
     /// API version for Azure Network resources
     const API_VERSION: &'static str = "2024-05-01";
 
@@ -769,29 +811,22 @@ impl NetworkApi for AzureNetworkClient {
         resource_group_name: &str,
         public_ip_address_name: &str,
     ) -> Result<OperationResult<()>> {
-        let bearer_token = self
-            .token_cache
-            .get_bearer_token_with_scope("https://management.azure.com/.default")
-            .await?;
-
-        let url = self.base.build_url(
-            &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/{}", 
-                     &self.token_cache.config().subscription_id, resource_group_name, public_ip_address_name),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
-        );
-
-        let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
-
-        let req = builder.build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
-
-        self.base
-            .execute_request_with_long_running_support(
-                signed,
-                "DeletePublicIpAddress",
-                public_ip_address_name,
-            )
+        self.delete_public_ip_address_with_etag(resource_group_name, public_ip_address_name, None)
             .await
+    }
+
+    async fn delete_public_ip_address_if_match(
+        &self,
+        resource_group_name: &str,
+        public_ip_address_name: &str,
+        etag: &str,
+    ) -> Result<OperationResult<()>> {
+        self.delete_public_ip_address_with_etag(
+            resource_group_name,
+            public_ip_address_name,
+            Some(etag),
+        )
+        .await
     }
 
     // -------------------------------------------------------------------------
@@ -929,5 +964,53 @@ impl NetworkApi for AzureNetworkClient {
                 network_security_group_name,
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AzureClientConfig, AzureCredentials};
+    use alien_core::AzureServiceOverrides;
+    use httpmock::prelude::*;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn public_ip_conditional_delete_rejects_stale_snapshot() {
+        let server = MockServer::start_async().await;
+        let delete = server.mock_async(|when, then| {
+            when.method(DELETE)
+                .path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip")
+                .query_param("api-version", "2024-05-01")
+                .header("Authorization", "Bearer test-token")
+                .header("If-Match", "W/\"snapshot\"");
+            then.status(412).json_body(json!({"error":{"code":"PreconditionFailed","message":"Snapshot changed"}}));
+        }).await;
+        let config = AzureClientConfig {
+            subscription_id: "sub".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: Some(AzureServiceOverrides {
+                endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+            }),
+        };
+        let client = AzureNetworkClient::new(Client::new(), AzureTokenCache::new(config));
+        let error = client
+            .delete_public_ip_address_if_match("rg", "pip", "W/\"snapshot\"")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
+            "{error}"
+        );
+        assert!(
+            !error.retryable,
+            "Refresh ownership and ETag before retrying"
+        );
+        delete.assert_hits_async(1).await;
     }
 }
