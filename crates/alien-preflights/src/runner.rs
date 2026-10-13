@@ -392,7 +392,7 @@ impl PreflightRunner {
 
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
-        let mut mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
+        let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
         let direct_setup = setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
         let hashed_target = match old_stack {
             Some(_) if !direct_setup => Some(without_declined_live_resources(
@@ -445,27 +445,6 @@ impl PreflightRunner {
                 all_results.extend(compatibility_summary.results);
             } else {
                 info!("Applying explicit authority for frozen resource changes");
-            }
-        }
-
-        // Placement is execution metadata, never caller-provided setup authority.
-        // Resolve only the direct path: template emitters have their own AZ contract.
-        mutated_stack.aws_network_placements.clear();
-        if direct_setup && platform == Platform::Aws {
-            if let Some(aws) = client_config.aws_config() {
-                if let Ok(credentials) =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws.clone()).await
-                {
-                    let ec2 =
-                        alien_aws_clients::Ec2Client::new(reqwest::Client::new(), credentials);
-                    crate::runtime::aws_nat::prepare_network_placements(
-                        &mut mutated_stack,
-                        stack_state,
-                        &ec2,
-                        &aws.region,
-                    )
-                    .await;
-                }
             }
         }
 
@@ -556,46 +535,12 @@ mod setup_update_authorization_tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
-            aws_network_placements: Default::default(),
             operations: None,
             id: "stack".to_string(),
             resources: IndexMap::new(),
             inputs: vec![],
             permissions: PermissionsConfig::default(),
             supported_platforms: None,
-        }
-    }
-
-    #[cfg(feature = "runtime-checks")]
-    #[tokio::test]
-    async fn caller_placement_is_discarded_without_direct_cloud_authority() {
-        for authority in [None, Some(alien_core::InitialSetupAuthority::DirectSetup)] {
-            let mut target = empty_stack();
-            target.aws_network_placements.insert(
-                "forged".into(),
-                alien_core::AwsNetworkPlacement {
-                    region: "us-east-1".into(),
-                    requested_zones: 1,
-                    zones: vec!["us-east-1a".into()],
-                },
-            );
-            let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
-            let (prepared, summary, _) = runner
-                .run_deployment_time_preflights(
-                    target,
-                    &StackState::new(Platform::Local),
-                    &deployment_config(),
-                    &ClientConfig::Local {
-                        state_directory: "/unused".into(),
-                    },
-                    None,
-                    None,
-                    authority,
-                )
-                .await
-                .unwrap();
-            assert!(summary.success);
-            assert!(prepared.aws_network_placements.is_empty());
         }
     }
 

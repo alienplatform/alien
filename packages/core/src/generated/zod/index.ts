@@ -44,7 +44,6 @@ export type { AwsLambdaWorkerHeartbeatData } from "./aws-lambda-worker-heartbeat
 export type { AwsManagementConfig } from "./aws-management-config-schema.js";
 export type { AwsMicrovmSandboxHeartbeatData } from "./aws-microvm-sandbox-heartbeat-data-schema.js";
 export type { AwsNetworkImportData } from "./aws-network-import-data-schema.js";
-export type { AwsNetworkPlacement } from "./aws-network-placement-schema.js";
 export type { AwsOpenSearchCapacityRange } from "./aws-open-search-capacity-range-schema.js";
 export type { AwsOpenSearchCapacity } from "./aws-open-search-capacity-schema.js";
 export type { AwsOpenSearchCollectionType } from "./aws-open-search-collection-type-schema.js";
@@ -554,7 +553,6 @@ export { AwsLambdaWorkerHeartbeatDataSchema } from "./aws-lambda-worker-heartbea
 export { AwsManagementConfigSchema } from "./aws-management-config-schema.js";
 export { AwsMicrovmSandboxHeartbeatDataSchema } from "./aws-microvm-sandbox-heartbeat-data-schema.js";
 export { AwsNetworkImportDataSchema } from "./aws-network-import-data-schema.js";
-export { AwsNetworkPlacementSchema } from "./aws-network-placement-schema.js";
 export { AwsOpenSearchCapacityRangeSchema } from "./aws-open-search-capacity-range-schema.js";
 export { AwsOpenSearchCapacitySchema } from "./aws-open-search-capacity-schema.js";
 export { AwsOpenSearchCollectionTypeSchema } from "./aws-open-search-collection-type-schema.js";

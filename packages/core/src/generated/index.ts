@@ -44,7 +44,6 @@ export type { AwsLambdaWorkerHeartbeatData } from "./zod/aws-lambda-worker-heart
 export type { AwsManagementConfig } from "./zod/aws-management-config-schema.js";
 export type { AwsMicrovmSandboxHeartbeatData } from "./zod/aws-microvm-sandbox-heartbeat-data-schema.js";
 export type { AwsNetworkImportData } from "./zod/aws-network-import-data-schema.js";
-export type { AwsNetworkPlacement } from "./zod/aws-network-placement-schema.js";
 export type { AwsOpenSearchCapacityRange } from "./zod/aws-open-search-capacity-range-schema.js";
 export type { AwsOpenSearchCapacity } from "./zod/aws-open-search-capacity-schema.js";
 export type { AwsOpenSearchCollectionType } from "./zod/aws-open-search-collection-type-schema.js";
@@ -554,7 +553,6 @@ export { AwsLambdaWorkerHeartbeatDataSchema } from "./zod/aws-lambda-worker-hear
 export { AwsManagementConfigSchema } from "./zod/aws-management-config-schema.js";
 export { AwsMicrovmSandboxHeartbeatDataSchema } from "./zod/aws-microvm-sandbox-heartbeat-data-schema.js";
 export { AwsNetworkImportDataSchema } from "./zod/aws-network-import-data-schema.js";
-export { AwsNetworkPlacementSchema } from "./zod/aws-network-placement-schema.js";
 export { AwsOpenSearchCapacityRangeSchema } from "./zod/aws-open-search-capacity-range-schema.js";
 export { AwsOpenSearchCapacitySchema } from "./zod/aws-open-search-capacity-schema.js";
 export { AwsOpenSearchCollectionTypeSchema } from "./zod/aws-open-search-collection-type-schema.js";

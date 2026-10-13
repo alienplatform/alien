@@ -60,37 +60,6 @@ impl ResourceEntry {
     }
 }
 
-/// Placement resolved with target credentials during direct setup preparation.
-/// This is execution metadata, separate from resource configuration and setup authority.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct AwsNetworkPlacement {
-    /// Target AWS region.
-    pub region: String,
-    /// Requested zone count from the Network Create configuration.
-    pub requested_zones: u8,
-    /// Selected zone names in provider order; the first owns the NAT gateway.
-    pub zones: Vec<String>,
-}
-
-impl AwsNetworkPlacement {
-    /// Reject stale or malformed metadata before using it for provisioning.
-    pub fn matches(&self, region: &str, requested: u8) -> bool {
-        self.region == region
-            && self.requested_zones == requested
-            && !self.zones.is_empty()
-            && self.zones.len() <= usize::from(requested)
-            && self.zones.iter().all(|zone| !zone.is_empty())
-            && self
-                .zones
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                == self.zones.len()
-    }
-}
-
 /// A bag of resources, unaware of any cloud.
 #[derive(Builder, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -125,11 +94,6 @@ pub struct Stack {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_container_image_resources: Vec<String>,
-    /// Internal direct-setup placement by Network resource ID. Recomputed by preparation;
-    /// never grants setup authority or changes resource configuration.
-    #[builder(field)]
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub aws_network_placements: IndexMap<String, AwsNetworkPlacement>,
     /// Operations this stack's deployments run: the plugins, their settings, and
     /// which operations run without approval. Changing them takes a new release.
     #[builder(field)]
@@ -437,39 +401,6 @@ mod tests {
         Storage, Worker, WorkerCode,
     };
     use insta::assert_json_snapshot;
-
-    #[test]
-    fn placement_roundtrip_preserves_frozen_configuration_and_digest() {
-        let original = Stack::new("placement-test".into())
-            .add(
-                Storage::new("bucket".into()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        let old_json = serde_json::to_value(&original).unwrap();
-        assert!(old_json.get("awsNetworkPlacements").is_none());
-        let mut prepared: Stack = serde_json::from_value(old_json).unwrap();
-        prepared.aws_network_placements.insert(
-            "network".into(),
-            AwsNetworkPlacement {
-                region: "eu-west-1".into(),
-                requested_zones: 2,
-                zones: vec!["eu-west-1b".into(), "eu-west-1a".into()],
-            },
-        );
-        let restored: Stack =
-            serde_json::from_str(&serde_json::to_string(&prepared).unwrap()).unwrap();
-        assert_eq!(restored, prepared);
-        assert_eq!(restored.resources, original.resources);
-        assert_eq!(restored.setup_owned_digest(), original.setup_owned_digest());
-        let plan = &restored.aws_network_placements["network"];
-        assert!(plan.matches("eu-west-1", 2));
-        assert!(!plan.matches("eu-west-2", 2));
-        assert!(!plan.matches("eu-west-1", 1));
-        let mut invalid = plan.clone();
-        invalid.zones[1] = invalid.zones[0].clone();
-        assert!(!invalid.matches("eu-west-1", 2));
-    }
 
     fn resource_entry<T: crate::ResourceDefinition>(
         resource: T,

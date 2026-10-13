@@ -56,7 +56,6 @@ use utoipa::OpenApi;
     ResourceStatus,
     ResourceType,
     Stack,
-    AwsNetworkPlacement,
     OperationsConfig,
     PluginOperationsConfig,
     CustomPluginOperationsConfig,
