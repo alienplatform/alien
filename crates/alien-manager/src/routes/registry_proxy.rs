@@ -7,9 +7,16 @@
 //!
 //! ## Auth
 //!
-//! **Push** (POST/PUT/PATCH): Admin or developer token only.
-//! **Pull** (GET/HEAD): Deployment token — validates the requested repo exists
-//! in the deployment's release.
+//! Both directions resolve the repository's project through the
+//! [`crate::traits::ProjectStore`] and ask [`crate::auth::Authz`]:
+//!
+//! **Push** (POST/PUT/PATCH): `can_push_image` on the repository's project.
+//! **Pull** (GET/HEAD): `can_pull_image` on the repository's project. A
+//! deployment token is further limited to its own project's repositories and
+//! those its release names.
+//!
+//! Charts and the Operator image are not project repositories and are served
+//! by their own handlers before this check.
 //!
 //! ## Performance
 //!
@@ -45,6 +52,7 @@ use alien_core::{
 
 use super::AppState;
 use crate::auth::{Role, Scope, Subject};
+use crate::traits::ProjectRecord;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -493,7 +501,7 @@ async fn proxy_push(
             Ok(s) => s,
             Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
         };
-        if let Err(e) = require_push_auth(&state, &subject, &oci.repo) {
+        if let Err(e) = require_push_auth(&state, &subject, &oci.repo).await {
             return e;
         }
         let mut query = query;
@@ -688,7 +696,7 @@ async fn proxy_upload_session(
         return invalid_upload_session_auth();
     }
 
-    if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
+    if let Err(e) = require_push_auth(&state, &subject, &repo_name).await {
         return e;
     }
 
@@ -1234,18 +1242,47 @@ fn upload_session_payload(upload_path: &str, repo_name: &str, expires_at: i64) -
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-/// Validate that the caller has push permissions. The project_id comes
-/// from the **routing table** — each provider composes repo names as
-/// `{prefix}{sep}{name}` (`-` for ECR, `/` for GAR/ACR/Local), so the
-/// routing-table prefix lookup gives us the project's name unambiguously.
-/// Pushes that don't match any prefix fall back to `"default"`; the
-/// configured [`crate::auth::Authz`] impl decides whether to allow.
-fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Result<(), Response> {
+/// The project that owns `repo_name`, looked up as `subject`. The project id comes from the
+/// **routing table**: each provider composes repo names as `{prefix}{sep}{name}` (`-` for ECR,
+/// `/` for GAR/ACR/Local), so the prefix lookup gives the project's id unambiguously. A repository
+/// that matches no prefix belongs to `"default"`. A project the store does not return is refused,
+/// and a failed lookup refuses too: access is granted only on a resolved project.
+async fn repository_project(
+    state: &AppState,
+    subject: &Subject,
+    repo_name: &str,
+) -> Result<ProjectRecord, Response> {
     let project_id = state
         .registry_routing_table
         .project_id_for_repo(repo_name)
         .unwrap_or("default");
-    if state.authz.can_push_image(subject, project_id, repo_name) {
+    match state.project_store.get_project(subject, project_id).await {
+        Ok(Some(project)) => Ok(project),
+        Ok(None) => Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Repository does not belong to a project the caller can access.",
+        )),
+        Err(e) => {
+            warn!(error = %e, %project_id, "Failed to resolve the project of a registry repository");
+            Err(oci_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "Failed to resolve repository project",
+            ))
+        }
+    }
+}
+
+/// Validate that the caller may push to `repo_name`, through
+/// [`crate::auth::Authz::can_push_image`] on the repository's project.
+async fn require_push_auth(
+    state: &AppState,
+    subject: &Subject,
+    repo_name: &str,
+) -> Result<(), Response> {
+    let project = repository_project(state, subject, repo_name).await?;
+    if state.authz.can_push_image(subject, &project, repo_name) {
         Ok(())
     } else {
         Err(oci_error(
@@ -1256,9 +1293,8 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
-/// Credentials that exist to provision or push images pull nothing. A project-scoped capability
-/// shares the scope whose pulls skip repo validation, so it is refused before that match, and
-/// before charts and the Operator image are routed.
+/// Credentials that exist to provision or push images pull nothing. They are refused before
+/// charts and the Operator image are routed, which `Authz::can_pull_image` does not see.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(oci_error(
@@ -1277,19 +1313,23 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     Ok(())
 }
 
-/// Validate that a deployment token can access the requested repo.
+/// Validate that the caller may pull `repo_name`.
 ///
-/// Uses the pull validation cache to avoid repeated DB lookups. Workspace-
-/// scoped subjects bypass repo validation (they can pull anything in the
-/// workspace).
+/// Every pull is authorized by [`crate::auth::Authz::can_pull_image`] on the repository's
+/// project. A deployment token is further held to its own project's repositories and those its
+/// release names; that list is cached per deployment to avoid repeated DB lookups.
 async fn validate_pull_access(
     state: &AppState,
     subject: &Subject,
     repo_name: &str,
 ) -> Result<(), Response> {
     refuse_capability_pull(subject)?;
-    let (deployment_id, own_project) = match &subject.scope {
-        Scope::Workspace | Scope::Project { .. } => return Ok(()),
+    let deployment = match &subject.scope {
+        Scope::Workspace | Scope::Project { .. } => None,
+        Scope::Deployment {
+            project_id,
+            deployment_id,
+        } => Some((deployment_id.as_str(), project_id.as_str())),
         Scope::DeploymentGroup { .. } => {
             return Err(oci_error(
                 StatusCode::FORBIDDEN,
@@ -1318,24 +1358,28 @@ async fn validate_pull_access(
                 "Telemetry credentials cannot access the registry proxy",
             ))
         }
-        Scope::Deployment {
-            project_id,
-            deployment_id,
-        } => {
-            // A deployment token may always pull from its own project's
-            // artifact repository. Source-built resources (Worker/Container/
-            // Daemon) publish their images there under `{prefix}-{project_id}`,
-            // and those repos are not discoverable from the stack's `image`
-            // fields — so the per-release allow-list below would otherwise
-            // reject them (e.g. a source-built Daemon).
-            if state.registry_routing_table.project_id_for_repo(repo_name)
-                == Some(project_id.as_str())
-            {
-                return Ok(());
-            }
-            (deployment_id.as_str(), project_id.as_str())
-        }
     };
+
+    let project = repository_project(state, subject, repo_name).await?;
+    if !state.authz.can_pull_image(subject, &project, repo_name) {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Caller cannot pull images from this repository.",
+        ));
+    }
+    let Some((deployment_id, own_project)) = deployment else {
+        return Ok(());
+    };
+    // A deployment token may always pull from its own project's artifact
+    // repository. Source-built resources (Worker/Container/Daemon) publish
+    // their images there under `{prefix}-{project_id}`, and those repos are
+    // not discoverable from the stack's `image` fields — so the per-release
+    // allow-list below would otherwise reject them (e.g. a source-built
+    // Daemon).
+    if state.registry_routing_table.project_id_for_repo(repo_name) == Some(own_project) {
+        return Ok(());
+    }
 
     // Check cache first.
     let repo_names = if let Some((_release_id, cached_repos)) =

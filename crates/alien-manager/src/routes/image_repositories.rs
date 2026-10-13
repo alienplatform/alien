@@ -45,6 +45,19 @@ async fn provision_image_repository(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let project = match state
+        .project_store
+        .get_project(&subject, &request.project_id)
+        .await
+    {
+        Ok(Some(project)) if project.id == request.project_id => project,
+        Ok(_) => return ErrorData::forbidden("Project is not available").into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if project.workspace_id != subject.workspace_id {
+        return ErrorData::forbidden("Caller cannot provision this project's image repository")
+            .into_response();
+    }
     if !state
         .authz
         .can_provision_image_repository(&subject, &request.project_id)

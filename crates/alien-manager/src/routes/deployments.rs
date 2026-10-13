@@ -1253,6 +1253,7 @@ mod tests {
         let state = AppState {
             deployment_store: Arc::new(deployment_store),
             release_store: Arc::new(UnusedReleaseStore),
+            project_store: Arc::new(crate::providers::SingleWorkspaceProjects),
             token_store: Arc::new(UnusedTokenStore),
             auth_validator: Arc::new(
                 crate::providers::permissive_auth::PermissiveAuthValidator::new(),

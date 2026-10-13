@@ -55,6 +55,9 @@ use crate::traits::*;
 pub struct AppState {
     pub deployment_store: Arc<dyn DeploymentStore>,
     pub release_store: Arc<dyn ReleaseStore>,
+    /// Resolves the project that owns a registry repository. Default:
+    /// [`crate::providers::SingleWorkspaceProjects`].
+    pub project_store: Arc<dyn crate::traits::ProjectStore>,
     pub token_store: Arc<dyn TokenStore>,
     pub auth_validator: Arc<dyn AuthValidator>,
     /// Authorization policy. Default: [`crate::providers::OssAuthz`].

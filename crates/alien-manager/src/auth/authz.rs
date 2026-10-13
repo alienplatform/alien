@@ -11,7 +11,7 @@ use crate::auth::Subject;
 use crate::traits::{
     deployment_store::{DeploymentGroupRecord, DeploymentRecord},
     release_store::ReleaseRecord,
-    TelemetrySignal,
+    ProjectRecord, TelemetrySignal,
 };
 use alien_commands::server::CommandAccessContext;
 use alien_core::remote_bindings::RemoteBindingKind;
@@ -117,16 +117,21 @@ pub trait Authz: Send + Sync {
     fn can_ingest_telemetry(&self, subject: &Subject, signal: TelemetrySignal) -> bool;
 
     // -- Registry proxy ----------------------------------------------------
-    /// Push: caller has write access on the project carrying the repo.
-    fn can_push_image(&self, subject: &Subject, project_id: &str, repo_name: &str) -> bool;
+    /// Pull `repo_name`, a repository of `project`. A deployment caller also
+    /// passes the handler's own check that the repository is its project's
+    /// or named by its release. Defaults to deny so an embedder decides
+    /// explicitly.
+    fn can_pull_image(&self, _subject: &Subject, _project: &ProjectRecord, _repo_name: &str) -> bool {
+        false
+    }
+    /// Push to `repo_name`, a repository of `project`.
+    fn can_push_image(&self, subject: &Subject, project: &ProjectRecord, repo_name: &str) -> bool;
     /// Create the project's repository in a cloud registry so a later push can
     /// land in it. Defaults to deny so an embedder decides explicitly.
     fn can_provision_image_repository(&self, _subject: &Subject, _project_id: &str) -> bool {
         false
     }
-    /// Generic "can act on deployment" — used by registry-proxy pull after a
-    /// structural "is this repo in this deployment's stack" check done by the
-    /// handler.
+    /// Generic "can act on deployment".
     fn can_act_on_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
 
     /// Whether `subject` may send requests into the deployment through the
