@@ -192,9 +192,9 @@ impl GcpWorkerIngress {
             firewall: None,
             health_check: None,
             backend,
-            certificate: GcpIngressCertificate::Custom {
+            frontend: crate::GcpIngressFrontend::Https(GcpIngressCertificate::Custom {
                 references: &references,
-            },
+            }),
         };
         let certificate_description = if recorded.custom_certificate {
             None
@@ -337,7 +337,7 @@ impl GcpWorkerIngress {
                 firewall: None,
                 health_check: None,
                 backend,
-                certificate: domains.certificate(),
+                frontend: crate::GcpIngressFrontend::Https(domains.certificate()),
             };
             let (state, outputs, fingerprint) = match scope {
                 GcpHttpsIngressScope::RegionalPrivate => (

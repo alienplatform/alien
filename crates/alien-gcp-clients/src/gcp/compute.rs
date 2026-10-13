@@ -300,6 +300,13 @@ pub trait ComputeApi: Send + Sync + Debug {
     ) -> Result<Operation>;
 
     /// Regional counterpart; uses region-scoped resources and operations.
+    /// Read a regional TCP proxy, including its immutable provider identity.
+    async fn get_region_target_tcp_proxy(
+        &self,
+        region: String,
+        target_tcp_proxy_name: String,
+    ) -> Result<TargetTcpProxy>;
+
     async fn insert_region_target_tcp_proxy(
         &self,
         region: String,
@@ -466,6 +473,9 @@ pub trait ComputeApi: Send + Sync + Debug {
         -> Result<Operation>;
 
     // --- Target TCP Proxy Operations ---
+
+    /// Read a global TCP proxy, including its immutable provider identity.
+    async fn get_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<TargetTcpProxy>;
 
     async fn insert_target_tcp_proxy(&self, target_tcp_proxy: TargetTcpProxy) -> Result<Operation>;
     async fn delete_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<Operation>;
@@ -1502,6 +1512,26 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn get_region_target_tcp_proxy(
+        &self,
+        region: String,
+        target_tcp_proxy_name: String,
+    ) -> Result<TargetTcpProxy> {
+        let path = format!(
+            "projects/{}/regions/{region}/targetTcpProxies/{target_tcp_proxy_name}",
+            self.project_id
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_tcp_proxy_name,
+            )
+            .await
+    }
+
     async fn insert_region_target_tcp_proxy(
         &self,
         region: String,
@@ -1958,6 +1988,22 @@ impl ComputeApi for ComputeClient {
                 None,
                 Option::<()>::None,
                 &target_https_proxy_name,
+            )
+            .await
+    }
+
+    async fn get_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<TargetTcpProxy> {
+        let path = format!(
+            "projects/{}/global/targetTcpProxies/{target_tcp_proxy_name}",
+            self.project_id
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_tcp_proxy_name,
             )
             .await
     }
@@ -4778,11 +4824,14 @@ pub struct TargetHttpProxy {
 // Data Structures - Target HTTPS Proxy
 // =============================================================================================
 
-/// Represents a target HTTPS proxy resource (with SSL certificate support).
-/// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies
+/// Target TCP proxy resource.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetTcpProxies
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetTcpProxy {
+    /// Immutable identifier assigned by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7086,6 +7135,45 @@ mod tests {
             .lines()
             .any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-token")));
         assert!(delete_body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn target_tcp_proxy_gets_preserve_identity_and_exact_scope() {
+        let body = r#"{"id":"1234567890123456789","name":"owned-proxy","description":"generation-owner","service":"projects/example-project/global/backendServices/backend","proxyHeader":"NONE"}"#;
+        let (endpoint, server) = serve_json_responses(vec![body, body]);
+        let client = test_client(endpoint);
+        let global = client
+            .get_target_tcp_proxy("owned-proxy".to_string())
+            .await
+            .unwrap();
+        let regional = client
+            .get_region_target_tcp_proxy("us-central1".to_string(), "owned-proxy".to_string())
+            .await
+            .unwrap();
+        for proxy in [global, regional] {
+            assert_eq!(proxy.id.as_deref(), Some("1234567890123456789"));
+            assert_eq!(proxy.name.as_deref(), Some("owned-proxy"));
+            assert_eq!(proxy.description.as_deref(), Some("generation-owner"));
+            assert_eq!(
+                proxy.service,
+                "projects/example-project/global/backendServices/backend"
+            );
+            assert_eq!(proxy.proxy_header.as_deref(), Some("NONE"));
+        }
+        let requests = server.join().unwrap();
+        for (request, scope) in requests.iter().zip(["global", "regions/us-central1"]) {
+            let (line, body) = request_line_and_body(request);
+            assert_eq!(
+                line,
+                format!(
+                    "GET /projects/example-project/{scope}/targetTcpProxies/owned-proxy HTTP/1.1"
+                )
+            );
+            assert!(body.is_null());
+            assert!(request
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-token")));
+        }
     }
 
     #[test]

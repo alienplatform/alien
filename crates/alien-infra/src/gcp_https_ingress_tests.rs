@@ -12,6 +12,7 @@ pub(crate) struct Provider {
     pub(crate) lose_backend_response: bool,
     pub(crate) deny_backend_recovery_reads: bool,
     fail_certificate_delete: bool,
+    lose_tcp_proxy_response: bool,
 }
 
 pub(crate) type Store = Arc<Mutex<Provider>>;
@@ -83,6 +84,12 @@ fn insert(
             message: "lost create response".to_string(),
         }));
     }
+    if kind == "tcpProxy" && store.lose_tcp_proxy_response {
+        store.lose_tcp_proxy_response = false;
+        return Err(AlienError::new(ClientErrorData::Timeout {
+            message: "lost TCP proxy create response".to_string(),
+        }));
+    }
     Ok(done())
 }
 
@@ -148,6 +155,12 @@ pub(crate) fn provider(store: &Store) -> MockComputeApi {
         expect_delete_region_target_https_proxy
     );
     regional!(
+        "tcpProxy",
+        expect_get_region_target_tcp_proxy,
+        expect_insert_region_target_tcp_proxy,
+        expect_delete_region_target_tcp_proxy
+    );
+    regional!(
         "address",
         expect_get_address,
         expect_insert_address,
@@ -204,6 +217,12 @@ pub(crate) fn provider(store: &Store) -> MockComputeApi {
         expect_get_target_https_proxy,
         expect_insert_target_https_proxy,
         expect_delete_target_https_proxy
+    );
+    global!(
+        "tcpProxy",
+        expect_get_target_tcp_proxy,
+        expect_insert_target_tcp_proxy,
+        expect_delete_target_tcp_proxy
     );
     global!(
         "address",
@@ -287,10 +306,10 @@ fn plan(certificate: &str) -> GcpHttpsIngressPlan<'_> {
             }],
             ..Default::default()
         },
-        certificate: GcpIngressCertificate::Managed {
+        frontend: crate::GcpIngressFrontend::Https(GcpIngressCertificate::Managed {
             certificate_pem: certificate,
             private_key_pem: "runtime-only-private-key",
-        },
+        }),
     }
 }
 
@@ -515,9 +534,9 @@ async fn switching_to_custom_certificate_retires_only_owned_imports() {
     for _ in 0..30 {
         state = checkpoint(&state);
         let mut desired = plan("unused");
-        desired.certificate = GcpIngressCertificate::Custom {
+        desired.frontend = crate::GcpIngressFrontend::Https(GcpIngressCertificate::Custom {
             references: &references,
-        };
+        });
         if state.reconcile(&client, desired).await.unwrap() {
             complete = true;
             break;
@@ -762,4 +781,101 @@ async fn recorded_global_graph_handoff_preserves_frontend_rotates_and_cleans_up(
     assert!(state.provider_ids.is_empty());
     assert!(state.legacy_descriptions.is_empty());
     assert!(store.lock().unwrap().objects.is_empty());
+}
+
+fn tcp_plan(scope: GcpHttpsIngressScope) -> GcpProxyIngressPlan<'static> {
+    let mut desired = plan("unused");
+    desired.scope = scope;
+    desired.frontend = GcpIngressFrontend::Tcp { port: 5432 };
+    desired.backend.protocol = Some(BackendServiceProtocol::Tcp);
+    desired.health_check = Some(HealthCheck {
+        r#type: Some(alien_gcp_clients::gcp::compute::HealthCheckType::Tcp),
+        tcp_health_check: Some(alien_gcp_clients::gcp::compute::TcpHealthCheck {
+            port_specification: Some(
+                alien_gcp_clients::gcp::compute::PortSpecification::UseServingPort,
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    desired
+}
+
+#[tokio::test]
+async fn tcp_proxy_lost_response_reload_and_delete_preserve_exact_graph() {
+    for scope in [
+        GcpHttpsIngressScope::GlobalPublic,
+        GcpHttpsIngressScope::RegionalPrivate,
+    ] {
+        let store = Arc::new(Mutex::new(Provider {
+            lose_tcp_proxy_response: true,
+            ..Default::default()
+        }));
+        let client = provider(&store);
+        let mut state = GcpProxyIngressState::new(&tcp_plan(scope));
+        let mut ready = false;
+        let mut lost = 0;
+        for _ in 0..40 {
+            state = checkpoint(&state);
+            let before = store.lock().unwrap().mutations;
+            match state.reconcile(&client, tcp_plan(scope)).await {
+                Ok(done) => ready = done,
+                Err(error) => {
+                    assert!(error.retryable);
+                    lost += 1;
+                }
+            }
+            assert!(store.lock().unwrap().mutations - before <= 1);
+            if ready {
+                break;
+            }
+        }
+        assert!(ready);
+        assert_eq!(lost, 1);
+        let objects = store.lock().unwrap().objects.clone();
+        assert_eq!(objects.len(), 5);
+        assert!(objects.keys().all(|key| !key.starts_with("certificate/")
+            && !key.starts_with("url/")
+            && !key.starts_with("proxy/")));
+        let proxy = &objects[&format!("tcpProxy/{}", state.name())];
+        assert_eq!(
+            proxy["service"],
+            state.url("backendServices", &state.name())
+        );
+        let frontend = &objects[&format!("frontend/{}", state.name())];
+        assert_eq!(
+            frontend["target"],
+            state.url("targetTcpProxies", &state.name())
+        );
+        assert_eq!(frontend["portRange"], "5432");
+        let before = store.lock().unwrap().mutations;
+        state = checkpoint(&state);
+        assert!(state.reconcile(&client, tcp_plan(scope)).await.unwrap());
+        assert_eq!(store.lock().unwrap().mutations, before);
+        assert_eq!(store.lock().unwrap().objects, objects);
+        let mut deleted = false;
+        for _ in 0..40 {
+            state = checkpoint(&state);
+            let before = store.lock().unwrap().mutations;
+            deleted = state.delete(&client, "api").await.unwrap();
+            assert!(store.lock().unwrap().mutations - before <= 1);
+            if deleted {
+                break;
+            }
+        }
+        assert!(deleted);
+        assert!(store.lock().unwrap().objects.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn tcp_protocol_change_is_rejected_before_provider_mutation() {
+    let desired = tcp_plan(GcpHttpsIngressScope::RegionalPrivate);
+    let mut state = GcpProxyIngressState::new(&desired);
+    let client = MockComputeApi::new();
+    assert!(state.reconcile(&client, plan("cert")).await.is_err());
+    let mut changed = tcp_plan(GcpHttpsIngressScope::RegionalPrivate);
+    changed.frontend = GcpIngressFrontend::Tcp { port: 5433 };
+    assert!(state.reconcile(&client, changed).await.is_err());
+    assert!(state.children.is_empty());
 }

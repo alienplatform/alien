@@ -6,7 +6,7 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::gcp::compute::{
     Address, AddressType, BackendService, BackendServiceProtocol, ComputeApi, Firewall,
     ForwardingRule, ForwardingRuleProtocol, HealthCheck, LoadBalancingScheme, Operation,
-    SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
+    SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, TargetTcpProxy, UrlMap,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,9 +46,24 @@ pub enum GcpIngressCertificate<'a> {
     },
 }
 
+/// Listener protocol and its runtime-only TLS material.
+pub enum GcpIngressFrontend<'a> {
+    Https(GcpIngressCertificate<'a>),
+    Tcp { port: u16 },
+}
+
+impl GcpIngressFrontend<'_> {
+    fn tcp_port(&self) -> Option<u16> {
+        match self {
+            Self::Https(_) => None,
+            Self::Tcp { port } => Some(*port),
+        }
+    }
+}
+
 /// Health checks and a proxy-subnet firewall are needed by VM NEGs, but not by
 /// serverless NEGs. Backend membership stays with the workload controller.
-pub struct GcpHttpsIngressPlan<'a> {
+pub struct GcpProxyIngressPlan<'a> {
     pub scope: GcpHttpsIngressScope,
     pub resource_id: &'a str,
     pub project: &'a str,
@@ -58,8 +73,11 @@ pub struct GcpHttpsIngressPlan<'a> {
     pub firewall: Option<Firewall>,
     pub health_check: Option<HealthCheck>,
     pub backend: BackendService,
-    pub certificate: GcpIngressCertificate<'a>,
+    pub frontend: GcpIngressFrontend<'a>,
 }
+
+/// Compatibility name for callers preparing HTTPS frontends.
+pub type GcpHttpsIngressPlan<'a> = GcpProxyIngressPlan<'a>;
 
 /// A child recorded by the previous controller, never a name discovered by a
 /// broad listing. A saved provider ID, when available, must still match.
@@ -89,7 +107,9 @@ pub struct GcpRecordedHttpsIngress<'a> {
 /// token distinguishes this instance from same-named leftovers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GcpHttpsIngressState {
+pub struct GcpProxyIngressState {
+    #[serde(default)]
+    tcp_port: Option<u16>,
     #[serde(default)]
     scope: GcpHttpsIngressScope,
     project: String,
@@ -113,6 +133,9 @@ pub struct GcpHttpsIngressState {
     pub address: Option<String>,
 }
 
+/// Compatibility name for previously persisted HTTPS controllers.
+pub type GcpHttpsIngressState = GcpProxyIngressState;
+
 /// Declaration order is dependency order; reverse order is safe teardown.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "name", rename_all = "camelCase")]
@@ -123,6 +146,7 @@ enum Child {
     UrlMap(String),
     Certificate(String),
     HttpsProxy(String),
+    TcpProxy(String),
     Address(String),
     Frontend(String),
 }
@@ -136,6 +160,7 @@ impl Child {
             Self::UrlMap(_) => "urlMap",
             Self::Certificate(_) => "certificate",
             Self::HttpsProxy(_) => "httpsProxy",
+            Self::TcpProxy(_) => "tcpProxy",
             Self::Address(_) => "address",
             Self::Frontend(_) => "frontend",
         }
@@ -153,6 +178,7 @@ impl Child {
             | Self::UrlMap(name)
             | Self::Certificate(name)
             | Self::HttpsProxy(name)
+            | Self::TcpProxy(name)
             | Self::Address(name)
             | Self::Frontend(name) => name,
         }
@@ -199,6 +225,13 @@ impl Child {
                 client,
                 get_region_target_https_proxy,
                 get_target_https_proxy,
+                name
+            )?),
+            Self::TcpProxy(_) => serde_json::to_value(scoped!(
+                state,
+                client,
+                get_region_target_tcp_proxy,
+                get_target_tcp_proxy,
                 name
             )?),
             Self::Address(_) => serde_json::to_value(scoped!(
@@ -260,6 +293,13 @@ impl Child {
                 delete_target_https_proxy,
                 name
             ),
+            Self::TcpProxy(_) => scoped!(
+                state,
+                client,
+                delete_region_target_tcp_proxy,
+                delete_target_tcp_proxy,
+                name
+            ),
             Self::Address(_) => scoped!(state, client, delete_address, delete_global_address, name),
             Self::Frontend(_) => scoped!(
                 state,
@@ -272,9 +312,10 @@ impl Child {
     }
 }
 
-impl GcpHttpsIngressState {
+impl GcpProxyIngressState {
     pub fn new(plan: &GcpHttpsIngressPlan<'_>) -> Self {
         Self {
+            tcp_port: plan.frontend.tcp_port(),
             scope: plan.scope,
             project: plan.project.to_string(),
             region: plan.region.to_string(),
@@ -299,7 +340,8 @@ impl GcpHttpsIngressState {
         recorded: GcpRecordedHttpsIngress<'_>,
     ) -> Result<Self> {
         let mut state = Self::new(plan);
-        if plan.scope != GcpHttpsIngressScope::GlobalPublic
+        if plan.frontend.tcp_port().is_some()
+            || plan.scope != GcpHttpsIngressScope::GlobalPublic
             || plan.firewall.is_some()
             || plan.health_check.is_some() != recorded.health_check.is_some()
             || recorded.certificate_references.is_empty()
@@ -594,6 +636,21 @@ impl GcpHttpsIngressState {
         client: &dyn ComputeApi,
         plan: GcpHttpsIngressPlan<'_>,
     ) -> Result<bool> {
+        if self.tcp_port != plan.frontend.tcp_port() || self.tcp_port == Some(0) {
+            return Err(AlienError::new(self.error(
+                plan.resource_id,
+                "Ingress listener protocol or port changes require replacement",
+            )));
+        }
+        if self.tcp_port.is_some()
+            && (plan.backend.protocol != Some(BackendServiceProtocol::Tcp)
+                || plan.health_check.is_none())
+        {
+            return Err(AlienError::new(self.error(
+                plan.resource_id,
+                "TCP ingress requires a TCP backend and health check",
+            )));
+        }
         if self.scope == GcpHttpsIngressScope::GlobalPublic && plan.firewall.is_some() {
             return Err(AlienError::new(self.error(
                 plan.resource_id,
@@ -601,10 +658,9 @@ impl GcpHttpsIngressState {
             )));
         }
         if plan.backend.backends.is_empty() {
-            return Err(AlienError::new(self.error(
-                plan.resource_id,
-                "HTTPS ingress requires at least one NEG",
-            )));
+            return Err(AlienError::new(
+                self.error(plan.resource_id, "Ingress requires at least one NEG"),
+            ));
         }
         if self.scope != plan.scope
             || self.project != plan.project
@@ -621,14 +677,14 @@ impl GcpHttpsIngressState {
             return Ok(false);
         }
         let name = self.name();
-        let certificate_name = match &plan.certificate {
-            GcpIngressCertificate::Managed {
+        let certificate_name = match &plan.frontend {
+            GcpIngressFrontend::Https(GcpIngressCertificate::Managed {
                 certificate_pem, ..
-            } => {
+            }) => {
                 let hash = format!("{:x}", Sha256::digest(certificate_pem.as_bytes()));
                 Some(format!("{name}-{}", &hash[..12]))
             }
-            GcpIngressCertificate::Custom { references } => {
+            GcpIngressFrontend::Https(GcpIngressCertificate::Custom { references }) => {
                 if references.is_empty() {
                     return Err(AlienError::new(
                         self.error(plan.resource_id, "Private ingress requires a certificate"),
@@ -636,12 +692,16 @@ impl GcpHttpsIngressState {
                 }
                 None
             }
+            GcpIngressFrontend::Tcp { .. } => None,
         };
-        let certificates = match &plan.certificate {
-            GcpIngressCertificate::Custom { references } => references.to_vec(),
-            GcpIngressCertificate::Managed { .. } => {
+        let certificates = match &plan.frontend {
+            GcpIngressFrontend::Https(GcpIngressCertificate::Custom { references }) => {
+                references.to_vec()
+            }
+            GcpIngressFrontend::Https(GcpIngressCertificate::Managed { .. }) => {
                 vec![self.url("sslCertificates", certificate_name.as_ref().unwrap())]
             }
+            GcpIngressFrontend::Tcp { .. } => Vec::new(),
         };
         let mut children = Vec::new();
         if plan.firewall.is_some() {
@@ -650,15 +710,19 @@ impl GcpHttpsIngressState {
         if plan.health_check.is_some() {
             children.push(Child::HealthCheck(self.child_name("healthCheck")));
         }
-        children.extend([
-            Child::Backend(self.child_name("backend")),
-            Child::UrlMap(self.child_name("urlMap")),
-        ]);
+        children.push(Child::Backend(self.child_name("backend")));
+        if self.tcp_port.is_none() {
+            children.push(Child::UrlMap(self.child_name("urlMap")));
+        }
         if let Some(certificate_name) = &certificate_name {
             children.push(Child::Certificate(certificate_name.clone()));
         }
         children.extend([
-            Child::HttpsProxy(self.child_name("httpsProxy")),
+            if self.tcp_port.is_some() {
+                Child::TcpProxy(self.child_name("tcpProxy"))
+            } else {
+                Child::HttpsProxy(self.child_name("httpsProxy"))
+            },
             Child::Address(self.child_name("address")),
             Child::Frontend(self.child_name("frontend")),
         ]);
@@ -771,10 +835,10 @@ impl GcpHttpsIngressState {
                     if live.is_some() {
                         continue;
                     }
-                    let GcpIngressCertificate::Managed {
+                    let GcpIngressFrontend::Https(GcpIngressCertificate::Managed {
                         certificate_pem,
                         private_key_pem,
-                    } = &plan.certificate
+                    }) = &plan.frontend
                     else {
                         unreachable!()
                     };
@@ -809,6 +873,20 @@ impl GcpHttpsIngressState {
                                 })
                     }
                 }
+                Child::TcpProxy(_) => {
+                    let desired = TargetTcpProxy {
+                        name: Some(name.clone()), description: Some(description.clone()),
+                        service: self.url("backendServices", &self.child_name("backend")),
+                        proxy_header: Some("NONE".to_string()), ..Default::default()
+                    };
+                    if let Some(live) = &live {
+                        if !contains_desired(live, &as_json(&desired, plan.resource_id)?) {
+                            return Err(AlienError::new(self.error(plan.resource_id, "TCP proxy points to an unexpected backend")));
+                        }
+                        continue;
+                    }
+                    scoped!(self, client, insert_region_target_tcp_proxy, insert_target_tcp_proxy, desired)
+                }
                 Child::Address(_) => {
                     if let Some(live) = &live {
                         if self.scope == GcpHttpsIngressScope::RegionalPrivate && !contains_desired(live, &serde_json::json!({"addressType": "INTERNAL", "subnetwork": self.subnetwork})) {
@@ -841,11 +919,16 @@ impl GcpHttpsIngressState {
                         description: Some(description.clone()),
                         ip_address: self.address.clone(),
                         ip_protocol: Some(ForwardingRuleProtocol::Tcp),
-                        port_range: Some(live.as_ref().and_then(|live| live.get("portRange")).and_then(Value::as_str).filter(|range| matches!(*range, "443" | "443-443")).unwrap_or("443").to_string()),
+                        port_range: Some({
+                            let port = self.tcp_port.unwrap_or(443).to_string();
+                            let range = format!("{port}-{port}");
+                            live.as_ref().and_then(|live| live.get("portRange")).and_then(Value::as_str)
+                                .filter(|value| *value == port || *value == range).unwrap_or(&port).to_string()
+                        }),
                         load_balancing_scheme: Some(if self.scope == GcpHttpsIngressScope::RegionalPrivate { LoadBalancingScheme::InternalManaged } else { LoadBalancingScheme::External }),
                         network: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.network.clone()),
                         subnetwork: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then(|| self.subnetwork.clone()),
-                        target: Some(self.url("targetHttpsProxies", &self.child_name("httpsProxy"))),
+                        target: Some(if self.tcp_port.is_some() { self.url("targetTcpProxies", &self.child_name("tcpProxy")) } else { self.url("targetHttpsProxies", &self.child_name("httpsProxy")) }),
                         allow_global_access: (self.scope == GcpHttpsIngressScope::RegionalPrivate).then_some(true),
                         ..Default::default()
                     };
@@ -853,7 +936,7 @@ impl GcpHttpsIngressState {
                         if !contains_desired(live, &as_json(&desired, plan.resource_id)?) {
                             return Err(AlienError::new(self.error(
                                 plan.resource_id,
-                                "HTTPS forwarding rule differs from its reserved configuration",
+                                "Forwarding rule differs from its reserved configuration",
                             )));
                         }
                         continue;
@@ -863,7 +946,7 @@ impl GcpHttpsIngressState {
             }
             .context(self.error(
                 plan.resource_id,
-                format!("Reconcile HTTPS ingress '{}'", child.name()),
+                format!("Reconcile proxy ingress '{}'", child.name()),
             ))?;
             self.record_operation(operation, plan.resource_id, child)?;
             return Ok(false);
