@@ -1,5 +1,6 @@
 mod aws;
 mod aws_private_endpoint;
+mod aws_gateway_config;
 pub use aws::*;
 
 mod aws_import;
