@@ -1,0 +1,45 @@
+{
+  "scenario": "AWS setup artifact rendering at applied EIP limit",
+  "region": "eu-west-1",
+  "appliedLimit": 5,
+  "negativeUsed": 5,
+  "additionalNeeded": 1,
+  "formats": [
+    "cloudformation",
+    "terraform"
+  ],
+  "featureNegativeExitCodes": [
+    1,
+    1
+  ],
+  "featureNegativeArtifactDirectoriesAbsent": true,
+  "originalParentRenderExitCodes": [
+    0,
+    0
+  ],
+  "featurePositiveExitCodes": [
+    0,
+    0
+  ],
+  "cloudIdentityVerification": {
+    "Vpcs": {
+      "negativeUnchangedExceptOwnedFillers": true,
+      "originalIdentitySetRestored": true,
+      "baselineCount": 1
+    },
+    "InternetGateways": {
+      "negativeUnchangedExceptOwnedFillers": true,
+      "originalIdentitySetRestored": true,
+      "baselineCount": 1
+    },
+    "Addresses": {
+      "negativeUnchangedExceptOwnedFillers": true,
+      "originalIdentitySetRestored": true,
+      "baselineCount": 0
+    }
+  },
+  "ownedFillersDeletedAndVerified": 5,
+  "activeScenarioResources": 0,
+  "retainedDeletedNatRecords": 1,
+  "coverage": "Rendering before apply only; no raw CFN/TF apply or successful deployment claimed"
+}

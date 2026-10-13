@@ -1,0 +1,8 @@
+$ AWS_REGION=eu-west-1 alien render --format cloudformation --stack alien.json --stack-settings settings.yaml --output negative-cloudformation --check-quotas
+Configuration error: VALIDATION_FAILED: Validation failed with 1 errors and 0 warnings
+Cause:
+  - Validation failed with 1 errors and 0 warnings
+Failed checks:
+  - EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): used 5, applied limit 5, additional needed 1. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3
+
+Exit code: 1

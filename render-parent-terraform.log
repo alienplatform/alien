@@ -1,0 +1,3 @@
+$ AWS_REGION=eu-west-1 alien render --format terraform --target aws --stack alien.json --stack-settings settings.yaml --output parent-terraform
+
+Exit code: 0
