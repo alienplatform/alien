@@ -73,20 +73,21 @@ fn retry(message: Option<&str>, json_output: bool, refused: bool) {
             "{stderr}"
         );
     } else {
+        let expected_message = message.filter(|message| !message.trim().is_empty());
         assert!(output.status.success(), "{stdout} {stderr}");
         if json_output {
             let response: Value = serde_json::from_str(&stdout).unwrap();
             assert_eq!(response["deploymentId"], "dep_test");
             assert_eq!(response["action"], "retry");
             assert_eq!(response["accepted"], true);
-            if let Some(message) = message {
+            if let Some(message) = expected_message {
                 assert_eq!(response["message"], message);
             } else {
                 assert!(response.get("message").is_none(), "{response}");
             }
         } else {
             assert!(
-                stdout.contains(message.unwrap_or("Retry requested.")),
+                stdout.contains(expected_message.unwrap_or("Retry requested.")),
                 "{stdout}"
             );
             assert!(
@@ -114,4 +115,13 @@ fn older_manager_without_guidance_still_works() {
 #[test]
 fn refused_retry_keeps_the_error() {
     retry(None, false, true);
+}
+
+#[test]
+fn blank_guidance_uses_the_existing_fallback() {
+    for message in ["", " \t\n "] {
+        for json in [false, true] {
+            retry(Some(message), json, false);
+        }
+    }
 }
