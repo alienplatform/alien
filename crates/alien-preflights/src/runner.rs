@@ -1061,6 +1061,9 @@ mod management_definition_upgrade_tests {
             registry.add_mutation(Box::new(
                 crate::mutations::ManagementPermissionProfileMutation,
             ));
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::PermissionProfilesUnchangedCheck,
+            ));
             registry.add_runtime_check(Box::new(CloudCheck(calls.clone())));
             let runner = PreflightRunner::with_registry(registry);
             let state = StackState::new(platform);
@@ -1170,7 +1173,7 @@ mod management_definition_upgrade_tests {
             }
             runner
                 .run_deployment_time_preflights(
-                    release,
+                    release.clone(),
                     &state,
                     &config,
                     &client,
@@ -1180,6 +1183,21 @@ mod management_definition_upgrade_tests {
                 )
                 .await
                 .expect("unchanged installed definitions need no setup");
+            let mut narrowed = release;
+            narrowed.permissions.management =
+                alien_core::permissions::ManagementPermissions::Override(PermissionProfile::new());
+            runner
+                .run_deployment_time_preflights(
+                    narrowed,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&prepared),
+                    None,
+                    None,
+                )
+                .await
+                .expect("removing a grant needs no additional permissions");
         }
     }
 }

@@ -101,10 +101,12 @@ impl StackMutation for ManagementPermissionProfileMutation {
             }
         }
         add_role_guards(&mut stack, stack_state.platform);
-        capture_management_permission_sets(
-            &mut stack,
-            config.base_platform.unwrap_or(stack_state.platform),
-        )?;
+        let permission_platform = if stack_state.platform == Platform::Kubernetes {
+            config.base_platform.unwrap_or(stack_state.platform)
+        } else {
+            stack_state.platform
+        };
+        capture_management_permission_sets(&mut stack, permission_platform)?;
 
         Ok(stack)
     }
