@@ -16,6 +16,8 @@ use mockall::automock;
 pub struct ResourceSku {
     /// Provider SKU name, for example `Standard_D4s_v5`.
     pub name: Option<String>,
+    /// Quota family reported by Microsoft.Compute, matching a regional usage name.
+    pub family: Option<String>,
     /// Compute resource type to which the SKU applies.
     pub resource_type: Option<String>,
     /// Locations and availability zones in which the SKU is offered.

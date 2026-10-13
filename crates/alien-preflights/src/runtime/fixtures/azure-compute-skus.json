@@ -1,0 +1,183 @@
+[
+  {
+    "name": "Standard_B2s",
+    "family": "standardBSFamily",
+    "resourceType": "virtualMachines",
+    "locationInfo": [
+      {
+        "location": "eastus",
+        "zones": [
+          "3",
+          "2",
+          "1"
+        ],
+        "zoneDetails": [
+          {
+            "Name": [
+              "3",
+              "2",
+              "1"
+            ],
+            "capabilities": [
+              {
+                "name": "UltraSSDAvailable",
+                "value": "True"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "restrictions": [
+      {
+        "type": "Location",
+        "values": [
+          "eastus"
+        ],
+        "restrictionInfo": {
+          "locations": [
+            "eastus"
+          ]
+        },
+        "reasonCode": "NotAvailableForSubscription"
+      },
+      {
+        "type": "Zone",
+        "values": [
+          "eastus"
+        ],
+        "restrictionInfo": {
+          "locations": [
+            "eastus"
+          ],
+          "zones": [
+            "3",
+            "1"
+          ]
+        },
+        "reasonCode": "NotAvailableForSubscription"
+      }
+    ]
+  },
+  {
+    "name": "Standard_D2s_v5",
+    "family": "standardDSv5Family",
+    "resourceType": "virtualMachines",
+    "locationInfo": [
+      {
+        "location": "eastus",
+        "zones": [
+          "3",
+          "2",
+          "1"
+        ],
+        "zoneDetails": [
+          {
+            "Name": [
+              "3",
+              "2",
+              "1"
+            ],
+            "capabilities": [
+              {
+                "name": "UltraSSDAvailable",
+                "value": "True"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "restrictions": [
+      {
+        "type": "Location",
+        "values": [
+          "eastus"
+        ],
+        "restrictionInfo": {
+          "locations": [
+            "eastus"
+          ]
+        },
+        "reasonCode": "NotAvailableForSubscription"
+      },
+      {
+        "type": "Zone",
+        "values": [
+          "eastus"
+        ],
+        "restrictionInfo": {
+          "locations": [
+            "eastus"
+          ],
+          "zones": [
+            "3",
+            "2",
+            "1"
+          ]
+        },
+        "reasonCode": "NotAvailableForSubscription"
+      }
+    ]
+  },
+  {
+    "name": "Standard_F2s_v2",
+    "family": "standardFSv2Family",
+    "resourceType": "virtualMachines",
+    "locationInfo": [
+      {
+        "location": "eastus",
+        "zones": [
+          "3",
+          "2",
+          "1"
+        ],
+        "zoneDetails": [
+          {
+            "Name": [
+              "3",
+              "2",
+              "1"
+            ],
+            "capabilities": [
+              {
+                "name": "UltraSSDAvailable",
+                "value": "True"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "restrictions": [
+      {
+        "type": "Location",
+        "values": [
+          "eastus"
+        ],
+        "restrictionInfo": {
+          "locations": [
+            "eastus"
+          ]
+        },
+        "reasonCode": "NotAvailableForSubscription"
+      },
+      {
+        "type": "Zone",
+        "values": [
+          "eastus"
+        ],
+        "restrictionInfo": {
+          "locations": [
+            "eastus"
+          ],
+          "zones": [
+            "3",
+            "1"
+          ]
+        },
+        "reasonCode": "NotAvailableForSubscription"
+      }
+    ]
+  }
+]

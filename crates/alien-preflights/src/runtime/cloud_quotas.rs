@@ -28,7 +28,7 @@ impl RuntimeCheck for CloudQuotasCheck {
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
-        matches!(platform, Platform::Aws | Platform::Gcp)
+        matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
             && stack.resources.values().any(|entry| {
                 (platform == Platform::Gcp
                     && (entry.has_remote_bindings()
@@ -59,6 +59,25 @@ impl RuntimeCheck for CloudQuotasCheck {
         client_config: &ClientConfig,
     ) -> Result<CheckResult> {
         let mut result = CheckResult::success();
+        if stack_state.platform == Platform::Azure {
+            let Some(config) = client_config.azure_config() else {
+                result.add_warning("Azure quota checks could not find target credentials".into());
+                result.status = Some(CheckStatus::Unknown);
+                return Ok(result);
+            };
+            let http = reqwest::Client::new();
+            let skus = alien_azure_clients::AzureResourceSkusClient::new(
+                http.clone(),
+                alien_azure_clients::AzureTokenCache::new(config.clone()),
+            );
+            let usages = alien_azure_clients::AzureComputeUsagesClient::new(
+                http,
+                alien_azure_clients::AzureTokenCache::new(config.clone()),
+            );
+            super::azure_compute::check(stack, stack_state, config, &skus, &usages, &mut result)
+                .await;
+            return Ok(result);
+        }
         if stack_state.platform == Platform::Gcp {
             let Some(config) = client_config.gcp_config() else {
                 result.add_warning("GCP quota checks could not find target credentials".into());

@@ -15,12 +15,13 @@ tracing = { workspace = true }
 indexmap = { workspace = true }
 alien-aws-clients = { workspace = true, optional = true }
 alien-gcp-clients = { workspace = true, optional = true }
+alien-azure-clients = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 utoipa = { workspace = true, optional = true }
 
 [features]
 default = []
-runtime-checks = ["dep:alien-aws-clients", "dep:alien-gcp-clients", "dep:reqwest"]
+runtime-checks = ["dep:alien-aws-clients", "dep:alien-gcp-clients", "dep:alien-azure-clients", "dep:reqwest"]
 openapi = ["utoipa", "alien-core/openapi"]
 
 [dev-dependencies]
