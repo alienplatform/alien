@@ -32,7 +32,9 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             role_bound: data.management_permissions_applied,
             impersonation_granted: data.management_permissions_applied,
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
-            management_permissions_revision: data.management_permissions_revision,
+            management_permissions_revision: data
+                .management_permissions_revision
+                .filter(|_| data.management_permissions_applied),
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

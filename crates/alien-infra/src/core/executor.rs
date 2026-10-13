@@ -1457,6 +1457,16 @@ impl StackExecutor {
         // Note: We don't need final validation of dependency readiness here.
         // The execution phase already handles dependency ordering through dependencies_met() and is_ready logic.
 
+        if !plan_result.creates.is_empty()
+            || !plan_result.updates.is_empty()
+            || !plan_result.replaces.is_empty()
+        {
+            crate::remote_stack_management::validate_installed_management_permissions(
+                &self.desired_stack,
+                state,
+                self.initial_setup_authority,
+            )?;
+        }
         Ok(plan_result)
     }
 
@@ -1653,6 +1663,20 @@ impl StackExecutor {
                     );
                 }
             }
+        }
+
+        if state.resources.iter().any(|(id, resource)| {
+            self.resources.contains_key(id)
+                && matches!(
+                    resource.status,
+                    ResourceStatus::Provisioning | ResourceStatus::Updating
+                )
+        }) {
+            crate::remote_stack_management::validate_installed_management_permissions(
+                &self.desired_stack,
+                &state,
+                self.initial_setup_authority,
+            )?;
         }
 
         let mut next_state = state.clone(); // Clone the input state to modify
