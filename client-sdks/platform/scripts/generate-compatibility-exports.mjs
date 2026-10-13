@@ -15,10 +15,18 @@ const modules = {
   "persistimporteddeploymentrequestpreparedstackoverridestackconditionunion": "persistimporteddeploymentrequestpreparedstackoverrideconditionstack",
   "synclistresponsependingpreparedstacktypeunion": "synclistresponsependingpreparedstacktypeenvenum",
   "synclistresponsepreparedstackoperationsunion": "synclistresponsepreparedstackoperations",
+  "targetdeploymentconfig": "targetdeploymentvolumerestore",
   "releaseinfotypestringlist": "targetdeploymentconfig"
 };
 // Names can move separately from the shared models in their former module.
 const additionalExports = {
+  "targetdeploymentconfig": {
+    "targetdeployment": [
+      "TargetDeploymentConfig",
+      "TargetDeploymentConfig$inboundSchema",
+      "targetDeploymentConfigFromJSON"
+]
+  },
   "createmanagerresponseproviderawsalb2": {
     "createmanagerresponse": [
       "CreateManagerResponseProviderAwsAlb2",
@@ -281,3 +289,14 @@ for (const file of await readdir(models)) {
   });
   if (aliases.length) await writeFile(url, `${source}${resourceMarker}${aliases.join("\n")}\n`);
 }
+
+// Inline setup settings share enums with deployment info after regeneration.
+// Preserve the public deployment-info names at both root and deep import paths.
+const deploymentInfoUrl = new URL("deploymentinfo.ts", models);
+const deploymentInfoMarker = "\n// Published deployment-info compatibility exports.\n";
+const deploymentInfoSource = (await readFile(deploymentInfoUrl, "utf8")).split(deploymentInfoMarker)[0];
+const deploymentInfoAliases = ["Heartbeats", "Telemetry", "Updates"].flatMap(name => [
+  `export { SetupUpdate${name} as DeploymentInfo${name} };`,
+  `export { SetupUpdate${name}$inboundSchema as DeploymentInfo${name}$inboundSchema };`,
+]);
+await writeFile(deploymentInfoUrl, `${deploymentInfoSource}${deploymentInfoMarker}${deploymentInfoAliases.join("\n")}\n`);

@@ -472,3 +472,25 @@ test("published deep imports retain moved enums and response parsers", async () 
   const provider = { provider: "awsAlb", scheme: "internet-facing", targetType: "ip" };
   assert.deepEqual(manager.CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(provider), provider);
 });
+
+test("target settings preserve setup authority through published model paths", async () => {
+  for (const path of ["targetdeploymentconfig", "releaseinfotypestringlist"]) {
+    const { targetDeploymentStackSettingsFromJSON } = await import(`../typescript/esm/models/${path}.js`);
+    for (const settings of [{}, { setupManagement: "manual" }, { setupManagement: "automatic" }]) {
+      assert.deepEqual(targetDeploymentStackSettingsFromJSON(JSON.stringify(settings)), { ok: true, value: settings });
+    }
+  }
+});
+
+test("published deployment-info operational enums retain root and deep imports", async () => {
+  for (const path of ["index", "deploymentinfo"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    for (const name of ["Heartbeats", "Telemetry", "Updates"]) {
+      const values = Object.values(models[`DeploymentInfo${name}`]);
+      assert.ok(values.length > 0);
+      for (const value of values) {
+        assert.equal(models[`DeploymentInfo${name}$inboundSchema`].parse(value), value);
+      }
+    }
+  }
+});

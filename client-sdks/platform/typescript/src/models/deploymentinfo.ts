@@ -5107,3 +5107,11 @@ export function deploymentInfoFromJSON(
     `Failed to parse 'DeploymentInfo' from JSON`,
   );
 }
+
+// Published deployment-info compatibility exports.
+export { SetupUpdateHeartbeats as DeploymentInfoHeartbeats };
+export { SetupUpdateHeartbeats$inboundSchema as DeploymentInfoHeartbeats$inboundSchema };
+export { SetupUpdateTelemetry as DeploymentInfoTelemetry };
+export { SetupUpdateTelemetry$inboundSchema as DeploymentInfoTelemetry$inboundSchema };
+export { SetupUpdateUpdates as DeploymentInfoUpdates };
+export { SetupUpdateUpdates$inboundSchema as DeploymentInfoUpdates$inboundSchema };
