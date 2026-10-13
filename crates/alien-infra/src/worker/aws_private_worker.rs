@@ -60,6 +60,19 @@ impl Domains {
 }
 
 impl AwsPrivateWorker {
+    pub async fn maintain(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        if let Some(graph) = &mut self.graph {
+            if graph.has_retired_tasks() {
+                let ecs = ctx
+                    .service_provider
+                    .get_aws_ecs_client(ctx.get_aws_config()?)
+                    .await?;
+                graph.maintain_retired_tasks(ecs.as_ref()).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn needs_update(
         &self,
         ctx: &ResourceControllerContext<'_>,

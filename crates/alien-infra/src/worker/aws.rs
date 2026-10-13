@@ -2620,6 +2620,7 @@ impl AwsWorkerController {
             }
         }
 
+        self.private_worker.maintain(ctx).await?;
         emit_aws_lambda_worker_heartbeat(ctx, &worker_config, &aws_worker_name, &function_info);
 
         debug!(name = %worker_config.id, "Heartbeat check passed");
@@ -4177,8 +4178,18 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if !self.step_private_ingress(ctx).await? {
+            let retiring = !ctx
+                .deployment_config
+                .stack_settings
+                .endpoint_access
+                .private_enabled()
+                || ctx
+                    .desired_resource_config::<Worker>()?
+                    .public_endpoints
+                    .is_empty();
             return Ok(HandlerAction::Stay {
-                max_times: Some(240),
+                // ECS definition deletion can lag a removed deployment by 24 hours.
+                max_times: Some(if retiring { 9000 } else { 240 }),
                 suggested_delay: Some(Duration::from_secs(10)),
             });
         }
@@ -4380,7 +4391,8 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         if !self.private_worker.delete(ctx).await? {
             return Ok(HandlerAction::Stay {
-                max_times: Some(240),
+                // Allow 24-hour ECS definition removal plus service/ENI draining.
+                max_times: Some(9000),
                 suggested_delay: Some(Duration::from_secs(10)),
             });
         }

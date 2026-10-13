@@ -82,6 +82,8 @@ pub(super) struct PrivateWorkerIngress {
     task: Option<GatewayTask>,
     #[serde(default)]
     retired_tasks: Vec<GatewayTask>,
+    #[serde(default)]
+    domain_rollout_pending: bool,
     service: Option<GatewayService>,
     frontend: AwsVmFrontend,
     frontend_deleted: bool,
@@ -108,7 +110,7 @@ impl PrivateWorkerIngress {
         if plan.domains == self.plan.domains {
             return Ok(true);
         }
-        if !self.retired_tasks.is_empty() {
+        if self.domain_rollout_pending {
             return Err(invalid(
                 "Private worker domain rollout is still retiring its previous tasks",
             ));
@@ -122,6 +124,7 @@ impl PrivateWorkerIngress {
             self.retired_tasks.push(task);
         }
         self.plan.domains = plan.domains.clone();
+        self.domain_rollout_pending = true;
         Ok(false)
     }
 
@@ -157,6 +160,7 @@ impl PrivateWorkerIngress {
         })?;
         Ok(Self {
             retired_tasks: Vec::new(),
+            domain_rollout_pending: false,
             permission: None,
             api: Some(PrivateRestApi::new(
                 &plan.account,
@@ -558,13 +562,36 @@ impl PrivateWorkerIngress {
         {
             return Ok(None);
         }
+        self.domain_rollout_pending = false;
+        Ok(Some(frontend))
+    }
+
+    pub fn has_retired_tasks(&self) -> bool {
+        !self.retired_tasks.is_empty() && !self.domain_rollout_pending
+    }
+
+    /// ECS can retain deleted task definitions for 24 hours after a deployment.
+    /// Maintain their receipts without delaying a healthy serving graph.
+    pub async fn maintain_retired_tasks(&mut self, ecs: &dyn EcsApi) -> Result<()> {
+        if !self.has_retired_tasks() {
+            return Ok(());
+        }
+        let service = self
+            .service
+            .as_mut()
+            .ok_or_else(|| invalid("Task retirement requires its retained service"))?;
+        let ready = service.step_create(ecs).await;
+        self.gateway_interfaces
+            .extend(service.network_interface_ids.iter().cloned());
+        if ready?.is_none() {
+            return Ok(());
+        }
         if let Some(task) = self.retired_tasks.last_mut() {
-            if task.step_delete(clients.ecs).await? {
+            if task.step_delete(ecs).await? {
                 self.retired_tasks.pop();
             }
-            return Ok(None);
         }
-        Ok(Some(frontend))
+        Ok(())
     }
 
     async fn configure_frontend(
@@ -1081,7 +1108,7 @@ mod tests {
                 &original.resource,
                 &bootstrap(GatewaySpec {
                     endpoint_dns: "endpoint.execute-api.us-east-1.vpce.amazonaws.com",
-                    api_id: "owned-api",
+                    api_id: "ownedapi",
                     domains: &original.domains,
                 })
                 .unwrap(),
