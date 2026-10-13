@@ -134,6 +134,7 @@ locals {
     "roles/iam.serviceAccountUser",
     "roles/iam.roleAdmin",
     "roles/resourcemanager.projectIamAdmin",
+    "roles/cloudkms.admin", # Key setup and key-version lifecycle
     "roles/secretmanager.admin",
     "roles/cloudbuild.builds.editor",
     "roles/datastore.owner",

@@ -143,7 +143,13 @@ impl ResourceDefinition for Storage {
                 reason: "the 'id' field is immutable".to_string(),
             }));
         }
-        // Add other validation rules here if needed
+        if self.encryption_key != new_storage.encryption_key {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'encryptionKey' field is immutable once the resource exists"
+                    .to_string(),
+            }));
+        }
         Ok(())
     }
 

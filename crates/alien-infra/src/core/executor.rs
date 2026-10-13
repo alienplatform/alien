@@ -2218,7 +2218,11 @@ impl StackExecutor {
                 }
             };
 
-            if is_ready {
+            // An unavailable dependency suspends automatic work, including a
+            // repair/replacement already in progress. Explicit teardown still runs.
+            let explicit_delete = current_resource_view.status == ResourceStatus::Deleting
+                && !self.resources.contains_key(resource_id);
+            if is_ready && (explicit_delete || self.dependencies_available(resource_id, &state)) {
                 ready_resource_ids.push(resource_id.clone());
             }
         }
@@ -2748,6 +2752,42 @@ impl StackExecutor {
             success: true,
             error: None,
         }
+    }
+
+    fn dependencies_available(&self, resource_id: &str, state: &StackState) -> bool {
+        let mut pending = vec![resource_id];
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if id != resource_id
+                && state
+                    .resources
+                    .get(id)
+                    .and_then(|resource| resource.outputs.as_ref())
+                    .is_some_and(|outputs| !outputs.as_resource_outputs().is_available())
+            {
+                return false;
+            }
+            if let Some(resource) = state.resources.get(id) {
+                pending.extend(
+                    resource
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.id()),
+                );
+            }
+            if let Some(resource) = self.resources.get(id) {
+                pending.extend(
+                    resource
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.id()),
+                );
+            }
+        }
+        true
     }
 
     fn dependencies_met(&self, node_index: NodeIndex, state: &StackState) -> bool {

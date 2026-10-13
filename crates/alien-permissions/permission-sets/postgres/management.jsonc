@@ -11,6 +11,7 @@
             "rds:DescribeDBClusters",
             "rds:DescribeDBSubnetGroups",
             "rds:ModifyDBCluster",
+            "rds:StartDBCluster",
             "rds:ModifyDBInstance",
             "rds:ListTagsForResource"
           ]

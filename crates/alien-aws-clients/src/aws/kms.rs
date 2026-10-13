@@ -120,6 +120,9 @@ pub struct DescribeKeyResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct KeyMetadata {
+    /// Key material origin, including EXTERNAL_KEY_STORE.
+    #[serde(default)]
+    pub origin: Option<String>,
     pub arn: String,
     pub key_id: String,
     pub enabled: bool,
@@ -164,4 +167,58 @@ pub struct DecryptRequest {
 pub struct DecryptResponse {
     pub plaintext: String,
     pub key_id: String,
+}
+
+/// Checks external key access using public plaintext and an isolated encryption context.
+/// Revocation is an observation, while IAM and malformed-request failures stay errors.
+pub async fn probe_external_key(client: &dyn KmsApi, key_id: &str) -> Result<bool> {
+    let result = client
+        .encrypt(
+            EncryptRequest::builder(key_id.to_string(), "YWxpZW4ta2V5LWhlYWx0aA==".to_string())
+                .encryption_context(BTreeMap::from([(
+                    "alien.dev/purpose".to_string(),
+                    "key-health".to_string(),
+                )]))
+                .build(),
+        )
+        .await;
+    match result {
+        Ok(_) => Ok(true),
+        Err(error) if external_key_is_unavailable(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn external_key_is_unavailable(
+    error: &alien_error::AlienError<alien_client_core::ErrorData>,
+) -> bool {
+    let contexts = std::iter::once(error.context.as_ref()).chain(
+        std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .map(|source| source.context.as_ref()),
+    );
+    contexts.flatten().any(|context| {
+        let Some(body) = context
+            .get("http_response_text")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return false;
+        };
+        let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
+            return false;
+        };
+        let code = body
+            .get("__type")
+            .or_else(|| body.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        matches!(
+            code.rsplit('#').next().unwrap_or(code),
+            "DisabledException"
+                | "KMSInvalidStateException"
+                | "KeyUnavailableException"
+                | "DependencyTimeoutException"
+                | "XksProxyInvalidResponseException"
+                | "CustomKeyStoreInvalidStateException"
+        )
+    })
 }

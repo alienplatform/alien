@@ -103,7 +103,7 @@ fn emit_storage_key_iam(
         return Ok(());
     };
     let context = aws_terraform_permission_context()
-        .with_resource_name(format!("${{aws_kms_key.{key_label}.arn}}"));
+        .with_resource_name(format!("${{terraform_data.{key_label}_key_identity.output}}"));
 
     for (owner_label, _) in storage_permission_owners(ctx) {
         emit_iam_role_policy_for_target_with_label(
@@ -149,7 +149,7 @@ fn encryption(label: &str, key_label: Option<&str>) -> Block {
     if let Some(key_label) = key_label {
         encryption.push(attr(
             "kms_master_key_id",
-            expr::traversal(["aws_kms_key", key_label, "arn"]),
+            super::key::key_arn(key_label),
         ));
     }
     let inner = block("apply_server_side_encryption_by_default", encryption);

@@ -5,7 +5,7 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
     KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
+    Platform, Postgres, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
 use alien_permissions::{get_permission_set, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
@@ -227,6 +227,29 @@ fn generate_auto_management_profile(
                 .entry(resource_id.clone())
                 .or_default()
                 .insert("sandbox/images".to_string());
+        }
+
+        if resource_type == "key" && platform == Platform::Aws {
+            resource_permission_set_ids.entry(resource_id.clone()).or_default()
+                .insert("key/availability".to_string());
+        }
+
+        if platform == Platform::Aws {
+            if resource_entry.config.downcast_ref::<Postgres>()
+                .is_some_and(|postgres| postgres.encryption_key.is_some())
+            {
+                // Setup still owns the cluster. Recovery may only start that
+                // existing cluster after its customer key becomes available.
+                resource_permission_set_ids.entry(resource_id.clone()).or_default()
+                    .insert("postgres/key-recovery".to_string());
+            }
+            if let Some(key) = resource_entry.config.downcast_ref::<Container>()
+                .and_then(|container| container.persistent_storage.as_ref())
+                .and_then(|storage| storage.encryption_key.as_ref())
+            {
+                resource_permission_set_ids.entry(key.id().to_string()).or_default()
+                    .insert("key/native-volume".to_string());
+            }
         }
 
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)

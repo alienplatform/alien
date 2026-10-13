@@ -34,9 +34,9 @@ use alien_core::{
     ComputePoolSelection, ComputeSettings, DeploymentState, DeploymentStatus, EnvironmentInfo,
     GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, HeartbeatsMode,
     KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
-    Network, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus,
-    RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState, Storage, UpdatesMode,
-    Worker, WorkerCode,
+    Network, NetworkSettings, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle,
+    ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState, Storage,
+    UpdatesMode, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -1763,6 +1763,205 @@ async fn a_reimport_changing_management_permissions_through_settings_is_refused(
     let accepted_settings = accepted.stack_settings.expect("stack settings");
     assert_eq!(accepted_settings.updates, UpdatesMode::ApprovalRequired);
     assert_eq!(accepted_settings.heartbeats, HeartbeatsMode::On);
+}
+
+/// A CloudFormation create-new network registration: the stack names its VPC and
+/// subnets but never their availability zones, which the controller discovers.
+fn aws_create_new_network_import_request(
+    public_subnet_ids: [&str; 2],
+    private_subnet_ids: [&str; 2],
+) -> StackImportRequest {
+    let mut request = aws_s3_import_request("acme-prod", "eu-west-1", "assets", "acme-imports");
+    request.stack_settings.network = Some(NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    });
+    request.resources.push(ImportedResource {
+        id: "default-network".to_string(),
+        resource_type: Network::RESOURCE_TYPE.into(),
+        import_data: serde_json::to_value(AwsNetworkImportData {
+            vpc_id: Some("vpc-0123456789abcdef0".to_string()),
+            cidr_block: Some("10.42.0.0/16".to_string()),
+            internet_gateway_id: Some("igw-0123456789abcdef0".to_string()),
+            nat_gateway_id: Some("nat-0123456789abcdef0".to_string()),
+            eip_allocation_id: Some("eipalloc-0123456789abcdef0".to_string()),
+            public_subnet_ids: public_subnet_ids.map(str::to_string).to_vec(),
+            private_subnet_ids: private_subnet_ids.map(str::to_string).to_vec(),
+            public_route_table_id: Some("rtb-public".to_string()),
+            private_route_table_id: Some("rtb-private".to_string()),
+            security_group_id: Some("sg-0123456789abcdef0".to_string()),
+            availability_zones: vec!["eu-west-1a".to_string(), "eu-west-1b".to_string()],
+            subnets_by_failure_domain: Default::default(),
+            is_byo_vpc: false,
+        })
+        .unwrap(),
+    });
+    request
+}
+
+/// The subnet-to-zone map the network controller's discovery step records for
+/// `aws_create_new_network_import_request(["subnet-pub-a", "subnet-pub-b"], ...)`.
+fn discovered_failure_domains() -> serde_json::Value {
+    serde_json::json!({
+        "eu-west-1a": {
+            "publicSubnetIds": ["subnet-pub-a"],
+            "privateSubnetIds": ["subnet-priv-a"]
+        },
+        "eu-west-1b": {
+            "publicSubnetIds": ["subnet-pub-b"],
+            "privateSubnetIds": ["subnet-priv-b"]
+        }
+    })
+}
+
+/// Imports a create-new network, then records what the network controller's
+/// discovery step writes (Ready, with the subnet-to-zone map) and marks the
+/// deployment running: the state a CloudFormation stack update registers against.
+async fn import_create_new_network_and_discover(fixture: &Fixture) -> String {
+    let body = aws_create_new_network_import_request(
+        ["subnet-pub-a", "subnet-pub-b"],
+        ["subnet-priv-a", "subnet-priv-b"],
+    );
+    let (status, json) = post_import(fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let deployment_id = serde_json::from_value::<StackImportResponse>(json)
+        .unwrap()
+        .deployment_id;
+
+    let mut deployment = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let mut stack_state = deployment.stack_state.take().expect("imported stack state");
+    let network = stack_state
+        .resources
+        .get_mut("default-network")
+        .expect("network is imported");
+    assert_eq!(network.status, ResourceStatus::Provisioning);
+    let internal = network.internal_state.as_mut().expect("network controller");
+    assert_eq!(internal["state"], "discoveringSubnetFailureDomains");
+    internal["state"] = serde_json::json!("ready");
+    internal["subnetsByFailureDomain"] = discovered_failure_domains();
+    network.status = ResourceStatus::Running;
+
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: deployment.id.clone(),
+                session: "network-discovered".to_string(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: deployment.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_storage("assets"),
+                    }),
+                    target_release: None,
+                    stack_state: Some(stack_state),
+                    error: None,
+                    environment_info: deployment.environment_info,
+                    runtime_metadata: deployment.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: deployment.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+    deployment_id
+}
+
+async fn persisted_network(
+    fixture: &Fixture,
+    deployment_id: &str,
+) -> (String, alien_core::StackResourceState) {
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), deployment_id)
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let network = deployment
+        .stack_state
+        .expect("stack state")
+        .resources
+        .remove("default-network")
+        .expect("network state");
+    (deployment.status, network)
+}
+
+/// A CloudFormation stack update re-registers the setup (here: only the updates
+/// mode changes). The re-import must keep the network the controller already
+/// discovered. Replacing it sent the network back through discovery with an empty
+/// zone map while the running compute cluster kept stepping, so the update failed
+/// with "requires 1 failure domains, but 0 valid domains were selected".
+#[tokio::test]
+async fn a_setup_rerun_keeps_the_discovered_network_failure_domains() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let deployment_id = import_create_new_network_and_discover(&fixture).await;
+
+    let mut approval_required = aws_create_new_network_import_request(
+        ["subnet-pub-a", "subnet-pub-b"],
+        ["subnet-priv-a", "subnet-priv-b"],
+    );
+    approval_required.stack_settings.updates = UpdatesMode::ApprovalRequired;
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &approval_required).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+
+    let (deployment_status, network) = persisted_network(&fixture, &deployment_id).await;
+    assert_eq!(
+        deployment_status, "update-pending",
+        "the settings change is reconciled"
+    );
+    assert_eq!(network.status, ResourceStatus::Running);
+    let internal = network.internal_state.expect("network controller");
+    assert_eq!(internal["state"], "ready");
+    assert_eq!(
+        internal["subnetsByFailureDomain"],
+        discovered_failure_domains()
+    );
+    assert_eq!(internal["vpcId"], "vpc-0123456789abcdef0");
+    assert_eq!(internal["natGatewayId"], "nat-0123456789abcdef0");
+}
+
+/// When the stack update hands off different subnets, the zones the controller
+/// discovered for the old ones no longer describe the network, so it is discovered
+/// again.
+#[tokio::test]
+async fn a_setup_rerun_with_new_subnets_rediscovers_failure_domains() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let deployment_id = import_create_new_network_and_discover(&fixture).await;
+
+    let moved = aws_create_new_network_import_request(
+        ["subnet-pub-a", "subnet-pub-c"],
+        ["subnet-priv-a", "subnet-priv-c"],
+    );
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &moved).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+
+    let (_, network) = persisted_network(&fixture, &deployment_id).await;
+    assert_eq!(network.status, ResourceStatus::Provisioning);
+    let internal = network.internal_state.expect("network controller");
+    assert_eq!(internal["state"], "discoveringSubnetFailureDomains");
+    assert_eq!(internal["subnetsByFailureDomain"], serde_json::json!({}));
+    assert_eq!(
+        internal["publicSubnetIds"],
+        serde_json::json!(["subnet-pub-a", "subnet-pub-c"])
+    );
 }
 
 /// A release that introduces a brand-new frozen gate must not inherit a

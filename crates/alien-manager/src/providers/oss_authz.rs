@@ -7,7 +7,6 @@
 
 use crate::auth::remote_binding_capability;
 use crate::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
-use crate::providers::single_workspace_projects::DEFAULT_WORKSPACE_ID;
 use crate::traits::deployment_store::{DeploymentGroupRecord, DeploymentRecord};
 use crate::traits::release_store::ReleaseRecord;
 use crate::traits::{ProjectRecord, TelemetrySignal};
@@ -19,6 +18,29 @@ use alien_core::remote_bindings::RemoteBindingKind;
 pub struct OssAuthz;
 
 impl OssAuthz {
+    /// The handler resolves workspace ownership before this role and scope check.
+    fn can_write_image_repository(s: &Subject, project_id: &str) -> bool {
+        if !Self::can_act_on_project(s, project_id) {
+            return false;
+        }
+        let scope_covers_project = match &s.scope {
+            Scope::Workspace => true,
+            Scope::Project { project_id: bound }
+            | Scope::DeploymentGroup {
+                project_id: bound, ..
+            } => bound == project_id,
+            _ => false,
+        };
+        scope_covers_project
+            && matches!(
+                s.role,
+                Role::WorkspaceAdmin
+                    | Role::WorkspaceMember
+                    | Role::ProjectDeveloper
+                    | Role::DeploymentGroupDeployer
+            )
+    }
+
     /// True if the subject has workspace-level write authority. In OSS this
     /// covers the legacy "admin" token (mapped to `WorkspaceAdmin`) and any
     /// workspace-scoped service account with a write role.
@@ -343,29 +365,11 @@ impl Authz for OssAuthz {
         if s.workspace_id != project.workspace_id || !Self::can_act_on_project(s, &project.id) {
             return false;
         }
-        let scope_covers_project = match &s.scope {
-            Scope::Workspace => true,
-            Scope::Project { project_id } | Scope::DeploymentGroup { project_id, .. } => {
-                project_id == &project.id
-            }
-            _ => false,
-        };
-        scope_covers_project
-            && matches!(
-                s.role,
-                Role::WorkspaceAdmin
-                    | Role::WorkspaceMember
-                    | Role::ProjectDeveloper
-                    | Role::DeploymentGroupDeployer
-            )
+        Self::can_write_image_repository(s, &project.id)
     }
 
     fn can_provision_image_repository(&self, s: &Subject, project_id: &str) -> bool {
-        let project = ProjectRecord {
-            id: project_id.to_string(),
-            workspace_id: DEFAULT_WORKSPACE_ID.to_string(),
-        };
-        self.can_push_image(s, &project, "")
+        Self::can_write_image_repository(s, project_id)
     }
 
     fn can_act_on_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {

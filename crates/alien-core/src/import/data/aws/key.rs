@@ -8,4 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct AwsKeyImportData {
     /// Immutable KMS key ARN. Alias ARNs are not accepted.
     pub key_arn: String,
+    /// Setup installed the scoped key availability probe permission.
+    #[serde(default)]
+    pub availability_probe: bool,
 }

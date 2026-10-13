@@ -1,0 +1,25 @@
+{
+  "id": "postgres/key-recovery",
+  "description": "Resume an existing Aurora cluster after its encryption key becomes available",
+  "platforms": {
+    "aws": [
+      {
+        "label": "resume-aurora-after-key-recovery",
+        "description": "Start the same cluster within AWS's recoverable encryption-credentials window. Does not grant creation, replacement, or data access.",
+        "grant": {
+          "actions": ["rds:StartDBCluster"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

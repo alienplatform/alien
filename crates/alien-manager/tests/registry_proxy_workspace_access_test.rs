@@ -103,12 +103,21 @@ struct TwoWorkspaceProjects;
 impl ProjectStore for TwoWorkspaceProjects {
     async fn get_project(
         &self,
-        _caller: &Subject,
+        caller: &Subject,
         project_id: &str,
     ) -> Result<Option<ProjectRecord>, AlienError> {
+        if project_id == "prj_failed" {
+            return Err(
+                alien_manager::error::ErrorData::bad_request("Project lookup failed")
+                    .into_generic(),
+            );
+        }
+        if project_id == "prj_hidden" && caller.workspace_id == "ws_a" {
+            return Ok(None);
+        }
         let workspace_id = match project_id {
             "prj_a" | "prj_c" | "prj_d" => "ws_a",
-            "prj_b" => "ws_b",
+            "prj_b" | "prj_hidden" => "ws_b",
             _ => return Ok(None),
         };
         Ok(Some(ProjectRecord {
@@ -253,7 +262,10 @@ fn push_requests(repo: &str) -> Vec<(&'static str, String)> {
     vec![
         ("POST", format!("/v2/{repo}/blobs/uploads/")),
         ("PATCH", format!("/v2/{repo}/blobs/uploads/session-1")),
-        ("PUT", format!("/v2/{repo}/blobs/uploads/session-1?digest={}", digest())),
+        (
+            "PUT",
+            format!("/v2/{repo}/blobs/uploads/session-1?digest={}", digest()),
+        ),
         ("PUT", format!("/v2/{repo}/manifests/v1")),
     ]
 }
@@ -280,7 +292,10 @@ async fn assert_forwarded(setup: &Setup, method: &str, target: &str, token: &str
         (200..300).contains(&status),
         "{token} {method} {target}: {status}"
     );
-    assert!(reached, "{token} {method} {target} did not reach the upstream");
+    assert!(
+        reached,
+        "{token} {method} {target} did not reach the upstream"
+    );
 }
 
 /// Workspace keys, workspace users and project tokens of `ws_a` cannot read `ws_b`'s images.
@@ -365,7 +380,7 @@ async fn deployment_release_cannot_open_other_workspace_repository() {
 }
 
 /// Own-workspace callers keep pulling, pushing and mounting within their projects, and a
-/// deployment keeps pulling its own project's images and those its release names.
+/// deployment keeps pulling its own project's images and refuses sibling repositories.
 #[tokio::test]
 async fn own_workspace_image_access_reaches_upstream() {
     let setup = setup().await;
@@ -401,14 +416,89 @@ async fn own_workspace_image_access_reaches_upstream() {
     for target in pull_paths(OWN_REPO)
         .into_iter()
         .chain(pull_paths(&format!("{OWN_REPO}/api")))
-        .chain(pull_paths(SIBLING_REPO))
     {
         assert_forwarded(&setup, "GET", &target, deployment).await;
     }
-    for target in pull_paths(UNLISTED_REPO) {
+    for target in pull_paths(SIBLING_REPO)
+        .into_iter()
+        .chain(pull_paths(UNLISTED_REPO))
+    {
         assert_denied(&setup, "GET", &target, deployment).await;
     }
     for (method, target) in push_requests(OWN_REPO) {
         assert_denied(&setup, method, &target, deployment).await;
+    }
+}
+
+/// Unavailable project records refuse reads and writes before the registry is contacted.
+#[tokio::test]
+async fn unavailable_project_lookups_refuse_image_access() {
+    let setup = setup().await;
+    for project in ["prj_missing", "prj_hidden", "prj_failed"] {
+        let repo = format!("artifacts/default-{project}");
+        let expected = if project == "prj_failed" { 500 } else { 403 };
+        for method in ["GET", "HEAD"] {
+            for target in pull_paths(&repo) {
+                assert_eq!(
+                    status_and_reach(&setup, method, &target, "key.ws_a").await,
+                    (expected, false),
+                    "{project} {method} {target}"
+                );
+            }
+        }
+        for (method, target) in push_requests(&repo) {
+            assert_eq!(
+                status_and_reach(&setup, method, &target, "key.ws_a").await,
+                (expected, false),
+                "{project} {method} {target}"
+            );
+        }
+        let before = setup.seen.lock().unwrap().len();
+        let target = format!(
+            "/v2/{OWN_REPO}/blobs/uploads/?mount={}&from={}",
+            digest(),
+            enc(&repo)
+        );
+        let response = send(setup.manager.port, "POST", &target, "key.ws_a").await;
+        assert_eq!(response.status, 202, "{}", response.body);
+        let reached = reached_since(&setup.seen, before);
+        assert_eq!(reached.len(), 1);
+        assert_eq!(reached[0].method, "POST");
+        assert_eq!(reached[0].path, format!("/v2/{OWN_REPO}/blobs/uploads/"));
+        assert!(!reached[0].has_mount_params());
+    }
+}
+
+/// Repository provisioning resolves the same project ownership as pushes.
+#[tokio::test]
+async fn repository_provisioning_uses_the_resolved_workspace() {
+    let setup = setup().await;
+    let client = reqwest::Client::new();
+    for (project, expected) in [
+        ("prj_a", 400),
+        ("prj_b", 403),
+        ("prj_missing", 403),
+        ("prj_hidden", 403),
+    ] {
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{}/v1/image-repositories",
+                setup.manager.port
+            ))
+            .bearer_auth("key.ws_a")
+            .json(&serde_json::json!({"projectId": project, "platform": "local"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), expected, "{project}");
+        if expected == 400 {
+            // The local fixture reaches provisioning validation after authorization;
+            // provisioning itself is only supported by cloud registries.
+            assert!(response
+                .text()
+                .await
+                .unwrap()
+                .contains("cloud registries only"));
+        }
     }
 }
