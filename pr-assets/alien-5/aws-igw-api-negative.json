@@ -1,0 +1,50 @@
+{
+  "status": "preflights-failed",
+  "resourceCount": 0,
+  "quotaCheck": {
+    "checkDescription": "Cloud quotas have room for additional deployment demand",
+    "code": "CLOUD_QUOTAS",
+    "errors": [
+      "Internet gateways per Region (L-A4707A72, eu-west-1): used 5, applied limit 5, additional needed 1. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72"
+    ],
+    "quotaResults": [
+      {
+        "outcome": {
+          "limit": 5.0,
+          "needed": 1.0,
+          "status": "pass",
+          "used": 1.0
+        },
+        "quota": {
+          "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-F678F1CE",
+          "name": "VPCs per Region",
+          "platform": "aws",
+          "providerId": "L-F678F1CE",
+          "scope": "eu-west-1",
+          "service": "vpc"
+        }
+      },
+      {
+        "outcome": {
+          "limit": 5.0,
+          "needed": 1.0,
+          "status": "fail",
+          "used": 5.0
+        },
+        "quota": {
+          "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72",
+          "name": "Internet gateways per Region",
+          "platform": "aws",
+          "providerId": "L-A4707A72",
+          "scope": "eu-west-1",
+          "service": "vpc"
+        }
+      }
+    ],
+    "status": "failed",
+    "success": false,
+    "warnings": []
+  },
+  "cloudIdentitySetsUnchanged": true,
+  "fillerCleanupVerified": true
+}
