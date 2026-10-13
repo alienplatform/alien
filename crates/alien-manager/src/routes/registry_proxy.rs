@@ -1450,6 +1450,7 @@ async fn validate_pull_access(
             .stacks
             .values()
             .flat_map(|stack| extract_repo_names(stack, proxy_host, &own_repo))
+            .filter(|repo| own_repo(repo))
             .collect::<Vec<_>>();
 
         // Cache the result.
