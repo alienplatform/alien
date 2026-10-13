@@ -1011,6 +1011,7 @@ impl StackExecutor {
     /// 4. **Replaces**: Desired resources whose failed create (or replace) left controller state
     ///    and whose config changed. They are deleted first and created again once `Deleted`.
     pub fn plan(&self, state: &StackState) -> Result<PlanResult> {
+        validate_stack_controller_state_versions(state)?;
         // 0. Validate that every dependency *outside* the filtered executor scope
         //    already exists in the state and is `Running` / `Deleted`.  This
         //    prevents us from provisioning resources that would immediately

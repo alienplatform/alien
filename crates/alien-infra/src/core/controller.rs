@@ -806,7 +806,10 @@ impl Clone for Box<dyn ResourceController> {
 }
 
 pub const MIN_SUPPORTED_CONTROLLER_STATE_VERSION: u32 = 1;
-pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 1;
+/// Version 2 carries durable ownership receipts that version 1 readers would
+/// otherwise discard. Upgrade all deployment actors before enabling writers;
+/// once saved, this state must not be processed by a version 1 binary.
+pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 2;
 
 /// Serializes a controller to a JSON Value, injecting its type tag.
 pub fn serialize_controller(
@@ -1536,6 +1539,23 @@ mod tests {
         let err = validate_controller_state_value(&value, Some("resource-a"))
             .expect_err("malformed controller state version should be incompatible");
         assert_eq!(err.code, "INCOMPATIBLE_CONTROLLER_STATE");
+    }
+
+    #[test]
+    fn controller_state_upgrades_legacy_envelopes_and_rejects_future_versions() {
+        let controller = crate::worker::TestWorkerController::default();
+        let mut legacy = serialize_controller(&controller).unwrap();
+        legacy["_controllerStateVersion"] = serde_json::json!(1);
+        let restored = deserialize_controller(legacy).expect("version 1 remains readable");
+        let upgraded = serialize_controller(restored.as_ref()).unwrap();
+        assert_eq!(upgraded["_controllerStateVersion"], 2);
+        let mut future = upgraded;
+        future["_controllerStateVersion"] = serde_json::json!(CURRENT_CONTROLLER_STATE_VERSION + 1);
+        assert_eq!(
+            validate_controller_state_value(&future, Some("worker")).unwrap_err().code,
+            "INCOMPATIBLE_CONTROLLER_STATE"
+        );
+        assert!(deserialize_controller(future).is_err());
     }
 
     // Guards deserializer registration for the in-tree Local Postgres controller; cloud controllers

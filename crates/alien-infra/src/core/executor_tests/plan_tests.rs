@@ -6,6 +6,34 @@ use crate::error::Result;
 use crate::worker::{TestWorkerController, TestWorkerState};
 use alien_core::{ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Worker};
 
+#[tokio::test]
+async fn incompatible_controller_envelope_blocks_planning_and_execution() -> Result<()> {
+    let stack = Stack::new("version-gate".to_owned())
+        .add(test_function("worker"), ResourceLifecycle::Live)
+        .build();
+    let executor = new_executor(&stack)?;
+    let original = run_to_synced(&executor, new_test_state()).await?;
+    for failed_checkpoint in [false, true] {
+        let mut state = original.clone();
+        let resource = state.resources.get_mut("worker").unwrap();
+        let mut future = resource.internal_state.clone().unwrap();
+        future["_controllerStateVersion"] =
+            serde_json::json!(crate::CURRENT_CONTROLLER_STATE_VERSION + 1);
+        if failed_checkpoint {
+            resource.last_failed_state = Some(future);
+        } else {
+            resource.internal_state = Some(future);
+        }
+        let before = serde_json::to_value(&state).unwrap();
+        let error = executor.plan(&state).expect_err("incompatible state cannot be planned");
+        assert_eq!(error.code, "INCOMPATIBLE_CONTROLLER_STATE");
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        let error = executor.step(state).await.expect_err("incompatible state cannot be stepped");
+        assert_eq!(error.code, "INCOMPATIBLE_CONTROLLER_STATE");
+    }
+    Ok(())
+}
+
 /// Tests that plan identifies resources to create.
 #[tokio::test]
 async fn test_plan_identifies_creates() -> Result<()> {
