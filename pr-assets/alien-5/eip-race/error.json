@@ -1,0 +1,57 @@
+{
+  "code": "DEPLOYMENT_FAILED",
+  "message": "Deployment failed: 1 resource error(s), 0 interrupted, 1 total",
+  "retryable": false,
+  "internal": false,
+  "httpStatusCode": 500,
+  "context": {
+    "total_resources": 1,
+    "failed_resources": 1,
+    "interrupted_resources": 0,
+    "resource_errors": [
+      {
+        "resourceId": "default-network",
+        "resourceType": "network",
+        "error": {
+          "code": "CLOUD_PLATFORM_ERROR",
+          "message": "Cloud platform operation failed: Failed to allocate Elastic IP",
+          "retryable": false,
+          "internal": false,
+          "httpStatusCode": 500,
+          "context": {
+            "message": "Failed to allocate Elastic IP",
+            "resource_id": "default-network"
+          },
+          "source": {
+            "code": "CLOUD_QUOTA_EXCEEDED",
+            "message": "Cloud quota exceeded: EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): The maximum number of addresses has been reached. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 500,
+            "context": {
+              "quota": {
+                "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3",
+                "name": "EC2-VPC Elastic IP addresses per Region",
+                "platform": "aws",
+                "providerId": "L-0263D0A3",
+                "scope": "eu-west-1",
+                "service": "ec2"
+              },
+              "message": "EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): The maximum number of addresses has been reached. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3"
+            },
+            "source": {
+              "code": "QUOTA_EXCEEDED",
+              "message": "Quota exceeded: The maximum number of addresses has been reached.",
+              "retryable": true,
+              "internal": false,
+              "httpStatusCode": 500,
+              "context": {
+                "message": "The maximum number of addresses has been reached."
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
