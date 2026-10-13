@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use super::{AwsVmLoadBalancer, AwsVmTargetGroup};
 use crate::{ErrorData, Result};
 
+#[path = "aws_vm_frontend_recorded.rs"]
+mod recorded;
+pub use recorded::AwsVmFrontendReceipt;
+
 /// One independently retained public or private frontend. Its security group
 /// belongs to the parent workload and can be shared by both frontends.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -20,6 +24,8 @@ pub struct AwsVmFrontend {
     target_group: AwsVmTargetGroup,
     #[serde(default)]
     load_balancer: AwsVmLoadBalancer,
+    #[serde(default)]
+    recorded: Option<recorded::RecordedFrontend>,
 }
 
 #[cfg(test)]
@@ -73,6 +79,9 @@ impl AwsVmFrontend {
         // In particular, missing public subnets must not leave a target group.
         super::aws_vm_target_group::prepare_request(plan.target_group.clone())?;
         super::aws_vm_load_balancer::prepare_request(plan.load_balancer.clone())?;
+        if let Some(recorded) = self.recorded.as_mut() {
+            return recorded.step_prepare(elb, plan).await;
+        }
         let Some(target_group_arn) = self
             .target_group
             .step_create(elb, plan.target_group)
@@ -124,6 +133,9 @@ impl AwsVmFrontend {
     /// Confirms the LB (and its listener) gone before deleting its target group.
     /// Parent security groups and retained frontends are untouched.
     pub async fn step_delete(&mut self, elb: &dyn Elbv2Api) -> Result<bool> {
+        if let Some(recorded) = self.recorded.as_mut() {
+            return recorded.step_delete(elb).await;
+        }
         if !self.load_balancer.step_delete(elb).await? {
             return Ok(false);
         }
@@ -133,6 +145,9 @@ impl AwsVmFrontend {
     /// Include these and the desired certificate in the parent's ACM retention
     /// set until every serving/prepared listener has confirmed its rotation.
     pub fn serving_certificate_arns(&self) -> &[String] {
+        if let Some(recorded) = &self.recorded {
+            return &recorded.certificate_arns;
+        }
         self.load_balancer.serving_certificate_arns()
     }
 }

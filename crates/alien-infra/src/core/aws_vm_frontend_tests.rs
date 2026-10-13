@@ -42,7 +42,11 @@ fn client(world: Arc<Mutex<World>>) -> MockElbv2Api {
     elb.expect_describe_target_groups().returning(move |request| {
         let state = state.lock().unwrap();
         if let Some(group) = &state.group {
-            assert_eq!(request.names.as_ref().unwrap()[0], group["TargetGroupName"].as_str().unwrap());
+            if let Some(names) = &request.names {
+                assert_eq!(names[0], group["TargetGroupName"].as_str().unwrap());
+            } else {
+                assert_eq!(request.target_group_arns.as_ref().unwrap(), &["group"]);
+            }
         }
         Ok(serde_json::from_value(json!({"DescribeTargetGroupsResult":{"TargetGroups":{"member":state.group.iter().cloned().collect::<Vec<_>>()}}})).unwrap())
     });
@@ -60,7 +64,11 @@ fn client(world: Arc<Mutex<World>>) -> MockElbv2Api {
     elb.expect_describe_load_balancers().returning(move |request| {
         let state = state.lock().unwrap();
         if let Some(lb) = &state.lb {
-            assert_eq!(request.names.as_ref().unwrap()[0], lb["LoadBalancerName"].as_str().unwrap());
+            if let Some(names) = &request.names {
+                assert_eq!(names[0], lb["LoadBalancerName"].as_str().unwrap());
+            } else {
+                assert_eq!(request.load_balancer_arns.as_ref().unwrap(), &["lb"]);
+            }
         }
         Ok(serde_json::from_value(json!({"DescribeLoadBalancersResult":{"LoadBalancers":{"member":state.lb.iter().cloned().collect::<Vec<_>>()}}})).unwrap())
     });
@@ -78,7 +86,11 @@ fn client(world: Arc<Mutex<World>>) -> MockElbv2Api {
     });
     let state = world.clone();
     elb.expect_describe_listeners().returning(move |request| {
-        assert_eq!(request.load_balancer_arn.as_deref(), Some("lb"));
+        if let Some(arns) = &request.listener_arns {
+            assert_eq!(arns, &["listener"]);
+        } else {
+            assert_eq!(request.load_balancer_arn.as_deref(), Some("lb"));
+        }
         let state = state.lock().unwrap();
         Ok(serde_json::from_value(json!({"DescribeListenersResult":{"Listeners":{"member":state.listener.iter().cloned().collect::<Vec<_>>()}}})).unwrap())
     });
@@ -94,6 +106,17 @@ fn client(world: Arc<Mutex<World>>) -> MockElbv2Api {
         state.tags.insert("listener".to_string(), request.tags.unwrap());
         state.committed("create-listener")?;
         Ok(serde_json::from_value(json!({"CreateListenerResult":{"Listeners":{"member":[listener]}}})).unwrap())
+    });
+    let state = world.clone();
+    elb.expect_modify_listener().returning(move |request| {
+        assert_eq!(request.listener_arn, "listener");
+        assert!(request.default_actions.is_none());
+        assert!(request.port.is_none() && request.protocol.is_none());
+        let certs: Vec<Value> = request.certificates.unwrap().iter().map(|certificate| json!({"CertificateArn":certificate.certificate_arn})).collect();
+        let mut state = state.lock().unwrap();
+        state.listener.as_mut().unwrap()["Certificates"] = json!({"member":certs});
+        state.committed("rotate-listener")?;
+        Ok(serde_json::from_value(json!({"ModifyListenerResult":{"Listeners":{"member":[state.listener.as_ref().unwrap()]}}})).unwrap())
     });
     let state = world.clone();
     elb.expect_delete_load_balancer().returning(move |arn| {
@@ -317,4 +340,182 @@ async fn lost_deletes_resume_the_remaining_children_without_repeating_mutations(
             ]
         );
     }
+}
+
+fn recorded_receipt() -> AwsVmFrontendReceipt {
+    AwsVmFrontendReceipt {
+        target_group_arn: "group".to_string(),
+        load_balancer_arn: "lb".to_string(),
+        listener_arn: "listener".to_string(),
+        ownership_tags: std::collections::BTreeMap::from([(
+            "Owner".to_string(),
+            "test-resource".to_string(),
+        )]),
+    }
+}
+
+async fn prepare_existing(elb: &MockElbv2Api, tcp: bool, private: bool) {
+    let mut existing = AwsVmFrontend::default();
+    let mut prepared = false;
+    for _ in 0..10 {
+        prepared = existing
+            .step_prepare(elb, plan(tcp, private))
+            .await
+            .unwrap()
+            .is_some();
+        if prepared {
+            break;
+        }
+    }
+    assert!(prepared);
+}
+
+#[tokio::test]
+async fn recorded_frontend_without_attempt_tags_keeps_exact_provider_ids_and_can_retire() {
+    for tcp in [false, true] {
+        for private in [false, true] {
+            let world = Arc::new(Mutex::new(World::default()));
+            let elb = client(world.clone());
+            prepare_existing(&elb, tcp, private).await;
+            for tags in world.lock().unwrap().tags.values_mut() {
+                tags.retain(|tag| tag.key != "CreateAttempt");
+            }
+            let mut recorded = AwsVmFrontend::from_recorded(recorded_receipt()).unwrap();
+            let mut prepared = None;
+            for _ in 0..3 {
+                prepared = recorded
+                    .step_prepare(&elb, plan(tcp, private))
+                    .await
+                    .unwrap();
+                recorded = reload(&recorded);
+                if prepared.is_some() {
+                    break;
+                }
+            }
+            let prepared = prepared.expect("recorded frontend did not confirm");
+            assert_eq!(prepared.target_group_arn, "group");
+            assert_eq!(prepared.load_balancer_arn, "lb");
+            assert_eq!(prepared.listener_arn, "listener");
+            assert_eq!(
+                world.lock().unwrap().mutations,
+                ["create-group", "create-lb", "create-listener"]
+            );
+            let mut deleted = false;
+            for _ in 0..8 {
+                let before = world.lock().unwrap().mutations.len();
+                deleted = recorded.step_delete(&elb).await.unwrap();
+                assert!(world.lock().unwrap().mutations.len() - before <= 1);
+                recorded = reload(&recorded);
+                if deleted {
+                    break;
+                }
+            }
+            assert!(deleted);
+            recorded
+                .step_prepare(&elb, plan(tcp, private))
+                .await
+                .err()
+                .expect("retired recorded IDs must never be recreated");
+            assert_eq!(
+                world.lock().unwrap().mutations,
+                [
+                    "create-group",
+                    "create-lb",
+                    "create-listener",
+                    "delete-lb",
+                    "delete-group"
+                ]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn recorded_listener_renewal_checkpoints_serving_certificate_before_lost_update_response() {
+    let world = Arc::new(Mutex::new(World::default()));
+    let elb = client(world.clone());
+    prepare_existing(&elb, false, true).await;
+    let mut recorded = AwsVmFrontend::from_recorded(recorded_receipt()).unwrap();
+    let mut desired = plan(false, true);
+    desired.certificate_arn = Some("renewed-cert".to_string());
+    assert!(recorded
+        .step_prepare(&elb, desired)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(recorded.serving_certificate_arns(), ["cert"]);
+    let saved = reload(&recorded);
+    world.lock().unwrap().lose_response = Some("rotate-listener");
+    let mut desired = plan(false, true);
+    desired.certificate_arn = Some("renewed-cert".to_string());
+    recorded
+        .step_prepare(&elb, desired)
+        .await
+        .err()
+        .expect("injected response loss");
+    let mut recorded = saved;
+    assert_eq!(recorded.serving_certificate_arns(), ["cert"]);
+    let mut desired = plan(false, true);
+    desired.certificate_arn = Some("renewed-cert".to_string());
+    assert!(recorded
+        .step_prepare(&elb, desired)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(recorded.serving_certificate_arns(), ["renewed-cert"]);
+    let mut desired = plan(false, true);
+    desired.certificate_arn = Some("renewed-cert".to_string());
+    assert_eq!(
+        recorded
+            .step_prepare(&elb, desired)
+            .await
+            .unwrap()
+            .unwrap()
+            .listener_arn,
+        "listener"
+    );
+    assert_eq!(
+        world.lock().unwrap().mutations,
+        [
+            "create-group",
+            "create-lb",
+            "create-listener",
+            "rotate-listener"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn recorded_frontend_refuses_foreign_ownership_and_changed_access_before_mutation() {
+    let world = Arc::new(Mutex::new(World::default()));
+    let elb = client(world.clone());
+    prepare_existing(&elb, false, false).await;
+    let mut recorded = AwsVmFrontend::from_recorded(recorded_receipt()).unwrap();
+    recorded
+        .step_prepare(&elb, plan(false, true))
+        .await
+        .err()
+        .expect("same LB cannot change public/private scheme");
+    world
+        .lock()
+        .unwrap()
+        .tags
+        .get_mut("lb")
+        .unwrap()
+        .iter_mut()
+        .find(|tag| tag.key == "Owner")
+        .unwrap()
+        .value = "foreign".to_string();
+    recorded
+        .step_prepare(&elb, plan(false, false))
+        .await
+        .err()
+        .expect("foreign LB must not be adopted");
+    let error = recorded.step_delete(&elb).await.unwrap_err();
+    assert!(!matches!(error.http_status_code, Some(401 | 403 | 404)));
+    assert!(error.source.is_none());
+    assert_eq!(
+        world.lock().unwrap().mutations,
+        ["create-group", "create-lb", "create-listener"]
+    );
 }

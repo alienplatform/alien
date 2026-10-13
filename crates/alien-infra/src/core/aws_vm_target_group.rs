@@ -229,7 +229,10 @@ impl AwsVmTargetGroup {
 
 // AWS fills provider defaults for omitted options; only explicit settings
 // belong to the recorded plan and must match during recovery.
-fn matches_requested_settings(group: &TargetGroup, request: &CreateTargetGroupRequest) -> bool {
+pub(super) fn matches_requested_settings(
+    group: &TargetGroup,
+    request: &CreateTargetGroupRequest,
+) -> bool {
     request
         .protocol_version
         .as_ref()
