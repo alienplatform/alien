@@ -17,6 +17,8 @@ pub use certificates::*;
 
 #[cfg(feature = "aws")]
 pub(crate) mod aws_tag_scoped;
+#[cfg(feature = "aws")]
+pub use aws_tag_scoped::preserve_composite_cleanup_error;
 
 #[cfg(feature = "aws")]
 mod aws_acm_import;

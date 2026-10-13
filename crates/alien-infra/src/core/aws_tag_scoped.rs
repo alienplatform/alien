@@ -30,7 +30,7 @@ pub(crate) fn is_remote_not_found(error: &AlienError<CloudClientErrorData>) -> b
 /// remaining cleanup. Preserve ordinary errors (including retryable timeouts)
 /// intact. Only remove source codes that the executor treats as terminal
 /// best-effort deletion; absence must instead be confirmed by the child.
-pub(crate) fn preserve_composite_cleanup_error(
+pub fn preserve_composite_cleanup_error(
     error: AlienError<crate::ErrorData>,
 ) -> AlienError<crate::ErrorData> {
     let skips_cleanup = |code: &str, status: Option<u16>| {
