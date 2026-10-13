@@ -270,9 +270,22 @@ pub fn select(index: usize, values: CfExpression) -> CfExpression {
     )])
 }
 
-/// `Fn::Select [0, value]`. Useful for list-typed parameters.
-pub fn first_or_null(values: CfExpression) -> CfExpression {
-    select(0, values)
+/// List-valued parameter, with CloudFormation's blank sentinel removed.
+pub fn list_parameter_value(parameter: &str) -> CfExpression {
+    CfExpression::if_(
+        format!("Has{parameter}"),
+        CfExpression::ref_(parameter),
+        CfExpression::list([]),
+    )
+}
+
+/// Optional existing workload security group. Never select from an absent list.
+pub fn existing_security_group_id() -> CfExpression {
+    CfExpression::if_(
+        "HasSecurityGroupIds",
+        select(0, CfExpression::ref_(PARAM_SECURITY_GROUP_IDS)),
+        CfExpression::no_value(),
+    )
 }
 
 /// AZ-conditional name used by `Network::Create` subnets / route tables.
@@ -407,7 +420,7 @@ pub fn public_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
 /// security group ID parameter.
 pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
-        return CfExpression::ref_(PARAM_SECURITY_GROUP_IDS);
+        return list_parameter_value(PARAM_SECURITY_GROUP_IDS);
     };
     match &network.settings {
         NetworkSettings::Create { .. } => created_or_provided(
@@ -416,12 +429,12 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
                 format!("{network_id}SecurityGroup"),
                 "GroupId",
             )]),
-            CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+            list_parameter_value(PARAM_SECURITY_GROUP_IDS),
         ),
         NetworkSettings::UseDefault => CfExpression::no_value(),
         NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
-        | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+        | NetworkSettings::ByoVnetAzure { .. } => list_parameter_value(PARAM_SECURITY_GROUP_IDS),
     }
 }
 

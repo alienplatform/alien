@@ -98,17 +98,17 @@ impl TfEmitter for AwsNetworkEmitter {
                 ("eipAllocationId", Expression::Null),
                 (
                     "publicSubnetIds",
-                    expr::raw(format!("var.{label}_public_subnet_ids")),
+                    expr::raw(format!("compact([for id in var.{label}_public_subnet_ids : trimspace(id)])")),
                 ),
                 (
                     "privateSubnetIds",
-                    expr::raw(format!("var.{label}_private_subnet_ids")),
+                    expr::raw(format!("compact([for id in var.{label}_private_subnet_ids : trimspace(id)])")),
                 ),
                 ("publicRouteTableId", Expression::Null),
                 ("privateRouteTableId", Expression::Null),
                 (
                     "securityGroupId",
-                    expr::raw(format!("try(var.{label}_security_group_ids[0], null)")),
+                    expr::raw(format!("try(compact([for id in var.{label}_security_group_ids : trimspace(id)])[0], null)")),
                 ),
                 (
                     "availabilityZones",
@@ -147,13 +147,13 @@ impl TfEmitter for AwsNetworkEmitter {
                 (
                     "publicSubnetIds",
                     expr::raw(format!(
-                        "var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : []"
+                        "var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.public_subnet_ids : trimspace(id)]) : []"
                     )),
                 ),
                 (
                     "privateSubnetIds",
                     expr::raw(format!(
-                        "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []"
+                        "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : []"
                     )),
                 ),
                 (
@@ -171,7 +171,7 @@ impl TfEmitter for AwsNetworkEmitter {
                 (
                     "securityGroupId",
                     expr::raw(format!(
-                        "var.network_mode == \"create-new\" ? aws_security_group.{label}_workload[0].id : var.network_mode == \"use-existing\" ? try(var.security_group_ids[0], null) : null"
+                        "var.network_mode == \"create-new\" ? aws_security_group.{label}_workload[0].id : var.network_mode == \"use-existing\" ? try(compact([for id in var.security_group_ids : trimspace(id)])[0], null) : null"
                     )),
                 ),
                 (

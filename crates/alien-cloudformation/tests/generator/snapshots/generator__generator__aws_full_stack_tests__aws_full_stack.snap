@@ -160,6 +160,27 @@ Parameters:
     - "off"
     - "on"
 Conditions:
+  HasPublicSubnetIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: PublicSubnetIds
+      - ''
+  HasPrivateSubnetIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: PrivateSubnetIds
+      - ''
+  HasSecurityGroupIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: SecurityGroupIds
+      - ''
   NetworkModeCreate:
     Fn::Equals:
     - Ref: NetworkMode
@@ -1734,11 +1755,20 @@ Resources:
               vpc_id:
                 Ref: VpcId
               public_subnet_ids:
-                Ref: PublicSubnetIds
+                Fn::If:
+                - HasPublicSubnetIds
+                - Ref: PublicSubnetIds
+                - []
               private_subnet_ids:
-                Ref: PrivateSubnetIds
+                Fn::If:
+                - HasPrivateSubnetIds
+                - Ref: PrivateSubnetIds
+                - []
               security_group_ids:
-                Ref: SecurityGroupIds
+                Fn::If:
+                - HasSecurityGroupIds
+                - Ref: SecurityGroupIds
+                - []
             - type: use-default
         domains:
           Fn::If:
@@ -1825,13 +1855,22 @@ Resources:
             - vpcId:
                 Ref: VpcId
               publicSubnetIds:
-                Ref: PublicSubnetIds
+                Fn::If:
+                - HasPublicSubnetIds
+                - Ref: PublicSubnetIds
+                - []
               privateSubnetIds:
-                Ref: PrivateSubnetIds
+                Fn::If:
+                - HasPrivateSubnetIds
+                - Ref: PrivateSubnetIds
+                - []
               securityGroupId:
-                Fn::Select:
-                - 0
-                - Ref: SecurityGroupIds
+                Fn::If:
+                - HasSecurityGroupIds
+                - Fn::Select:
+                  - 0
+                  - Ref: SecurityGroupIds
+                - Ref: AWS::NoValue
               availabilityZones: []
               isByoVpc: true
             - publicSubnetIds: []
@@ -2085,11 +2124,20 @@ Outputs:
               vpc_id:
                 Ref: VpcId
               public_subnet_ids:
-                Ref: PublicSubnetIds
+                Fn::If:
+                - HasPublicSubnetIds
+                - Ref: PublicSubnetIds
+                - []
               private_subnet_ids:
-                Ref: PrivateSubnetIds
+                Fn::If:
+                - HasPrivateSubnetIds
+                - Ref: PrivateSubnetIds
+                - []
               security_group_ids:
-                Ref: SecurityGroupIds
+                Fn::If:
+                - HasSecurityGroupIds
+                - Ref: SecurityGroupIds
+                - []
             - type: use-default
         domains:
           Fn::If:
@@ -2179,13 +2227,22 @@ Outputs:
             - vpcId:
                 Ref: VpcId
               publicSubnetIds:
-                Ref: PublicSubnetIds
+                Fn::If:
+                - HasPublicSubnetIds
+                - Ref: PublicSubnetIds
+                - []
               privateSubnetIds:
-                Ref: PrivateSubnetIds
+                Fn::If:
+                - HasPrivateSubnetIds
+                - Ref: PrivateSubnetIds
+                - []
               securityGroupId:
-                Fn::Select:
-                - 0
-                - Ref: SecurityGroupIds
+                Fn::If:
+                - HasSecurityGroupIds
+                - Fn::Select:
+                  - 0
+                  - Ref: SecurityGroupIds
+                - Ref: AWS::NoValue
               availabilityZones: []
               isByoVpc: true
             - publicSubnetIds: []

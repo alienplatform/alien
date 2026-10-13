@@ -542,15 +542,15 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> Expression {
     };
     match &network.settings {
         NetworkSettings::Create { .. } if stack_has_setup_postgres(ctx) => expr::raw(format!(
-            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : data.aws_subnets.{label}_default[0].ids"
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : data.aws_subnets.{label}_default[0].ids"
         )),
         NetworkSettings::Create { .. } => expr::raw(format!(
-            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []"
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : []"
         )),
         NetworkSettings::UseDefault => {
             expr::raw(format!("data.aws_subnets.{label}_default.ids"))
         }
-        NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_private_subnet_ids")),
+        NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("compact([for id in var.{label}_private_subnet_ids : trimspace(id)])")),
         _ => expr::raw("[]"),
     }
 }
@@ -562,9 +562,9 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> Expression {
     };
     match &network.settings {
         NetworkSettings::Create { .. } => expr::raw(format!(
-            "var.network_mode == \"create-new\" ? [aws_security_group.{label}_workload[0].id] : var.network_mode == \"use-existing\" ? var.security_group_ids : []"
+            "var.network_mode == \"create-new\" ? [aws_security_group.{label}_workload[0].id] : var.network_mode == \"use-existing\" ? compact([for id in var.security_group_ids : trimspace(id)]) : []"
         )),
-        NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_security_group_ids")),
+        NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("compact([for id in var.{label}_security_group_ids : trimspace(id)])")),
         _ => expr::raw("[]"),
     }
 }

@@ -118,11 +118,14 @@ pub enum NetworkSettings {
         /// The ID of the existing VPC
         vpc_id: String,
         /// IDs of public subnets (required for public ingress)
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         public_subnet_ids: Vec<String>,
         /// IDs of private subnets
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         private_subnet_ids: Vec<String>,
         /// Optional security group IDs to use
         #[serde(default)]
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         security_group_ids: Vec<String>,
     },
 

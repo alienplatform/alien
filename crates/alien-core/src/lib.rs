@@ -130,6 +130,7 @@ pub mod file_utils;
 pub mod image_rewrite;
 pub mod import;
 pub mod instance_catalog;
+pub mod network_ids;
 pub use import::*;
 
 pub use alien_macros::alien_event;
