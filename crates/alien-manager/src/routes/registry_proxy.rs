@@ -38,7 +38,10 @@ use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
 };
 use alien_bindings::BindingsProviderApi;
-use alien_core::Platform;
+use alien_core::{
+    classify_azure_sandbox_image, image_rewrite::strip_registry_host, AzureSandboxImage, Container,
+    ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, Worker, WorkerCode,
+};
 
 use super::AppState;
 use crate::auth::{Role, Scope, Subject};
@@ -1401,7 +1404,7 @@ async fn validate_pull_access(
         let proxy_host = state.config.base_url();
         let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
         let routes = &state.registry_routing_table;
-        let own_repo = |repo: &str| sandbox_repo_in_own_project(routes, repo, own_project);
+        let own_repo = |repo: &str| image_repo_in_own_project(routes, repo, own_project);
         let repos = release
             .stacks
             .values()
@@ -1430,35 +1433,24 @@ async fn validate_pull_access(
     Ok(())
 }
 
-/// Whether a Sandbox's image repo may enter the release's list: only one in the deployment's own
-/// project, so a Sandbox naming another project's repo cannot open it to this deployment's token.
+/// Whether an image repo may enter the release's list: only one in the deployment's own
+/// project, so naming another project's repo cannot open it to this deployment's token.
 /// An unattributable repo counts as "default", as a push to it does.
-fn sandbox_repo_in_own_project(
-    routes: &RegistryRoutingTable,
-    repo: &str,
-    own_project: &str,
-) -> bool {
+fn image_repo_in_own_project(routes: &RegistryRoutingTable, repo: &str, own_project: &str) -> bool {
     routes.project_id_for_repo(repo).unwrap_or("default") == own_project
 }
 
 /// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
-/// registry host, the only one a sandbox image is pulled through, and `sandbox_repo_allowed`
-/// filters the repos a sandbox image may add.
+/// registry host, the only one a sandbox image is pulled through, and `repo_allowed`
+/// filters the repos any image resource may add.
 fn extract_repo_names(
     stack: &alien_core::Stack,
     proxy_host: &str,
-    sandbox_repo_allowed: &dyn Fn(&str) -> bool,
+    repo_allowed: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
-    use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{
-        classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
-        DaemonCode, Sandbox, SandboxCode, Worker, WorkerCode,
-    };
-
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
-        let mut from_sandbox = false;
         let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
                 WorkerCode::Image { image } => Some(image.as_str()),
@@ -1484,7 +1476,6 @@ fn extract_repo_names(
                             .split_once('/')
                             .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host)) =>
                     {
-                        from_sandbox = true;
                         Some(reference)
                     }
                     _ => None,
@@ -1499,7 +1490,7 @@ fn extract_repo_names(
             if let Some(stripped) = strip_registry_host(image_uri) {
                 let repo = stripped.split(':').next().unwrap_or(&stripped);
                 let repo = repo.split('@').next().unwrap_or(repo);
-                if from_sandbox && !sandbox_repo_allowed(repo) {
+                if !repo_allowed(repo) {
                     continue;
                 }
                 if !repo.is_empty() && !repos.contains(&repo.to_string()) {
@@ -2274,18 +2265,18 @@ mod tests {
             RegistryRoutingTable::new(vec![registry_route("artifacts", Platform::Aws, "aws")])
                 .unwrap();
 
-        assert!(sandbox_repo_in_own_project(
+        assert!(image_repo_in_own_project(
             &routes,
             "artifacts/prj_a",
             "prj_a"
         ));
-        assert!(!sandbox_repo_in_own_project(
+        assert!(!image_repo_in_own_project(
             &routes,
             "artifacts/prj_b",
             "prj_a"
         ));
-        assert!(!sandbox_repo_in_own_project(&routes, "elsewhere", "prj_a"));
-        assert!(sandbox_repo_in_own_project(&routes, "elsewhere", "default"));
+        assert!(!image_repo_in_own_project(&routes, "elsewhere", "prj_a"));
+        assert!(image_repo_in_own_project(&routes, "elsewhere", "default"));
     }
 
     #[test]
