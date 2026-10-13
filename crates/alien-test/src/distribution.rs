@@ -62,6 +62,7 @@ pub enum DistributionArtifactCleanup {
         stack_name: String,
         region: String,
         env: Vec<(String, String)>,
+        template_bucket: Option<String>,
         retained_resources: Vec<ImportedResource>,
         workdir: Option<TempDir>,
     },
@@ -153,6 +154,7 @@ impl DistributionArtifactCleanup {
                 stack_name,
                 region,
                 env,
+                template_bucket,
                 retained_resources,
                 workdir,
             } => {
@@ -234,6 +236,10 @@ impl DistributionArtifactCleanup {
                         "CloudFormation stack '{stack_name}' was deleted, but retained resources [{retained_ids}] still need cleanup: {error}{}",
                         recovery_workdir_suffix(workdir.as_deref())
                     );
+                }
+
+                if let Some(bucket) = template_bucket {
+                    remove_cloudformation_template_bucket(&bucket, &region, &env).await?;
                 }
 
                 Ok(())
@@ -340,6 +346,24 @@ fn recovery_workdir_suffix(workdir: Option<&Path>) -> String {
     workdir
         .map(|path| format!("; workdir retained at {}", path.display()))
         .unwrap_or_default()
+}
+
+async fn remove_cloudformation_template_bucket(
+    bucket: &str,
+    region: &str,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    let mut remove = Command::new("aws");
+    remove.args([
+        "s3",
+        "rb",
+        &format!("s3://{bucket}"),
+        "--force",
+        "--region",
+        region,
+    ]);
+    apply_env(&mut remove, env);
+    run_command(remove, "aws s3 rb CloudFormation template bucket").await
 }
 
 async fn cleanup_after_setup_error(
@@ -1205,10 +1229,50 @@ async fn run_cloudformation_aws(
         .await
         .context("Failed to write CloudFormation template")?;
 
+    // CreateStack accepts only 51,200 inline bytes. Own-environment templates
+    // include management permissions and exceed that limit; use the same S3
+    // template URL path as a customer launching from the dashboard.
+    let template_bucket = if fs::metadata(&template_path).await?.len() > 51_200 {
+        let bucket = format!("{stack_name}-template");
+        let mut create_bucket = Command::new("aws");
+        create_bucket.args([
+            "s3",
+            "mb",
+            &format!("s3://{bucket}"),
+            "--region",
+            &target.region,
+        ]);
+        apply_env(&mut create_bucket, &env);
+        run_command(create_bucket, "aws s3 mb CloudFormation template bucket").await?;
+        Some(bucket)
+    } else {
+        None
+    };
+
+    if let Some(bucket) = &template_bucket {
+        let mut upload = Command::new("aws");
+        upload.args([
+            "s3",
+            "cp",
+            &template_path.to_string_lossy(),
+            &format!("s3://{bucket}/template.yaml"),
+            "--region",
+            &target.region,
+        ]);
+        apply_env(&mut upload, &env);
+        if let Err(error) = run_command(upload, "aws s3 cp CloudFormation template").await {
+            remove_cloudformation_template_bucket(bucket, &target.region, &env)
+                .await
+                .context("CloudFormation template upload failed and bucket cleanup failed")?;
+            return Err(error);
+        }
+    }
+
     let cleanup = DistributionArtifactCleanup::CloudFormation {
         stack_name: stack_name.clone(),
         region: target.region.clone(),
         env: env.clone(),
+        template_bucket: template_bucket.clone(),
         retained_resources: Vec::new(),
         workdir: Some(workdir),
     };
@@ -1230,8 +1294,6 @@ async fn run_cloudformation_aws(
             "create-stack",
             "--stack-name",
             &stack_name,
-            "--template-body",
-            &format!("file://{}", template_path.display()),
             "--capabilities",
             "CAPABILITY_IAM",
             "CAPABILITY_NAMED_IAM",
@@ -1239,6 +1301,20 @@ async fn run_cloudformation_aws(
             "--region",
             &target.region,
         ]);
+        if let Some(bucket) = &template_bucket {
+            create.args([
+                "--template-url",
+                &format!(
+                    "https://{bucket}.s3.{}.amazonaws.com/template.yaml",
+                    target.region
+                ),
+            ]);
+        } else {
+            create.args([
+                "--template-body",
+                &format!("file://{}", template_path.display()),
+            ]);
+        }
         let parameters: Vec<String> = [
             ("Token", prepared.dg_token.as_str()),
             ("ManagingRoleArn", role_arn.as_str()),
@@ -1285,6 +1361,7 @@ async fn run_cloudformation_aws(
                 stack_name,
                 region: target.region.clone(),
                 env,
+                template_bucket,
                 retained_resources,
                 workdir: None,
             };
@@ -1317,6 +1394,7 @@ async fn run_cloudformation_k8s(
         stack_name: stack_name.clone(),
         region: target.region.clone(),
         env: env.clone(),
+        template_bucket: None,
         retained_resources: Vec::new(),
         workdir: Some(workdir),
     };
