@@ -62,13 +62,26 @@ impl CloudWatchClient {
         }
     }
 
-    async fn send_json<T: DeserializeOwned + Send + 'static>(
+    async fn send_query<T: DeserializeOwned + Send + 'static>(
         &self,
-        target: &str,
         body: String,
         operation: &str,
         resource: &str,
     ) -> Result<T> {
+        let value: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+            alien_error::AlienError::new(ErrorData::InvalidClientConfig {
+                message: error.to_string(),
+                errors: None,
+            })
+        })?;
+        let mut params = vec![
+            ("Action".to_string(), operation.to_string()),
+            ("Version".to_string(), "2010-08-01".to_string()),
+        ];
+        query_parameters("", &value, &mut params);
+        let body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
         self.credentials.ensure_fresh().await?;
         let url = format!("{}/", self.get_base_url().trim_end_matches('/'));
 
@@ -76,13 +89,12 @@ impl CloudWatchClient {
             .client
             .post(&url)
             .host(&self.host())
-            .header("X-Amz-Target", target)
-            .content_type_amz_json()
+            .content_type_form()
             .content_sha256(&body)
             .body(body.clone());
 
         let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
 
         Self::map_result(result, operation, resource, Some(&body))
     }
@@ -122,7 +134,12 @@ impl CloudWatchClient {
         resource: &str,
         request_body: Option<&str>,
     ) -> Option<ErrorData> {
-        let parsed: Option<CloudWatchErrorResponse> = serde_json::from_str(body).ok();
+        let parsed: Option<CloudWatchErrorResponse> =
+            serde_json::from_str(body).ok().or_else(|| {
+                quick_xml::de::from_str::<QueryErrorEnvelope>(body)
+                    .ok()
+                    .map(|response| response.error)
+            });
         let code = parsed
             .as_ref()
             .map(|error| error.code.trim_start_matches('#'))
@@ -174,13 +191,10 @@ impl CloudWatchApi for CloudWatchClient {
             })
         })?;
 
-        self.send_json(
-            GET_METRIC_DATA_TARGET,
-            body,
-            "GetMetricData",
-            "cloudwatch metrics",
-        )
-        .await
+        let response: MetricDataEnvelope = self
+            .send_query(body, "GetMetricData", "cloudwatch metrics")
+            .await?;
+        response.result.into_response()
     }
 
     async fn list_metrics(&self, request: ListMetricsRequest) -> Result<ListMetricsResponse> {
@@ -191,13 +205,33 @@ impl CloudWatchApi for CloudWatchClient {
             })
         })?;
 
-        self.send_json(
-            LIST_METRICS_TARGET,
-            body,
-            "ListMetrics",
-            request.namespace.as_deref().unwrap_or("all namespaces"),
-        )
-        .await
+        let response: ListMetricsEnvelope = self
+            .send_query(
+                body,
+                "ListMetrics",
+                request.namespace.as_deref().unwrap_or("all namespaces"),
+            )
+            .await?;
+        Ok(ListMetricsResponse {
+            metrics: response
+                .result
+                .metrics
+                .map(|list| list.items)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|metric| Metric {
+                    namespace: metric.namespace,
+                    metric_name: metric.metric_name,
+                    dimensions: metric.dimensions.map(|list| list.items).unwrap_or_default(),
+                })
+                .collect(),
+            next_token: response.result.next_token,
+            owning_accounts: response
+                .result
+                .owning_accounts
+                .map(|list| list.items)
+                .unwrap_or_default(),
+        })
     }
 }
 
@@ -335,6 +369,12 @@ pub struct ListMetricsResponse {
     pub owning_accounts: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct QueryErrorEnvelope {
+    #[serde(rename = "Error")]
+    error: CloudWatchErrorResponse,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct CloudWatchErrorResponse {
@@ -344,124 +384,253 @@ struct CloudWatchErrorResponse {
     message: Option<String>,
 }
 
+/// CloudWatch uses the AWS Query protocol, including member-indexed lists.
+fn query_parameters(prefix: &str, value: &serde_json::Value, params: &mut Vec<(String, String)>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (name, value) in fields {
+                let key = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                query_parameters(&key, value, params);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                query_parameters(&format!("{prefix}.member.{}", index + 1), value, params);
+            }
+        }
+        serde_json::Value::Null => {}
+        serde_json::Value::Number(number) if prefix == "StartTime" || prefix == "EndTime" => {
+            let time = number
+                .as_i64()
+                .and_then(|time| chrono::DateTime::from_timestamp(time, 0))
+                .map(|time| time.to_rfc3339())
+                .unwrap_or_else(|| number.to_string());
+            params.push((prefix.into(), time));
+        }
+        serde_json::Value::String(value) => params.push((prefix.into(), value.clone())),
+        _ => params.push((prefix.into(), value.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+struct Members<T> {
+    #[serde(rename = "member", default)]
+    items: Vec<T>,
+}
+
+#[derive(Deserialize)]
+struct MetricDataEnvelope {
+    #[serde(rename = "GetMetricDataResult")]
+    result: MetricDataWire,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct MetricDataWire {
+    metric_data_results: Option<Members<MetricResultWire>>,
+    messages: Option<Members<MessageData>>,
+    next_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct MetricResultWire {
+    id: String,
+    label: Option<String>,
+    status_code: Option<String>,
+    timestamps: Option<Members<String>>,
+    values: Option<Members<f64>>,
+    messages: Option<Members<MessageData>>,
+}
+
+impl MetricDataWire {
+    fn into_response(self) -> Result<GetMetricDataResponse> {
+        let mut results = Vec::new();
+        for result in self
+            .metric_data_results
+            .map(|list| list.items)
+            .unwrap_or_default()
+        {
+            let mut timestamps = Vec::new();
+            for timestamp in result.timestamps.map(|list| list.items).unwrap_or_default() {
+                let parsed = chrono::DateTime::parse_from_rfc3339(&timestamp).map_err(|error| {
+                    alien_error::AlienError::new(ErrorData::InvalidClientConfig {
+                        message: format!("Invalid CloudWatch timestamp: {error}"),
+                        errors: None,
+                    })
+                })?;
+                timestamps.push(parsed.timestamp());
+            }
+            results.push(MetricDataResult {
+                id: result.id,
+                label: result.label,
+                status_code: result.status_code,
+                timestamps,
+                values: result.values.map(|list| list.items).unwrap_or_default(),
+                messages: result.messages.map(|list| list.items).unwrap_or_default(),
+            });
+        }
+        Ok(GetMetricDataResponse {
+            metric_data_results: results,
+            messages: self.messages.map(|list| list.items).unwrap_or_default(),
+            next_token: self.next_token,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct ListMetricsEnvelope {
+    #[serde(rename = "ListMetricsResult")]
+    result: ListMetricsWire,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ListMetricsWire {
+    metrics: Option<Members<MetricWire>>,
+    next_token: Option<String>,
+    owning_accounts: Option<Members<String>>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct MetricWire {
+    namespace: Option<String>,
+    metric_name: Option<String>,
+    dimensions: Option<Members<Dimension>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::{prelude::*, MockServer};
+    use std::collections::HashMap;
+
+    async fn client(server: &MockServer) -> CloudWatchClient {
+        let credentials = AwsCredentialProvider::from_config(AwsClientConfig {
+            account_id: "000000000000".into(),
+            region: "us-east-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test".into(),
+                secret_access_key: "test".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("monitoring".into(), server.base_url())]),
+            }),
+        })
+        .await
+        .unwrap();
+        CloudWatchClient::new(Client::new(), credentials)
+    }
 
     #[test]
-    fn get_metric_data_request_matches_aws_json_shape() {
-        let request = GetMetricDataRequest::builder()
-            .start_time(1_637_061_900)
-            .end_time(1_637_074_500)
-            .metric_data_queries(vec![MetricDataQuery::builder()
-                .id("m1".to_string())
-                .label("CPU".to_string())
-                .metric_stat(
-                    MetricStat::builder()
-                        .metric(
-                            Metric::builder()
-                                .namespace("AWS/EC2".to_string())
-                                .metric_name("CPUUtilization".to_string())
-                                .dimensions(vec![Dimension::builder()
-                                    .name("InstanceId".to_string())
-                                    .value("i-123".to_string())
-                                    .build()])
-                                .build(),
-                        )
-                        .period(300)
-                        .stat("Average".to_string())
-                        .build(),
-                )
-                .return_data(true)
-                .build()])
-            .build();
+    fn query_errors_preserve_provider_code_and_message() {
+        let mapped = CloudWatchClient::map_error(StatusCode::BAD_REQUEST,
+            "<ErrorResponse><Error><Code>InvalidNextToken</Code><Message>Expired next token</Message></Error></ErrorResponse>",
+            "ListMetrics", "metrics", None).unwrap();
+        assert!(
+            matches!(mapped, ErrorData::InvalidClientConfig { message, .. } if message == "Expired next token")
+        );
+    }
 
-        let encoded = serde_json::to_value(request).unwrap();
-
-        assert_eq!(
-            encoded,
-            json!({
-                "StartTime": 1637061900,
-                "EndTime": 1637074500,
-                "MetricDataQueries": [{
-                    "Id": "m1",
-                    "Label": "CPU",
-                    "MetricStat": {
-                        "Metric": {
-                            "Namespace": "AWS/EC2",
-                            "MetricName": "CPUUtilization",
-                            "Dimensions": [{ "Name": "InstanceId", "Value": "i-123" }]
+    #[tokio::test]
+    async fn get_metric_data_uses_query_protocol_and_decodes_real_xml_shape() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock_async(|when, then| {
+            when.method(POST).path("/").header("content-type", "application/x-www-form-urlencoded")
+                .body_contains("Action=GetMetricData").body_contains("Version=2010-08-01")
+                .body_contains("MetricDataQueries.member.1.MetricStat.Metric.Dimensions.member.1.Name=Class")
+                .body_contains("StartTime=2026-10-13T00%3A00%3A00%2B00%3A00");
+            then.status(200).body(r#"<GetMetricDataResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/"><GetMetricDataResult>
+                <MetricDataResults><member><Id>usage</Id><Label>ResourceCount</Label><StatusCode>Complete</StatusCode>
+                <Timestamps><member>2026-10-13T00:00:00Z</member></Timestamps><Values><member>12.0</member></Values>
+                <Messages><member><Code>Notice</Code><Value>test message</Value></member></Messages></member></MetricDataResults>
+                <NextToken>next-page</NextToken></GetMetricDataResult><ResponseMetadata><RequestId>test</RequestId></ResponseMetadata></GetMetricDataResponse>"#);
+        }).await;
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-10-13T00:00:00Z")
+            .unwrap()
+            .timestamp();
+        let response = client(&server)
+            .await
+            .get_metric_data(GetMetricDataRequest {
+                start_time: timestamp,
+                end_time: timestamp + 60,
+                metric_data_queries: vec![MetricDataQuery {
+                    id: "usage".into(),
+                    expression: None,
+                    label: None,
+                    period: None,
+                    return_data: Some(true),
+                    metric_stat: Some(MetricStat {
+                        metric: Metric {
+                            namespace: Some("AWS/Usage".into()),
+                            metric_name: Some("ResourceCount".into()),
+                            dimensions: vec![Dimension {
+                                name: "Class".into(),
+                                value: "Standard/OnDemand".into(),
+                            }],
                         },
-                        "Period": 300,
-                        "Stat": "Average"
-                    },
-                    "ReturnData": true
-                }]
+                        period: 60,
+                        stat: "Maximum".into(),
+                        unit: None,
+                    }),
+                }],
+                max_datapoints: None,
+                next_token: None,
+                scan_by: Some("TimestampDescending".into()),
             })
-        );
+            .await
+            .unwrap();
+        assert_eq!(response.next_token.as_deref(), Some("next-page"));
+        assert_eq!(response.metric_data_results.len(), 1);
+        let result = &response.metric_data_results[0];
+        assert_eq!(result.id, "usage");
+        assert_eq!(result.timestamps, vec![timestamp]);
+        assert_eq!(result.values, vec![12.0]);
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].code.as_deref(), Some("Notice"));
+        mock.assert_async().await;
     }
 
-    #[test]
-    fn list_metrics_request_matches_aws_json_shape() {
-        let request = ListMetricsRequest::builder()
-            .namespace("AWS/EC2".to_string())
-            .dimensions(vec![DimensionFilter::builder()
-                .name("InstanceId".to_string())
-                .build()])
-            .build();
-
-        let encoded = serde_json::to_value(request).unwrap();
-
-        assert_eq!(
-            encoded,
-            json!({
-                "Namespace": "AWS/EC2",
-                "Dimensions": [{ "Name": "InstanceId" }]
+    #[tokio::test]
+    async fn list_metrics_uses_member_filters_and_decodes_dimensions_and_pagination() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock_async(|when, then| {
+            when.method(POST).path("/").body_contains("Action=ListMetrics")
+                .body_contains("Dimensions.member.1.Name=Service");
+            then.status(200).body(r#"<ListMetricsResponse><ListMetricsResult>
+                <Metrics><member><Namespace>AWS/Usage</Namespace><MetricName>ResourceCount</MetricName>
+                <Dimensions><member><Name>Service</Name><Value>EC2</Value></member></Dimensions></member></Metrics>
+                <NextToken>next-page</NextToken><OwningAccounts><member>000000000000</member></OwningAccounts>
+                </ListMetricsResult></ListMetricsResponse>"#);
+        }).await;
+        let response = client(&server)
+            .await
+            .list_metrics(ListMetricsRequest {
+                namespace: Some("AWS/Usage".into()),
+                metric_name: None,
+                dimensions: vec![DimensionFilter {
+                    name: "Service".into(),
+                    value: Some("EC2".into()),
+                }],
+                next_token: None,
+                recently_active: None,
+                include_linked_accounts: None,
+                owning_account: None,
             })
-        );
-    }
-
-    #[test]
-    fn get_metric_data_response_parses_values() {
-        let response: GetMetricDataResponse = serde_json::from_value(json!({
-            "NextToken": "next",
-            "MetricDataResults": [{
-                "Id": "m1",
-                "Label": "CPU",
-                "StatusCode": "Complete",
-                "Timestamps": [1637074200],
-                "Values": [0.5]
-            }]
-        }))
-        .unwrap();
-
-        assert_eq!(response.next_token.as_deref(), Some("next"));
-        assert_eq!(response.metric_data_results[0].id, "m1");
-        assert_eq!(
-            response.metric_data_results[0].timestamps,
-            vec![1_637_074_200]
-        );
-        assert_eq!(response.metric_data_results[0].values, vec![0.5]);
-    }
-
-    #[test]
-    fn list_metrics_response_parses_metrics() {
-        let response: ListMetricsResponse = serde_json::from_value(json!({
-            "Metrics": [{
-                "Namespace": "AWS/EC2",
-                "MetricName": "CPUUtilization",
-                "Dimensions": [{ "Name": "InstanceId", "Value": "i-123" }]
-            }],
-            "OwningAccounts": ["111111111111"]
-        }))
-        .unwrap();
-
-        assert_eq!(response.metrics[0].namespace.as_deref(), Some("AWS/EC2"));
-        assert_eq!(
-            response.metrics[0].metric_name.as_deref(),
-            Some("CPUUtilization")
-        );
-        assert_eq!(response.owning_accounts, vec!["111111111111"]);
+            .await
+            .unwrap();
+        assert_eq!(response.next_token.as_deref(), Some("next-page"));
+        assert_eq!(response.metrics.len(), 1);
+        assert_eq!(response.metrics[0].namespace.as_deref(), Some("AWS/Usage"));
+        assert_eq!(response.metrics[0].dimensions.len(), 1);
+        assert_eq!(response.metrics[0].dimensions[0].value, "EC2");
+        assert_eq!(response.owning_accounts, vec!["000000000000"]);
+        mock.assert_async().await;
     }
 }
