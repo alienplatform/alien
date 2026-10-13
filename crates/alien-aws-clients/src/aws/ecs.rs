@@ -132,6 +132,18 @@ impl EcsClient {
                 .unwrap_or("");
             let message = format!("{code}: {detail}");
             let mapped = match code {
+                // ECS has no dedicated not-found code for this operation. Match the
+                // native missing-definition response narrowly; other ClientException
+                // failures must never make a durable owner forget a resource.
+                "ClientException"
+                    if operation == "DescribeTaskDefinition"
+                        && detail == "Unable to describe task definition." =>
+                {
+                    ErrorData::RemoteResourceNotFound {
+                        resource_type: "ECS task definition".into(),
+                        resource_name: operation.into(),
+                    }
+                }
                 "ClusterNotFoundException" | "ServiceNotFoundException" => {
                     ErrorData::RemoteResourceNotFound {
                         resource_type: "ECS resource".into(),

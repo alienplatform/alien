@@ -220,3 +220,49 @@ async fn cleanup_errors_distinguish_denial_absence_dependency_drain_and_bad_requ
         call.assert_hits_async(1).await;
     }
 }
+
+#[tokio::test]
+async fn only_exact_native_missing_definition_is_classified_as_absent() {
+    for (message, expected) in [
+        (
+            "Unable to describe task definition.",
+            "REMOTE_RESOURCE_NOT_FOUND",
+        ),
+        ("Invalid identifier", "INVALID_INPUT"),
+    ] {
+        let server = MockServer::start_async().await;
+        let call = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/").header(
+                    "x-amz-target",
+                    "AmazonEC2ContainerServiceV20141113.DescribeTaskDefinition",
+                );
+                then.status(400)
+                    .json_body(json!({"__type": "ClientException", "message": message}));
+            })
+            .await;
+        let error = client(&server)
+            .describe_task_definition(
+                DescribeTaskDefinitionRequest::builder()
+                    .task_definition("owned:1".into())
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected);
+        call.assert_hits_async(1).await;
+    }
+    let server = MockServer::start_async().await;
+    let call = server.mock_async(|when, then| {
+        when.method(POST).path("/").header("x-amz-target", "AmazonEC2ContainerServiceV20141113.DeleteTaskDefinitions");
+        then.status(400).json_body(json!({"__type": "ClientException", "message": "Unable to describe task definition."}));
+    }).await;
+    let error = client(&server)
+        .delete_task_definitions(DeleteTaskDefinitionsRequest {
+            task_definitions: vec!["owned:1".into()],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "INVALID_INPUT");
+    call.assert_hits_async(1).await;
+}
