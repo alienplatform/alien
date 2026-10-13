@@ -349,3 +349,91 @@ async fn ambiguous_private_api_creation_is_not_blindly_resent_by_sdk() {
         .unwrap_err();
     committed.assert_hits(1);
 }
+
+#[tokio::test]
+async fn discovery_retains_provider_ids_tags_configuration_and_opaque_cursors() {
+    let server = MockServer::start_async().await;
+    let api = client(&server);
+    let cursor = "opaque+/cursor=";
+    let rest = json!({"id":"owned-api","name":"private-worker","rootResourceId":"root-owned",
+        "tags":{"CreateAttempt":"attempt-1"},"endpointConfiguration":{"types":["PRIVATE"],"vpcEndpointIds":["vpce-owned"]},
+        "policy":"{\"Statement\":[]}","disableExecuteApiEndpoint":true});
+    let list_apis = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/restapis")
+                .header("accept", "application/json")
+                .query_param("limit", "500")
+                .query_param("position", cursor);
+            then.status(200)
+                .json_body(json!({"item":[rest],"position":cursor}));
+        })
+        .await;
+    let get_api = server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/restapis/owned-api")
+                .header("accept", "application/json");
+            then.status(200).json_body(rest.clone());
+        })
+        .await;
+    let domains = server.mock_async(|when,then| {
+        when.method(GET).path("/domainnames").header("accept","application/json").query_param("limit","500").query_param("resourceOwner","SELF").query_param("position",cursor);
+        then.status(200).json_body(json!({"item":[
+            {"domainName":"api.example.com","tags":{"CreateAttempt":"foreign-attempt"}},
+            {"domainName":"api.example.com","domainNameId":"private-id","domainNameArn":"owned-private-domain-arn","tags":{"CreateAttempt":"attempt-1"}}
+        ],"position":cursor}));
+    }).await;
+    let page = api.get_rest_apis(Some(cursor.to_string())).await.unwrap();
+    assert_eq!(page.position.as_deref(), Some(cursor));
+    assert_eq!(page.items.len(), 1);
+    let details = api
+        .get_rest_api_details(page.items[0].id.as_deref().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&details).unwrap().get("tags"),
+        Some(&json!({"CreateAttempt":"attempt-1"}))
+    );
+    assert_eq!(details.disable_execute_api_endpoint, Some(true));
+    let endpoint = details.endpoint_configuration.unwrap();
+    assert_eq!(endpoint.types, ["PRIVATE"]);
+    assert_eq!(endpoint.vpc_endpoint_ids, ["vpce-owned"]);
+    let page = api
+        .get_domain_names(Some(cursor.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(page.position.as_deref(), Some(cursor));
+    assert_eq!(page.items.len(), 2);
+    assert!(page.items[0].domain_name_id.is_none());
+    assert_eq!(page.items[1].domain_name_id.as_deref(), Some("private-id"));
+    assert_eq!(
+        page.items[1]
+            .tags
+            .as_ref()
+            .unwrap()
+            .get("CreateAttempt")
+            .map(String::as_str),
+        Some("attempt-1")
+    );
+    for request in [&list_apis, &get_api, &domains] {
+        request.assert_hits(1);
+    }
+}
+
+#[tokio::test]
+async fn unexpected_hypermedia_collections_fail_instead_of_hiding_owned_children() {
+    let server = MockServer::start_async().await;
+    let unexpected = server
+        .mock_async(|when, then| {
+            when.method(GET).header("accept", "application/json");
+            then.status(200)
+                .json_body(json!({"_embedded":{"item":[{"id":"owned-api"}]},"_links":{}}));
+        })
+        .await;
+    let api = client(&server);
+    assert!(api.get_rest_apis(None).await.is_err());
+    assert!(api.get_domain_names(None).await.is_err());
+    assert!(api.get_domain_name_access_associations(None).await.is_err());
+    unexpected.assert_hits(3);
+}

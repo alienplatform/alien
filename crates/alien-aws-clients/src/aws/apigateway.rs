@@ -1,7 +1,7 @@
 //! AWS API Gateway V1 (REST API) Client
 //!
 //! Minimal REST API control-plane operations for a streaming Lambda proxy with a
-//! REGIONAL custom domain. REST V1 (unlike the V2 HTTP API) supports response
+//! REGIONAL or PRIVATE custom domain. REST V1 (unlike the V2 HTTP API) supports response
 //! streaming via `responseTransferMode: STREAM`, which is why a streaming worker
 //! that needs a custom domain is served here rather than through a Function URL.
 
@@ -44,6 +44,10 @@ pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
         request: CreatePrivateRestApiRequest,
     ) -> Result<RestApi>;
     async fn get_rest_api(&self, rest_api_id: &str) -> Result<RestApi>;
+    async fn get_rest_api_details(&self, rest_api_id: &str) -> Result<RestApiDetails>;
+    async fn get_rest_apis(&self, position: Option<String>) -> Result<RestApisPage>;
+    /// Account-owned domains, including public entries without a domainNameId.
+    async fn get_domain_names(&self, position: Option<String>) -> Result<DomainNamesPage>;
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()>;
 
     async fn create_resource(
@@ -200,6 +204,7 @@ impl ApiGatewayClient {
             .client
             .request(method, &url)
             .host(&self.host())
+            .header("Accept", "application/json")
             .content_type_json();
 
         if let Some(body) = body {
@@ -230,6 +235,7 @@ impl ApiGatewayClient {
             .client
             .request(method, &url)
             .host(&self.host())
+            .header("Accept", "application/json")
             .content_type_json();
 
         let result = if let Some(body) = body {
@@ -409,6 +415,36 @@ impl ApiGatewayApi for ApiGatewayClient {
         let path = format!("/restapis/{}", rest_api_id);
         self.send_json(Method::GET, &path, None, "GetRestApi", rest_api_id)
             .await
+    }
+
+    async fn get_rest_api_details(&self, rest_api_id: &str) -> Result<RestApiDetails> {
+        let path = format!("/restapis/{}", urlencoding::encode(rest_api_id));
+        self.send_json(Method::GET, &path, None, "GetRestApi", rest_api_id)
+            .await
+    }
+
+    async fn get_rest_apis(&self, position: Option<String>) -> Result<RestApisPage> {
+        let path = collection_path("/restapis?limit=500", position);
+        self.send_json(
+            Method::GET,
+            &path,
+            None,
+            "GetRestApis",
+            "REST API collection",
+        )
+        .await
+    }
+
+    async fn get_domain_names(&self, position: Option<String>) -> Result<DomainNamesPage> {
+        let path = collection_path("/domainnames?limit=500&resourceOwner=SELF", position);
+        self.send_json(
+            Method::GET,
+            &path,
+            None,
+            "GetDomainNames",
+            "account-owned domains",
+        )
+        .await
     }
 
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()> {
@@ -660,11 +696,10 @@ impl ApiGatewayApi for ApiGatewayClient {
         &self,
         position: Option<String>,
     ) -> Result<DomainNameAccessAssociationsPage> {
-        let mut path = "/domainnameaccessassociations?limit=500&resourceOwner=SELF".to_string();
-        if let Some(position) = position {
-            path.push_str("&position=");
-            path.push_str(&urlencoding::encode(&position));
-        }
+        let path = collection_path(
+            "/domainnameaccessassociations?limit=500&resourceOwner=SELF",
+            position,
+        );
         self.send_json(
             Method::GET,
             &path,
@@ -738,9 +773,55 @@ pub struct DomainNameAccessAssociation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainNameAccessAssociationsPage {
-    #[serde(default, rename = "item")]
+    #[serde(rename = "item")]
     pub items: Vec<DomainNameAccessAssociation>,
     pub position: Option<String>,
+}
+
+/// Only the JSON collection format is accepted. Never turn an unexpected HAL
+/// payload into an empty result: that could hide a committed lost-response create.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestApisPage {
+    #[serde(rename = "item")]
+    pub items: Vec<RestApiDetails>,
+    pub position: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainNamesPage {
+    #[serde(rename = "item")]
+    pub items: Vec<PrivateDomainName>,
+    pub position: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestApiDetails {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub root_resource_id: Option<String>,
+    pub endpoint_configuration: Option<RestApiEndpointConfiguration>,
+    pub disable_execute_api_endpoint: Option<bool>,
+    pub policy: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestApiEndpointConfiguration {
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub vpc_endpoint_ids: Vec<String>,
+    pub ip_address_type: Option<String>,
+}
+
+fn collection_path(base: &str, position: Option<String>) -> String {
+    match position {
+        Some(position) => format!("{base}&position={}", urlencoding::encode(&position)),
+        None => base.to_string(),
+    }
 }
 
 /// Private-domain query IDs are mandatory; an omitted ID can select a public
