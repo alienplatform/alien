@@ -1,7 +1,7 @@
 //! One generation's exact private API invocation grant on a retained Lambda.
 
 use alien_aws_clients::lambda::{AddPermissionRequest, LambdaApi, RemovePermissionRequest};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;

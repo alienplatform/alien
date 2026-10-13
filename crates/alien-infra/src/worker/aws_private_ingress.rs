@@ -21,15 +21,15 @@ use alien_aws_clients::{
     iam::IamApi,
     lambda::LambdaApi,
 };
-use alien_core::standard_resource_tags;
+use alien_core::{standard_resource_tags, Network, ResourceRef, Worker};
 use alien_error::{AlienError, Context, ContextError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
     aws_gateway_cluster::GatewayCluster,
-    aws_gateway_permission::GatewayPermission,
     aws_gateway_config::{bootstrap, GatewaySpec, GATEWAY_HEALTH_PORT, GATEWAY_HTTP_PORT},
+    aws_gateway_permission::GatewayPermission,
     aws_gateway_service::GatewayService,
     aws_gateway_task::GatewayTask,
     aws_private_endpoint::{EndpointPlan, PrivateEndpoint},
@@ -39,7 +39,8 @@ use crate::core::aws_tag_scoped::{
     is_remote_not_found, preserve_composite_cleanup_error, CREATE_ATTEMPT_TAG,
 };
 use crate::{
-    AwsPreparedVmFrontend, AwsVmFrontend, AwsVmFrontendPlan, AwsVmSecurityGroup, ErrorData, Result,
+    AwsPreparedVmFrontend, AwsVmFrontend, AwsVmFrontendPlan, AwsVmSecurityGroup, ErrorData,
+    ResourceControllerContext, Result,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,53 +170,13 @@ impl PrivateWorkerIngress {
             .ok_or_else(|| invalid("Private gateway cluster receipt is missing"))?
             .validate_setup(clients.iam)
             .await?;
-        for selected in [&self.plan.private_subnets, &self.plan.gateway_subnets] {
-            let response = clients
-                .ec2
-                .describe_subnets(
-                    DescribeSubnetsRequest::builder()
-                        .subnet_ids(selected.clone())
-                        .build(),
-                )
-                .await
-                .context(cloud("Read private gateway setup subnets"))?;
-            if response.next_token.is_some() {
-                return Err(invalid(
-                    "Private gateway setup subnet inventory is incomplete",
-                ));
-            }
-            let subnets = response
-                .subnet_set
-                .ok_or_else(|| invalid("Private gateway setup subnets are missing"))?
-                .items;
-            let mut ids = BTreeSet::new();
-            let mut zones = BTreeSet::new();
-            for subnet in subnets {
-                let id = subnet
-                    .subnet_id
-                    .ok_or_else(|| invalid("Private gateway subnet ID is missing"))?;
-                if !selected.contains(&id)
-                    || !ids.insert(id)
-                    || subnet.vpc_id.as_deref() != Some(&self.plan.vpc_id)
-                    || subnet.state.as_deref() != Some("available")
-                {
-                    return Err(invalid(
-                        "Private gateway setup subnets changed network, identity or availability",
-                    ));
-                }
-                zones.insert(
-                    subnet.availability_zone_id.ok_or_else(|| {
-                        invalid("Private gateway subnet physical zone is missing")
-                    })?,
-                );
-            }
-            if ids.len() != selected.len() || zones.len() != selected.len() {
-                return Err(invalid(
-                    "Private gateway requires complete subnet membership in two physical zones",
-                ));
-            }
-        }
-        Ok(())
+        validate_subnets(
+            clients.ec2,
+            &self.plan.vpc_id,
+            &self.plan.private_subnets,
+            &self.plan.gateway_subnets,
+        )
+        .await
     }
 
     /// Discover the owned API before preparing its invocation grant and ingress.
@@ -275,9 +236,12 @@ impl PrivateWorkerIngress {
             )?);
             return Ok(None);
         }
-        if !self.permission.as_mut()
+        if !self
+            .permission
+            .as_mut()
             .ok_or_else(|| invalid("Private invocation permission receipt missing"))?
-            .step_prepare(clients.lambda).await?
+            .step_prepare(clients.lambda)
+            .await?
         {
             return Ok(None);
         }
@@ -697,6 +661,111 @@ impl PrivateWorkerIngress {
         }
         Ok(true)
     }
+}
+
+/// Validate Frozen prerequisites before the worker changes code, configuration,
+/// logs, or its function. Public-only workers do not require gateway setup.
+pub(super) async fn validate_worker_setup(
+    ctx: &ResourceControllerContext<'_>,
+    worker: &Worker,
+) -> Result<()> {
+    if worker.public_endpoints.is_empty()
+        || !ctx
+            .deployment_config
+            .stack_settings
+            .endpoint_access
+            .private_enabled()
+    {
+        return Ok(());
+    }
+    let network = ctx.require_dependency::<crate::network::AwsNetworkController>(
+        &ResourceRef::new(Network::RESOURCE_TYPE, "default-network".into()),
+    )?;
+    let vpc_id = network
+        .vpc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| invalid("Private worker gateway requires setup with a VPC"))?;
+    let aws = ctx.get_aws_config()?;
+    let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
+    let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
+    GatewayCluster::new(
+        &aws.account_id,
+        &aws.region,
+        ctx.resource_prefix,
+        &worker.id,
+    )?
+    .validate_setup(iam.as_ref())
+    .await?;
+    validate_subnets(
+        ec2.as_ref(),
+        vpc_id,
+        &network.private_subnet_ids,
+        &network.public_subnet_ids,
+    )
+    .await
+}
+
+async fn validate_subnets(
+    ec2: &dyn Ec2Api,
+    vpc_id: &str,
+    private_subnets: &[String],
+    gateway_subnets: &[String],
+) -> Result<()> {
+    for selected in [private_subnets, gateway_subnets] {
+        if selected.len() < 2
+            || selected.iter().any(String::is_empty)
+            || selected.iter().collect::<BTreeSet<_>>().len() != selected.len()
+        {
+            return Err(invalid(
+                "Private worker gateway requires setup with distinct subnets in two zones",
+            ));
+        }
+        let response = ec2
+            .describe_subnets(
+                DescribeSubnetsRequest::builder()
+                    .subnet_ids(selected.to_vec())
+                    .build(),
+            )
+            .await
+            .context(cloud("Read private gateway setup subnets"))?;
+        if response.next_token.is_some() {
+            return Err(invalid(
+                "Private gateway setup subnet inventory is incomplete",
+            ));
+        }
+        let subnets = response
+            .subnet_set
+            .ok_or_else(|| invalid("Private gateway setup subnets are missing"))?
+            .items;
+        let mut ids = BTreeSet::new();
+        let mut zones = BTreeSet::new();
+        for subnet in subnets {
+            let id = subnet
+                .subnet_id
+                .ok_or_else(|| invalid("Private gateway subnet ID is missing"))?;
+            if !selected.contains(&id)
+                || !ids.insert(id)
+                || subnet.vpc_id.as_deref() != Some(vpc_id)
+                || subnet.state.as_deref() != Some("available")
+            {
+                return Err(invalid(
+                    "Private gateway setup subnets changed network, identity or availability",
+                ));
+            }
+            zones.insert(
+                subnet
+                    .availability_zone_id
+                    .ok_or_else(|| invalid("Private gateway subnet physical zone is missing"))?,
+            );
+        }
+        if ids.len() != selected.len() || zones.len() != selected.len() {
+            return Err(invalid(
+                "Private gateway requires complete subnet membership in two physical zones",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Every group has one exact ingress rule. Refuse drift rather than accepting a

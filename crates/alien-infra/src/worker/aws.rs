@@ -532,6 +532,7 @@ impl AwsWorkerController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let cfg = ctx.desired_resource_config::<Worker>()?;
+        super::aws_private_ingress::validate_worker_setup(ctx, &cfg).await?;
         info!(name=%cfg.id, code=?cfg.code, "Initiating creation");
 
         // Product limitation: Only allow at most one queue trigger per worker
@@ -2697,6 +2698,7 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
+        super::aws_private_ingress::validate_worker_setup(ctx, &current_config).await?;
         let code_changed = current_config.code != previous_config.code;
 
         // UpdateCodeStart only handles code updates if needed
@@ -5349,6 +5351,67 @@ mod tests {
         AwsWorkerState,
     };
     use alien_core::standard_resource_tags;
+
+    #[tokio::test]
+    async fn private_setup_failure_precedes_parent_create_and_code_updates() {
+        for updating in [false, true] {
+            for missing_role in [false, true] {
+                let lambda = Arc::new(MockLambdaApi::new());
+                let mut iam = MockIamApi::new();
+                iam.expect_get_role().times(1).returning(move |name| {
+                    assert_eq!(name, "AWSServiceRoleForECS");
+                    if missing_role {
+                        return Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "role".into(), resource_name: name.into(),
+                        }));
+                    }
+                    Ok(serde_json::from_value(serde_json::json!({"GetRoleResult":{"Role":{
+                        "Path":"/aws-service-role/ecs.amazonaws.com/", "RoleName":"AWSServiceRoleForECS",
+                        "RoleId":"owned-role", "Arn":"arn:aws:iam::123456789012:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS",
+                        "CreateDate":"2026-01-01T00:00:00Z"
+                    }}})).unwrap())
+                });
+                let iam = Arc::new(iam);
+                let mut ec2 = MockEc2Api::new();
+                if !missing_role {
+                    ec2.expect_describe_subnets().times(1).returning(|request| {
+                        let subnets = request.subnet_ids.unwrap();
+                        Ok(serde_json::from_value(serde_json::json!({"subnetSet":{"item":subnets.into_iter().map(|id| serde_json::json!({
+                            "subnetId":id, "vpcId":"vpc-foreign", "state":"available", "availabilityZoneId":"use1-az1"
+                        })).collect::<Vec<_>>()}})).unwrap())
+                    });
+                }
+                let ec2 = Arc::new(ec2);
+                let mut provider = MockPlatformServiceProvider::new();
+                provider.expect_get_aws_lambda_client().returning(move |_| Ok(lambda.clone()));
+                provider.expect_get_aws_iam_client().returning(move |_| Ok(iam.clone()));
+                provider.expect_get_aws_ec2_client().returning(move |_| Ok(ec2.clone()));
+                let previous = function_public_ingress();
+                let mut desired = previous.clone();
+                desired.code = WorkerCode::Image { image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/new:version".into() };
+                let controller = if updating {
+                    let mut controller = AwsWorkerController::mock_ready("test-public-func");
+                    controller.state = AwsWorkerState::UpdateCodeStart;
+                    controller
+                } else { AwsWorkerController::default() };
+                let expected_arn = controller.arn.clone();
+                let mut executor = SingleControllerExecutor::builder()
+                    .resource(desired).previous_resource(previous).controller(controller)
+                    .platform(Platform::Aws).service_provider(Arc::new(provider))
+                    .stack_settings(StackSettings { endpoint_access: alien_core::EndpointAccess::Both, ..Default::default() })
+                    .with_dependency(alien_core::Network {
+                        id: "default-network".into(),
+                        settings: NetworkSettings::Create { cidr: None, availability_zones: 2 },
+                    }, crate::network::AwsNetworkController::mock_ready("vpc-owned", 2))
+                    .build().await.unwrap();
+                let error = executor.step().await.expect_err("setup failure must precede every workload mutation");
+                assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+                let retained = executor.internal_state::<AwsWorkerController>().unwrap();
+                assert_eq!(retained.arn, expected_arn);
+                assert!(retained.function_create_token.is_none());
+            }
+        }
+    }
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
         FunctionConfiguration {
