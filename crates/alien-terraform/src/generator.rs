@@ -4178,10 +4178,11 @@ fn readme_md(
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
     let mut input_sections = vec![readme_required_inputs(registration.is_some())];
-    let setup_only = stack
-        .resources
-        .values()
-        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+    let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
+        && stack
+            .resources
+            .values()
+            .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
         && !stack
             .resources
             .values()

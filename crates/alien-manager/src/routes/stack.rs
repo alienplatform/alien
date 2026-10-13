@@ -133,6 +133,7 @@ pub async fn stack_import(
     };
 
     let automatic = req.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+    let mut approved_automatic_installation = None;
     if automatic {
         let approved = match state
             .deployment_store
@@ -140,7 +141,10 @@ pub async fn stack_import(
             .await
         {
             Ok(Some(existing)) => {
-                existing.import_source.is_some()
+                let approved = matches!(
+                    req.platform,
+                    Platform::Aws | Platform::Gcp | Platform::Azure
+                ) && existing.import_source.is_some()
                     && state.authz.can_update_deployment(&subject, &existing)
                     && existing.stack_settings.as_ref().is_some_and(|settings| {
                         settings.setup_management == alien_core::SetupManagement::Automatic
@@ -149,7 +153,11 @@ pub async fn stack_import(
                         || existing
                             .runtime_metadata
                             .as_ref()
-                            .is_some_and(|metadata| metadata.automatic_setup))
+                            .is_some_and(|metadata| metadata.automatic_setup));
+                if approved {
+                    approved_automatic_installation = Some(existing);
+                }
+                approved
             }
             Ok(None) => false,
             Err(error) => return error.into_response(),
@@ -239,6 +247,20 @@ pub async fn stack_import(
         })
         .into_response();
     }
+    // Deferred resources cannot answer gates by presence. Recover workspace-managed
+    // non-secret inputs from the approved reservation; deployer secrets stay in cloud storage.
+    if let Some(existing) = &approved_automatic_installation {
+        for input in &stack_inputs {
+            if input.kind != alien_core::StackInputKind::Secret {
+                if let Some(value) = existing.input_values.get(&input.id) {
+                    req.input_values
+                        .entry(input.id.clone())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
+    let deferred_resource_ids = std::collections::HashSet::new();
     let delivered_resource_ids: std::collections::HashSet<String> = req
         .resources
         .iter()
@@ -247,7 +269,7 @@ pub async fn stack_import(
     let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers_from_presence(
         source_stack,
         if automatic {
-            &std::collections::HashSet::new()
+            &deferred_resource_ids
         } else {
             &delivered_resource_ids
         },
@@ -462,6 +484,9 @@ pub async fn stack_import(
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
             for (input_id, imported_answer) in &imported_gate_answers {
+                if automatic {
+                    continue;
+                }
                 if let Some(persisted) = persisted_answers.get(input_id) {
                     if persisted != imported_answer {
                         return AlienError::new(
@@ -1238,6 +1263,13 @@ fn reimport_runtime_metadata(
     imported_gate_answers: alien_core::GateAnswers,
 ) -> crate::error::Result<RuntimeMetadata> {
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    if metadata.automatic_setup {
+        metadata
+            .persisted_gate_answers
+            .extend(imported_gate_answers);
+        metadata.setup_update_authorization = None;
+        return Ok(metadata);
+    }
     metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
     // The route refused conflicting answers before calling this, so what
     // remains is bookkeeping: answers for inputs a new release introduces are
