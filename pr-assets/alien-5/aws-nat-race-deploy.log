@@ -1,0 +1,9 @@
+$ alien deploy --name q5-vpc --platform aws --token-file <token-file>
+Deploying q5-vpc to aws
+deployment step loop failed
+Cause:
+  - Deployment failed: 1 resource error(s), 0 interrupted, 1 total
+Failed resources:
+  - default-network: Cloud quota exceeded: NAT gateways per Availability Zone (L-FE5A380F, eu-west-1 / eu-west-1a): Performing this operation would exceed the limit of 5 NAT gateways. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-FE5A380F
+
+Exit code: 1

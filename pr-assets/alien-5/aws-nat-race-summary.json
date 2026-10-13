@@ -1,0 +1,29 @@
+{
+  "commit": "158d298d6638631ec3dd4a5b3b3ed8d119a713b0",
+  "guardPassedBeforeFill": true,
+  "usageAtGuard": 0,
+  "appliedLimit": 5,
+  "usageAfterFill": 5,
+  "status": "initial-setup-failed",
+  "quota": {
+    "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-FE5A380F",
+    "name": "NAT gateways per Availability Zone",
+    "platform": "aws",
+    "providerId": "L-FE5A380F",
+    "scope": "eu-west-1 / eu-west-1a",
+    "service": "vpc"
+  },
+  "retryable": false,
+  "realProviderError": "NatGatewayLimitExceeded",
+  "partialNetwork": {
+    "Vpcs": 1,
+    "InternetGateways": 1,
+    "Subnets": 4,
+    "RouteTables": 2,
+    "Addresses": 1,
+    "SecurityGroups": 0
+  },
+  "activeOwnedNatAfter": 0,
+  "retainedDeletedTaggedNatRecords": 1,
+  "earlyBlockClaimed": false
+}

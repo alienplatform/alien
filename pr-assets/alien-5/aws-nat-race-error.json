@@ -1,0 +1,57 @@
+{
+  "code": "DEPLOYMENT_FAILED",
+  "message": "Deployment failed: 1 resource error(s), 0 interrupted, 1 total",
+  "retryable": false,
+  "internal": false,
+  "httpStatusCode": 500,
+  "context": {
+    "total_resources": 1,
+    "failed_resources": 1,
+    "interrupted_resources": 0,
+    "resource_errors": [
+      {
+        "resourceId": "default-network",
+        "resourceType": "network",
+        "error": {
+          "code": "CLOUD_PLATFORM_ERROR",
+          "message": "Cloud platform operation failed: Failed to create NAT Gateway",
+          "retryable": false,
+          "internal": false,
+          "httpStatusCode": 500,
+          "context": {
+            "message": "Failed to create NAT Gateway",
+            "resource_id": "default-network"
+          },
+          "source": {
+            "code": "CLOUD_QUOTA_EXCEEDED",
+            "message": "Cloud quota exceeded: NAT gateways per Availability Zone (L-FE5A380F, eu-west-1 / eu-west-1a): Performing this operation would exceed the limit of 5 NAT gateways. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-FE5A380F",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 500,
+            "context": {
+              "quota": {
+                "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-FE5A380F",
+                "name": "NAT gateways per Availability Zone",
+                "platform": "aws",
+                "providerId": "L-FE5A380F",
+                "scope": "eu-west-1 / eu-west-1a",
+                "service": "vpc"
+              },
+              "message": "NAT gateways per Availability Zone (L-FE5A380F, eu-west-1 / eu-west-1a): Performing this operation would exceed the limit of 5 NAT gateways. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-FE5A380F"
+            },
+            "source": {
+              "code": "QUOTA_EXCEEDED",
+              "message": "Quota exceeded: Performing this operation would exceed the limit of 5 NAT gateways",
+              "retryable": true,
+              "internal": false,
+              "httpStatusCode": 500,
+              "context": {
+                "message": "Performing this operation would exceed the limit of 5 NAT gateways"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
