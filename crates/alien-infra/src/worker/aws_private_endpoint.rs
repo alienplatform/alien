@@ -545,4 +545,120 @@ mod tests {
         assert!(owner.step_delete(&ec2).await.unwrap());
         assert_eq!(owner.phase, Phase::Deleted);
     }
+    #[tokio::test]
+    async fn uncertain_create_cleanup_replays_the_persisted_token_after_empty_discovery() {
+        let mut owner = owner();
+        let mut ec2 = MockEc2Api::new();
+        owner.step_create(&ec2).await.unwrap();
+        let token = owner.token.clone();
+        describe(&mut ec2, None);
+        let expected_token = token.clone();
+        ec2.expect_create_interface_vpc_endpoint()
+            .times(1)
+            .return_once(move |request| {
+                assert_eq!(request.client_token, expected_token);
+                Err(AlienError::new(ClientError::Timeout {
+                    message: "reply lost after commit".into(),
+                }))
+            });
+        assert!(owner.step_create(&ec2).await.is_err());
+        assert!(owner.endpoint_id.is_none());
+        owner = reload(&owner);
+        ec2.checkpoint();
+        describe(&mut ec2, None);
+        let created = endpoint(&owner);
+        ec2.expect_create_interface_vpc_endpoint()
+            .times(1)
+            .return_once(move |request| {
+                assert_eq!(request.client_token, token);
+                assert!(!request.private_dns_enabled);
+                Ok(CreateVpcEndpointResponse {
+                    vpc_endpoint: created,
+                    client_token: None,
+                })
+            });
+        assert!(!owner.step_delete(&ec2).await.unwrap());
+        assert_eq!(owner.endpoint_id.as_deref(), Some("vpce-test"));
+        owner = reload(&owner);
+        ec2.checkpoint();
+        describe(&mut ec2, Some(endpoint(&owner)));
+        assert!(!owner.step_delete(&ec2).await.unwrap());
+        ec2.checkpoint();
+        describe(&mut ec2, Some(endpoint(&owner)));
+        ec2.expect_delete_vpc_endpoints().times(1).return_once(|_| {
+            Err(AlienError::new(ClientError::Timeout {
+                message: "delete committed, reply lost".into(),
+            }))
+        });
+        assert!(owner.step_delete(&ec2).await.is_err());
+        owner = reload(&owner);
+        ec2.checkpoint();
+        describe(&mut ec2, None);
+        assert!(!owner.step_delete(&ec2).await.unwrap());
+        ec2.checkpoint();
+        ec2.expect_describe_network_interfaces()
+            .times(1)
+            .return_once(|_| {
+                Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                    resource_type: "interface".into(),
+                    resource_name: "eni-test".into(),
+                }))
+            });
+        assert!(owner.step_delete(&ec2).await.unwrap());
+    }
+    #[tokio::test]
+    async fn partial_delete_failure_keeps_receipt_and_does_not_complete_cleanup() {
+        let mut owner = owner();
+        owner.phase = Phase::Creating;
+        let mut ec2 = MockEc2Api::new();
+        describe(&mut ec2, Some(endpoint(&owner)));
+        owner.step_create(&ec2).await.unwrap().unwrap();
+        ec2.checkpoint();
+        describe(&mut ec2, Some(endpoint(&owner)));
+        assert!(!owner.step_delete(&ec2).await.unwrap());
+        ec2.checkpoint();
+        describe(&mut ec2, Some(endpoint(&owner)));
+        ec2.expect_delete_vpc_endpoints().times(1).return_once(|_| Ok(
+            serde_json::from_value(json!({"unsuccessful": {"item": [{
+                "resourceId": "vpce-test", "error": {"code": "UnauthorizedOperation", "message": "denied"}
+            }]}})).unwrap()
+        ));
+        assert!(owner
+            .step_delete(&ec2)
+            .await
+            .unwrap_err()
+            .message
+            .contains("UnauthorizedOperation"));
+        owner = reload(&owner);
+        assert_eq!(owner.endpoint_id.as_deref(), Some("vpce-test"));
+        assert_ne!(owner.phase, Phase::Deleted);
+    }
+
+    #[tokio::test]
+    async fn changed_tags_policy_and_attachments_refuse_cloud_mutations() {
+        let original = owner();
+        for field in ["generation", "policy", "subnets", "groups", "dns", "id"] {
+            let mut owner = reload(&original);
+            owner.phase = Phase::Waiting;
+            owner.endpoint_id = Some("vpce-test".into());
+            owner.observed = true;
+            let mut changed = endpoint(&owner);
+            match field {
+                "generation" => changed.tag_set = None,
+                "policy" => changed.policy_document = Some("{}".into()),
+                "subnets" => changed.subnet_id_set = None,
+                "groups" => changed.group_set = None,
+                "dns" => changed.private_dns_enabled = Some(true),
+                "id" => changed.vpc_endpoint_id = "vpce-other".into(),
+                _ => unreachable!(),
+            }
+            let mut ec2 = MockEc2Api::new();
+            describe(&mut ec2, Some(changed.clone()));
+            assert!(owner.step_create(&ec2).await.is_err(), "{field}");
+            ec2.checkpoint();
+            describe(&mut ec2, Some(changed));
+            assert!(owner.step_delete(&ec2).await.is_err(), "{field}");
+            assert_eq!(owner.endpoint_id.as_deref(), Some("vpce-test"));
+        }
+    }
 }
