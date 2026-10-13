@@ -25,11 +25,13 @@ use alien_core::{
     GcpManagementConfig, KubernetesCertificateMode, KubernetesClusterOwnership,
     KubernetesClusterSettings, KubernetesExposureSettings, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesRouteProviderOptions, KubernetesSettings, ManagementConfig,
-    Platform, Stack, StackSettings, StackState, Worker, WorkerCode,
+    Platform, RuntimeMetadata, SetupConfigurationProfile, SetupManagement, Stack, StackSettings,
+    StackState, Worker, WorkerCode,
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
 use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ModelGardenApi, ResourceManagerApi};
+use alien_manager::{auth::Subject, traits::CreateImportedDeploymentParams};
 use anyhow::Context;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -544,6 +546,7 @@ struct DistributionPrepared {
     flow: DistributionFlow,
     group_id: String,
     dg_token: String,
+    release_id: String,
 }
 
 struct TerraformApplyResult {
@@ -689,7 +692,11 @@ async fn prepare_distribution(
         pushed_stack.clone()
     };
 
-    let stack_settings = e2e_stack_settings_for_flow(model, &config, platform)?;
+    let mut stack_settings = e2e_stack_settings_for_flow(model, &config, platform)?;
+    if app == TestApp::AutomaticSetup {
+        stack_settings.setup_management = SetupManagement::Automatic;
+        stack_settings.telemetry = alien_core::TelemetryMode::Off;
+    }
     let management_config =
         render_distribution_management_config(flow, platform, &config, &stack_settings);
     let rendered_stack = apply_render_mutations_with_management_config(
@@ -701,7 +708,7 @@ async fn prepare_distribution(
     .await
     .context("Failed to apply distribution render preflights")?;
 
-    create_release(&manager, platform, &pushed_stack).await?;
+    let release_id = create_release(&manager, platform, &pushed_stack).await?;
     let (group_id, dg_token) = create_deployment_group_token(&manager).await?;
 
     Ok(DistributionPrepared {
@@ -715,6 +722,7 @@ async fn prepare_distribution(
         flow,
         group_id,
         dg_token,
+        release_id,
     })
 }
 
@@ -1090,14 +1098,14 @@ async fn create_release(
     manager: &Arc<TestManager>,
     platform: Platform,
     stack: &Stack,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let stack_json = serde_json::to_value(stack).context("Failed to serialize stack")?;
     let stack_by_platform = serde_json::json!({ platform.as_str(): stack_json });
     let stack_by_platform_sdk: alien_manager_api::types::StackByPlatform =
         serde_json::from_value(stack_by_platform)
             .context("Failed to convert stack to SDK StackByPlatform")?;
 
-    manager
+    let release = manager
         .client()
         .create_release()
         .body(alien_manager_api::types::CreateReleaseRequest {
@@ -1110,7 +1118,7 @@ async fn create_release(
         .await
         .map_err(|error| anyhow::anyhow!("Failed to create release: {error}"))?;
 
-    Ok(())
+    Ok(release.id.clone())
 }
 
 async fn create_deployment_group_token(
@@ -1164,22 +1172,30 @@ async fn run_cloudformation_aws(
     let workdir = tempfile::tempdir().context("Failed to create CFN workdir")?;
 
     let registry = alien_cloudformation::CfRegistry::built_in();
-    let template = alien_cloudformation::generate_cloudformation_template(
+    let mut stack_settings =
+        e2e_stack_settings_for_flow(prepared.model, &prepared.config, prepared.platform)?;
+    if prepared.app == TestApp::AutomaticSetup {
+        stack_settings.setup_management = SetupManagement::Automatic;
+        stack_settings.telemetry = alien_core::TelemetryMode::Off;
+    }
+    let profile = if prepared.app == TestApp::AutomaticSetup {
+        SetupConfigurationProfile::Standard
+    } else {
+        SetupConfigurationProfile::Advanced
+    };
+    let template = alien_cloudformation::generate_cloudformation_template_with_profile(
         &prepared.rendered_stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
             target: alien_cloudformation::CloudFormationTarget::Aws,
-            stack_settings: e2e_stack_settings_for_flow(
-                prepared.model,
-                &prepared.config,
-                prepared.platform,
-            )?,
+            stack_settings,
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),
             setup_fingerprint_version: 1,
             registration: alien_cloudformation::RegistrationMode::OutputsFallback,
             description: Some(format!("Alien E2E distribution stack {stack_name}")),
         },
+        profile,
     )
     .map_err(|error| anyhow::anyhow!("CloudFormation render failed: {error}"))?;
     let yaml = alien_cloudformation::to_yaml(&template)
@@ -1222,14 +1238,22 @@ async fn run_cloudformation_aws(
             "CAPABILITY_AUTO_EXPAND",
             "--region",
             &target.region,
-            "--parameters",
-            &format!("ParameterKey=Token,ParameterValue={}", prepared.dg_token),
-            &format!("ParameterKey=ManagingRoleArn,ParameterValue={role_arn}"),
-            &format!("ParameterKey=ManagingAccountId,ParameterValue={managing_account_id}"),
-            "ParameterKey=DomainName,ParameterValue=",
-            "ParameterKey=HostedZoneId,ParameterValue=",
-            "ParameterKey=CertificateArn,ParameterValue=",
         ]);
+        let parameters: Vec<String> = [
+            ("Token", prepared.dg_token.as_str()),
+            ("ManagingRoleArn", role_arn.as_str()),
+            ("ManagingAccountId", managing_account_id.as_str()),
+            ("DomainName", ""),
+            ("HostedZoneId", ""),
+            ("CertificateArn", ""),
+        ]
+        .into_iter()
+        .filter(|(key, _)| template.parameters.contains_key(*key))
+        .map(|(key, value)| format!("ParameterKey={key},ParameterValue={value}"))
+        .collect();
+        if !parameters.is_empty() {
+            create.arg("--parameters").args(parameters);
+        }
         apply_env(&mut create, &env);
         run_command(create, "aws cloudformation create-stack").await?;
 
@@ -1822,11 +1846,20 @@ async fn apply_terraform_and_import(
 ) -> anyhow::Result<TerraformApplyResult> {
     let workdir = tempfile::tempdir().context("Failed to create Terraform workdir")?;
     let registry = alien_terraform::TfRegistry::built_in();
-    let stack_settings = stack_settings_for_terraform(prepared, target)?;
+    let mut stack_settings = stack_settings_for_terraform(prepared, target)?;
+    if prepared.app == TestApp::AutomaticSetup {
+        stack_settings.setup_management = SetupManagement::Automatic;
+        stack_settings.telemetry = alien_core::TelemetryMode::Off;
+    }
     let terraform_stack = terraform_stack_for_target(prepared, target, &stack_settings).await?;
     let has_remote_management =
         stack_contains_resource_type(&terraform_stack, "remote-stack-management");
-    let module = alien_terraform::generate_terraform_module(
+    let profile = if prepared.app == TestApp::AutomaticSetup {
+        SetupConfigurationProfile::Standard
+    } else {
+        SetupConfigurationProfile::Advanced
+    };
+    let module = alien_terraform::generate_product_terraform_module_with_profile(
         &terraform_stack,
         target,
         alien_terraform::TerraformOptions {
@@ -1837,6 +1870,8 @@ async fn apply_terraform_and_import(
             helm_install: None,
             supported_aws_regions: Vec::new(),
         },
+        false,
+        profile,
     )
     .map_err(|error| anyhow::anyhow!("Terraform render failed: {error}"))?;
 
@@ -2383,6 +2418,43 @@ async fn import_stack(
     prepared: &DistributionPrepared,
     request: StackImportRequest,
 ) -> anyhow::Result<ImportedTestDeployment> {
+    if prepared.app == TestApp::AutomaticSetup {
+        // The dashboard creates this reservation before launching the package. The OSS test
+        // fixture records the same approved intent immediately before the real artifact calls
+        // the manager, so registration cannot accidentally pass by creating its own authority.
+        prepared
+            .manager
+            .deployment_store()
+            .create_with_state(
+                &Subject::system(),
+                CreateImportedDeploymentParams {
+                    name: request.deployment_name.clone(),
+                    deployment_group_id: prepared.group_id.clone(),
+                    platform: request.platform,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: request.base_platform,
+                    stack_settings: request.stack_settings.clone(),
+                    stack_state: StackState::new(request.platform),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata::default(),
+                    status: "pending".into(),
+                    current_release_id: None,
+                    desired_release_id: None,
+                    import_source: request.source_kind,
+                    setup_metadata: Some(serde_json::json!({
+                        "setupReservation": { "releaseId": prepared.release_id }
+                    })),
+                    setup_target: request.setup_target.clone(),
+                    setup_fingerprint: request.setup_fingerprint.clone(),
+                    setup_fingerprint_version: request.setup_fingerprint_version,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .context("Failed to reserve approved own-environment setup")?;
+    }
     let url = format!("{}/v1/stack/import", prepared.manager.url);
     let response = reqwest::Client::new()
         .post(&url)
@@ -2454,7 +2526,10 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
             anyhow::anyhow!("Deployment failed to reach running within {timeout:?}: {error}")
         })?;
     if ctx.model == DeploymentModel::Push
-        && !matches!(ctx.app, TestApp::ByoEncryptionKey | TestApp::ByoAi)
+        && !matches!(
+            ctx.app,
+            TestApp::ByoEncryptionKey | TestApp::ByoAi | TestApp::AutomaticSetup
+        )
         && matches!(
             ctx.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure

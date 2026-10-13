@@ -106,84 +106,7 @@ impl AutomaticSetup {
             "Setup must persist its grant"
         );
 
-        // No further setup calls occur. A resource type absent from the first release must be
-        // provisioned with the installed management grant, then updated and removed by runtime.
-        for (name, stack) in [
-            ("add", storage_stack(self.platform, false)),
-            ("change", storage_stack(self.platform, true)),
-            ("remove", Stack::new("automatic-setup".into()).build()),
-        ] {
-            let release = publish(&self.manager, self.platform, &stack).await?;
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(900);
-            loop {
-                let state = self
-                    .manager
-                    .client()
-                    .get_deployment()
-                    .id(&self.deployment.id)
-                    .send()
-                    .await?;
-                if state.status.ends_with("-failed") || state.status == "error" {
-                    bail!("{name} failed: {:?}", state.error);
-                }
-                if state.status == "running"
-                    && state.current_release_id.as_deref() == Some(&release)
-                {
-                    let state = serde_json::to_value(
-                        state.stack_state.as_ref().context("Stack state required")?,
-                    )?;
-                    anyhow::ensure!(
-                        state["resources"]["management"]["status"] == "running",
-                        "Automatic updates must retain the installed management identity"
-                    );
-                    if name == "remove" {
-                        for id in ["archive", "archive-next"] {
-                            let resource = &state["resources"][id];
-                            anyhow::ensure!(
-                                resource.is_null() || resource["status"] == "deleted",
-                                "Removed storage must finish deletion before release promotion"
-                            );
-                        }
-                    } else {
-                        let storage_id = if self.platform == Platform::Azure && name == "change" {
-                            let previous = &state["resources"]["archive"];
-                            anyhow::ensure!(
-                                previous.is_null() || previous["status"] == "deleted",
-                                "Azure replacement must delete the previous container"
-                            );
-                            "archive-next"
-                        } else {
-                            "archive"
-                        };
-                        anyhow::ensure!(
-                            state["resources"][storage_id]["status"] == "running",
-                            "Storage must reach running"
-                        );
-                        anyhow::ensure!(
-                            state["resources"][storage_id]["config"][if self.platform
-                                == Platform::Gcp
-                            {
-                                "versioning"
-                            } else {
-                                "publicRead"
-                            }] == (name == "change" && self.platform != Platform::Azure),
-                            "The installed configuration must converge"
-                        );
-                    }
-                    tracing::info!(
-                        phase = name,
-                        "Automatic infrastructure update completed with installed credentials"
-                    );
-                    break;
-                }
-                anyhow::ensure!(
-                    tokio::time::Instant::now() < deadline,
-                    "{name} did not converge"
-                );
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-        }
-        Ok(())
+        verify_updates(&self.manager, &self.deployment, self.platform).await
     }
 
     pub async fn cleanup(self) -> anyhow::Result<()> {
@@ -199,6 +122,87 @@ impl AutomaticSetup {
         )
         .await
     }
+}
+
+/// Exercise later frozen-resource changes using only the identity installed at setup.
+pub async fn verify_updates(
+    manager: &Arc<TestManager>,
+    deployment: &TestDeployment,
+    platform: Platform,
+) -> anyhow::Result<()> {
+    // No further setup calls occur. A resource type absent from the first release must be
+    // provisioned with the installed management grant, then updated and removed by runtime.
+    for (name, stack) in [
+        ("add", storage_stack(platform, false)),
+        ("change", storage_stack(platform, true)),
+        ("remove", Stack::new("automatic-setup".into()).build()),
+    ] {
+        let release = publish(manager, platform, &stack).await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(900);
+        loop {
+            let state = manager
+                .client()
+                .get_deployment()
+                .id(&deployment.id)
+                .send()
+                .await?;
+            if state.status.ends_with("-failed") || state.status == "error" {
+                bail!("{name} failed: {:?}", state.error);
+            }
+            if state.status == "running" && state.current_release_id.as_deref() == Some(&release) {
+                let state = serde_json::to_value(
+                    state.stack_state.as_ref().context("Stack state required")?,
+                )?;
+                anyhow::ensure!(
+                    state["resources"]["management"]["status"] == "running",
+                    "Automatic updates must retain the installed management identity"
+                );
+                if name == "remove" {
+                    for id in ["archive", "archive-next"] {
+                        let resource = &state["resources"][id];
+                        anyhow::ensure!(
+                            resource.is_null() || resource["status"] == "deleted",
+                            "Removed storage must finish deletion before release promotion"
+                        );
+                    }
+                } else {
+                    let storage_id = if platform == Platform::Azure && name == "change" {
+                        let previous = &state["resources"]["archive"];
+                        anyhow::ensure!(
+                            previous.is_null() || previous["status"] == "deleted",
+                            "Azure replacement must delete the previous container"
+                        );
+                        "archive-next"
+                    } else {
+                        "archive"
+                    };
+                    anyhow::ensure!(
+                        state["resources"][storage_id]["status"] == "running",
+                        "Storage must reach running"
+                    );
+                    anyhow::ensure!(
+                        state["resources"][storage_id]["config"][if platform == Platform::Gcp {
+                            "versioning"
+                        } else {
+                            "publicRead"
+                        }] == (name == "change" && platform != Platform::Azure),
+                        "The installed configuration must converge"
+                    );
+                }
+                tracing::info!(
+                    phase = name,
+                    "Automatic infrastructure update completed with installed credentials"
+                );
+                break;
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "{name} did not converge"
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    Ok(())
 }
 
 fn storage_stack(platform: Platform, changed: bool) -> Stack {

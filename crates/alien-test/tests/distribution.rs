@@ -81,6 +81,25 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("remote AI checks failed: {error:#}");
             }
         }
+        TestApp::AutomaticSetup => {
+            let installed = ctx
+                .manager
+                .client()
+                .get_deployment()
+                .id(&ctx.deployment.id)
+                .send()
+                .await
+                .expect("fetch installed deployment");
+            let metadata = serde_json::to_value(&installed.runtime_metadata)
+                .expect("serialize runtime metadata");
+            assert_eq!(
+                metadata["automaticSetup"], true,
+                "package must install management access"
+            );
+            common::automatic_setup::verify_updates(&ctx.manager, &ctx.deployment, ctx.platform)
+                .await
+                .expect("frozen resources must change through installed access");
+        }
     }
 }
 
@@ -869,6 +888,18 @@ macro_rules! distribution_test_context {
 // ---------------------------------------------------------------------------
 
 distribution_test_context!(
+    CloudFormationAwsPushAutomaticSetup,
+    DistributionFlow::CloudFormationAwsPush,
+    TestApp::AutomaticSetup
+);
+
+#[test_context(CloudFormationAwsPushAutomaticSetup)]
+#[tokio::test]
+async fn cloudformation_aws_push_automatic_setup(ctx: &mut CloudFormationAwsPushAutomaticSetup) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     CloudFormationAwsPushRust,
     DistributionFlow::CloudFormationAwsPush,
     TestApp::ComprehensiveRust
@@ -903,6 +934,18 @@ distribution_test_context!(
     DistributionFlow::TerraformAwsPush,
     TestApp::ComprehensiveRust
 );
+
+distribution_test_context!(
+    TerraformAwsPushAutomaticSetup,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::AutomaticSetup
+);
+
+#[test_context(TerraformAwsPushAutomaticSetup)]
+#[tokio::test]
+async fn terraform_aws_push_automatic_setup(ctx: &mut TerraformAwsPushAutomaticSetup) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
 
 #[test_context(TerraformAwsPushRust)]
 #[tokio::test]
@@ -952,6 +995,18 @@ distribution_test_context!(
     TestApp::ComprehensiveRust
 );
 
+distribution_test_context!(
+    TerraformGcpPushAutomaticSetup,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::AutomaticSetup
+);
+
+#[test_context(TerraformGcpPushAutomaticSetup)]
+#[tokio::test]
+async fn terraform_gcp_push_automatic_setup(ctx: &mut TerraformGcpPushAutomaticSetup) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
 #[test_context(TerraformGcpPushRust)]
 #[tokio::test]
 async fn terraform_gcp_push_comprehensive_rust(ctx: &mut TerraformGcpPushRust) {
@@ -987,6 +1042,18 @@ distribution_test_context!(
     DistributionFlow::TerraformAzurePush,
     TestApp::ComprehensiveRust
 );
+
+distribution_test_context!(
+    TerraformAzurePushAutomaticSetup,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::AutomaticSetup
+);
+
+#[test_context(TerraformAzurePushAutomaticSetup)]
+#[tokio::test]
+async fn terraform_azure_push_automatic_setup(ctx: &mut TerraformAzurePushAutomaticSetup) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
 
 #[test_context(TerraformAzurePushRust)]
 #[tokio::test]

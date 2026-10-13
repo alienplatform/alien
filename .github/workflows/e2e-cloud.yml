@@ -351,6 +351,17 @@ jobs:
           # Build Terraform distribution matrix. Kubernetes entries provision
           # frozen resources with Terraform and install the agent with Helm.
           TERRAFORM_ENTRIES='[]'
+          if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
+            if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-automatic-setup","test_filter":"terraform_aws_push_automatic_setup","needs_oidc":false,"resource_suffix":"tfawsauto"}]')
+            fi
+            if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-automatic-setup","test_filter":"terraform_gcp_push_automatic_setup","needs_oidc":false,"resource_suffix":"tfgcpauto"}]')
+            fi
+            if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-automatic-setup","test_filter":"terraform_azure_push_automatic_setup","needs_oidc":true,"resource_suffix":"tfazauto"}]')
+            fi
+          fi
           if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-comprehensive-rust","test_filter":"terraform_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfawscr"}]')
@@ -435,6 +446,9 @@ jobs:
           # and currently validates the push/import path.
           CLOUDFORMATION_ENTRIES='[]'
           if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-automatic-setup","test_filter":"cloudformation_aws_push_automatic_setup","needs_oidc":false,"resource_suffix":"cfawsauto"}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
               CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-comprehensive-rust","test_filter":"cloudformation_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"cfawscr"}]')
             fi
