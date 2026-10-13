@@ -1,8 +1,10 @@
 //! Start an ephemeral manager with a Network-only AWS deployment for CLI quota proof.
 //! This only creates local API records. Run the deploy CLI separately with target
 //! credentials, then drive normal deletion before stopping this fixture.
+//! Launch this single-account manager with the same AWS environment as the CLI.
 
-use alien_core::Stack;
+use alien_client_config::ClientConfigExt;
+use alien_core::{ClientConfig, Platform, Stack};
 use alien_test::manager::TestManager;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -14,6 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&output)?;
     #[cfg(unix)]
     std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700))?;
+    let environment = std::env::vars().collect();
+    ClientConfig::from_env(Platform::Aws, &environment).await?;
     let manager = TestManager::start().await?;
     let stack = Stack::new("q5-vpc".into()).build();
     let release = manager
