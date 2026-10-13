@@ -1,0 +1,6 @@
+Deploying q5-vpc to aws
+deployment step loop failed
+Cause:
+  - Deployment failed: 1 resource error(s), 0 interrupted, 1 total
+Failed resources:
+  - default-network: Cloud quota exceeded: Internet gateways per Region (L-A4707A72, eu-west-1): The maximum number of internet gateways has been reached. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72

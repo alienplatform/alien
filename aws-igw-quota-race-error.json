@@ -1,0 +1,57 @@
+{
+  "code": "DEPLOYMENT_FAILED",
+  "message": "Deployment failed: 1 resource error(s), 0 interrupted, 1 total",
+  "retryable": false,
+  "internal": false,
+  "httpStatusCode": 500,
+  "context": {
+    "total_resources": 1,
+    "failed_resources": 1,
+    "interrupted_resources": 0,
+    "resource_errors": [
+      {
+        "resourceId": "default-network",
+        "resourceType": "network",
+        "error": {
+          "code": "CLOUD_PLATFORM_ERROR",
+          "message": "Cloud platform operation failed: Failed to create Internet Gateway",
+          "retryable": false,
+          "internal": false,
+          "httpStatusCode": 500,
+          "context": {
+            "message": "Failed to create Internet Gateway",
+            "resource_id": "default-network"
+          },
+          "source": {
+            "code": "CLOUD_QUOTA_EXCEEDED",
+            "message": "Cloud quota exceeded: Internet gateways per Region (L-A4707A72, eu-west-1): The maximum number of internet gateways has been reached. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 500,
+            "context": {
+              "quota": {
+                "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72",
+                "name": "Internet gateways per Region",
+                "platform": "aws",
+                "providerId": "L-A4707A72",
+                "scope": "eu-west-1",
+                "service": "vpc"
+              },
+              "message": "Internet gateways per Region (L-A4707A72, eu-west-1): The maximum number of internet gateways has been reached. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72"
+            },
+            "source": {
+              "code": "QUOTA_EXCEEDED",
+              "message": "Quota exceeded: The maximum number of internet gateways has been reached.",
+              "retryable": true,
+              "internal": false,
+              "httpStatusCode": 500,
+              "context": {
+                "message": "The maximum number of internet gateways has been reached."
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

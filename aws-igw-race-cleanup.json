@@ -1,0 +1,31 @@
+{
+  "destroyExitCode": 0,
+  "taggedResourcesAbsent": true,
+  "activeNatGateways": 0,
+  "awsRetainedDeletedNatRecords": 4,
+  "vpcAndIgwBaselineRestored": true,
+  "cliExitCode": 1,
+  "preflightAcceptedBeforeQuotaFill": true,
+  "igwAppliedLimit": 5,
+  "igwUsedBeforeFill": 1,
+  "igwUsedAfterFill": 5,
+  "ownedPartialVpcsCreated": 1,
+  "ownedInternetGatewaysCreated": 0,
+  "temporaryFillersDeleted": 4,
+  "vpcPseudonymousIdentitySets": {
+    "before": [
+      "vpc-3b5f55c8"
+    ],
+    "after": [
+      "vpc-3b5f55c8"
+    ]
+  },
+  "igwPseudonymousIdentitySets": {
+    "before": [
+      "igw-9c9c23d2"
+    ],
+    "after": [
+      "igw-9c9c23d2"
+    ]
+  }
+}
