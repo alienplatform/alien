@@ -3032,6 +3032,13 @@ impl AwsNetworkController {
         // Reads first: everything this handler learns before `create_vpc` is recorded, so a
         // retry never repeats the lookups with different answers.
         if self.availability_zones.is_empty() {
+            if let Some(plan) = ctx.desired_stack.aws_network_placements.get(&config.id) {
+                if plan.matches(&aws_cfg.region, availability_zones) {
+                    self.availability_zones = plan.zones.clone();
+                }
+            }
+        }
+        if self.availability_zones.is_empty() {
             let az_response = client
                 .describe_availability_zones(DescribeAvailabilityZonesRequest::builder().build())
                 .await
@@ -3040,7 +3047,7 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let zones = select_network_availability_zones(az_response, availability_zones);
+            let zones = select_network_availability_zones(&az_response, availability_zones);
 
             if zones.is_empty() {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
@@ -5710,6 +5717,54 @@ mod controller_state_tests {
     }
 
     // ─────────────── VPC ───────────────
+
+    #[tokio::test]
+    async fn serialized_placement_needs_no_zone_read_and_recorded_controller_state_wins() {
+        for recorded in [false, true] {
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_describe_availability_zones().times(0);
+            let mut executor = executor(
+                ec2,
+                AwsNetworkController {
+                    state: AwsNetworkState::CreatingVpc,
+                    availability_zones: if recorded {
+                        vec!["us-east-1c".into()]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                Some("10.0.0.0/16"),
+            )
+            .await;
+            let stack = executor.desired_stack_mut();
+            stack.aws_network_placements.insert(
+                NETWORK_ID.into(),
+                alien_core::AwsNetworkPlacement {
+                    region: "us-east-1".into(),
+                    requested_zones: 2,
+                    zones: vec!["us-east-1b".into(), "us-east-1a".into()],
+                },
+            );
+            // The setup metadata path serializes and reloads the prepared Stack.
+            *stack = serde_json::from_str(&serde_json::to_string(stack).unwrap()).unwrap();
+            executor
+                .step()
+                .await
+                .expect("persisted placement requires no AZ lookup");
+            assert_eq!(controller(&executor).state, AwsNetworkState::CreatingVpc);
+            assert!(controller(&executor).vpc_create_token.is_some());
+            assert!(controller(&executor).vpc_id.is_none());
+            let expected = if recorded {
+                vec!["us-east-1c"]
+            } else {
+                vec!["us-east-1b", "us-east-1a"]
+            };
+            assert_eq!(controller(&executor).availability_zones, expected);
+            let serialized = crate::core::serialize_controller(controller(&executor)).unwrap();
+            assert!(serialized.to_string().contains(expected[0]));
+        }
+    }
 
     #[tokio::test]
     async fn vpc_id_survives_a_dns_failure_and_the_retry_does_not_create_another_vpc() {

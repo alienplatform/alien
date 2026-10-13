@@ -103,6 +103,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
         };
 
@@ -164,6 +165,7 @@ mod tests {
             inputs: vec![],
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
         };
 

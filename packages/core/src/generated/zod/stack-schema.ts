@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { AwsNetworkPlacementSchema } from "./aws-network-placement-schema.js";
 import { OperationsConfigSchema } from "./operations-config-schema.js";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
@@ -14,7 +15,10 @@ import { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
  * @description A bag of resources, unaware of any cloud.
  */
 export const StackSchema = z.object({
-    "dynamicContainerImageResources": z.optional(z.array(z.string()).describe("Released Container resources whose image repositories are approved for\ncontainers created after installation.")),
+    "awsNetworkPlacements": z.optional(z.object({
+    
+    }).catchall(z.lazy(() => AwsNetworkPlacementSchema).describe("Placement resolved with target credentials during direct setup preparation.\nThis is execution metadata, separate from resource configuration and setup authority.")).describe("Internal direct-setup placement by Network resource ID. Recomputed by preparation;\nnever grants setup authority or changes resource configuration.")),
+"dynamicContainerImageResources": z.optional(z.array(z.string()).describe("Released Container resources whose image repositories are approved for\ncontainers created after installation.")),
 "dynamicContainerRepositories": z.optional(z.array(z.string()).describe("Exact image repositories approved for containers created after installation.\nThe runtime API also requires an immutable SHA-256 digest.")),
 "id": z.string().describe("Unique identifier for the stack"),
 get "inputs"(){

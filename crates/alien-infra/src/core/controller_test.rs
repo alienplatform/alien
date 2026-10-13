@@ -716,6 +716,11 @@ impl SingleControllerExecutor {
     }
 
     /// Gets a reference to the current stack state.
+    /// Inject persisted preparation metadata before running a controller step.
+    pub fn desired_stack_mut(&mut self) -> &mut Stack {
+        &mut self.desired_stack
+    }
+
     pub fn stack_state(&self) -> &StackState {
         &self.stack_state
     }
@@ -1247,6 +1252,7 @@ impl SingleControllerExecutorBuilder {
             inputs: vec![],
             dynamic_container_repositories: vec![],
             dynamic_container_image_resources: vec![],
+            aws_network_placements: Default::default(),
             operations: None,
         };
 

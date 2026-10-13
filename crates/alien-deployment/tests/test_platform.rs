@@ -163,6 +163,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
         inputs: Vec::new(),
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
+        aws_network_placements: Default::default(),
         operations: None,
     }
 }
@@ -213,6 +214,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
         inputs: Vec::new(),
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
+        aws_network_placements: Default::default(),
         operations: None,
     }
 }
@@ -981,6 +983,7 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
         inputs: Vec::new(),
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
+        aws_network_placements: Default::default(),
         operations: None,
     };
 
@@ -1449,6 +1452,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         inputs: Vec::new(),
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
+        aws_network_placements: Default::default(),
         operations: None,
     };
 
@@ -1827,6 +1831,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
         inputs: Vec::new(),
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
+        aws_network_placements: Default::default(),
         operations: None,
     }
 }
@@ -1895,6 +1900,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
         inputs: Vec::new(),
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
+        aws_network_placements: Default::default(),
         operations: None,
     }
 }

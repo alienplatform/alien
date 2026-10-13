@@ -208,6 +208,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -242,6 +243,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -280,6 +282,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -327,6 +330,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -370,6 +374,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -403,6 +408,7 @@ mod tests {
             let stack = Stack {
                 dynamic_container_repositories: Vec::new(),
                 dynamic_container_image_resources: Vec::new(),
+                aws_network_placements: Default::default(),
                 operations: None,
                 id: "test-stack".to_string(),
                 resources,
@@ -442,6 +448,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,
@@ -809,6 +816,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            aws_network_placements: Default::default(),
             operations: None,
             id: "test-stack".to_string(),
             resources,

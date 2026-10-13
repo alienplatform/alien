@@ -1,8 +1,10 @@
 //! Applied cloud quota checks before provisioning begins.
 
+use super::aws_nat::{needs_network_placement, read_nat_gateway_observation};
 use crate::error::Result;
 use crate::quotas::{
-    aws_network_quota_identity, evaluate, QuotaDemand, QuotaObservation, QuotaOutcome, QuotaResult,
+    aws_nat_gateway_quota_identity, aws_network_quota_identity, evaluate, QuotaDemand,
+    QuotaObservation, QuotaOutcome, QuotaResult,
 };
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
@@ -13,7 +15,7 @@ use alien_core::{
     ClientConfig, DeploymentConfig, Network, NetworkOutputs, NetworkSettings, Platform,
     ResourceStatus, Stack, StackState,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub struct CloudQuotasCheck;
 
@@ -69,9 +71,12 @@ impl RuntimeCheck for CloudQuotasCheck {
                 elastic_ip_demand(stack, stack_state),
             ),
         ];
-        if demands
-            .iter()
-            .all(|(_, _, demand)| demand.is_some_and(|demand| demand.additional() == Some(0.0)))
+        let (nat_demands, nat_unknown) = nat_gateway_demands(stack, stack_state, &config.region);
+        if !nat_unknown
+            && nat_demands.is_empty()
+            && demands
+                .iter()
+                .all(|(_, _, demand)| demand.is_some_and(|demand| demand.additional() == Some(0.0)))
         {
             return Ok(result);
         }
@@ -86,6 +91,21 @@ impl RuntimeCheck for CloudQuotasCheck {
                         &mut result,
                         QuotaResult {
                             quota: aws_network_quota_identity(&config.region, code, name),
+                            outcome: QuotaOutcome::Unknown {
+                                reason: "could not initialize AWS quota read credentials".into(),
+                            },
+                        },
+                    );
+                }
+                for zone in nat_demands
+                    .keys()
+                    .map(|zone| Some(zone.as_str()))
+                    .chain(nat_unknown.then_some(None))
+                {
+                    record(
+                        &mut result,
+                        QuotaResult {
+                            quota: aws_nat_gateway_quota_identity(&config.region, zone),
                             outcome: QuotaOutcome::Unknown {
                                 reason: "could not initialize AWS quota read credentials".into(),
                             },
@@ -125,8 +145,80 @@ impl RuntimeCheck for CloudQuotasCheck {
                 },
             );
         }
+        for (zone, demand) in nat_demands {
+            record(
+                &mut result,
+                QuotaResult {
+                    quota: aws_nat_gateway_quota_identity(&config.region, Some(&zone)),
+                    outcome: evaluate(
+                        demand,
+                        read_nat_gateway_observation(&ec2, &quotas, &zone).await,
+                    ),
+                },
+            );
+        }
+        if nat_unknown {
+            record(&mut result, QuotaResult {
+                quota: aws_nat_gateway_quota_identity(&config.region, None),
+                outcome: QuotaOutcome::Unknown {
+                    reason: "network placement or partially provisioned NAT demand could not be resolved".into(),
+                },
+            });
+        }
         Ok(result)
     }
+}
+
+/// Sum new NAT slots by the same first zone that the direct controller consumes.
+/// Completed networks add no demand; recovery without proven placement is Unknown.
+fn nat_gateway_demands(
+    stack: &Stack,
+    state: &StackState,
+    region: &str,
+) -> (BTreeMap<String, QuotaDemand>, bool) {
+    let mut demands = BTreeMap::new();
+    let mut unknown = false;
+    for (id, entry) in &stack.resources {
+        let Some(network) = entry.config.downcast_ref::<Network>() else {
+            continue;
+        };
+        let NetworkSettings::Create {
+            availability_zones, ..
+        } = network.settings
+        else {
+            continue;
+        };
+        if state.resources.get(id).is_some_and(|current| {
+            current.status == ResourceStatus::Running
+                && current
+                    .outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.downcast_ref::<NetworkOutputs>())
+                    .is_some_and(|outputs| {
+                        !outputs.network_id.is_empty() && outputs.has_nat_gateway
+                    })
+        }) {
+            continue;
+        }
+        if !needs_network_placement(state, id) {
+            unknown = true;
+            continue;
+        }
+        let Some(plan) = stack
+            .aws_network_placements
+            .get(id)
+            .filter(|plan| plan.matches(region, availability_zones))
+        else {
+            unknown = true;
+            continue;
+        };
+        let demand = demands.entry(plan.zones[0].clone()).or_insert(QuotaDemand {
+            peak: 0.0,
+            held: 0.0,
+        });
+        demand.peak += 1.0;
+    }
+    (demands, unknown)
 }
 
 /// Each created network provisions one public NAT gateway, regardless of AZ count.
@@ -159,7 +251,10 @@ fn elastic_ip_demand(stack: &Stack, state: &StackState) -> Option<QuotaDemand> {
                 .is_some_and(|outputs| !outputs.network_id.is_empty() && outputs.has_nat_gateway)
         {
             demand.held += 1.0;
-        } else if current.status != ResourceStatus::Pending || current.internal_state.is_some() {
+        } else if current.status != ResourceStatus::Pending
+            || current.internal_state.is_some()
+            || current.last_failed_state.is_some()
+        {
             return None;
         }
     }
@@ -300,7 +395,9 @@ fn vpc_demand(stack: &Stack, state: &StackState) -> Option<QuotaDemand> {
                 .is_some_and(|outputs| !outputs.network_id.is_empty())
             {
                 demand.held += 1.0;
-            } else if current.status != ResourceStatus::Pending || current.internal_state.is_some()
+            } else if current.status != ResourceStatus::Pending
+                || current.internal_state.is_some()
+                || current.last_failed_state.is_some()
             {
                 // Config alone cannot prove whether a failed create holds a VPC.
                 return None;
@@ -450,6 +547,111 @@ mod tests {
         assert!(identity
             .increase_url
             .ends_with("/services/ec2/quotas/L-0263D0A3"));
+    }
+
+    #[test]
+    fn completed_nat_has_no_additional_demand_but_recovery_is_unknown() {
+        let stack = stack();
+        let mut state = StackState::new(Platform::Aws);
+        let mut current = StackResourceState::new_pending(
+            "network".into(),
+            stack.resources["network"].config.clone(),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        current.outputs = Some(ResourceOutputs::new(NetworkOutputs {
+            network_id: "vpc-test".into(),
+            availability_zones: 2,
+            has_public_subnets: true,
+            has_nat_gateway: true,
+            cidr: None,
+        }));
+        state.resources.insert("network".into(), current);
+        assert_eq!(
+            nat_gateway_demands(&stack, &state, "eu-west-1"),
+            (BTreeMap::new(), false)
+        );
+        let current = state.resources.get_mut("network").unwrap();
+        current.status = ResourceStatus::Pending;
+        current.outputs = None;
+        current.last_failed_state = Some(serde_json::json!({"state":"creatingVpc"}));
+        assert_eq!(
+            nat_gateway_demands(&stack, &state, "eu-west-1"),
+            (BTreeMap::new(), true)
+        );
+        assert_eq!(vpc_demand(&stack, &state), None);
+        assert_eq!(elastic_ip_demand(&stack, &state), None);
+    }
+
+    #[test]
+    fn nat_demands_share_slots_only_in_the_same_zone_and_unknown_never_guesses() {
+        let mut stack = stack();
+        let entry = stack.resources["network"].clone();
+        stack.resources.insert("second".into(), entry.clone());
+        stack.resources.insert("third".into(), entry);
+        for (id, zone) in [
+            ("network", "eu-west-1a"),
+            ("second", "eu-west-1a"),
+            ("third", "eu-west-1b"),
+        ] {
+            stack.aws_network_placements.insert(
+                id.into(),
+                alien_core::AwsNetworkPlacement {
+                    region: "eu-west-1".into(),
+                    requested_zones: 2,
+                    zones: vec![zone.into()],
+                },
+            );
+        }
+        let state = StackState::new(Platform::Aws);
+        let (demands, unknown) = nat_gateway_demands(&stack, &state, "eu-west-1");
+        assert!(!unknown);
+        assert_eq!(demands.len(), 2);
+        assert_eq!(demands["eu-west-1a"].additional(), Some(2.0));
+        assert_eq!(demands["eu-west-1b"].additional(), Some(1.0));
+        let mut combined = CheckResult::success();
+        record(
+            &mut combined,
+            QuotaResult {
+                quota: aws_network_quota_identity("eu-west-1", "L-F678F1CE", "VPCs"),
+                outcome: evaluate(
+                    QuotaDemand {
+                        peak: 3.0,
+                        held: 0.0,
+                    },
+                    Some(QuotaObservation {
+                        used: 5.0,
+                        limit: 5.0,
+                    }),
+                ),
+            },
+        );
+        record(
+            &mut combined,
+            QuotaResult {
+                quota: aws_nat_gateway_quota_identity("eu-west-1", Some("eu-west-1a")),
+                outcome: evaluate(
+                    demands["eu-west-1a"],
+                    Some(QuotaObservation {
+                        used: 4.0,
+                        limit: 5.0,
+                    }),
+                ),
+            },
+        );
+        assert!(!combined.success);
+        assert_eq!(combined.errors.len(), 2);
+        assert!(combined.errors[0].contains("L-F678F1CE"));
+        assert!(combined.errors[1].contains("L-FE5A380F"));
+        assert!(combined.errors[1].contains("additional needed 2"));
+        stack.aws_network_placements.remove("second");
+        let (demands, unknown) = nat_gateway_demands(&stack, &state, "eu-west-1");
+        assert!(unknown);
+        assert_eq!(demands["eu-west-1a"].additional(), Some(1.0));
+        let (demands, unknown) = nat_gateway_demands(&stack, &state, "eu-west-2");
+        assert!(unknown);
+        assert!(demands.is_empty());
     }
 
     #[test]

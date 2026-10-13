@@ -2,8 +2,14 @@
 
 use crate::quotas::QuotaObservation;
 use alien_aws_clients::{
-    ec2::{DescribeAvailabilityZonesResponse, DescribeNatGatewaysRequest, DescribeSubnetsRequest},
+    ec2::{
+        DescribeAvailabilityZonesRequest, DescribeAvailabilityZonesResponse,
+        DescribeNatGatewaysRequest, DescribeSubnetsRequest,
+    },
     Ec2Api, ServiceQuotasApi,
+};
+use alien_core::{
+    AwsNetworkPlacement, Network, NetworkSettings, ResourceStatus, Stack, StackState,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -12,17 +18,72 @@ use std::collections::{HashMap, HashSet};
 /// dropping unnamed entries: filling those gaps from later entries would change
 /// the existing controller's placement. An empty result cannot resolve placement.
 pub fn select_network_availability_zones(
-    response: DescribeAvailabilityZonesResponse,
+    response: &DescribeAvailabilityZonesResponse,
     requested: u8,
 ) -> Vec<String> {
     response
         .availability_zone_info
-        .map(|set| set.items)
+        .as_ref()
+        .map(|set| set.items.as_slice())
         .unwrap_or_default()
-        .into_iter()
+        .iter()
         .take(requested as usize)
-        .filter_map(|zone| zone.zone_name)
+        .filter_map(|zone| zone.zone_name.clone())
         .collect()
+}
+
+/// Only pristine creates may choose new placement. A retry's recorded controller
+/// placement must remain authoritative even when its status has returned to Pending.
+pub fn needs_network_placement(state: &StackState, id: &str) -> bool {
+    state.resources.get(id).is_none_or(|current| {
+        current.status == ResourceStatus::Deleted
+            || (current.status == ResourceStatus::Pending
+                && current.internal_state.is_none()
+                && current.last_failed_state.is_none())
+    })
+}
+
+/// Resolve all pristine direct Networks from one provider response. Caller-supplied
+/// metadata must be cleared before this function; unavailable reads leave no plan.
+pub async fn prepare_network_placements(
+    stack: &mut Stack,
+    state: &StackState,
+    ec2: &dyn Ec2Api,
+    region: &str,
+) {
+    let requests = stack
+        .resources
+        .iter()
+        .filter_map(|(id, entry)| {
+            let network = entry.config.downcast_ref::<Network>()?;
+            let NetworkSettings::Create {
+                availability_zones, ..
+            } = network.settings
+            else {
+                return None;
+            };
+            needs_network_placement(state, id).then_some((id.clone(), availability_zones))
+        })
+        .collect::<Vec<_>>();
+    if requests.is_empty() {
+        return;
+    }
+    let Ok(response) = ec2
+        .describe_availability_zones(DescribeAvailabilityZonesRequest::builder().build())
+        .await
+    else {
+        return;
+    };
+    for (id, requested) in requests {
+        let plan = AwsNetworkPlacement {
+            region: region.into(),
+            requested_zones: requested,
+            zones: select_network_availability_zones(&response, requested),
+        };
+        if plan.matches(region, requested) {
+            stack.aws_network_placements.insert(id, plan);
+        }
+    }
 }
 
 /// Read the applied per-AZ limit and join gateway subnet IDs to provider AZ names.
@@ -134,22 +195,103 @@ mod tests {
             .unwrap()
         };
         assert_eq!(
-            select_network_availability_zones(response(), 1),
+            select_network_availability_zones(&response(), 1),
             ["eu-west-1b"]
         );
         assert_eq!(
-            select_network_availability_zones(response(), 2),
+            select_network_availability_zones(&response(), 2),
             ["eu-west-1b"]
         );
         assert_eq!(
-            select_network_availability_zones(response(), 3),
+            select_network_availability_zones(&response(), 3),
             ["eu-west-1b", "eu-west-1a"]
         );
-        assert!(select_network_availability_zones(response(), 0).is_empty());
+        assert!(select_network_availability_zones(&response(), 0).is_empty());
         assert!(
-            select_network_availability_zones(serde_json::from_value(json!({})).unwrap(), 2)
+            select_network_availability_zones(&serde_json::from_value(json!({})).unwrap(), 2)
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn preparation_selects_once_and_never_replans_recovery() {
+        let network = |id: &str| {
+            Network::new(id.into())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build()
+        };
+        let mut stack = Stack::new("placement".into())
+            .add(network("new"), alien_core::ResourceLifecycle::Frozen)
+            .add(network("retry"), alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let mut state = StackState::new(alien_core::Platform::Aws);
+        let mut retry = alien_core::StackResourceState::new_pending(
+            "retry".into(),
+            stack.resources["retry"].config.clone(),
+            None,
+            vec![],
+        );
+        retry.last_failed_state = Some(json!({"availabilityZones": ["eu-west-1a"]}));
+        state.resources.insert("retry".into(), retry);
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_availability_zones()
+            .times(1)
+            .returning(|_| {
+                Ok(
+                    serde_json::from_value(json!({"availabilityZoneInfo":{"item":[
+                        {"zoneName":"eu-west-1b"},{"zoneName":"eu-west-1a"}
+                    ]}}))
+                    .unwrap(),
+                )
+            });
+        prepare_network_placements(&mut stack, &state, &ec2, "eu-west-1").await;
+        assert_eq!(stack.aws_network_placements.len(), 1);
+        assert_eq!(
+            stack.aws_network_placements["new"].zones,
+            ["eu-west-1b", "eu-west-1a"]
+        );
+        assert!(!needs_network_placement(&state, "retry"));
+        state.resources.get_mut("retry").unwrap().last_failed_state = None;
+        assert!(needs_network_placement(&state, "retry"));
+        state.resources.get_mut("retry").unwrap().internal_state = Some(json!({}));
+        assert!(!needs_network_placement(&state, "retry"));
+    }
+
+    #[tokio::test]
+    async fn denied_placement_read_leaves_no_guessed_plan() {
+        let mut stack = Stack::new("placement".into())
+            .add(
+                Network::new("network".into())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_availability_zones()
+            .times(1)
+            .returning(|_| {
+                Err(alien_error::AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteAccessDenied {
+                        resource_type: "AvailabilityZones".into(),
+                        resource_name: "test".into(),
+                    },
+                ))
+            });
+        prepare_network_placements(
+            &mut stack,
+            &StackState::new(alien_core::Platform::Aws),
+            &ec2,
+            "eu-west-1",
+        )
+        .await;
+        assert!(stack.aws_network_placements.is_empty());
     }
 
     fn quotas() -> MockServiceQuotasApi {
