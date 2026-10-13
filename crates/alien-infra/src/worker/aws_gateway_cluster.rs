@@ -239,3 +239,121 @@ fn cloud(message: &str) -> ErrorData {
         resource_id: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_aws_clients::{
+        ecs::{DescribeClustersResponse, MockEcsApi},
+        iam::MockIamApi,
+    };
+    use alien_client_core::ErrorData as ClientError;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    fn owner() -> GatewayCluster {
+        GatewayCluster::new("123456789012", "us-east-1", "stack", "worker").unwrap()
+    }
+    fn reload(owner: &GatewayCluster) -> GatewayCluster {
+        serde_json::from_value(serde_json::to_value(owner).unwrap()).unwrap()
+    }
+
+    fn setup_role() -> MockIamApi {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|name| {
+            assert_eq!(name,"AWSServiceRoleForECS");
+            Ok(serde_json::from_value(json!({"GetRoleResult":{"Role":{
+                "Path":"/aws-service-role/ecs.amazonaws.com/","RoleName":"AWSServiceRoleForECS","RoleId":"role-test",
+                "Arn":"arn:aws:iam::123456789012:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS","CreateDate":"2026-01-01T00:00:00Z"
+            }}})).unwrap())
+        });
+        iam
+    }
+
+    #[tokio::test]
+    async fn missing_or_unreadable_shared_role_refuses_runtime_creation_before_intent() {
+        for denied in [false, true] {
+            let mut owner = owner();
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role().times(1).return_once(move |_| {
+                Err(AlienError::new(if denied {
+                    ClientError::RemoteAccessDenied {
+                        resource_type: "role".into(),
+                        resource_name: "shared".into(),
+                    }
+                } else {
+                    ClientError::RemoteResourceNotFound {
+                        resource_type: "role".into(),
+                        resource_name: "shared".into(),
+                    }
+                }))
+            });
+            let ecs = MockEcsApi::new();
+            let error = owner.step_create(&ecs, &iam).await.unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+            assert!(error.message.contains("requires setup"));
+            assert!(!owner.create_permitted);
+        }
+    }
+
+    #[tokio::test]
+    async fn cluster_crash_recovery_preserves_generation_and_waits_for_service_drain() {
+        let mut owner = owner();
+        let world = Arc::new(Mutex::new(None::<Cluster>));
+        let mut ecs = MockEcsApi::new();
+        let iam = setup_role();
+        let read = world.clone();
+        let arn = owner.arn.clone();
+        ecs.expect_describe_clusters().returning(move |request| {
+            assert_eq!(request.clusters, vec![arn.clone()]);
+            match &*read.lock().unwrap() {
+                Some(cluster) => Ok(DescribeClustersResponse {
+                    clusters: vec![cluster.clone()],
+                    failures: vec![],
+                }),
+                None => Ok(serde_json::from_value(
+                    json!({"clusters":[],"failures":[{"arn":arn,"reason":"MISSING"}]}),
+                )
+                .unwrap()),
+            }
+        });
+        let write = world.clone();
+        let arn = owner.arn.clone();
+        ecs.expect_create_cluster().times(1).return_once(move |request| {
+            *write.lock().unwrap()=Some(serde_json::from_value(json!({"clusterArn":arn,"clusterName":request.cluster_name,"tags":request.tags,
+                "status":"ACTIVE","activeServicesCount":1,"runningTasksCount":0,"pendingTasksCount":0})).unwrap());
+            Err(AlienError::new(ClientError::Timeout {message:"committed create reply lost".into()}))
+        });
+        let write = world.clone();
+        ecs.expect_delete_cluster().times(1).return_once(move |_| {
+            let mut state = write.lock().unwrap();
+            let cluster = state.as_mut().unwrap();
+            assert_eq!(cluster.active_services_count, Some(0));
+            cluster.status = Some("INACTIVE".into());
+            Err(AlienError::new(ClientError::Timeout {
+                message: "committed delete reply lost".into(),
+            }))
+        });
+        assert!(owner.step_create(&ecs, &iam).await.unwrap().is_none());
+        let checkpoint = reload(&owner);
+        assert!(owner.step_create(&ecs, &iam).await.is_err());
+        owner = checkpoint;
+        assert_eq!(
+            owner.step_create(&ecs, &iam).await.unwrap(),
+            Some(owner.arn.clone())
+        );
+        assert!(!owner.step_delete(&ecs, &iam).await.unwrap());
+        assert!(!owner.delete_permitted);
+        world
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .active_services_count = Some(0);
+        assert!(!owner.step_delete(&ecs, &iam).await.unwrap());
+        let checkpoint = reload(&owner);
+        assert!(owner.step_delete(&ecs, &iam).await.is_err());
+        owner = checkpoint;
+        assert!(owner.step_delete(&ecs, &iam).await.unwrap());
+    }
+}
