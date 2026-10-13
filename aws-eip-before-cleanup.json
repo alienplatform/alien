@@ -1,0 +1,10 @@
+{
+  "parentCommit": "aa42e2f38",
+  "cliExitCode": 1,
+  "managerStatus": "initial-setup-failed",
+  "controllerRetries": 10,
+  "taggedResourcesAbsent": true,
+  "activeNatGateways": 0,
+  "fillersDeletedAndVerified": 5,
+  "exactOriginalEipSetRestored": true
+}
