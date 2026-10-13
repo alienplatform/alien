@@ -5,7 +5,10 @@
 //! streaming via `responseTransferMode: STREAM`, which is why a streaming worker
 //! that needs a custom domain is served here rather than through a Function URL.
 
-use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
+use crate::aws::aws_request_utils::{
+    is_json_throttling, is_transient_json_error, sign_send_json_retrying_when,
+    AwsRequestBuilderExt, AwsSignConfig,
+};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, ContextError, IntoAlienError};
@@ -36,6 +39,10 @@ struct ApiGatewayErrorResponse {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
     async fn create_rest_api(&self, request: CreateRestApiRequest) -> Result<RestApi>;
+    async fn create_private_rest_api(
+        &self,
+        request: CreatePrivateRestApiRequest,
+    ) -> Result<RestApi>;
     async fn get_rest_api(&self, rest_api_id: &str) -> Result<RestApi>;
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()>;
 
@@ -68,6 +75,51 @@ pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
     async fn create_domain_name(&self, request: CreateDomainNameRequest) -> Result<DomainName>;
     async fn get_domain_name(&self, domain_name: &str) -> Result<DomainName>;
     async fn delete_domain_name(&self, domain_name: &str) -> Result<()>;
+
+    /// Private domains require their provider ID even when the hostname is unique.
+    async fn create_private_domain_name(
+        &self,
+        request: CreatePrivateDomainNameRequest,
+    ) -> Result<PrivateDomainName>;
+    async fn get_private_domain_name(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+    ) -> Result<PrivateDomainName>;
+    async fn delete_private_domain_name(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+    ) -> Result<()>;
+    async fn update_private_domain_certificate(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+        certificate_arn: &str,
+    ) -> Result<PrivateDomainName>;
+    async fn create_private_base_path_mapping(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+        request: CreateBasePathMappingRequest,
+    ) -> Result<BasePathMapping>;
+    async fn delete_private_base_path_mapping(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+        base_path: &str,
+    ) -> Result<()>;
+
+    async fn create_domain_name_access_association(
+        &self,
+        request: CreateDomainNameAccessAssociationRequest,
+    ) -> Result<DomainNameAccessAssociation>;
+    /// One account-owned page; callers must persist/consume position for complete discovery.
+    async fn get_domain_name_access_associations(
+        &self,
+        position: Option<String>,
+    ) -> Result<DomainNameAccessAssociationsPage>;
+    async fn delete_domain_name_access_association(&self, association_arn: &str) -> Result<()>;
 
     async fn create_base_path_mapping(
         &self,
@@ -135,6 +187,14 @@ impl ApiGatewayClient {
         self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}{}", base_url.trim_end_matches('/'), path);
+        // A create can commit before a 5xx/transport error. Let the durable
+        // controller rediscover its attempt instead of blindly sending again.
+        let retry_when: fn(&alien_error::AlienError<ErrorData>) -> bool = if method == Method::POST
+        {
+            is_json_throttling
+        } else {
+            is_transient_json_error
+        };
 
         let mut builder = self
             .client
@@ -145,13 +205,12 @@ impl ApiGatewayClient {
         if let Some(body) = body {
             builder = builder.content_sha256(&body).body(body.clone());
             let result =
-                crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+                sign_send_json_retrying_when(builder, &self.sign_config(), retry_when).await;
             return Self::map_result(result, operation, resource, Some(&body));
         }
 
         builder = builder.content_sha256("");
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = sign_send_json_retrying_when(builder, &self.sign_config(), retry_when).await;
         Self::map_result(result, operation, resource, None)
     }
 
@@ -175,10 +234,20 @@ impl ApiGatewayClient {
 
         let result = if let Some(body) = body {
             builder = builder.content_sha256(&body).body(body.clone());
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await
+            crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+                builder,
+                &self.sign_config(),
+                crate::aws::aws_request_utils::is_transient_json_error,
+            )
+            .await
         } else {
             builder = builder.content_sha256("");
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await
+            crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+                builder,
+                &self.sign_config(),
+                crate::aws::aws_request_utils::is_transient_json_error,
+            )
+            .await
         };
         Self::map_result(result, operation, resource, None)
     }
@@ -302,6 +371,30 @@ impl ApiGatewayClient {
 impl ApiGatewayApi for ApiGatewayClient {
     async fn create_rest_api(&self, request: CreateRestApiRequest) -> Result<RestApi> {
         let body = Self::serialize(&request, "CreateRestApiRequest")?;
+        self.send_json(
+            Method::POST,
+            "/restapis",
+            Some(body),
+            "CreateRestApi",
+            &request.name,
+        )
+        .await
+    }
+
+    async fn create_private_rest_api(
+        &self,
+        request: CreatePrivateRestApiRequest,
+    ) -> Result<RestApi> {
+        let body = Self::serialize(
+            &serde_json::json!({
+                "name":request.name,
+                "endpointConfiguration":{"types":["PRIVATE"],"vpcEndpointIds":request.vpc_endpoint_ids},
+                "policy":request.policy,
+                "disableExecuteApiEndpoint":request.disable_execute_api_endpoint,
+                "tags":request.tags,
+            }),
+            "CreatePrivateRestApiRequest",
+        )?;
         self.send_json(
             Method::POST,
             "/restapis",
@@ -438,6 +531,165 @@ impl ApiGatewayApi for ApiGatewayClient {
         .await
     }
 
+    async fn create_private_domain_name(
+        &self,
+        request: CreatePrivateDomainNameRequest,
+    ) -> Result<PrivateDomainName> {
+        let body = Self::serialize(
+            &serde_json::json!({
+                "domainName": request.domain_name,
+                "certificateArn": request.certificate_arn,
+                "endpointConfiguration": { "types": ["PRIVATE"] },
+                "securityPolicy": "TLS_1_2",
+                "policy": request.policy,
+                "tags": request.tags,
+            }),
+            "CreatePrivateDomainNameRequest",
+        )?;
+        self.send_json(
+            Method::POST,
+            "/domainnames",
+            Some(body),
+            "CreateDomainName",
+            &request.domain_name,
+        )
+        .await
+    }
+
+    async fn get_private_domain_name(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+    ) -> Result<PrivateDomainName> {
+        let path = private_domain_path(domain_name, domain_name_id, "")?;
+        self.send_json(Method::GET, &path, None, "GetDomainName", domain_name)
+            .await
+    }
+
+    async fn delete_private_domain_name(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+    ) -> Result<()> {
+        let path = private_domain_path(domain_name, domain_name_id, "")?;
+        self.send_no_response(Method::DELETE, &path, None, "DeleteDomainName", domain_name)
+            .await
+    }
+
+    async fn update_private_domain_certificate(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+        certificate_arn: &str,
+    ) -> Result<PrivateDomainName> {
+        let path = private_domain_path(domain_name, domain_name_id, "")?;
+        let body = Self::serialize(
+            &serde_json::json!({"patchOperations": [{"op": "replace", "path": "/certificateArn", "value": certificate_arn}]}),
+            "UpdatePrivateDomainNameRequest",
+        )?;
+        self.send_json(
+            Method::PATCH,
+            &path,
+            Some(body),
+            "UpdateDomainName",
+            domain_name,
+        )
+        .await
+    }
+
+    async fn create_private_base_path_mapping(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+        request: CreateBasePathMappingRequest,
+    ) -> Result<BasePathMapping> {
+        let path = private_domain_path(domain_name, domain_name_id, "/basepathmappings")?;
+        let body = Self::serialize(&request, "CreateBasePathMappingRequest")?;
+        self.send_json(
+            Method::POST,
+            &path,
+            Some(body),
+            "CreateBasePathMapping",
+            domain_name,
+        )
+        .await
+    }
+
+    async fn delete_private_base_path_mapping(
+        &self,
+        domain_name: &str,
+        domain_name_id: &str,
+        base_path: &str,
+    ) -> Result<()> {
+        let suffix = format!("/basepathmappings/{}", urlencoding::encode(base_path));
+        let path = private_domain_path(domain_name, domain_name_id, &suffix)?;
+        self.send_no_response(
+            Method::DELETE,
+            &path,
+            None,
+            "DeleteBasePathMapping",
+            domain_name,
+        )
+        .await
+    }
+
+    async fn create_domain_name_access_association(
+        &self,
+        request: CreateDomainNameAccessAssociationRequest,
+    ) -> Result<DomainNameAccessAssociation> {
+        let body = Self::serialize(
+            &serde_json::json!({
+                "accessAssociationSource":request.vpc_endpoint_id,
+                "accessAssociationSourceType":"VPCE",
+                "domainNameArn":request.domain_name_arn,
+                "tags":request.tags,
+            }),
+            "CreateDomainNameAccessAssociationRequest",
+        )?;
+        self.send_json(
+            Method::POST,
+            "/domainnameaccessassociations",
+            Some(body),
+            "CreateDomainNameAccessAssociation",
+            &request.domain_name_arn,
+        )
+        .await
+    }
+
+    async fn get_domain_name_access_associations(
+        &self,
+        position: Option<String>,
+    ) -> Result<DomainNameAccessAssociationsPage> {
+        let mut path = "/domainnameaccessassociations?limit=500&resourceOwner=SELF".to_string();
+        if let Some(position) = position {
+            path.push_str("&position=");
+            path.push_str(&urlencoding::encode(&position));
+        }
+        self.send_json(
+            Method::GET,
+            &path,
+            None,
+            "GetDomainNameAccessAssociations",
+            "account-owned associations",
+        )
+        .await
+    }
+
+    async fn delete_domain_name_access_association(&self, association_arn: &str) -> Result<()> {
+        let path = format!(
+            "/domainnameaccessassociations/{}",
+            urlencoding::encode(association_arn)
+        );
+        self.send_no_response(
+            Method::DELETE,
+            &path,
+            None,
+            "DeleteDomainNameAccessAssociation",
+            association_arn,
+        )
+        .await
+    }
+
     async fn tag_resource(
         &self,
         resource_arn: &str,
@@ -466,6 +718,71 @@ impl ApiGatewayApi for ApiGatewayClient {
     }
 }
 
+#[derive(Debug, Clone, Builder)]
+pub struct CreateDomainNameAccessAssociationRequest {
+    pub vpc_endpoint_id: String,
+    pub domain_name_arn: String,
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainNameAccessAssociation {
+    pub access_association_source: Option<String>,
+    pub access_association_source_type: Option<String>,
+    pub domain_name_access_association_arn: Option<String>,
+    pub domain_name_arn: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainNameAccessAssociationsPage {
+    #[serde(default, rename = "item")]
+    pub items: Vec<DomainNameAccessAssociation>,
+    pub position: Option<String>,
+}
+
+/// Private-domain query IDs are mandatory; an omitted ID can select a public
+/// domain with the same hostname. Validate before any request, including delete.
+fn private_domain_path(domain_name: &str, domain_name_id: &str, suffix: &str) -> Result<String> {
+    if domain_name_id.trim().is_empty() {
+        return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
+            message: "Private API Gateway domain operations require a domainNameId".to_string(),
+            field_name: Some("domainNameId".to_string()),
+        }));
+    }
+    Ok(format!(
+        "/domainnames/{}{}?domainNameId={}",
+        urlencoding::encode(domain_name),
+        suffix,
+        urlencoding::encode(domain_name_id)
+    ))
+}
+
+/// The SDK fixes PRIVATE endpoint type and TLS1.2 for this request. The policy
+/// must restrict execute-api invocation to the owned VPC endpoint.
+#[derive(Debug, Clone, Builder)]
+pub struct CreatePrivateDomainNameRequest {
+    pub domain_name: String,
+    pub certificate_arn: String,
+    pub policy: String,
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateDomainName {
+    pub domain_name: Option<String>,
+    pub domain_name_id: Option<String>,
+    pub domain_name_arn: Option<String>,
+    pub domain_name_status: Option<String>,
+    pub domain_name_status_message: Option<String>,
+    pub certificate_arn: Option<String>,
+    pub policy: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+}
+
 // ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
@@ -474,6 +791,17 @@ impl ApiGatewayApi for ApiGatewayClient {
 #[serde(rename_all = "camelCase")]
 pub struct EndpointConfiguration {
     pub types: Vec<String>,
+}
+
+/// Private REST API creation carries its invocation policy and VPC endpoint
+/// association from the first provider mutation.
+#[derive(Debug, Clone, Builder)]
+pub struct CreatePrivateRestApiRequest {
+    pub name: String,
+    pub vpc_endpoint_ids: Vec<String>,
+    pub policy: String,
+    pub disable_execute_api_endpoint: bool,
+    pub tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
