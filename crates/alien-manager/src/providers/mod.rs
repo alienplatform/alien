@@ -7,7 +7,9 @@ pub mod oss_authz;
 pub mod otlp_forwarding;
 pub mod permissive_auth;
 pub mod recent_logs;
+pub mod single_workspace_projects;
 pub mod token_db_validator;
 
 pub use null_telemetry::NullTelemetryBackend;
 pub use oss_authz::OssAuthz;
+pub use single_workspace_projects::SingleWorkspaceProjects;

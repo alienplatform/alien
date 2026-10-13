@@ -387,6 +387,7 @@ async fn handed_off_deployment(answer: Answer) -> Fixture {
     let state = AppState {
         deployment_store: store.clone(),
         release_store,
+        project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
         token_store,
         auth_validator,
         authz,

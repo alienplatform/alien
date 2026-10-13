@@ -14,7 +14,8 @@ use alien_manager::providers::OssAuthz;
 use alien_manager::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore};
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, DeploymentFilter,
-    DeploymentGroupRecord, DeploymentRecord, DeploymentStore, ReleaseRecord, TelemetrySignal,
+    DeploymentGroupRecord, DeploymentRecord, DeploymentStore, ProjectRecord, ReleaseRecord,
+    TelemetrySignal,
 };
 use alien_manager::AlienManagerBuilder;
 use async_trait::async_trait;
@@ -56,11 +57,14 @@ impl AuthValidator for PusherValidator {
 struct PusherAuthz;
 
 impl Authz for PusherAuthz {
-    fn can_push_image(&self, s: &Subject, project_id: &str, repo_name: &str) -> bool {
+    fn can_push_image(&self, s: &Subject, project: &ProjectRecord, repo_name: &str) -> bool {
         match (&s.scope, s.role) {
-            (Scope::Project { project_id: pid }, Role::SandboxImagePusher) => pid == project_id,
-            _ => OssAuthz.can_push_image(s, project_id, repo_name),
+            (Scope::Project { project_id: pid }, Role::SandboxImagePusher) => pid == &project.id,
+            _ => OssAuthz.can_push_image(s, project, repo_name),
         }
+    }
+    fn can_pull_image(&self, s: &Subject, project: &ProjectRecord, repo_name: &str) -> bool {
+        OssAuthz.can_pull_image(s, project, repo_name)
     }
     fn can_create_release(&self, s: &Subject, p: &str) -> bool {
         OssAuthz.can_create_release(s, p)
