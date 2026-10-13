@@ -239,6 +239,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_cli_client_moves_to_the_next_address_when_one_never_answers() {
+        // A host behind a load balancer resolves to several addresses; on the
+        // affected networks a connect to one of them gets no answer.
+        let (_dead_listener, dead, _fillers) = syn_dropping_listener().await;
+        let live_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let live = live_listener.local_addr().expect("local addr");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = live_listener.accept().await.expect("accept");
+            let mut buf = vec![0u8; 4096];
+            let mut received = Vec::new();
+            while !received.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = stream.read(&mut buf).await.expect("read");
+                assert!(n > 0, "client closed before sending the request");
+                received.extend_from_slice(&buf[..n]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                .await
+                .expect("write");
+        });
+
+        let client = builder()
+            .resolve_to_addrs("api.multi-address.test", &[dead, live])
+            .build()
+            .expect("client");
+        let started = Instant::now();
+        let response = tokio::time::timeout(
+            Duration::from_secs(25),
+            client.get("http://api.multi-address.test/health").send(),
+        )
+        .await
+        .expect("request must not wait for the OS connect timeout on the dead address")
+        .expect("the live address should answer");
+
+        let elapsed = started.elapsed();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.expect("body"), "ok");
+        // The connect timeout is split across the two addresses.
+        assert!(
+            elapsed >= CONNECT_TIMEOUT / 2 - Duration::from_millis(500),
+            "took {elapsed:?}"
+        );
+        assert!(elapsed < CONNECT_TIMEOUT, "took {elapsed:?}");
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
     async fn a_failure_after_the_connection_is_up_is_not_retried() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local addr");

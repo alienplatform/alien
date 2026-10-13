@@ -17,10 +17,7 @@ use alien_platform_api::{
     Client as SdkClient,
 };
 use dirs::config_dir;
-use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
-    Client,
-};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
