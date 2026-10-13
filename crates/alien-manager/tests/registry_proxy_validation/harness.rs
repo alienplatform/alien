@@ -268,6 +268,25 @@ pub async fn start_manager(registry_url: String) -> Manager {
 /// Like `start_manager`, with the registry binding set through `binding_env`. A binding named
 /// `artifacts` registers no route, so the manager serves it with an empty routing table.
 pub async fn start_manager_with_binding(registry_url: String, binding_env: &str) -> Manager {
+    start_manager_with_auth(
+        registry_url,
+        binding_env,
+        tempfile::tempdir().unwrap(),
+        Arc::new(TestValidator),
+        Arc::new(TestAuthz),
+    )
+    .await
+}
+
+/// A manager authenticating with `validator` and authorizing with `authz`, whose database lives
+/// in `state_dir` (`test.db`), so a test can create deployments and releases before it starts.
+pub async fn start_manager_with_auth(
+    registry_url: String,
+    binding_env: &str,
+    state_dir: tempfile::TempDir,
+    validator: Arc<dyn AuthValidator>,
+    authz: Arc<dyn Authz>,
+) -> Manager {
     let binding = alien_core::bindings::ArtifactRegistryBinding::local(registry_url, None);
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     env_map.insert(
@@ -280,7 +299,6 @@ pub async fn start_manager_with_binding(registry_url: String, binding_env: &str)
             .await
             .unwrap(),
     );
-    let state_dir = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let url = format!("http://127.0.0.1:{port}");
@@ -305,8 +323,8 @@ pub async fn start_manager_with_binding(registry_url: String, binding_env: &str)
     };
     let toml_config = alien_manager::standalone_config::ManagerTomlConfig::default();
     let manager = AlienManagerBuilder::new(config)
-        .auth_validator(Arc::new(TestValidator))
-        .authz(Arc::new(TestAuthz))
+        .auth_validator(validator)
+        .authz(authz)
         .bindings_provider(bindings_provider)
         .with_standalone_defaults(&toml_config)
         .await
