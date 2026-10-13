@@ -586,15 +586,37 @@ impl AzureRemoteStackManagementController {
         let azure_cfg = ctx.get_azure_config()?;
 
         if let Some(uami_resource_id) = &self.uami_resource_id {
-            let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
-            let identity_name = get_management_identity_name(ctx.resource_prefix);
+            // Setup may import an identity in an existing resource group without
+            // adding a resource-group controller to the stack.
+            let parts: Vec<_> = uami_resource_id.split('/').collect();
+            let (resource_group_name, identity_name) = match parts.as_slice() {
+                ["", subscriptions, subscription, groups, group, providers, namespace, identities, name]
+                    if subscriptions.eq_ignore_ascii_case("subscriptions")
+                        && subscription.eq_ignore_ascii_case(&azure_cfg.subscription_id)
+                        && groups.eq_ignore_ascii_case("resourceGroups")
+                        && providers.eq_ignore_ascii_case("providers")
+                        && namespace.eq_ignore_ascii_case("Microsoft.ManagedIdentity")
+                        && identities.eq_ignore_ascii_case("userAssignedIdentities")
+                        && !group.is_empty()
+                        && !name.is_empty() =>
+                {
+                    (*group, *name)
+                }
+                _ => {
+                    return Err(AlienError::new(ErrorData::InfrastructureError {
+                        message: format!("Invalid management identity ID: {uami_resource_id}"),
+                        operation: Some("management_identity_heartbeat".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
 
             let client = ctx
                 .service_provider
                 .get_azure_managed_identity_client(azure_cfg)?;
 
             let identity = client
-                .get_user_assigned_identity(&resource_group_name, &identity_name)
+                .get_user_assigned_identity(resource_group_name, identity_name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to get management identity during heartbeat".to_string(),

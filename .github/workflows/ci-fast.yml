@@ -342,7 +342,7 @@ jobs:
           # Compile non-default feature coverage in the same unified graph. Running
           # these as later `cargo test` commands adds two serial recompilation tails.
           read -r -a SELECTION <<< "$RUST_SELECTION"
-          cargo nextest run "${SELECTION[@]}" --filter-expr "${FILTER_CLAUSES[*]}"
+          cargo nextest run "${SELECTION[@]}" --no-fail-fast --filter-expr "${FILTER_CLAUSES[*]}"
 
       - name: Platform SDK full-api tests
         # The workspace builds the filtered client; tests that need operations outside it

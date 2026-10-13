@@ -38,9 +38,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use tracing::{info, warn};
@@ -48,6 +50,9 @@ use tracing::{info, warn};
 const BASE_IMAGE_BUILD_MAX_ATTEMPTS: usize = 3;
 const IMAGE_PUSH_MAX_ATTEMPTS: usize = 3;
 const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
+
+static IMAGE_EXPORT_LOCKS: LazyLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ArtifactCacheMetadata {
@@ -3646,8 +3651,7 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
     }
 }
 
-/// Pull a Docker image and export it to OCI tarballs for each target architecture.
-/// This handles both registry images (nginx:latest) and local images (my-app:v1).
+/// Resolve a registry image and export an OCI archive for each target architecture.
 #[alien_event(AlienEvent::BuildingResource {
     resource_name: container_name.to_string(),
     resource_type: "container".to_string(),
@@ -3684,11 +3688,35 @@ async fn pull_and_export_image(
             reason: "Failed to create container directory for export".to_string(),
         })?;
 
-    // Pull the image for each target architecture
-    use std::process::Stdio;
-    use tokio::process::Command;
+    // Classic Docker stores one architecture under a tag. Keep pulls and saves
+    // for the same repository together, including short/fully qualified aliases.
+    // Unrelated repositories can still export concurrently.
+    let image_reference = Reference::try_from(image).into_alien_error().context(
+        ErrorData::InvalidResourceConfig {
+            resource_id: container_name.to_string(),
+            reason: format!("Invalid image reference '{image}'"),
+        },
+    )?;
+    let image_key = format!(
+        "{}/{}",
+        image_reference.registry(),
+        image_reference.repository()
+    );
+    let image_lock = {
+        let mut locks = IMAGE_EXPORT_LOCKS.lock().await;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        match locks.get(&image_key).and_then(Weak::upgrade) {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(image_key, Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
 
     for target in targets {
+        let image_guard = image_lock.lock().await;
         let arch_str = match target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
@@ -3701,8 +3729,8 @@ async fn pull_and_export_image(
         // Pull the image with specific platform
         let pull_output = Command::new("docker")
             .args(&["pull", "--platform", &platform_str, image])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .output()
             .await
             .into_alien_error()
@@ -3730,8 +3758,8 @@ async fn pull_and_export_image(
 
         let save_output = Command::new("docker")
             .args(&["save", "-o", &output_tarball.to_string_lossy(), image])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .output()
             .await
             .into_alien_error()
@@ -3748,6 +3776,8 @@ async fn pull_and_export_image(
                 &save_output,
             ));
         }
+
+        drop(image_guard);
 
         // Flatten the saved archive to a single image manifest before the OCI reader sees it.
         crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
@@ -4582,6 +4612,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pull_and_export_parallel_architectures() {
+        if !docker_available() {
+            eprintln!("Skipping test_pull_and_export_parallel_architectures: docker not available");
+            return;
+        }
+        let build_dir = tempdir().unwrap();
+        let settings = BuildSettings {
+            output_directory: build_dir.path().to_str().unwrap().to_string(),
+            platform: PlatformBuildSettings::Test {},
+            targets: Some(vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let mut reversed = settings.clone();
+        reversed.targets.as_mut().unwrap().reverse();
+
+        // Both containers share a mutable Docker tag, but request opposite
+        // architectures first. Every output must still match its target.
+        let (first, second) = tokio::join!(
+            pull_and_export_image(
+                "alpine:latest",
+                "parallel-first",
+                "test-stack",
+                &settings,
+                build_dir.path()
+            ),
+            pull_and_export_image(
+                "docker.io/library/alpine:latest",
+                "parallel-second",
+                "test-stack",
+                &reversed,
+                build_dir.path()
+            ),
+        );
+        for result in [first, second] {
+            let directory = PathBuf::from(result.expect("parallel export should succeed"));
+            for (target, architecture) in [
+                (BinaryTarget::LinuxX64, "amd64"),
+                (BinaryTarget::LinuxArm64, "arm64"),
+            ] {
+                let target = target.runtime_platform_id();
+                let file =
+                    std::fs::File::open(directory.join(format!("{target}.oci.tar"))).unwrap();
+                let mut archive = tar::Archive::new(file);
+                let mut blobs = HashMap::new();
+                for entry in archive.entries().unwrap() {
+                    let mut entry = entry.unwrap();
+                    let path = entry.path().unwrap().to_string_lossy().into_owned();
+                    let mut bytes = Vec::new();
+                    std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+                    blobs.insert(path, bytes);
+                }
+                let index: serde_json::Value =
+                    serde_json::from_slice(&blobs["index.json"]).unwrap();
+                let manifest_path = index["manifests"][0]["digest"]
+                    .as_str()
+                    .unwrap()
+                    .replace(':', "/");
+                let manifest: serde_json::Value =
+                    serde_json::from_slice(&blobs[&format!("blobs/{manifest_path}")]).unwrap();
+                let config_path = manifest["config"]["digest"]
+                    .as_str()
+                    .unwrap()
+                    .replace(':', "/");
+                let config: serde_json::Value =
+                    serde_json::from_slice(&blobs[&format!("blobs/{config_path}")]).unwrap();
+                assert_eq!(config["architecture"], architecture);
+                assert_eq!(config["os"], "linux");
+                Image::from_tarball(directory.join(format!("{target}.oci.tar")))
+                    .unwrap()
+                    .get_metadata()
+                    .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_pull_nonexistent_image_fails() {
         if !docker_available() {
             eprintln!("Skipping test_pull_nonexistent_image_fails: docker not available");
@@ -4612,13 +4722,13 @@ mod tests {
         )
         .await;
 
-        // Should fail with docker pull error
+        // Missing registry images must fail before an artifact is produced.
         assert!(result.is_err(), "Should fail for non-existent image");
         let err = result.unwrap_err();
         let err_str = err.to_string();
         assert!(
             err_str.contains("docker pull failed") || err_str.contains("not found"),
-            "Error should mention docker pull failure: {}",
+            "Error should identify the image resolution failure: {}",
             err_str
         );
     }

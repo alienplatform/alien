@@ -32,6 +32,7 @@ fn container(id: &str, image: &str, persistent: bool) -> Container {
     if persistent {
         builder
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),

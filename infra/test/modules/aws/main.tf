@@ -479,6 +479,28 @@ resource "aws_iam_policy" "manager" {
         ]
       },
       {
+        Sid    = "NativeEncryptionSetup"
+        Effect = "Allow"
+        Action = [
+          "kms:CreateKey", "kms:DescribeKey", "kms:GetKeyPolicy", "kms:PutKeyPolicy",
+          "kms:EnableKey", "kms:DisableKey", "kms:EnableKeyRotation",
+          "kms:GetKeyRotationStatus", "kms:TagResource", "kms:UntagResource",
+          "kms:ListResourceTags", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion",
+          "kms:CreateCustomKeyStore", "kms:DescribeCustomKeyStores",
+          "kms:ConnectCustomKeyStore", "kms:DisconnectCustomKeyStore",
+          "kms:UpdateCustomKeyStore", "kms:DeleteCustomKeyStore",
+          "kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant", "kms:RetireGrant",
+          "kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey*", "kms:ReEncrypt*",
+          "rds:CreateDBCluster", "rds:CreateDBInstance", "rds:CreateDBSubnetGroup",
+          "rds:DescribeDBClusters", "rds:DescribeDBInstances", "rds:DescribeDBSubnetGroups",
+          "rds:ModifyDBCluster", "rds:ModifyDBInstance", "rds:StartDBCluster",
+          "rds:StopDBCluster", "rds:RebootDBInstance", "rds:DeleteDBCluster",
+          "rds:DeleteDBInstance", "rds:DeleteDBSubnetGroup", "rds:AddTagsToResource",
+          "rds:RemoveTagsFromResource", "rds:ListTagsForResource",
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "AllServices"
         Effect = "Allow"
         Action = [

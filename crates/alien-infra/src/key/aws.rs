@@ -20,6 +20,11 @@ use crate::{
 
 #[controller]
 pub struct AwsKeyController {
+    // Older installations have only DescribeKey permission until setup is rerun.
+    #[serde(default)]
+    pub(crate) availability_probe: bool,
+    #[serde(default)]
+    pub(crate) available: Option<bool>,
     pub(crate) key_arn: Option<String>,
     pub(crate) region: Option<String>,
 }
@@ -39,6 +44,7 @@ impl AwsKeyController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.available = Some(false);
         let config = ctx.desired_resource_config::<Key>()?;
         let key_arn = self.key_arn.as_deref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -46,10 +52,11 @@ impl AwsKeyController {
                 message: "Imported AWS key is missing its ARN".to_string(),
             })
         })?;
-        let metadata = ctx
+        let client = ctx
             .service_provider
             .get_aws_kms_client(ctx.get_aws_config()?)
-            .await?
+            .await?;
+        let metadata = client
             .describe_key(key_arn)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -63,11 +70,24 @@ impl AwsKeyController {
                 message: "AWS KMS returned metadata for a different key".to_string(),
             }));
         }
+        let mut usable = metadata.key_state == "Enabled" && metadata.enabled;
+        if usable
+            && self.availability_probe
+            && metadata.origin.as_deref() == Some("EXTERNAL_KEY_STORE")
+        {
+            // DescribeKey cannot observe the external customer's key. Encrypting
+            // public probe text exercises the gateway without permitting data reads.
+            usable = alien_aws_clients::kms::probe_external_key(client.as_ref(), key_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to check customer key availability".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
+        self.available = Some(usable);
         let (health, lifecycle) = match metadata.key_state.as_str() {
-            "Enabled" if metadata.enabled => {
-                (ObservedHealth::Healthy, ProviderLifecycleState::Running)
-            }
-            "Disabled" => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
+            "Enabled" if usable => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
+            "Enabled" | "Disabled" => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
             "PendingDeletion" | "PendingReplicaDeletion" => {
                 (ObservedHealth::Unhealthy, ProviderLifecycleState::Deleting)
             }
@@ -84,7 +104,8 @@ impl AwsKeyController {
                 status: KeyHeartbeatStatus {
                     health,
                     lifecycle,
-                    message: None,
+                    message: (self.available != Some(true))
+                        .then(|| "customer key unavailable".to_string()),
                 },
                 key_arn: metadata.arn,
                 key_state: metadata.key_state,
@@ -96,7 +117,7 @@ impl AwsKeyController {
         });
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(300)),
+            suggested_delay: Some(Duration::from_secs(30)),
         })
     }
 
@@ -110,9 +131,14 @@ impl AwsKeyController {
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn requires_convergence_reconciliation(&self) -> bool {
+        true
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         let key_arn = self.key_arn.clone()?;
         Some(ResourceOutputs::new(KeyOutputs {
+            available: Some(self.available.unwrap_or(false)),
             fingerprint: KeyFingerprint::Aws {
                 key_arn: key_arn.clone(),
             },
@@ -138,8 +164,21 @@ impl AwsKeyController {
 #[derive(Debug, Default)]
 pub struct AwsKeyImporter;
 
+#[cfg(all(test, feature = "test"))]
+#[path = "aws_tests.rs"]
+mod tests;
+
 impl ResourceImporter for AwsKeyImporter {
     type ImportData = AwsKeyImportData;
+
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> alien_core::Result<StackResourceState> {
+        super::merge_key_reimport(existing, imported, ctx)
+    }
 
     fn import(
         &self,
@@ -149,6 +188,8 @@ impl ResourceImporter for AwsKeyImporter {
         make_imported_state(
             AwsKeyController {
                 state: AwsKeyState::Ready,
+                available: None,
+                availability_probe: data.availability_probe,
                 key_arn: Some(data.key_arn),
                 region: Some(ctx.region.to_string()),
                 _internal_stay_count: None,

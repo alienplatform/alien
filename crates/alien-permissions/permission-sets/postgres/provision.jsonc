@@ -11,6 +11,7 @@
             "rds:CreateDBCluster",
             "rds:DeleteDBCluster",
             "rds:ModifyDBCluster",
+            "rds:StartDBCluster",
             "rds:CreateDBInstance",
             "rds:DeleteDBInstance",
             "rds:ModifyDBInstance",

@@ -515,8 +515,8 @@ fn setup_update_authorization_matches(
     authorization: &alien_core::SetupUpdateAuthorization,
 ) -> bool {
     old_stack.is_some_and(|old_stack| {
-        old_stack.setup_owned_digest() == authorization.baseline_frozen_digest
-    }) && target_stack.setup_owned_digest() == authorization.target_frozen_digest
+        old_stack.setup_update_digest() == authorization.baseline_frozen_digest
+    }) && target_stack.setup_update_digest() == authorization.target_frozen_digest
 }
 
 impl Default for PreflightRunner {
@@ -622,8 +622,8 @@ mod setup_update_authorization_tests {
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
         SetupUpdateAuthorization {
             nonce: "revision".to_string(),
-            baseline_frozen_digest: stack.setup_owned_digest(),
-            target_frozen_digest: stack.setup_owned_digest(),
+            baseline_frozen_digest: stack.setup_update_digest(),
+            target_frozen_digest: stack.setup_update_digest(),
             release_id: "release".to_string(),
             setup_target: "target".to_string(),
             setup_fingerprint: "fingerprint".to_string(),
@@ -697,6 +697,78 @@ mod setup_update_authorization_tests {
             .await
             .expect("explicit setup authority may prepare the new storage");
         assert!(authorized);
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn permission_updates_require_exact_setup_authority() {
+        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+
+        let baseline = empty_stack();
+        let mut target = baseline.clone();
+        target.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("database", ["postgres/key-recovery"]),
+        );
+        let mut authority = authorization(&baseline);
+        let runner = PreflightRunner::with_registry({
+            let mut registry = crate::PreflightRegistry::new();
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::PermissionProfilesUnchangedCheck,
+            ));
+            registry
+        });
+        let config = deployment_config();
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        for stale_authority in [None, Some(&authority)] {
+            let error = runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&baseline),
+                    stale_authority,
+                    None,
+                )
+                .await
+                .expect_err("an uninstalled grant requires setup");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        }
+        authority.target_frozen_digest = target.setup_update_digest();
+        let (prepared, _, authorized) = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&baseline),
+                Some(&authority),
+                None,
+            )
+            .await
+            .expect("setup installed this exact grant");
+        assert!(authorized);
+        assert_eq!(prepared.permissions, target.permissions);
+
+        target.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("database", ["postgres/provision"]),
+        );
+        let error = runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &config,
+                &client,
+                Some(&baseline),
+                Some(&authority),
+                None,
+            )
+            .await
+            .expect_err("recovery authority cannot authorize provisioning");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 
     #[test]
@@ -878,8 +950,8 @@ mod setup_update_authorization_tests {
 
             let rerun = SetupUpdateAuthorization {
                 nonce: "revision".to_string(),
-                baseline_frozen_digest: old.setup_owned_digest(),
-                target_frozen_digest: target.setup_owned_digest(),
+                baseline_frozen_digest: old.setup_update_digest(),
+                target_frozen_digest: target.setup_update_digest(),
                 release_id: "release".to_string(),
                 setup_target: "target".to_string(),
                 setup_fingerprint: "fingerprint".to_string(),

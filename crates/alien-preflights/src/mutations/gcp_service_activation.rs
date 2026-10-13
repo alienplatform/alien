@@ -142,6 +142,12 @@ impl GcpServiceActivationMutation {
                         "storage.googleapis.com".to_string(),
                     );
                 }
+                "key" => {
+                    services.insert(
+                        "enable-cloud-kms".to_string(),
+                        "cloudkms.googleapis.com".to_string(),
+                    );
+                }
                 "role" => {
                     services.insert("enable-iam".to_string(), "iam.googleapis.com".to_string());
                     services.insert(

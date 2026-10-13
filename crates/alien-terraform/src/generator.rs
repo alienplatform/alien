@@ -601,6 +601,7 @@ fn retained_key_detach_script(
         match target.cloud_platform() {
             alien_core::Platform::Aws => {
                 addresses.push(format!("aws_kms_key.{label}"));
+                addresses.push(format!("aws_kms_key.{label}[0]"));
             }
             alien_core::Platform::Gcp => {
                 addresses.push(format!("google_kms_crypto_key.{label}"));
@@ -992,7 +993,12 @@ fn is_count_attribute(structure: &Structure) -> bool {
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {
-    let mut structures: Vec<Structure> = Vec::new();
+    let mut structures: Vec<Structure> = fragment
+        .variable_blocks
+        .into_iter()
+        .chain(fragment.moved_blocks)
+        .map(Structure::Block)
+        .collect();
     for data_block in fragment.data_blocks {
         structures.push(Structure::Block(data_block));
     }
