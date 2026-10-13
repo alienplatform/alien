@@ -54,7 +54,7 @@ fn client(world: Arc<Mutex<World>>) -> MockElbv2Api {
     elb.expect_create_target_group().returning(move |request| {
         let mut state = state.lock().unwrap();
         assert!(state.group.is_none());
-        let group = json!({"TargetGroupArn":"group","TargetGroupName":request.name,"Protocol":request.protocol,"Port":request.port,"VpcId":request.vpc_id,"TargetType":request.target_type});
+        let group = json!({"TargetGroupArn":"group","TargetGroupName":request.name,"Protocol":request.protocol,"Port":request.port,"VpcId":request.vpc_id,"TargetType":request.target_type,"HealthCheckPort":request.health_check_port});
         state.group = Some(group.clone());
         state.tags.insert("group".to_string(), request.tags.unwrap());
         state.committed("create-group")?;
@@ -277,44 +277,61 @@ async fn every_preparation_checkpoint_can_resume_or_delete_with_one_mutation_per
 
 #[tokio::test]
 async fn partial_child_progress_survives_lost_create_responses_without_duplicate_resources() {
-    for operation in ["create-group", "create-lb", "create-listener"] {
-        let world = Arc::new(Mutex::new(World {
-            lose_response: Some(operation),
-            ..World::default()
-        }));
-        let elb = client(world.clone());
-        let mut frontend = AwsVmFrontend::default();
-        let mut ready = None;
-        let mut failures = 0;
-        for _ in 0..15 {
-            let saved = reload(&frontend);
-            let before = world.lock().unwrap().mutations.len();
-            let result = frontend.step_prepare(&elb, plan(false, true)).await;
-            assert!(world.lock().unwrap().mutations.len() - before <= 1);
-            match result {
-                Ok(Some(prepared)) => {
-                    ready = Some(prepared);
-                    break;
+    for ip_targets in [false, true] {
+        for operation in ["create-group", "create-lb", "create-listener"] {
+            let world = Arc::new(Mutex::new(World {
+                lose_response: Some(operation),
+                ..World::default()
+            }));
+            let elb = client(world.clone());
+            let mut frontend = AwsVmFrontend::default();
+            let mut ready = None;
+            let mut failures = 0;
+            for _ in 0..15 {
+                let saved = reload(&frontend);
+                let before = world.lock().unwrap().mutations.len();
+                let mut desired = plan(false, true);
+                if ip_targets {
+                    desired.target_group.target_type = Some("ip".into());
+                    desired.target_group.health_check_port = Some("8081".into());
                 }
-                Ok(None) => frontend = reload(&frontend),
-                Err(_) => {
-                    failures += 1;
-                    frontend = saved;
+                let result = frontend.step_prepare(&elb, desired).await;
+                assert!(world.lock().unwrap().mutations.len() - before <= 1);
+                match result {
+                    Ok(Some(prepared)) => {
+                        ready = Some(prepared);
+                        break;
+                    }
+                    Ok(None) => frontend = reload(&frontend),
+                    Err(_) => {
+                        failures += 1;
+                        frontend = saved;
+                    }
                 }
             }
+            let prepared = ready.expect("frontend preparation did not finish");
+            assert_eq!(failures, 1);
+            assert!(world.lock().unwrap().lose_response.is_none());
+            assert_eq!(prepared.target_group_arn, "group");
+            assert_eq!(prepared.load_balancer_arn, "lb");
+            assert_eq!(prepared.listener_arn, "listener");
+            assert_eq!(prepared.endpoint.dns_name, "lb.example.test");
+            assert_eq!(frontend.serving_certificate_arns(), ["cert"]);
+            assert_eq!(
+                world.lock().unwrap().group.as_ref().unwrap()["TargetType"],
+                if ip_targets { "ip" } else { "instance" }
+            );
+            if ip_targets {
+                assert_eq!(
+                    world.lock().unwrap().group.as_ref().unwrap()["HealthCheckPort"],
+                    "8081"
+                );
+            }
+            assert_eq!(
+                world.lock().unwrap().mutations,
+                ["create-group", "create-lb", "create-listener"]
+            );
         }
-        let prepared = ready.expect("frontend preparation did not finish");
-        assert_eq!(failures, 1);
-        assert!(world.lock().unwrap().lose_response.is_none());
-        assert_eq!(prepared.target_group_arn, "group");
-        assert_eq!(prepared.load_balancer_arn, "lb");
-        assert_eq!(prepared.listener_arn, "listener");
-        assert_eq!(prepared.endpoint.dns_name, "lb.example.test");
-        assert_eq!(frontend.serving_certificate_arns(), ["cert"]);
-        assert_eq!(
-            world.lock().unwrap().mutations,
-            ["create-group", "create-lb", "create-listener"]
-        );
     }
 }
 

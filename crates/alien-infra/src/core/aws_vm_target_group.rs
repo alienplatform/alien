@@ -296,9 +296,9 @@ pub(super) fn prepare_request(
         || request
             .target_type
             .as_deref()
-            .is_some_and(|kind| kind != "instance")
+            .is_some_and(|kind| !matches!(kind, "instance" | "ip"))
     {
-        return Err(invalid("VM target group requires a name, HTTP/TCP protocol, valid port, VPC and instance targets"));
+        return Err(invalid("VM target group requires a name, HTTP/TCP protocol, valid port, VPC and instance or IP targets"));
     }
     request
         .target_type

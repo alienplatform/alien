@@ -529,6 +529,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paginated_family_recovery_retains_every_revision_before_cleanup_mutates() {
+        let mut owner = owner();
+        owner.registration_permitted = true;
+        let first = response(&owner, 1, "ACTIVE");
+        let second = response(&owner, 2, "ACTIVE");
+        let first_arn = first.task_definition.task_definition_arn.clone();
+        let second_arn = second.task_definition.task_definition_arn.clone();
+        let mut ecs = MockEcsApi::new();
+        ecs.expect_list_task_definitions().times(4).returning({
+            let first_arn = first_arn.clone();
+            let second_arn = second_arn.clone();
+            move |request| {
+                let (task_definition_arns, next_token) =
+                    match (request.status.as_deref(), request.next_token.as_deref()) {
+                        (Some("ACTIVE"), None) => {
+                            (vec![first_arn.clone()], Some("second-page".into()))
+                        }
+                        (Some("ACTIVE"), Some("second-page")) => (vec![second_arn.clone()], None),
+                        (Some("INACTIVE" | "DELETE_IN_PROGRESS"), None) => (vec![], None),
+                        _ => panic!("unexpected inventory request"),
+                    };
+                Ok(ListTaskDefinitionsResponse {
+                    task_definition_arns,
+                    next_token,
+                })
+            }
+        });
+        ecs.expect_describe_task_definition()
+            .returning(move |request| {
+                Ok(
+                    if request.task_definition == first.task_definition.task_definition_arn {
+                        first.clone()
+                    } else {
+                        assert_eq!(
+                            request.task_definition,
+                            second.task_definition.task_definition_arn
+                        );
+                        second.clone()
+                    },
+                )
+            });
+        ecs.expect_deregister_task_definition()
+            .times(1)
+            .return_once(|_| {
+                Err(AlienError::new(ClientError::RemoteAccessDenied {
+                    resource_type: "task definition".into(),
+                    resource_name: "owned".into(),
+                }))
+            });
+        let error = owner.step_delete(&ecs).await.unwrap_err();
+        assert!(!matches!(error.http_status_code, Some(401 | 403 | 404)));
+        assert_eq!(
+            reload(&owner).revisions,
+            BTreeSet::from([first_arn, second_arn])
+        );
+    }
+
+    #[tokio::test]
     async fn cleanup_keeps_identity_on_lost_delete_and_waits_for_inventory_absence() {
         let mut owner = owner();
         owner.registration_permitted = true;
