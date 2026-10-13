@@ -126,6 +126,39 @@ fn client(world: Arc<Mutex<World>>) -> MockElbv2Api {
         state.listener = None;
         state.committed("delete-lb")
     });
+    let state = world.clone();
+    elb.expect_modify_target_group_attributes()
+        .returning(move |request| {
+            assert_eq!(request.target_group_arn, "group");
+            assert_eq!(
+                request
+                    .attributes
+                    .iter()
+                    .map(|a| (a.key.as_str(), a.value.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("preserve_client_ip.enabled", "false"),
+                    ("deregistration_delay.timeout_seconds", "30")
+                ]
+            );
+            state.lock().unwrap().committed("configure-group")?;
+            Ok(serde_json::from_value(json!({"ModifyTargetGroupAttributesResult": {}})).unwrap())
+        });
+    let state = world.clone();
+    elb.expect_modify_load_balancer_attributes()
+        .returning(move |request| {
+            assert_eq!(request.load_balancer_arn, "lb");
+            assert_eq!(
+                request
+                    .attributes
+                    .iter()
+                    .map(|a| (a.key.as_str(), a.value.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("load_balancing.cross_zone.enabled", "true")]
+            );
+            state.lock().unwrap().committed("configure-lb")?;
+            Ok(serde_json::from_value(json!({"ModifyLoadBalancerAttributesResult": {}})).unwrap())
+        });
     elb.expect_delete_target_group().returning(move |arn| {
         assert_eq!(arn, "group");
         let mut state = world.lock().unwrap();
@@ -386,7 +419,7 @@ async fn recorded_frontend_without_attempt_tags_keeps_exact_provider_ids_and_can
             }
             let mut recorded = AwsVmFrontend::from_recorded(recorded_receipt()).unwrap();
             let mut prepared = None;
-            for _ in 0..3 {
+            for _ in 0..5 {
                 prepared = recorded
                     .step_prepare(&elb, plan(tcp, private))
                     .await
@@ -400,10 +433,16 @@ async fn recorded_frontend_without_attempt_tags_keeps_exact_provider_ids_and_can
             assert_eq!(prepared.target_group_arn, "group");
             assert_eq!(prepared.load_balancer_arn, "lb");
             assert_eq!(prepared.listener_arn, "listener");
-            assert_eq!(
-                world.lock().unwrap().mutations,
-                ["create-group", "create-lb", "create-listener"]
-            );
+            let mut expected = vec!["create-group", "create-lb", "create-listener"];
+            if tcp {
+                expected.extend([
+                    "configure-group",
+                    "configure-lb",
+                    "configure-group",
+                    "configure-lb",
+                ]);
+            }
+            assert_eq!(world.lock().unwrap().mutations, expected);
             let mut deleted = false;
             for _ in 0..8 {
                 let before = world.lock().unwrap().mutations.len();
@@ -420,16 +459,8 @@ async fn recorded_frontend_without_attempt_tags_keeps_exact_provider_ids_and_can
                 .await
                 .err()
                 .expect("retired recorded IDs must never be recreated");
-            assert_eq!(
-                world.lock().unwrap().mutations,
-                [
-                    "create-group",
-                    "create-lb",
-                    "create-listener",
-                    "delete-lb",
-                    "delete-group"
-                ]
-            );
+            expected.extend(["delete-lb", "delete-group"]);
+            assert_eq!(world.lock().unwrap().mutations, expected);
         }
     }
 }
@@ -522,4 +553,68 @@ async fn recorded_frontend_refuses_foreign_ownership_and_changed_access_before_m
         world.lock().unwrap().mutations,
         ["create-group", "create-lb", "create-listener"]
     );
+}
+
+#[tokio::test]
+async fn tcp_attribute_lost_replies_resume_without_replacing_children() {
+    for recorded in [false, true] {
+        for operation in ["configure-group", "configure-lb"] {
+            let world = Arc::new(Mutex::new(World::default()));
+            let elb = client(world.clone());
+            let mut frontend = if recorded {
+                prepare_existing(&elb, true, true).await;
+                world.lock().unwrap().mutations.clear();
+                AwsVmFrontend::from_recorded(recorded_receipt()).unwrap()
+            } else {
+                AwsVmFrontend::default()
+            };
+            world.lock().unwrap().lose_response = Some(operation);
+            let mut failures = 0;
+            let mut ready = None;
+            for _ in 0..15 {
+                let saved = reload(&frontend);
+                let before = world.lock().unwrap().mutations.len();
+                let result = frontend.step_prepare(&elb, plan(true, true)).await;
+                assert!(world.lock().unwrap().mutations.len() - before <= 1);
+                match result {
+                    Ok(Some(prepared)) => {
+                        ready = Some(prepared);
+                        break;
+                    }
+                    Ok(None) => frontend = reload(&frontend),
+                    Err(error) => {
+                        assert!(error.retryable);
+                        failures += 1;
+                        frontend = saved;
+                    }
+                }
+            }
+            let ready = ready.expect("TCP preparation must finish after lost attribute reply");
+            assert_eq!(failures, 1);
+            assert_eq!(ready.target_group_arn, "group");
+            assert_eq!(ready.load_balancer_arn, "lb");
+            assert_eq!(ready.listener_arn, "listener");
+            let mut expected = if recorded {
+                vec![]
+            } else {
+                vec!["create-group", "create-lb", "create-listener"]
+            };
+            expected.push("configure-group");
+            if operation == "configure-group" {
+                expected.push("configure-group");
+            }
+            expected.push("configure-lb");
+            if operation == "configure-lb" {
+                expected.push("configure-lb");
+            }
+            assert_eq!(world.lock().unwrap().mutations, expected);
+            frontend = reload(&frontend);
+            assert!(frontend
+                .step_prepare(&elb, plan(true, true))
+                .await
+                .unwrap()
+                .is_some());
+            assert_eq!(world.lock().unwrap().mutations, expected);
+        }
+    }
 }

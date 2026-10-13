@@ -2,10 +2,11 @@
 
 use alien_aws_clients::elbv2::{
     Action, Certificate, CreateListenerRequest, CreateLoadBalancerRequest,
-    CreateTargetGroupRequest, Elbv2Api,
+    CreateTargetGroupRequest, Elbv2Api, LoadBalancerAttribute, ModifyLoadBalancerAttributesRequest,
+    ModifyTargetGroupAttributesRequest, TargetGroupAttribute,
 };
 use alien_core::LoadBalancerEndpoint;
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use serde::{Deserialize, Serialize};
 
 use super::{AwsVmLoadBalancer, AwsVmTargetGroup};
@@ -26,6 +27,10 @@ pub struct AwsVmFrontend {
     load_balancer: AwsVmLoadBalancer,
     #[serde(default)]
     recorded: Option<recorded::RecordedFrontend>,
+    #[serde(default)]
+    tcp_target_configured: bool,
+    #[serde(default)]
+    tcp_load_balancer_configured: bool,
 }
 
 #[cfg(test)]
@@ -80,7 +85,13 @@ impl AwsVmFrontend {
         super::aws_vm_target_group::prepare_request(plan.target_group.clone())?;
         super::aws_vm_load_balancer::prepare_request(plan.load_balancer.clone())?;
         if let Some(recorded) = self.recorded.as_mut() {
-            return recorded.step_prepare(elb, plan).await;
+            let prepared = recorded.step_prepare(elb, plan).await?;
+            if let Some(prepared) = prepared.as_ref() {
+                if tcp && !self.configure_tcp(elb, prepared).await? {
+                    return Ok(None);
+                }
+            }
+            return Ok(prepared);
         }
         let Some(target_group_arn) = self
             .target_group
@@ -121,12 +132,69 @@ impl AwsVmFrontend {
         let Some(listener_arn) = self.load_balancer.step_listener(elb, request).await? else {
             return Ok(None);
         };
-        Ok(Some(AwsPreparedVmFrontend {
+        let prepared = AwsPreparedVmFrontend {
             target_group_arn,
             load_balancer_arn,
             listener_arn,
             endpoint,
-        }))
+        };
+        if tcp && !self.configure_tcp(elb, &prepared).await? {
+            return Ok(None);
+        }
+        Ok(Some(prepared))
+    }
+
+    /// Preserve the VM TCP routing policy: disable client-IP preservation and
+    /// allow each frontend zone to reach registered hosts in other zones.
+    /// Attribute updates are idempotent; a lost reply repeats only that phase.
+    async fn configure_tcp(
+        &mut self,
+        elb: &dyn Elbv2Api,
+        prepared: &AwsPreparedVmFrontend,
+    ) -> Result<bool> {
+        if !self.tcp_target_configured {
+            elb.modify_target_group_attributes(
+                ModifyTargetGroupAttributesRequest::builder()
+                    .target_group_arn(prepared.target_group_arn.clone())
+                    .attributes(vec![
+                        TargetGroupAttribute {
+                            key: "preserve_client_ip.enabled".to_string(),
+                            value: "false".to_string(),
+                        },
+                        TargetGroupAttribute {
+                            key: "deregistration_delay.timeout_seconds".to_string(),
+                            value: "30".to_string(),
+                        },
+                    ])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Configure TCP frontend target attributes".to_string(),
+                resource_id: None,
+            })?;
+            self.tcp_target_configured = true;
+            return Ok(false);
+        }
+        if !self.tcp_load_balancer_configured {
+            elb.modify_load_balancer_attributes(
+                ModifyLoadBalancerAttributesRequest::builder()
+                    .load_balancer_arn(prepared.load_balancer_arn.clone())
+                    .attributes(vec![LoadBalancerAttribute {
+                        key: "load_balancing.cross_zone.enabled".to_string(),
+                        value: "true".to_string(),
+                    }])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Configure TCP frontend cross-zone routing".to_string(),
+                resource_id: None,
+            })?;
+            self.tcp_load_balancer_configured = true;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// Caller has withdrawn this frontend's DNS and workload registration.
