@@ -86,6 +86,8 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
     ) -> Result<ListEventSourceMappingsResponse>;
 
     // Concurrency operations
+    async fn get_account_settings(&self) -> Result<AccountSettings>;
+    async fn get_function_concurrency(&self, function_name: &str) -> Result<FunctionConcurrency>;
     async fn put_function_concurrency(
         &self,
         function_name: &str,
@@ -834,6 +836,30 @@ impl LambdaApi for LambdaClient {
         .await
     }
 
+    async fn get_account_settings(&self) -> Result<AccountSettings> {
+        self.send_json(
+            Method::GET,
+            "/2016-08-19/account-settings",
+            None,
+            None,
+            "GetAccountSettings",
+            "account",
+        )
+        .await
+    }
+
+    async fn get_function_concurrency(&self, function_name: &str) -> Result<FunctionConcurrency> {
+        self.send_json(
+            Method::GET,
+            &format!("/2017-10-31/functions/{function_name}/concurrency"),
+            None,
+            None,
+            "GetFunctionConcurrency",
+            function_name,
+        )
+        .await
+    }
+
     async fn put_function_concurrency(
         &self,
         function_name: &str,
@@ -1310,4 +1336,24 @@ pub struct InvokeResponse {
     pub payload: Vec<u8>,
     /// The version of the function that was executed
     pub executed_version: Option<String>,
+}
+
+/// Account allocation limits; omitted fields are unknown, never zero.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AccountSettings {
+    pub account_limit: Option<AccountConcurrencyLimit>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AccountConcurrencyLimit {
+    pub concurrent_executions: Option<u32>,
+    pub unreserved_concurrent_executions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct FunctionConcurrency {
+    pub reserved_concurrent_executions: Option<u32>,
 }

@@ -7,11 +7,11 @@ use crate::quotas::{
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
     ec2::{DescribeAddressesResponse, DescribeInternetGatewaysRequest, DescribeVpcsRequest},
-    AwsCredentialProvider, Ec2Api, Ec2Client, ServiceQuotasApi, ServiceQuotasClient,
+    AwsCredentialProvider, Ec2Api, Ec2Client, LambdaClient, ServiceQuotasApi, ServiceQuotasClient,
 };
 use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
-    Platform, ResourceStatus, Stack, StackState,
+    Platform, ResourceStatus, Stack, StackState, Worker,
 };
 use std::collections::HashSet;
 
@@ -30,7 +30,11 @@ impl RuntimeCheck for CloudQuotasCheck {
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
         platform == Platform::Aws
             && stack.resources.values().any(|entry| {
-                entry.config.downcast_ref::<ComputeCluster>().is_some()
+                entry
+                    .config
+                    .downcast_ref::<Worker>()
+                    .is_some_and(|worker| worker.concurrency_limit.is_some())
+                    || entry.config.downcast_ref::<ComputeCluster>().is_some()
                     || entry
                         .config
                         .downcast_ref::<Network>()
@@ -57,6 +61,12 @@ impl RuntimeCheck for CloudQuotasCheck {
             .resources
             .values()
             .any(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some());
+        let has_lambda = stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<Worker>()
+                .is_some_and(|worker| worker.concurrency_limit.is_some())
+        });
         let demands = [
             (
                 "L-F678F1CE",
@@ -75,6 +85,7 @@ impl RuntimeCheck for CloudQuotasCheck {
             ),
         ];
         if !has_compute
+            && !has_lambda
             && demands
                 .iter()
                 .all(|(_, _, demand)| demand.is_some_and(|demand| demand.additional() == Some(0.0)))
@@ -84,9 +95,9 @@ impl RuntimeCheck for CloudQuotasCheck {
         let credentials = match AwsCredentialProvider::from_config(config.clone()).await {
             Ok(credentials) => credentials,
             Err(_) => {
-                if has_compute {
+                if has_compute || has_lambda {
                     result.add_warning(
-                        "EC2 vCPU quota checks could not initialize target credentials".into(),
+                        "Cloud quota checks could not initialize target credentials".into(),
                     );
                     result.status = Some(CheckStatus::Unknown);
                 }
@@ -109,7 +120,12 @@ impl RuntimeCheck for CloudQuotasCheck {
         };
         let client = reqwest::Client::new();
         let ec2 = Ec2Client::new(client.clone(), credentials.clone());
+        let lambda = LambdaClient::new(client.clone(), credentials.clone());
         let quotas = ServiceQuotasClient::new(client, credentials);
+        if has_lambda {
+            super::aws_lambda::check(stack, stack_state, &config.region, &lambda, &mut result)
+                .await;
+        }
         if has_compute {
             super::aws_compute::check(
                 stack,

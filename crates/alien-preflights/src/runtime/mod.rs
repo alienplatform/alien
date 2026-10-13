@@ -4,6 +4,8 @@
 #[cfg(feature = "runtime-checks")]
 pub mod aws_compute;
 #[cfg(feature = "runtime-checks")]
+pub mod aws_lambda;
+#[cfg(feature = "runtime-checks")]
 pub mod aws_nat;
 #[cfg(feature = "runtime-checks")]
 pub mod cloud_quotas;
