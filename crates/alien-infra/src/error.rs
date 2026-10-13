@@ -6,6 +6,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Runtime cannot continue until setup updates the installation boundary.
+    #[error(
+        code = "DEPLOYMENT_SETUP_REQUIRED",
+        message = "Update the existing installation before retrying this deployment: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupRequired {
+        message: String,
+        resource_id: Option<String>,
+    },
+
     /// Controller state version is outside this binary's supported range.
     #[error(
         code = "INCOMPATIBLE_CONTROLLER_STATE",

@@ -111,6 +111,30 @@
         }
       },
       {
+        // DescribeTags supports only Resource: "*". Ownership verification must
+        // read tags before adopting or retiring a frontend, including listeners.
+        // This is metadata only; mutations retain their resource-tag conditions.
+        "label": "read-load-balancer-ownership",
+        "description": "Read regional ELB ownership metadata for daemon frontend recovery.",
+        "grant": {
+          "actions": ["elasticloadbalancing:DescribeTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": { "aws:RequestedRegion": "${awsRegion}" }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": { "aws:RequestedRegion": "${awsRegion}" }
+            }
+          }
+        }
+      },
+      {
         "label": "inspect-public-load-balancer",
         "description": "Inspect ALB resources for daemon endpoint status and cleanup.",
         "grant": {
