@@ -1,26 +1,9 @@
 //! Real Terraform plans with mocked providers exercise input evaluation without
 //! cloud credentials or creating infrastructure.
-use std::{fs, process::Command};
-
 use alien_core::{Network, NetworkSettings, ResourceLifecycle, Stack, StackSettings};
 use alien_terraform::TerraformTarget;
 
-use super::helpers::render;
-
-fn terraform(dir: &std::path::Path, args: &[&str]) {
-    let output = Command::new("terraform")
-        .args(args)
-        .current_dir(dir)
-        .env("TF_IN_AUTOMATION", "1")
-        .output()
-        .expect("terraform must be installed");
-    assert!(
-        output.status.success(),
-        "terraform {args:?} failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
+use super::helpers::{render, test_utils};
 
 #[test]
 fn mocked_network_plans_normalize_empty_ids_in_registration() {
@@ -53,10 +36,11 @@ fn mocked_network_plans_normalize_empty_ids_in_registration() {
                 ..Default::default()
             },
         );
-        let dir = tempfile::tempdir().unwrap();
-        for (path, content) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
-            fs::write(dir.path().join(path), content).unwrap();
-        }
+        let mut files: test_utils::LinterFiles = module
+            .iter()
+            .filter(|(path, _)| path.ends_with(".tf"))
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect();
         let mut tests = String::from(
             r#"
 mock_provider "aws" {
@@ -138,11 +122,9 @@ run "network_{index}" {{
 }}
 "#));
         }
-        fs::write(dir.path().join("network.tftest.hcl"), tests).unwrap();
-        terraform(
-            dir.path(),
-            &["init", "-backend=false", "-input=false", "-no-color"],
-        );
-        terraform(dir.path(), &["test", "-no-color"]);
+        files.insert("network.tftest.hcl".to_string(), tests);
+        test_utils::terraform_test(&files).assert_ok(format!(
+            "network ID normalization plans (static existing network: {is_static})"
+        ));
     }
 }
