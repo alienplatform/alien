@@ -227,27 +227,37 @@ impl DistributionArtifactCleanup {
                     );
                 }
 
-                // Once the stack is gone, its template can be removed even if
-                // a separately retained application resource needs recovery.
-                if let Some(bucket) = template_bucket {
-                    remove_cloudformation_template_bucket(&bucket, &region, &env)
+                // The template and retained application resources are independent
+                // after stack deletion. Attempt both before reporting recovery.
+                let template_cleanup_error = if let Some(bucket) = template_bucket.as_deref() {
+                    remove_cloudformation_template_bucket(bucket, &region, &env)
                         .await
-                        .with_context(|| {
-                            format!("Template bucket s3://{bucket} still needs cleanup")
-                        })?;
-                }
-
-                if let Err(error) =
-                    cleanup_retained_cloudformation_resources(&env, &retained_resources).await
-                {
-                    let retained_ids = retained_resources
-                        .iter()
-                        .map(|resource| resource.id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                        .err()
+                        .map(|error| format!("template bucket s3://{bucket}: {error}"))
+                } else {
+                    None
+                };
+                let retained_cleanup_error =
+                    cleanup_retained_cloudformation_resources(&env, &retained_resources)
+                        .await
+                        .err()
+                        .map(|error| {
+                            let retained_ids = retained_resources
+                                .iter()
+                                .map(|resource| resource.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("retained resources [{retained_ids}]: {error}")
+                        });
+                let cleanup_errors = [template_cleanup_error, retained_cleanup_error]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                if !cleanup_errors.is_empty() {
                     let workdir = workdir.map(TempDir::keep);
                     anyhow::bail!(
-                        "CloudFormation stack '{stack_name}' was deleted, but retained resources [{retained_ids}] still need cleanup: {error}{}",
+                        "CloudFormation stack '{stack_name}' was deleted, but cleanup failed for {}{}",
+                        cleanup_errors.join("; "),
                         recovery_workdir_suffix(workdir.as_deref())
                     );
                 }
