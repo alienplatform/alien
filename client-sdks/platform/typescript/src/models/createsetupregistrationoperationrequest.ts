@@ -1222,6 +1222,20 @@ export type CreateSetupRegistrationOperationRequestNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const CreateSetupRegistrationOperationRequestSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type CreateSetupRegistrationOperationRequestSetupManagement = ClosedEnum<
+  typeof CreateSetupRegistrationOperationRequestSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const CreateSetupRegistrationOperationRequestTelemetry = {
@@ -1314,6 +1328,12 @@ export type CreateSetupRegistrationOperationRequestStackSettings = {
    * replacing DNS records or certificates.
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?:
+    | CreateSetupRegistrationOperationRequestSetupManagement
+    | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -4276,6 +4296,11 @@ export function createSetupRegistrationOperationRequestNetworkUnionToJSON(
 }
 
 /** @internal */
+export const CreateSetupRegistrationOperationRequestSetupManagement$outboundSchema:
+  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestSetupManagement> = z
+    .enum(CreateSetupRegistrationOperationRequestSetupManagement);
+
+/** @internal */
 export const CreateSetupRegistrationOperationRequestTelemetry$outboundSchema:
   z.ZodEnum<typeof CreateSetupRegistrationOperationRequestTelemetry> = z.enum(
     CreateSetupRegistrationOperationRequestTelemetry,
@@ -4321,6 +4346,7 @@ export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -4389,6 +4415,9 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
     publicEndpoints: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    setupManagement:
+      CreateSetupRegistrationOperationRequestSetupManagement$outboundSchema
+        .optional(),
     telemetry: CreateSetupRegistrationOperationRequestTelemetry$outboundSchema
       .optional(),
     updates: CreateSetupRegistrationOperationRequestUpdates$outboundSchema

@@ -1486,6 +1486,13 @@ export type DeploymentStateSetupUpdateAuthorizationUnion =
  */
 export type DeploymentStateRuntimeMetadata = {
   /**
+   * Setup-owned grant to keep using the direct setup executor for updates.
+   *
+   * @remarks
+   * Runtime settings and release contents must never create or change this grant.
+   */
+  automaticSetup?: boolean | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1539,9 +1546,9 @@ export type DeploymentStateRuntimeMetadata = {
    * keyed by input id, recorded when the deployment is created or its
    * setup import registers.
    *
-   * A frozen gate's answer is fixed for the deployment's lifetime: the
-   * update path refuses input values that conflict with these, and a Live
-   * resource sharing such an input resolves the persisted answer forever.
+   * Manual installations keep these answers fixed. An installation with an
+   * ongoing-management grant refreshes them when preparing a release. Live
+   * resources sharing a gate use the same recorded answer as Frozen resources.
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: DeploymentStatePreparedStack | string | null | undefined;
@@ -7191,6 +7198,7 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentStateRuntimeMetadata,
   unknown
 > = z.object({
+  automaticSetup: z.boolean().optional(),
   deployerSecrets: z.array(DeploymentStateDeployerSecret$inboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
@@ -7229,6 +7237,7 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type DeploymentStateRuntimeMetadata$Outbound = {
+  automaticSetup?: boolean | undefined;
   deployerSecrets?: Array<DeploymentStateDeployerSecret$Outbound> | undefined;
   directSetupRevision?: string | null | undefined;
   initialSetupAuthority?: string | undefined;
@@ -7266,6 +7275,7 @@ export const DeploymentStateRuntimeMetadata$outboundSchema: z.ZodType<
   DeploymentStateRuntimeMetadata$Outbound,
   DeploymentStateRuntimeMetadata
 > = z.object({
+  automaticSetup: z.boolean().optional(),
   deployerSecrets: z.array(DeploymentStateDeployerSecret$outboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),

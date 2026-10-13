@@ -1126,6 +1126,20 @@ export type ImportSourceNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const ImportSourceSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type ImportSourceSetupManagement = ClosedEnum<
+  typeof ImportSourceSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const ImportSourceTelemetry = {
@@ -1198,6 +1212,10 @@ export type ImportSourceStackSettings = {
    * replacing DNS records or certificates.
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: ImportSourceSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3678,6 +3696,11 @@ export function importSourceNetworkUnionToJSON(
 }
 
 /** @internal */
+export const ImportSourceSetupManagement$outboundSchema: z.ZodEnum<
+  typeof ImportSourceSetupManagement
+> = z.enum(ImportSourceSetupManagement);
+
+/** @internal */
 export const ImportSourceTelemetry$outboundSchema: z.ZodEnum<
   typeof ImportSourceTelemetry
 > = z.enum(ImportSourceTelemetry);
@@ -3709,6 +3732,7 @@ export type ImportSourceStackSettings$Outbound = {
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3746,6 +3770,7 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  setupManagement: ImportSourceSetupManagement$outboundSchema.optional(),
   telemetry: ImportSourceTelemetry$outboundSchema.optional(),
   updates: ImportSourceUpdates$outboundSchema.optional(),
 });

@@ -1177,6 +1177,20 @@ export type PlanDeploymentComputeNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const PlanDeploymentComputeSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type PlanDeploymentComputeSetupManagement = ClosedEnum<
+  typeof PlanDeploymentComputeSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const PlanDeploymentComputeTelemetry = {
@@ -1256,6 +1270,10 @@ export type PlanDeploymentComputeStackSettings = {
    * replacing DNS records or certificates.
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: PlanDeploymentComputeSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3793,6 +3811,11 @@ export function planDeploymentComputeNetworkUnionToJSON(
 }
 
 /** @internal */
+export const PlanDeploymentComputeSetupManagement$outboundSchema: z.ZodEnum<
+  typeof PlanDeploymentComputeSetupManagement
+> = z.enum(PlanDeploymentComputeSetupManagement);
+
+/** @internal */
 export const PlanDeploymentComputeTelemetry$outboundSchema: z.ZodEnum<
   typeof PlanDeploymentComputeTelemetry
 > = z.enum(PlanDeploymentComputeTelemetry);
@@ -3828,6 +3851,7 @@ export type PlanDeploymentComputeStackSettings$Outbound = {
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3875,6 +3899,8 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  setupManagement: PlanDeploymentComputeSetupManagement$outboundSchema
+    .optional(),
   telemetry: PlanDeploymentComputeTelemetry$outboundSchema.optional(),
   updates: PlanDeploymentComputeUpdates$outboundSchema.optional(),
 });

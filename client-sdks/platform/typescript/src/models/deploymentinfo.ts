@@ -335,16 +335,14 @@ export type DeploymentInfoEndpointAccess = ClosedEnum<
 /**
  * How heartbeat health checks are handled.
  */
-export const DeploymentInfoHeartbeats = {
+export const SetupUpdateHeartbeats = {
   Off: "off",
   On: "on",
 } as const;
 /**
  * How heartbeat health checks are handled.
  */
-export type DeploymentInfoHeartbeats = ClosedEnum<
-  typeof DeploymentInfoHeartbeats
->;
+export type SetupUpdateHeartbeats = ClosedEnum<typeof SetupUpdateHeartbeats>;
 
 /**
  * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
@@ -1156,9 +1154,23 @@ export type DeploymentInfoNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const DeploymentInfoSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type DeploymentInfoSetupManagement = ClosedEnum<
+  typeof DeploymentInfoSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
-export const DeploymentInfoTelemetry = {
+export const SetupUpdateTelemetry = {
   Off: "off",
   Auto: "auto",
   ApprovalRequired: "approval-required",
@@ -1166,21 +1178,19 @@ export const DeploymentInfoTelemetry = {
 /**
  * How telemetry (logs, metrics, traces) is handled.
  */
-export type DeploymentInfoTelemetry = ClosedEnum<
-  typeof DeploymentInfoTelemetry
->;
+export type SetupUpdateTelemetry = ClosedEnum<typeof SetupUpdateTelemetry>;
 
 /**
  * How updates are delivered to the deployment.
  */
-export const DeploymentInfoUpdates = {
+export const SetupUpdateUpdates = {
   Auto: "auto",
   ApprovalRequired: "approval-required",
 } as const;
 /**
  * How updates are delivered to the deployment.
  */
-export type DeploymentInfoUpdates = ClosedEnum<typeof DeploymentInfoUpdates>;
+export type SetupUpdateUpdates = ClosedEnum<typeof SetupUpdateUpdates>;
 
 /**
  * User-customizable deployment settings specified at deploy time.
@@ -1209,7 +1219,7 @@ export type DeploymentInfoStackSettings = {
   /**
    * How heartbeat health checks are handled.
    */
-  heartbeats?: DeploymentInfoHeartbeats | undefined;
+  heartbeats?: SetupUpdateHeartbeats | undefined;
   kubernetes?: DeploymentInfoKubernetes | string | null | undefined;
   network?:
     | DeploymentInfoNetworkByoVpcAws
@@ -1231,13 +1241,17 @@ export type DeploymentInfoStackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: DeploymentInfoSetupManagement | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
-  telemetry?: DeploymentInfoTelemetry | undefined;
+  telemetry?: SetupUpdateTelemetry | undefined;
   /**
    * How updates are delivered to the deployment.
    */
-  updates?: DeploymentInfoUpdates | undefined;
+  updates?: SetupUpdateUpdates | undefined;
 };
 
 export type SetupUpdate = {
@@ -1541,6 +1555,69 @@ export const CloudformationStatus = {
 export type CloudformationStatus = ClosedEnum<typeof CloudformationStatus>;
 
 /**
+ * How heartbeat health checks are handled.
+ */
+export const CloudformationHeartbeats = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type CloudformationHeartbeats = ClosedEnum<
+  typeof CloudformationHeartbeats
+>;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const CloudformationTelemetry = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type CloudformationTelemetry = ClosedEnum<
+  typeof CloudformationTelemetry
+>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const CloudformationUpdates = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type CloudformationUpdates = ClosedEnum<typeof CloudformationUpdates>;
+
+/**
+ * Operational settings fixed by the Standard configuration profile.
+ */
+export type OperationalDefaultsCloudformation = {
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats: CloudformationHeartbeats;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry: CloudformationTelemetry;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates: CloudformationUpdates;
+};
+
+export type CloudformationOperationalDefaultsUnion =
+  | OperationalDefaultsCloudformation
+  | string;
+
+/**
  * Information about a single CloudFormation template package for one target.
  */
 export type CloudformationTargets = {
@@ -1548,6 +1625,15 @@ export type CloudformationTargets = {
    * AWS Console quick-launch URL
    */
   launchStackUrl: string;
+  operationalDefaults?:
+    | OperationalDefaultsCloudformation
+    | string
+    | null
+    | undefined;
+  /**
+   * Parameters exposed by this template. Empty for legacy package metadata.
+   */
+  parameters?: Array<string> | undefined;
   /**
    * SHA256 checksum of the template
    */
@@ -1621,6 +1707,65 @@ export const TerraformStatus = {
 export type TerraformStatus = ClosedEnum<typeof TerraformStatus>;
 
 /**
+ * How heartbeat health checks are handled.
+ */
+export const TerraformHeartbeats = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type TerraformHeartbeats = ClosedEnum<typeof TerraformHeartbeats>;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const TerraformTelemetry = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type TerraformTelemetry = ClosedEnum<typeof TerraformTelemetry>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const TerraformUpdates = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type TerraformUpdates = ClosedEnum<typeof TerraformUpdates>;
+
+/**
+ * Operational settings fixed by the Standard configuration profile.
+ */
+export type OperationalDefaultsTerraform = {
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats: TerraformHeartbeats;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry: TerraformTelemetry;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates: TerraformUpdates;
+};
+
+export type TerraformOperationalDefaultsUnion =
+  | OperationalDefaultsTerraform
+  | string;
+
+/**
  * Information about a single Terraform module package for one target.
  */
 export type DeploymentInfoModules = {
@@ -1632,6 +1777,11 @@ export type DeploymentInfoModules = {
    * Filename of the module archive
    */
   filename: string;
+  operationalDefaults?:
+    | OperationalDefaultsTerraform
+    | string
+    | null
+    | undefined;
   /**
    * SHA256 checksum of the archive
    */
@@ -2612,9 +2762,9 @@ export const DeploymentInfoEndpointAccess$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentInfoEndpointAccess);
 
 /** @internal */
-export const DeploymentInfoHeartbeats$inboundSchema: z.ZodEnum<
-  typeof DeploymentInfoHeartbeats
-> = z.enum(DeploymentInfoHeartbeats);
+export const SetupUpdateHeartbeats$inboundSchema: z.ZodEnum<
+  typeof SetupUpdateHeartbeats
+> = z.enum(SetupUpdateHeartbeats);
 
 /** @internal */
 export const DeploymentInfoCloud$inboundSchema: z.ZodType<
@@ -3881,14 +4031,19 @@ export function deploymentInfoNetworkUnionFromJSON(
 }
 
 /** @internal */
-export const DeploymentInfoTelemetry$inboundSchema: z.ZodEnum<
-  typeof DeploymentInfoTelemetry
-> = z.enum(DeploymentInfoTelemetry);
+export const DeploymentInfoSetupManagement$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoSetupManagement
+> = z.enum(DeploymentInfoSetupManagement);
 
 /** @internal */
-export const DeploymentInfoUpdates$inboundSchema: z.ZodEnum<
-  typeof DeploymentInfoUpdates
-> = z.enum(DeploymentInfoUpdates);
+export const SetupUpdateTelemetry$inboundSchema: z.ZodEnum<
+  typeof SetupUpdateTelemetry
+> = z.enum(SetupUpdateTelemetry);
+
+/** @internal */
+export const SetupUpdateUpdates$inboundSchema: z.ZodEnum<
+  typeof SetupUpdateUpdates
+> = z.enum(SetupUpdateUpdates);
 
 /** @internal */
 export const DeploymentInfoStackSettings$inboundSchema: z.ZodType<
@@ -3906,7 +4061,7 @@ export const DeploymentInfoStackSettings$inboundSchema: z.ZodType<
   externalBindings: z.nullable(
     z.record(z.string(), ExternalBindingUnion$inboundSchema),
   ).optional(),
-  heartbeats: DeploymentInfoHeartbeats$inboundSchema.optional(),
+  heartbeats: SetupUpdateHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => DeploymentInfoKubernetes$inboundSchema), z.string()]),
   ).optional(),
@@ -3923,8 +4078,9 @@ export const DeploymentInfoStackSettings$inboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
-  telemetry: DeploymentInfoTelemetry$inboundSchema.optional(),
-  updates: DeploymentInfoUpdates$inboundSchema.optional(),
+  setupManagement: DeploymentInfoSetupManagement$inboundSchema.optional(),
+  telemetry: SetupUpdateTelemetry$inboundSchema.optional(),
+  updates: SetupUpdateUpdates$inboundSchema.optional(),
 });
 
 export function deploymentInfoStackSettingsFromJSON(
@@ -4268,11 +4424,73 @@ export const CloudformationStatus$inboundSchema: z.ZodEnum<
 > = z.enum(CloudformationStatus);
 
 /** @internal */
+export const CloudformationHeartbeats$inboundSchema: z.ZodEnum<
+  typeof CloudformationHeartbeats
+> = z.enum(CloudformationHeartbeats);
+
+/** @internal */
+export const CloudformationTelemetry$inboundSchema: z.ZodEnum<
+  typeof CloudformationTelemetry
+> = z.enum(CloudformationTelemetry);
+
+/** @internal */
+export const CloudformationUpdates$inboundSchema: z.ZodEnum<
+  typeof CloudformationUpdates
+> = z.enum(CloudformationUpdates);
+
+/** @internal */
+export const OperationalDefaultsCloudformation$inboundSchema: z.ZodType<
+  OperationalDefaultsCloudformation,
+  unknown
+> = z.object({
+  heartbeats: CloudformationHeartbeats$inboundSchema,
+  telemetry: CloudformationTelemetry$inboundSchema,
+  updates: CloudformationUpdates$inboundSchema,
+});
+
+export function operationalDefaultsCloudformationFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationalDefaultsCloudformation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationalDefaultsCloudformation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationalDefaultsCloudformation' from JSON`,
+  );
+}
+
+/** @internal */
+export const CloudformationOperationalDefaultsUnion$inboundSchema: z.ZodType<
+  CloudformationOperationalDefaultsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => OperationalDefaultsCloudformation$inboundSchema),
+  z.string(),
+]);
+
+export function cloudformationOperationalDefaultsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<CloudformationOperationalDefaultsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CloudformationOperationalDefaultsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CloudformationOperationalDefaultsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const CloudformationTargets$inboundSchema: z.ZodType<
   CloudformationTargets,
   unknown
 > = z.object({
   launchStackUrl: z.string(),
+  operationalDefaults: z.nullable(
+    z.union([
+      z.lazy(() => OperationalDefaultsCloudformation$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  parameters: z.array(z.string()).optional(),
   sha256: z.string(),
   size: z.int(),
   stackPolicyUrl: z.string(),
@@ -4345,12 +4563,72 @@ export const TerraformStatus$inboundSchema: z.ZodEnum<typeof TerraformStatus> =
   z.enum(TerraformStatus);
 
 /** @internal */
+export const TerraformHeartbeats$inboundSchema: z.ZodEnum<
+  typeof TerraformHeartbeats
+> = z.enum(TerraformHeartbeats);
+
+/** @internal */
+export const TerraformTelemetry$inboundSchema: z.ZodEnum<
+  typeof TerraformTelemetry
+> = z.enum(TerraformTelemetry);
+
+/** @internal */
+export const TerraformUpdates$inboundSchema: z.ZodEnum<
+  typeof TerraformUpdates
+> = z.enum(TerraformUpdates);
+
+/** @internal */
+export const OperationalDefaultsTerraform$inboundSchema: z.ZodType<
+  OperationalDefaultsTerraform,
+  unknown
+> = z.object({
+  heartbeats: TerraformHeartbeats$inboundSchema,
+  telemetry: TerraformTelemetry$inboundSchema,
+  updates: TerraformUpdates$inboundSchema,
+});
+
+export function operationalDefaultsTerraformFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationalDefaultsTerraform, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationalDefaultsTerraform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationalDefaultsTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const TerraformOperationalDefaultsUnion$inboundSchema: z.ZodType<
+  TerraformOperationalDefaultsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => OperationalDefaultsTerraform$inboundSchema),
+  z.string(),
+]);
+
+export function terraformOperationalDefaultsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TerraformOperationalDefaultsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TerraformOperationalDefaultsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TerraformOperationalDefaultsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoModules$inboundSchema: z.ZodType<
   DeploymentInfoModules,
   unknown
 > = z.object({
   downloadUrl: z.string(),
   filename: z.string(),
+  operationalDefaults: z.nullable(
+    z.union([
+      z.lazy(() => OperationalDefaultsTerraform$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   shasum: z.string(),
   size: z.int(),
   source: z.string(),

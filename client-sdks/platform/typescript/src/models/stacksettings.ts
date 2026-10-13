@@ -1105,6 +1105,20 @@ export type StackSettingsNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const StackSettingsSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type StackSettingsSetupManagement = ClosedEnum<
+  typeof StackSettingsSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const StackSettingsTelemetry = {
@@ -1177,6 +1191,10 @@ export type StackSettings = {
    * replacing DNS records or certificates.
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: StackSettingsSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3520,6 +3538,11 @@ export function stackSettingsNetworkUnionToJSON(
 }
 
 /** @internal */
+export const StackSettingsSetupManagement$outboundSchema: z.ZodEnum<
+  typeof StackSettingsSetupManagement
+> = z.enum(StackSettingsSetupManagement);
+
+/** @internal */
 export const StackSettingsTelemetry$outboundSchema: z.ZodEnum<
   typeof StackSettingsTelemetry
 > = z.enum(StackSettingsTelemetry);
@@ -3551,6 +3574,7 @@ export type StackSettings$Outbound = {
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3588,6 +3612,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  setupManagement: StackSettingsSetupManagement$outboundSchema.optional(),
   telemetry: StackSettingsTelemetry$outboundSchema.optional(),
   updates: StackSettingsUpdates$outboundSchema.optional(),
 });

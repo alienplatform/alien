@@ -8,6 +8,8 @@ import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentG
 import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import { deploymentSetupConfigInputToJSON } from "../typescript/esm/models/deploymentsetupconfiginput.js";
 import { deploymentSetupPolicyFromJSON, deploymentSetupPolicyToJSON } from "../typescript/esm/models/deploymentsetuppolicy.js";
+import { newDeploymentRequestToJSON } from "../typescript/esm/models/newdeploymentrequest.js";
+import { deploymentInfoStackSettingsFromJSON } from "../typescript/esm/models/deploymentinfo.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -23,6 +25,17 @@ import {
   UpdateProjectHelm$outboundSchema,
   updateProjectHelmToJSON,
 } from "../typescript/esm/models/updateproject.js";
+
+test("deployment requests retain explicit authority without elevating omitted settings", () => {
+  for (const setupManagement of [undefined, "manual", "automatic"]) {
+    const stackSettings = setupManagement === undefined ? {} : { setupManagement };
+    const request = JSON.parse(newDeploymentRequestToJSON({ name: "example", project: "example", platform: "aws", stackSettings }));
+    assert.deepEqual(request.stackSettings, stackSettings);
+    const response = deploymentInfoStackSettingsFromJSON(JSON.stringify(stackSettings));
+    assert.equal(response.ok, true);
+    if (response.ok) assert.deepEqual(response.value, stackSettings);
+  }
+});
 
 test("link configuration profiles survive request and response serialization without a legacy default", () => {
   for (const configurationProfile of [undefined, "standard", "advanced"]) {
