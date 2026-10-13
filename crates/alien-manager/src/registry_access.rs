@@ -15,9 +15,10 @@ use alien_bindings::{
     BindingsProviderApi,
 };
 use alien_core::{
-    AwsEnvironmentInfo, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
-    Platform, RegistryAccess, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata,
-    Sandbox, SandboxCode, Stack, StackState, Worker, WorkerCode,
+    AwsEnvironmentInfo, Container, ContainerCode, Daemon, DaemonCode, DeploymentState,
+    DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo, Platform, RegistryAccess,
+    RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata, Sandbox, SandboxCode, Stack,
+    StackState, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
@@ -666,8 +667,7 @@ fn repository_ids_for_access(
     repository_access(artifact_registry, state, project_id).0
 }
 
-/// The repositories to grant, and whether any sandbox base image was refused as not this
-/// project's.
+/// The repositories to grant, and whether an image was refused as not this project's.
 fn repository_access(
     artifact_registry: &dyn ArtifactRegistry,
     state: &DeploymentState,
@@ -702,41 +702,67 @@ fn repository_access(
     // No per-project path to hold a sandbox to here: a GCP sandbox pulls the agents image Alien
     // publishes under the shared prefix, and GAR binds IAM at the repository, so every grant on
     // this platform opens the same shared repository. AWS narrows its own grant per project.
-    if !has_image_in_repository_prefix(state, &prefix, sandbox_source) {
-        return (Vec::new(), false);
+    let (matches, refused) =
+        has_image_in_repository_prefix(state, &prefix, sandbox_source, project_id);
+    if !matches {
+        return (Vec::new(), refused);
     }
 
     let repo_ids = HashSet::from([prefix]);
     let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
     repo_ids.sort();
-    (repo_ids, false)
+    (repo_ids, refused)
 }
 
 fn has_image_in_repository_prefix(
     state: &DeploymentState,
     prefix: &str,
     sandbox_source: SandboxImageSource,
-) -> bool {
-    let stack_matches = |stack: &Stack| {
-        stack.resources().any(|(_id, entry)| {
-            resource_image_reference(entry, sandbox_source)
-                .is_some_and(|image| image_repository_matches_prefix(image, prefix))
-        })
+    project_id: &str,
+) -> (bool, bool) {
+    let mut found = false;
+    let mut refused = false;
+    let mut collect = |stack: &Stack| {
+        for (_id, entry) in stack.resources() {
+            let Some(image) = resource_image_reference(entry, sandbox_source) else {
+                continue;
+            };
+            if !image_repository_matches_prefix(image, prefix) {
+                continue;
+            }
+            let Some(repository) = image_repository_path(image) else {
+                continue;
+            };
+            let suffix = repository
+                .strip_prefix(prefix)
+                .unwrap_or_default()
+                .trim_start_matches(['/', '-']);
+            let owner = suffix.split('/').next().unwrap_or_default();
+            if owner.starts_with("prj_") && owner != project_id {
+                warn!(
+                    project_id,
+                    "Refusing registry access for an image outside its project's repository"
+                );
+                refused = true;
+            } else {
+                found = true;
+            }
+        }
     };
-
-    state
-        .current_release
+    if let Some(release) = &state.current_release {
+        collect(&release.stack);
+    }
+    if let Some(release) = &state.target_release {
+        collect(&release.stack);
+    }
+    if let Some(stack) = state
+        .runtime_metadata
         .as_ref()
-        .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .target_release
-            .as_ref()
-            .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .runtime_metadata
-            .as_ref()
-            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(stack_matches)
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+    {
+        collect(stack);
+    }
+    (found, refused)
 }
 
 /// The principals a GCP grant names: Cloud Run always, and the sandbox agent when a release
@@ -820,6 +846,18 @@ fn resource_image_reference(
             _ => None,
         };
     }
+    if let Some(container) = entry.config.downcast_ref::<Container>() {
+        return match &container.code {
+            ContainerCode::Image { image } => Some(image),
+            _ => None,
+        };
+    }
+    if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+        return match &daemon.code {
+            DaemonCode::Image { image } => Some(image),
+            _ => None,
+        };
+    }
     if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
         return match sandbox_source {
             SandboxImageSource::PrivateBaseImage => sandbox.private_base_image.as_deref(),
@@ -892,14 +930,14 @@ fn collect_image_repositories(
             // The host too: the grant is written on this registry, so a same-path repository in
             // another account would be granted here and pulled from there.
             let own_registry = served_by_registry(image, registry_endpoint);
-            if entry.config.downcast_ref::<Sandbox>().is_some()
-                && (repo_id != own_repository || !own_registry)
+            if (repo_id != own_repository && repo_id != prefix)
+                || (entry.config.downcast_ref::<Sandbox>().is_some()
+                    && (repo_id != own_repository || !own_registry))
             {
                 warn!(
                     resource_id = %id,
-                    repository = %repo_id,
                     project_id = %project_id,
-                    "Refusing registry access for a sandbox base image outside its project's repository"
+                    "Refusing registry access for an image outside its project's repository"
                 );
                 refused = true;
                 continue;
@@ -1400,6 +1438,117 @@ mod tests {
             runtime_metadata: None,
             retry_requested: false,
             protocol_version: 1,
+        }
+    }
+
+    #[test]
+    fn release_repository_ownership_grant_computation() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        let state = aws_state_with_stack(worker_stack(
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_other@sha256:abcdef",
+        ));
+        let (repositories, refused) = repository_access(&registry, &state, PROJECT);
+        println!("repository_access repositories={repositories:?} refused={refused}");
+        assert!(repositories.is_empty());
+        assert!(refused);
+    }
+
+    #[test]
+    fn grant_computation_checks_every_workload_image_and_release_state() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for owner in [PROJECT, "prj_other"] {
+            let image =
+                format!("123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-{owner}:v1");
+            let quantity = alien_core::ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            };
+            let stacks = [
+                worker_stack(&image),
+                Stack::new("test".to_string())
+                    .add(
+                        Container::new("api".to_string())
+                            .code(ContainerCode::Image {
+                                image: image.clone(),
+                            })
+                            .cpu(quantity.clone())
+                            .memory(quantity)
+                            .permissions("execution".to_string())
+                            .build(),
+                        ResourceLifecycle::Live,
+                    )
+                    .build(),
+                Stack::new("test".to_string())
+                    .add(
+                        Daemon::new("api".to_string())
+                            .code(DaemonCode::Image {
+                                image: image.clone(),
+                            })
+                            .build(),
+                        ResourceLifecycle::Live,
+                    )
+                    .build(),
+            ];
+            for stack in stacks {
+                let mut state = aws_state_with_stack(stack.clone());
+                for position in 0..3 {
+                    state.current_release = None;
+                    state.target_release = None;
+                    state.runtime_metadata = None;
+                    let release = ReleaseInfo {
+                        release_id: Some("rel_legacy".to_string()),
+                        version: None,
+                        description: None,
+                        stack: stack.clone(),
+                    };
+                    match position {
+                        0 => state.current_release = Some(release),
+                        1 => state.target_release = Some(release),
+                        _ => {
+                            state.runtime_metadata = Some(RuntimeMetadata {
+                                prepared_stack: Some(stack.clone()),
+                                ..RuntimeMetadata::default()
+                            })
+                        }
+                    }
+                    let (repositories, refused) = repository_access(&registry, &state, PROJECT);
+                    if owner == PROJECT {
+                        assert_eq!(repositories, vec!["alien-artifacts-prj_test"]);
+                        assert!(!refused);
+                    } else {
+                        assert!(repositories.is_empty());
+                        assert!(refused);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gar_refuses_another_project_reference_but_own_images_still_need_the_shared_grant() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for (owner, expected) in [
+            (PROJECT, vec!["vendor/artifacts".to_string()]),
+            ("prj_other", Vec::new()),
+        ] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "region-docker.pkg.dev/vendor/artifacts/{owner}/worker:v1"
+            )));
+            let (repositories, refused) = repository_access(&registry, &state, PROJECT);
+            assert_eq!(repositories, expected);
+            assert_eq!(refused, owner != PROJECT);
         }
     }
 
