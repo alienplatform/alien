@@ -2,9 +2,11 @@
 //! These checks only run during deployment time and require the runtime-checks feature.
 
 #[cfg(feature = "runtime-checks")]
-pub mod cloud_quotas;
+pub mod aws_compute;
 #[cfg(feature = "runtime-checks")]
 pub mod aws_nat;
+#[cfg(feature = "runtime-checks")]
+pub mod cloud_quotas;
 #[cfg(feature = "runtime-checks")]
 pub use cloud_quotas::CloudQuotasCheck;
 

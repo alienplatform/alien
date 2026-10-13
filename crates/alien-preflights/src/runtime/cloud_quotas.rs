@@ -7,11 +7,12 @@ use crate::quotas::{
 use crate::{CheckResult, CheckStatus, RuntimeCheck};
 use alien_aws_clients::{
     ec2::{DescribeAddressesResponse, DescribeInternetGatewaysRequest, DescribeVpcsRequest},
-    AwsCredentialProvider, Ec2Api, Ec2Client, ServiceQuotasApi, ServiceQuotasClient,
+    AwsCredentialProvider, CloudWatchClient, Ec2Api, Ec2Client, ServiceQuotasApi,
+    ServiceQuotasClient,
 };
 use alien_core::{
-    ClientConfig, DeploymentConfig, Network, NetworkOutputs, NetworkSettings, Platform,
-    ResourceStatus, Stack, StackState,
+    ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
+    Platform, ResourceStatus, Stack, StackState,
 };
 use std::collections::HashSet;
 
@@ -30,12 +31,13 @@ impl RuntimeCheck for CloudQuotasCheck {
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
         platform == Platform::Aws
             && stack.resources.values().any(|entry| {
-                entry
-                    .config
-                    .downcast_ref::<Network>()
-                    .is_some_and(|network| {
-                        matches!(network.settings, NetworkSettings::Create { .. })
-                    })
+                entry.config.downcast_ref::<ComputeCluster>().is_some()
+                    || entry
+                        .config
+                        .downcast_ref::<Network>()
+                        .is_some_and(|network| {
+                            matches!(network.settings, NetworkSettings::Create { .. })
+                        })
             })
     }
 
@@ -52,6 +54,10 @@ impl RuntimeCheck for CloudQuotasCheck {
             result.status = Some(CheckStatus::Unknown);
             return Ok(result);
         };
+        let has_compute = stack
+            .resources
+            .values()
+            .any(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some());
         let demands = [
             (
                 "L-F678F1CE",
@@ -69,15 +75,22 @@ impl RuntimeCheck for CloudQuotasCheck {
                 elastic_ip_demand(stack, stack_state),
             ),
         ];
-        if demands
-            .iter()
-            .all(|(_, _, demand)| demand.is_some_and(|demand| demand.additional() == Some(0.0)))
+        if !has_compute
+            && demands
+                .iter()
+                .all(|(_, _, demand)| demand.is_some_and(|demand| demand.additional() == Some(0.0)))
         {
             return Ok(result);
         }
         let credentials = match AwsCredentialProvider::from_config(config.clone()).await {
             Ok(credentials) => credentials,
             Err(_) => {
+                if has_compute {
+                    result.add_warning(
+                        "EC2 vCPU quota checks could not initialize target credentials".into(),
+                    );
+                    result.status = Some(CheckStatus::Unknown);
+                }
                 for (code, name, demand) in demands {
                     if demand.is_some_and(|demand| demand.additional() == Some(0.0)) {
                         continue;
@@ -97,7 +110,20 @@ impl RuntimeCheck for CloudQuotasCheck {
         };
         let client = reqwest::Client::new();
         let ec2 = Ec2Client::new(client.clone(), credentials.clone());
+        let metrics = CloudWatchClient::new(client.clone(), credentials.clone());
         let quotas = ServiceQuotasClient::new(client, credentials);
+        if has_compute {
+            super::aws_compute::check(
+                stack,
+                stack_state,
+                &config.region,
+                &quotas,
+                &metrics,
+                &ec2,
+                &mut result,
+            )
+            .await;
+        }
         for (code, name, demand) in demands {
             if demand.is_some_and(|demand| demand.additional() == Some(0.0)) {
                 continue;
@@ -356,7 +382,7 @@ async fn read_vpc_observation(
     Some(QuotaObservation { used, limit })
 }
 
-fn record(result: &mut CheckResult, quota_result: QuotaResult) {
+pub(super) fn record(result: &mut CheckResult, quota_result: QuotaResult) {
     let quota = &quota_result.quota;
     let label = format!("{} ({}, {})", quota.name, quota.provider_id, quota.scope);
     match &quota_result.outcome {

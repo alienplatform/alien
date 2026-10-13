@@ -3639,6 +3639,8 @@ pub struct InstanceSet {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
+    /// Absent for On-Demand; spot instances consume a separate quota.
+    pub instance_lifecycle: Option<String>,
     pub instance_id: Option<String>,
     pub image_id: Option<String>,
     pub instance_type: Option<String>,
