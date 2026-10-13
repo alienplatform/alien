@@ -5414,10 +5414,6 @@ impl AwsNetworkController {
     }
 }
 
-/// Retry, rediscovery and delete-ordering behavior of the managed (Create) network. Each
-/// test drives the real handlers through `SingleControllerExecutor` with a mocked EC2 API.
-/// `SingleControllerExecutor::step` keeps what a failed handler wrote to `self`, like the
-/// real executor, so a failed step followed by another step is a retry.
 /// Existing networks must name at least one subnet. An empty `DescribeSubnets`
 /// filter would list every subnet in the account instead of the network's own.
 fn require_existing_subnet_ids(subnet_ids: &[String], resource_id: &str) -> Result<()> {
@@ -5430,6 +5426,10 @@ fn require_existing_subnet_ids(subnet_ids: &[String], resource_id: &str) -> Resu
     Ok(())
 }
 
+/// Retry, rediscovery and delete-ordering behavior of the managed (Create) network. Each
+/// test drives the real handlers through `SingleControllerExecutor` with a mocked EC2 API.
+/// `SingleControllerExecutor::step` keeps what a failed handler wrote to `self`, like the
+/// real executor, so a failed step followed by another step is a retry.
 #[cfg(test)]
 mod controller_state_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
