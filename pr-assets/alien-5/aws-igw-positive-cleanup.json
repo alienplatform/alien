@@ -1,0 +1,15 @@
+{
+  "region": "eu-west-1",
+  "deployExitCode": 0,
+  "destroyExitCode": 0,
+  "taggedVpcs": 0,
+  "taggedInternetGateways": 0,
+  "taggedSubnets": 0,
+  "taggedRouteTables": 0,
+  "taggedEips": 0,
+  "taggedSecurityGroups": 0,
+  "activeNatGateways": 0,
+  "vpcBaselineIdentitySetRestored": true,
+  "internetGatewayBaselineIdentitySetRestored": true,
+  "allEightFillerGatewaysDeletedAndVerified": true
+}
