@@ -330,6 +330,7 @@ impl DockerToolchain {
         &self,
         context: &ToolchainContext,
         additional_contexts: &[(&str, &Path)],
+        requires_execution: bool,
     ) -> Result<ToolchainOutput> {
         let dockerfile_name = self.dockerfile.as_deref().unwrap_or("Dockerfile");
 
@@ -372,13 +373,17 @@ impl DockerToolchain {
         let platform_str = format!("linux/{}", arch_str);
 
         let builder = Self::select_builder().await?;
-        if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
-            if builder.owned {
-                if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
-                    warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
+        // An image-only FROM export never executes target instructions and works
+        // across architectures without emulation. Dockerfile builds can run code.
+        if requires_execution {
+            if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
+                if builder.owned {
+                    if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
+                        warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
+                    }
                 }
+                return Err(error);
             }
-            return Err(error);
         }
 
         let mut args = vec![
@@ -535,7 +540,7 @@ impl DockerToolchain {
 #[async_trait]
 impl Toolchain for DockerToolchain {
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
-        self.build_with_contexts(context, &[]).await
+        self.build_with_contexts(context, &[], true).await
     }
 
     fn dev_command(&self, _src_dir: &Path) -> Vec<String> {

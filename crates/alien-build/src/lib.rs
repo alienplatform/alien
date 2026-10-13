@@ -3725,6 +3725,7 @@ async fn pull_and_export_image(
                     workload: toolchain::WorkloadKind::Container,
                 },
                 &[],
+                false,
             )
             .await?;
     }

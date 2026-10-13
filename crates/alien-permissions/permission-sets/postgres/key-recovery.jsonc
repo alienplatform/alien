@@ -14,7 +14,9 @@
             "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*"]
           },
           "resource": {
-            "resources": ["arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"]
+            "resources": [
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}"
+            ]
           }
         }
       }

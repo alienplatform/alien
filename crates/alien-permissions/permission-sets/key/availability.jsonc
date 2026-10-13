@@ -7,15 +7,11 @@
         "label": "probe-key-availability",
         "description": "Exercise the external key store with an isolated probe context.",
         "grant": {
-          "actions": [
-            "kms:Encrypt"
-          ]
+          "actions": ["kms:Encrypt"]
         },
         "binding": {
           "resource": {
-            "resources": [
-              "${resourceName}"
-            ],
+            "resources": ["${resourceName}"],
             "condition": {
               "StringEquals": {
                 "kms:EncryptionContext:alien.dev/purpose": "key-health"

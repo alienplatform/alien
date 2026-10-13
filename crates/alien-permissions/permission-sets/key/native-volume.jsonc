@@ -15,9 +15,7 @@
         },
         "binding": {
           "resource": {
-            "resources": [
-              "${resourceName}"
-            ],
+            "resources": ["${resourceName}"],
             "condition": {
               "StringEquals": {
                 "kms:ViaService": "ec2.${awsRegion}.amazonaws.com"
@@ -29,15 +27,11 @@
       {
         "label": "grant-to-ebs",
         "grant": {
-          "actions": [
-            "kms:CreateGrant"
-          ]
+          "actions": ["kms:CreateGrant"]
         },
         "binding": {
           "resource": {
-            "resources": [
-              "${resourceName}"
-            ],
+            "resources": ["${resourceName}"],
             "condition": {
               "Bool": {
                 "kms:GrantIsForAWSResource": "true"
