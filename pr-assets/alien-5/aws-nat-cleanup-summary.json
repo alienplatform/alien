@@ -1,0 +1,9 @@
+{
+  "vpcSubnetEipIgwBaselineSetsRestored": true,
+  "activeNatGateways": 0,
+  "ownedFillersAbsentOrDeleted": true,
+  "featureDestroyExitCode": 0,
+  "parentDestroyExitCode": 0,
+  "fixturesStopped": true,
+  "quotaOverrides": false
+}
