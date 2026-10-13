@@ -1,0 +1,5 @@
+Deploying q5-vpc to aws
+Configuration error: Failed to acquire setup deployment lock
+Cause:
+  - Setup has nothing to apply to deployment '[DEPLOYMENT REDACTED]': its last operation failed (preflights-failed) and is not waiting for setup. Retry the deployment first (`alien deployments retry [DEPLOYMENT REDACTED]`, or Retry in the dashboard). If the retry fails with an error that asks for setup, rerun setup then
+  - Deployment '[DEPLOYMENT REDACTED]' cannot be acquired for this operation: statusMismatch
