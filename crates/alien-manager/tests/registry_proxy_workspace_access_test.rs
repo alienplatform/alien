@@ -253,7 +253,10 @@ fn push_requests(repo: &str) -> Vec<(&'static str, String)> {
     vec![
         ("POST", format!("/v2/{repo}/blobs/uploads/")),
         ("PATCH", format!("/v2/{repo}/blobs/uploads/session-1")),
-        ("PUT", format!("/v2/{repo}/blobs/uploads/session-1?digest={}", digest())),
+        (
+            "PUT",
+            format!("/v2/{repo}/blobs/uploads/session-1?digest={}", digest()),
+        ),
         ("PUT", format!("/v2/{repo}/manifests/v1")),
     ]
 }
@@ -280,7 +283,10 @@ async fn assert_forwarded(setup: &Setup, method: &str, target: &str, token: &str
         (200..300).contains(&status),
         "{token} {method} {target}: {status}"
     );
-    assert!(reached, "{token} {method} {target} did not reach the upstream");
+    assert!(
+        reached,
+        "{token} {method} {target} did not reach the upstream"
+    );
 }
 
 /// Workspace keys, workspace users and project tokens of `ws_a` cannot read `ws_b`'s images.
@@ -313,7 +319,7 @@ async fn push_to_other_workspace_project_is_denied() {
 }
 
 /// A blob mount copies from its source repository, so a source the caller cannot pull is
-/// forwarded as a plain upload.
+/// refused before any upstream request.
 #[tokio::test]
 async fn mount_from_other_workspace_repository_is_not_forwarded() {
     let setup = setup().await;
@@ -323,12 +329,7 @@ async fn mount_from_other_workspace_repository_is_not_forwarded() {
             digest(),
             enc(OTHER_WORKSPACE_REPO)
         );
-        let before = setup.seen.lock().unwrap().len();
-        let response = send(setup.manager.port, "POST", &target, token).await;
-        let reached = reached_since(&setup.seen, before);
-        assert_eq!(response.status, 202, "{token}: {}", response.body);
-        assert_eq!(reached.len(), 1, "{token}");
-        assert!(!reached[0].has_mount_params(), "{token}: {reached:?}");
+        assert_denied(&setup, "POST", &target, token).await;
     }
 }
 
