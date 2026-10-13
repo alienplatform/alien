@@ -969,11 +969,17 @@ impl SingleControllerExecutorBuilder {
                     )
                     .with_dependency(
                         test_function_1(),
-                        AwsWorkerController::mock_ready("test-function-1"),
+                        AwsWorkerController {
+                            url: None,
+                            ..AwsWorkerController::mock_ready("test-function-1")
+                        },
                     )
                     .with_dependency(
                         test_function_2(),
-                        AwsWorkerController::mock_ready("test-function-2"),
+                        AwsWorkerController {
+                            url: None,
+                            ..AwsWorkerController::mock_ready("test-function-2")
+                        },
                     );
             }
             Platform::Gcp => {
@@ -1048,11 +1054,17 @@ impl SingleControllerExecutorBuilder {
                     )
                     .with_dependency(
                         test_function_1(),
-                        AwsWorkerController::mock_ready("test-function-1"),
+                        AwsWorkerController {
+                            url: None,
+                            ..AwsWorkerController::mock_ready("test-function-1")
+                        },
                     )
                     .with_dependency(
                         test_function_2(),
-                        AwsWorkerController::mock_ready("test-function-2"),
+                        AwsWorkerController {
+                            url: None,
+                            ..AwsWorkerController::mock_ready("test-function-2")
+                        },
                     );
             }
         }

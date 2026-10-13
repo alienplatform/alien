@@ -5828,6 +5828,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unexposed_worker_is_stable_but_legacy_function_url_requires_retirement() {
+        for mode in [
+            alien_core::EndpointAccess::Internet,
+            alien_core::EndpointAccess::Private,
+            alien_core::EndpointAccess::Both,
+        ] {
+            for legacy_url in [false, true] {
+                let mut controller = AwsWorkerController::mock_ready("test-function-1");
+                if !legacy_url {
+                    controller.url = None;
+                }
+                let executor = SingleControllerExecutor::builder()
+                    .resource(crate::core::controller_test::test_function_1())
+                    .controller(controller)
+                    .platform(Platform::Aws)
+                    .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                    .stack_settings(StackSettings {
+                        endpoint_access: mode,
+                        ..Default::default()
+                    })
+                    .build()
+                    .await
+                    .unwrap();
+                let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+                executor.with_context(|ctx| {
+                    assert_eq!(saved.needs_update(ctx).unwrap(), legacy_url);
+                });
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn access_only_runtime_phases_skip_lambda_mutations_but_environment_changes_apply() {
         for mode in [
             alien_core::EndpointAccess::Internet,
