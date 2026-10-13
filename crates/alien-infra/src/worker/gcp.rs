@@ -5410,7 +5410,9 @@ impl GcpWorkerController {
             );
 
             let binding_exists = policy.bindings.iter().any(|binding| {
-                binding.role == invoker_role && binding.members.contains(&invoker_member)
+                binding.role == invoker_role
+                    && binding.condition.is_none()
+                    && binding.members.contains(&invoker_member)
             });
 
             if !binding_exists {
@@ -7987,6 +7989,11 @@ mod tests {
     /// Private workers authenticate Pub/Sub and Scheduler delivery as their execution SA.
     #[tokio::test]
     async fn test_private_function_grants_invoker_to_execution_service_account() {
+        private_function_invoker_policy(false).await;
+        private_function_invoker_policy(true).await;
+    }
+
+    async fn private_function_invoker_policy(existing_conditional_grant: bool) {
         let worker = function_private_ingress();
         let function_name = format!("test-{}", worker.id);
 
@@ -8029,12 +8036,35 @@ mod tests {
 
         mock_cloudrun
             .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
+            .returning(move |_, _| {
+                let mut policy = create_empty_iam_policy();
+                if existing_conditional_grant {
+                    policy.version = Some(3);
+                    policy.bindings.push(alien_gcp_clients::iam::Binding {
+                        role: "roles/run.invoker".to_string(),
+                        members: vec!["serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com".to_string()],
+                        condition: Some(alien_gcp_clients::iam::Expr {
+                            expression: "request.time < timestamp('2020-01-01T00:00:00Z')".to_string(),
+                            title: Some("expired-existing-grant".to_string()),
+                            description: None,
+                            location: None,
+                        }),
+                    });
+                }
+                Ok(policy)
+            });
 
         mock_cloudrun
             .expect_set_service_iam_policy()
-            .withf(|_, _, policy| {
-                policy.bindings.iter().any(|binding| {
+            .withf(move |_, _, policy| {
+                let conditional_grants = policy.bindings.iter().filter(|binding| {
+                    binding.condition.as_ref().is_some_and(|condition| {
+                        condition.title.as_deref() == Some("expired-existing-grant")
+                            && condition.expression == "request.time < timestamp('2020-01-01T00:00:00Z')"
+                    })
+                }).count();
+                conditional_grants == usize::from(existing_conditional_grant)
+                    && policy.bindings.iter().any(|binding| {
                     binding.role == "roles/run.invoker"
                         && binding.members
                             == ["serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"]
