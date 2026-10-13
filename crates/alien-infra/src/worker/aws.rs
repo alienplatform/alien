@@ -4272,8 +4272,59 @@ impl AwsWorkerController {
             self.retiring_public_permission = None;
         }
         Ok(HandlerAction::Continue {
-            state: UpdateRetiringPublicCertificate,
+            state: UpdateRetiringFunctionUrl,
             suggested_delay: None,
+        })
+    }
+
+    // A legacy Function URL bypasses API Gateway entirely. Read the retained
+    // function on every retry so a lost delete reply cannot leave it exposed.
+    #[handler(state = UpdateRetiringFunctionUrl, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn update_retiring_function_url(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        let function = self.arn.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Retiring a Function URL requires its retained Lambda".into(),
+                resource_id: Some(worker.id.clone()),
+            })
+        })?;
+        let lambda = ctx
+            .service_provider
+            .get_aws_lambda_client(ctx.get_aws_config()?)
+            .await?;
+        match lambda.get_function_url_config(function, None).await {
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(HandlerAction::Continue {
+                    state: UpdateRetiringPublicCertificate,
+                    suggested_delay: None,
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to inspect legacy Function URL".into(),
+                    resource_id: Some(worker.id.clone()),
+                }))
+            }
+        }
+        lambda
+            .delete_function_url_config(function, None)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to retire legacy Function URL".into(),
+                resource_id: Some(worker.id.clone()),
+            })?;
+        Ok(HandlerAction::Continue {
+            state: UpdateRetiringFunctionUrl,
+            suggested_delay: Some(Duration::from_secs(5)),
         })
     }
 
@@ -5600,6 +5651,10 @@ mod tests {
         let retained_arn = controller.arn.clone();
         let grant_present = Arc::new(Mutex::new(true));
         let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_url_config()
+            .times(1)
+            .returning(|_, _| Err(not_found("Function URL")));
         let world = grant_present.clone();
         lambda.expect_get_policy().times(2).returning(move |function, _| {
             assert_eq!(function, "arn:aws:lambda:us-east-1:123456789012:function:test-public-func");
@@ -5682,6 +5737,94 @@ mod tests {
         assert!(controller.url.is_none());
         assert!(controller.retiring_public_permission.is_none());
         assert!(!*grant_present.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn legacy_function_url_retirement_recovers_lost_reply_and_refuses_denied_reads() {
+        let mut controller = AwsWorkerController::mock_ready("test-public-func");
+        controller.state = AwsWorkerState::UpdateRetiringFunctionUrl;
+        let retained_arn = controller.arn.clone();
+        let present = Arc::new(Mutex::new(true));
+        let mut lambda = MockLambdaApi::new();
+        let world = present.clone();
+        let mut reads = 0;
+        lambda
+            .expect_get_function_url_config()
+            .times(3)
+            .returning(move |function, qualifier| {
+                assert_eq!(
+                    function,
+                    "arn:aws:lambda:us-east-1:123456789012:function:test-public-func"
+                );
+                assert!(qualifier.is_none());
+                reads += 1;
+                if reads == 1 {
+                    return Err(access_denied());
+                }
+                if !*world.lock().unwrap() {
+                    return Err(not_found("Function URL"));
+                }
+                Ok(serde_json::from_value(serde_json::json!({
+                    "FunctionUrl": "https://legacy.lambda-url.us-east-1.on.aws/",
+                    "AuthType": "NONE"
+                }))
+                .unwrap())
+            });
+        let world = present.clone();
+        lambda
+            .expect_delete_function_url_config()
+            .times(1)
+            .returning(move |function, qualifier| {
+                assert_eq!(
+                    function,
+                    "arn:aws:lambda:us-east-1:123456789012:function:test-public-func"
+                );
+                assert!(qualifier.is_none());
+                *world.lock().unwrap() = false;
+                Err(AlienError::new(CloudClientErrorData::Timeout {
+                    message: "delete succeeded; reply lost".into(),
+                }))
+            });
+        let lambda = Arc::new(lambda);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let provider = Arc::new(provider);
+        for attempt in 0..3 {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .service_provider(provider.clone())
+                .stack_settings(StackSettings {
+                    endpoint_access: alien_core::EndpointAccess::Private,
+                    ..Default::default()
+                })
+                .build()
+                .await
+                .unwrap();
+            let result = executor.step().await;
+            if attempt < 2 {
+                assert!(result.is_err());
+            } else {
+                result.unwrap();
+            }
+            controller = serde_json::from_value(
+                serialize_controller(executor.internal_state::<AwsWorkerController>().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(controller.arn, retained_arn);
+            if attempt < 2 {
+                assert_eq!(controller.state, AwsWorkerState::UpdateRetiringFunctionUrl);
+            }
+        }
+        assert_eq!(
+            controller.state,
+            AwsWorkerState::UpdateRetiringPublicCertificate
+        );
+        assert!(!*present.lock().unwrap());
     }
 
     #[tokio::test]
