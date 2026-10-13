@@ -1132,10 +1132,22 @@ mod tests {
         foreign.vpc_id = "vpc-different".into();
         assert!(owner.configure_plan(&foreign).is_err());
         assert_eq!(serde_json::to_value(&owner).unwrap(), checkpoint);
-        // Neither generation was registered. Cancellation must forget neither
-        // receipt, and it must finish without acquiring provider resources.
+        // Neither generation was registered. Cancellation must retain both
+        // receipts until cleanup, with only exact-name SG absence reads.
         let api = MockApiGatewayApi::new();
-        let ec2 = MockEc2Api::new();
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_security_groups()
+            .times(3)
+            .returning(|request| {
+                let filters = request.filters.unwrap();
+                assert!(filters
+                    .iter()
+                    .any(|filter| filter.name == "vpc-id" && filter.values == ["vpc-owned"]));
+                assert!(filters.iter().any(|filter| filter.name == "group-name"
+                    && filter.values.len() == 1
+                    && filter.values[0].starts_with("alien-ingress-")));
+                Ok(serde_json::from_value(json!({"securityGroupInfo":{"item":[]}})).unwrap())
+            });
         let ecs = MockEcsApi::new();
         let iam = MockIamApi::new();
         let elb = MockElbv2Api::new();
@@ -1148,6 +1160,11 @@ mod tests {
             elb: &elb,
             lambda: &lambda,
         };
+        assert!(
+            !owner.has_retired_tasks(),
+            "old task remains protected until the new gateway is healthy"
+        );
+        owner.maintain_retired_tasks(&ecs).await.unwrap();
         let mut deleted = false;
         for _ in 0..20 {
             deleted = owner.step_delete(&clients).await.unwrap();
