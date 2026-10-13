@@ -2642,6 +2642,7 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
+        super::aws_private_ingress::validate_worker_setup(ctx, &worker_config).await?;
 
         // A worker created while the management role could not manage its
         // log group gets the retention period once setup grants it.
@@ -5988,8 +5989,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_setup_failure_precedes_parent_create_and_code_updates() {
-        for updating in [false, true] {
+    async fn private_setup_failure_precedes_parent_create_certificate_and_code_updates() {
+        for update_phase in [
+            None,
+            Some(AwsWorkerState::UpdateImportingCertificate),
+            Some(AwsWorkerState::UpdateCodeStart),
+        ] {
             for missing_role in [false, true] {
                 let lambda = Arc::new(MockLambdaApi::new());
                 let mut iam = MockIamApi::new();
@@ -6032,9 +6037,9 @@ mod tests {
                 desired.code = WorkerCode::Image {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/new:version".into(),
                 };
-                let controller = if updating {
+                let controller = if let Some(phase) = &update_phase {
                     let mut controller = AwsWorkerController::mock_ready("test-public-func");
-                    controller.state = AwsWorkerState::UpdateCodeStart;
+                    controller.state = phase.clone();
                     controller
                 } else {
                     AwsWorkerController::default()
