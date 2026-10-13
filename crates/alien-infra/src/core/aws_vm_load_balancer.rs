@@ -45,50 +45,9 @@ impl AwsVmLoadBalancer {
     pub async fn step_create(
         &mut self,
         elb: &dyn Elbv2Api,
-        mut request: CreateLoadBalancerRequest,
+        request: CreateLoadBalancerRequest,
     ) -> Result<Option<LoadBalancer>> {
-        if request.name.is_empty()
-            || request.subnets.is_empty()
-            || request.subnets.iter().any(String::is_empty)
-            || request.subnet_mappings.is_some()
-            || !matches!(
-                request.scheme.as_deref(),
-                Some("internet-facing" | "internal")
-            )
-            || !matches!(
-                request.load_balancer_type.as_deref(),
-                Some("application" | "network")
-            )
-        {
-            return Err(invalid("VM load balancer requires a name, subnets, explicit public/private scheme and application/network type"));
-        }
-        request.subnets.sort();
-        request.subnets.dedup();
-        if let Some(groups) = request.security_groups.as_mut() {
-            groups.sort();
-            groups.dedup();
-        }
-        request
-            .ip_address_type
-            .get_or_insert_with(|| "ipv4".to_string());
-        let mut tags = BTreeMap::new();
-        for tag in request.tags.take().unwrap_or_default() {
-            if tag.key.is_empty()
-                || tag.key == CREATE_ATTEMPT_TAG
-                || tags.insert(tag.key, tag.value).is_some()
-            {
-                return Err(invalid(
-                    "Load balancer ownership tags are empty, reserved or duplicated",
-                ));
-            }
-        }
-        if tags.is_empty() {
-            return Err(invalid("Load balancer requires ownership tags"));
-        }
-        let encoded = serde_json::to_vec(&request)
-            .into_alien_error()
-            .context(config_data("Encode VM load balancer configuration"))?;
-        let fingerprint = format!("{:x}", Sha256::digest(encoded));
+        let (mut request, tags, fingerprint) = prepare_request(request)?;
         if self.token.is_none() {
             if self.arn.is_some()
                 || self.name.is_some()
@@ -312,6 +271,54 @@ impl AwsVmLoadBalancer {
         }
         Ok(())
     }
+}
+
+pub(super) fn prepare_request(
+    mut request: CreateLoadBalancerRequest,
+) -> Result<(CreateLoadBalancerRequest, BTreeMap<String, String>, String)> {
+    if request.name.is_empty()
+        || request.subnets.is_empty()
+        || request.subnets.iter().any(String::is_empty)
+        || request.subnet_mappings.is_some()
+        || !matches!(
+            request.scheme.as_deref(),
+            Some("internet-facing" | "internal")
+        )
+        || !matches!(
+            request.load_balancer_type.as_deref(),
+            Some("application" | "network")
+        )
+    {
+        return Err(invalid("VM load balancer requires a name, subnets, explicit public/private scheme and application/network type"));
+    }
+    request.subnets.sort();
+    request.subnets.dedup();
+    if let Some(groups) = request.security_groups.as_mut() {
+        groups.sort();
+        groups.dedup();
+    }
+    request
+        .ip_address_type
+        .get_or_insert_with(|| "ipv4".to_string());
+    let mut tags = BTreeMap::new();
+    for tag in request.tags.take().unwrap_or_default() {
+        if tag.key.is_empty()
+            || tag.key == CREATE_ATTEMPT_TAG
+            || tags.insert(tag.key, tag.value).is_some()
+        {
+            return Err(invalid(
+                "Load balancer ownership tags are empty, reserved or duplicated",
+            ));
+        }
+    }
+    if tags.is_empty() {
+        return Err(invalid("Load balancer requires ownership tags"));
+    }
+    let encoded = serde_json::to_vec(&request)
+        .into_alien_error()
+        .context(config_data("Encode VM load balancer configuration"))?;
+    let fingerprint = format!("{:x}", Sha256::digest(encoded));
+    Ok((request, tags, fingerprint))
 }
 
 fn required_arn(lb: &LoadBalancer) -> Result<String> {

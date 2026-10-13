@@ -69,6 +69,10 @@ impl AwsVmFrontend {
                 resource_id: None,
             }));
         }
+        // Setup boundaries must be known before creating any runtime child.
+        // In particular, missing public subnets must not leave a target group.
+        super::aws_vm_target_group::prepare_request(plan.target_group.clone())?;
+        super::aws_vm_load_balancer::prepare_request(plan.load_balancer.clone())?;
         let Some(target_group_arn) = self
             .target_group
             .step_create(elb, plan.target_group)

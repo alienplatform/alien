@@ -155,6 +155,36 @@ fn reload(frontend: &AwsVmFrontend) -> AwsVmFrontend {
 }
 
 #[tokio::test]
+async fn incomplete_setup_or_ownership_is_rejected_before_any_child_intent_or_api_call() {
+    for invalid_case in 0..4 {
+        let elb = MockElbv2Api::new(); // Every provider operation is unexpected.
+        let mut frontend = AwsVmFrontend::default();
+        let mut desired = plan(false, false);
+        match invalid_case {
+            0 => desired.load_balancer.subnets.clear(),
+            1 => desired.load_balancer.scheme = None,
+            2 => desired.load_balancer.tags = None,
+            _ => desired.load_balancer.tags.as_mut().unwrap().push(ElbTag {
+                key: "Owner".to_string(),
+                value: "ambiguous".to_string(),
+            }),
+        }
+        let before = serde_json::to_value(&frontend).unwrap();
+        let error = frontend
+            .step_prepare(&elb, desired)
+            .await
+            .err()
+            .expect("invalid plan must fail immediately");
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert_eq!(
+            serde_json::to_value(&frontend).unwrap(),
+            before,
+            "invalid setup must not begin child ownership"
+        );
+    }
+}
+
+#[tokio::test]
 async fn every_preparation_checkpoint_can_resume_or_delete_with_one_mutation_per_step() {
     for tcp in [false, true] {
         for private in [false, true] {

@@ -40,27 +40,9 @@ impl AwsVmTargetGroup {
     pub async fn step_create(
         &mut self,
         elb: &dyn Elbv2Api,
-        mut request: CreateTargetGroupRequest,
+        request: CreateTargetGroupRequest,
     ) -> Result<Option<String>> {
-        if request.name.is_empty()
-            || !matches!(request.protocol.as_deref(), Some("HTTP" | "TCP"))
-            || !request.port.is_some_and(|port| (1..=65535).contains(&port))
-            || request.vpc_id.as_deref().is_none_or(str::is_empty)
-            || request
-                .target_type
-                .as_deref()
-                .is_some_and(|kind| kind != "instance")
-        {
-            return Err(invalid("VM target group requires a name, HTTP/TCP protocol, valid port, VPC and instance targets"));
-        }
-        request
-            .target_type
-            .get_or_insert_with(|| "instance".to_string());
-        let tags = normalized_tags(request.tags.take().unwrap_or_default())?;
-        let encoded = serde_json::to_vec(&request)
-            .into_alien_error()
-            .context(invalid_data("Encode VM target group configuration"))?;
-        let fingerprint = format!("{:x}", Sha256::digest(encoded));
+        let (mut request, tags, fingerprint) = prepare_request(request)?;
         if self.token.is_none() {
             if self.arn.is_some()
                 || self.name.is_some()
@@ -300,6 +282,31 @@ fn matches_requested_settings(group: &TargetGroup, request: &CreateTargetGroupRe
                         .is_none_or(|value| actual.grpc_code.as_ref() == Some(value))
             })
         })
+}
+
+pub(super) fn prepare_request(
+    mut request: CreateTargetGroupRequest,
+) -> Result<(CreateTargetGroupRequest, BTreeMap<String, String>, String)> {
+    if request.name.is_empty()
+        || !matches!(request.protocol.as_deref(), Some("HTTP" | "TCP"))
+        || !request.port.is_some_and(|port| (1..=65535).contains(&port))
+        || request.vpc_id.as_deref().is_none_or(str::is_empty)
+        || request
+            .target_type
+            .as_deref()
+            .is_some_and(|kind| kind != "instance")
+    {
+        return Err(invalid("VM target group requires a name, HTTP/TCP protocol, valid port, VPC and instance targets"));
+    }
+    request
+        .target_type
+        .get_or_insert_with(|| "instance".to_string());
+    let tags = normalized_tags(request.tags.take().unwrap_or_default())?;
+    let encoded = serde_json::to_vec(&request)
+        .into_alien_error()
+        .context(invalid_data("Encode VM target group configuration"))?;
+    let fingerprint = format!("{:x}", Sha256::digest(encoded));
+    Ok((request, tags, fingerprint))
 }
 
 fn required_arn(group: &TargetGroup) -> Result<String> {
