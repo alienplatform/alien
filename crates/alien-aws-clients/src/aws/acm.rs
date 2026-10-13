@@ -78,6 +78,30 @@ pub async fn find_imported_certificates_by_tag(
     key: &str,
     value: &str,
 ) -> Result<Vec<String>> {
+    find_imported_certificates(acm, key, value, false).await
+}
+
+/// Every imported certificate carrying a tag, requiring readable metadata for every candidate.
+///
+/// Use this for recovering an import whose response was lost. A denied tag read cannot
+/// distinguish an unrelated certificate from the import being recovered, so it must fail
+/// discovery rather than report an incomplete result. This requires ListTagsForCertificate
+/// permission for all imported certificates in the region. Certificates deleted during the
+/// scan are skipped; other errors are returned.
+pub async fn find_imported_certificates_by_tag_strict(
+    acm: &dyn AcmApi,
+    key: &str,
+    value: &str,
+) -> Result<Vec<String>> {
+    find_imported_certificates(acm, key, value, true).await
+}
+
+async fn find_imported_certificates(
+    acm: &dyn AcmApi,
+    key: &str,
+    value: &str,
+    require_readable_tags: bool,
+) -> Result<Vec<String>> {
     let mut found = Vec::new();
     let mut next_token = None;
     loop {
@@ -103,11 +127,12 @@ pub async fn find_imported_certificates_by_tag(
                     }
                 }
                 Err(error)
-                    if matches!(
-                        error.error,
-                        Some(ErrorData::RemoteResourceNotFound { .. })
-                            | Some(ErrorData::RemoteAccessDenied { .. })
-                    ) => {}
+                    if matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. }))
+                        || (!require_readable_tags
+                            && matches!(
+                                error.error,
+                                Some(ErrorData::RemoteAccessDenied { .. })
+                            )) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -897,6 +922,120 @@ mod tests {
         unreadable.assert_hits_async(1).await;
         other_token.assert_hits_async(1).await;
         amazon_issued.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn strict_import_discovery_walks_pages_and_tolerates_concurrent_deletion() {
+        let server = MockServer::start_async().await;
+        let first_page = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.ListCertificates")
+                    .json_body(all_key_types_body(None));
+                then.status(200).json_body(json!({
+                    "CertificateSummaryList": [summary(IMPORTED_UNREADABLE, "IMPORTED")],
+                    "NextToken": "page-2"
+                }));
+            })
+            .await;
+        let second_page = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.ListCertificates")
+                    .json_body(all_key_types_body(Some("page-2")));
+                then.status(200).json_body(json!({
+                    "CertificateSummaryList": [
+                        summary(IMPORTED_OURS, "IMPORTED"),
+                        summary(IMPORTED_OTHER_TOKEN, "IMPORTED"),
+                        summary(AMAZON_ISSUED, "AMAZON_ISSUED"),
+                    ]
+                }));
+            })
+            .await;
+        let deleted = tags_mock(
+            &server,
+            IMPORTED_UNREADABLE,
+            400,
+            json!({ "__type": "ResourceNotFoundException", "Message": "Certificate was deleted" }),
+        )
+        .await;
+        let ours = tags_mock(
+            &server,
+            IMPORTED_OURS,
+            200,
+            json!({ "Tags": [{ "Key": "CreateAttempt", "Value": "token-1" }] }),
+        )
+        .await;
+        let other = tags_mock(
+            &server,
+            IMPORTED_OTHER_TOKEN,
+            200,
+            json!({ "Tags": [{ "Key": "CreateAttempt", "Value": "token-2" }] }),
+        )
+        .await;
+        let issued = tags_mock(&server, AMAZON_ISSUED, 200, json!({ "Tags": [] })).await;
+        let found =
+            find_imported_certificates_by_tag_strict(&client(&server), "CreateAttempt", "token-1")
+                .await
+                .expect("a deleted candidate does not invalidate the scan");
+        assert_eq!(found, vec![IMPORTED_OURS.to_string()]);
+        first_page.assert_hits_async(1).await;
+        second_page.assert_hits_async(1).await;
+        deleted.assert_hits_async(1).await;
+        ours.assert_hits_async(1).await;
+        other.assert_hits_async(1).await;
+        issued.assert_hits_async(0).await;
+    }
+
+    /// A token match found before an unreadable certificate is still an incomplete scan:
+    /// another matching import may exist after a lost response and must not be orphaned.
+    #[tokio::test]
+    async fn strict_import_discovery_rejects_partial_results_after_a_denied_tag_read() {
+        let server = MockServer::start_async().await;
+        let list = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "CertificateManager.ListCertificates")
+                    .json_body(all_key_types_body(None));
+                then.status(200).json_body(json!({
+                    "CertificateSummaryList": [
+                        summary(IMPORTED_OURS, "IMPORTED"),
+                        summary(IMPORTED_UNREADABLE, "IMPORTED"),
+                    ]
+                }));
+            })
+            .await;
+        let ours = tags_mock(
+            &server,
+            IMPORTED_OURS,
+            200,
+            json!({ "Tags": [{ "Key": "CreateAttempt", "Value": "token-1" }] }),
+        )
+        .await;
+        let denied = tags_mock(
+            &server,
+            IMPORTED_UNREADABLE,
+            400,
+            json!({
+                "__type": "AccessDeniedException",
+                "Message": "User is not authorized to perform: acm:ListTagsForCertificate"
+            }),
+        )
+        .await;
+
+        let error =
+            find_imported_certificates_by_tag_strict(&client(&server), "CreateAttempt", "token-1")
+                .await
+                .expect_err(
+                    "a partial scan must not authorize another import or completed cleanup",
+                );
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
+        );
+        list.assert_hits_async(1).await;
+        ours.assert_hits_async(1).await;
+        denied.assert_hits_async(1).await;
     }
 
     #[tokio::test]
