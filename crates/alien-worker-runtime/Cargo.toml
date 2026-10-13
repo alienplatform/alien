@@ -61,7 +61,7 @@ libc = "0.2"
 axum = { workspace = true, features = ["macros", "json", "tokio", "http1"] }
 prost-types = { workspace = true }
 lru = "0.16"
-lambda_http = { workspace = true, optional = true }
+lambda_http = { workspace = true, optional = true, features = ["apigw_rest"] }
 lambda_runtime = { workspace = true, optional = true }
 lambda-extension = { workspace = true, optional = true }
 aws_lambda_events = { workspace = true, optional = true, features = ["cloudwatch_events", "s3", "sqs"] }

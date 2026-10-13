@@ -19,8 +19,8 @@ use std::{
 use alien_commands::{runtime::submit_response, types::CommandResponse};
 use alien_error::AlienError;
 use alien_worker_protocol::{
-    control::{task::Payload, ArcCommand, CronEvent, QueueMessage, StorageEvent, Task},
     ControlGrpcServer,
+    control::{ArcCommand, CronEvent, QueueMessage, StorageEvent, Task, task::Payload},
 };
 use aws_lambda_events::{
     cloudwatch_events::CloudWatchEvent, event::s3::S3Event, event::sqs::SqsEvent,
@@ -28,23 +28,27 @@ use aws_lambda_events::{
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use http_body::Body as HttpBody;
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use lambda_http::{
-    aws_lambda_events::apigw::ApiGatewayV2httpResponse,
-    http::{
-        header::{RETRY_AFTER, SET_COOKIE},
-        Response,
-    },
     Body as LambdaBody, Request as LambdaRequest, RequestExt,
+    aws_lambda_events::apigw::{
+        ApiGatewayProxyRequest, ApiGatewayProxyResponse, ApiGatewayV2httpRequest,
+        ApiGatewayV2httpResponse,
+    },
+    http::{
+        Response,
+        header::{RETRY_AFTER, SET_COOKIE},
+    },
+    request::{LambdaRequest as LambdaRequestInternal, RequestContext},
 };
 use lambda_runtime::{
     self as lambda, Error as LambdaError, LambdaEvent, MetadataPrelude, Service, StreamResponse,
 };
 use pin_project_lite::pin_project;
 use serde_json::Value;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_stream::Stream;
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::{
     config::LambdaMode,
@@ -57,10 +61,10 @@ use crate::{
 pub mod wait_until_extension {
     use crate::error::{ErrorData, Result};
     use alien_error::AlienError;
-    use lambda_extension::{service_fn, Extension, LambdaEvent, NextEvent};
+    use lambda_extension::{Extension, LambdaEvent, NextEvent, service_fn};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::{
-        sync::{mpsc::UnboundedReceiver, Mutex},
+        sync::{Mutex, mpsc::UnboundedReceiver},
         task::JoinHandle,
     };
     use tracing::{debug, error, info, warn};
@@ -264,7 +268,7 @@ pub mod wait_until_extension {
             sync::{Arc, Condvar, Mutex as StdMutex},
             time::Instant,
         };
-        use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+        use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
         /// The app-log provider is process-global, so tests that install one run one at a time.
         static APP_LOG_PROVIDER: Mutex<()> = Mutex::const_new(());
@@ -608,25 +612,41 @@ impl LambdaTransport {
 // ============================================================================
 
 /// Convert LambdaEvent<Value> to LambdaRequest by parsing the event payload
-fn event_to_request(event: LambdaEvent<Value>) -> LambdaRequest {
-    use lambda_http::aws_lambda_events::apigw::ApiGatewayV2httpRequest;
-    use lambda_http::request::LambdaRequest as LambdaRequestInternal;
-
-    let payload = event.payload.clone();
-
-    // Try to parse as API Gateway HTTP request
-    if let Ok(http_req) = serde_json::from_value::<ApiGatewayV2httpRequest>(payload.clone()) {
-        return LambdaRequest::from(LambdaRequestInternal::ApiGatewayV2(http_req))
-            .with_lambda_context(event.context);
+fn event_to_request(event: LambdaEvent<Value>) -> std::result::Result<LambdaRequest, LambdaError> {
+    let payload = event.payload;
+    if payload.get("version").and_then(Value::as_str) == Some("2.0")
+        || payload.pointer("/requestContext/http").is_some()
+    {
+        let request = serde_json::from_value::<ApiGatewayV2httpRequest>(payload)
+            .map_err(|_| invocation_failure("Malformed API Gateway HTTP event"))?;
+        return Ok(
+            LambdaRequest::from(LambdaRequestInternal::ApiGatewayV2(request))
+                .with_lambda_context(event.context),
+        );
+    }
+    if payload.get("httpMethod").is_some() && payload.get("requestContext").is_some() {
+        let mut request = serde_json::from_value::<ApiGatewayProxyRequest>(payload)
+            .map_err(|_| invocation_failure("Malformed API Gateway REST event"))?;
+        // REST's stage selects the transport integration, not an application
+        // route. The event path already excludes that stage.
+        request.request_context.stage = None;
+        let multi_headers = request.multi_value_headers.clone();
+        let mut request = LambdaRequest::from(LambdaRequestInternal::ApiGatewayV1(request));
+        // lambda-http merges the single-value map last. Restore the canonical
+        // multi-value map so duplicate application headers are not discarded.
+        request.headers_mut().extend(multi_headers);
+        return Ok(request.with_lambda_context(event.context));
     }
 
-    // For non-HTTP events (S3, SQS, CloudWatch, Commands), create a synthetic POST request
-    // with the raw JSON payload as the body
-    let body_json = serde_json::to_string(&payload).unwrap_or_default();
-    let mut req = LambdaRequest::new(LambdaBody::Text(body_json));
-    *req.method_mut() = lambda_http::http::Method::POST;
-    *req.uri_mut() = "/__event".parse().unwrap();
-    req.with_lambda_context(event.context)
+    // Triggers and commands retain their raw event payload for classification.
+    let body_json = serde_json::to_string(&payload)
+        .map_err(|_| invocation_failure("Cannot serialize Lambda event"))?;
+    let request = lambda_http::http::Request::builder()
+        .method(lambda_http::http::Method::POST)
+        .uri("/__event")
+        .body(LambdaBody::Text(body_json))
+        .map_err(|_| invocation_failure("Cannot construct Lambda event request"))?;
+    Ok(request.with_lambda_context(event.context))
 }
 
 #[derive(Clone)]
@@ -673,8 +693,41 @@ struct BufferedAdapter {
     request_done_sender: UnboundedSender<()>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum BufferedResponse {
+    Rest(Box<ApiGatewayProxyResponse>),
+    Http(Box<ApiGatewayV2httpResponse>),
+}
+
+fn buffered_response(
+    rest: bool,
+    response: ApiGatewayV2httpResponse,
+) -> std::result::Result<BufferedResponse, LambdaError> {
+    if !rest {
+        return Ok(BufferedResponse::Http(Box::new(response)));
+    }
+    let mut headers = response.headers;
+    headers.extend(response.multi_value_headers);
+    for cookie in response.cookies {
+        headers.append(
+            SET_COOKIE,
+            cookie
+                .parse()
+                .map_err(|_| invocation_failure("Invalid response cookie"))?,
+        );
+    }
+    Ok(BufferedResponse::Rest(Box::new(ApiGatewayProxyResponse {
+        status_code: response.status_code,
+        multi_value_headers: headers,
+        body: response.body,
+        is_base64_encoded: response.is_base64_encoded,
+        ..Default::default()
+    })))
+}
+
 impl Service<LambdaRequest> for BufferedAdapter {
-    type Response = ApiGatewayV2httpResponse;
+    type Response = BufferedResponse;
     type Error = LambdaError;
     type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
 
@@ -690,7 +743,14 @@ impl Service<LambdaRequest> for BufferedAdapter {
 
         Box::pin(
             async move {
-                let result = handle_buffered_event(&state, &request_id, req).await;
+                let rest = matches!(
+                    req.request_context_ref(),
+                    Some(RequestContext::ApiGatewayV1(_))
+                );
+                let result = match handle_buffered_event(&state, &request_id, req).await {
+                    Ok(response) => buffered_response(rest, response),
+                    Err(error) => Err(error),
+                };
 
                 // Signal that the handler has completed
                 if let Err(e) = request_done_sender.send(()) {
@@ -786,31 +846,32 @@ async fn run_streaming(
 
     use lambda_runtime::tower::ServiceExt;
 
-    let svc = lambda_runtime::tower::ServiceBuilder::new()
-        .map_request(event_to_request)
-        .service(handler)
-        .map_response(|res: Response<StreamingBody>| {
-            let (parts, body) = res.into_parts();
+    let svc = lambda::service_fn(move |event| {
+        let mut handler = handler.clone();
+        async move { handler.call(event_to_request(event)?).await }
+    })
+    .map_response(|res: Response<StreamingBody>| {
+        let (parts, body) = res.into_parts();
 
-            let cookies: Vec<_> = parts
-                .headers
-                .get_all(SET_COOKIE)
-                .iter()
-                .filter_map(|v| std::str::from_utf8(v.as_bytes()).ok().map(str::to_owned))
-                .collect();
+        let cookies: Vec<_> = parts
+            .headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| std::str::from_utf8(v.as_bytes()).ok().map(str::to_owned))
+            .collect();
 
-            let mut headers = parts.headers;
-            headers.remove(SET_COOKIE);
+        let mut headers = parts.headers;
+        headers.remove(SET_COOKIE);
 
-            StreamResponse {
-                metadata_prelude: MetadataPrelude {
-                    headers,
-                    status_code: parts.status,
-                    cookies,
-                },
-                stream: BodyStream { body },
-            }
-        });
+        StreamResponse {
+            metadata_prelude: MetadataPrelude {
+                headers,
+                status_code: parts.status,
+                cookies,
+            },
+            stream: BodyStream { body },
+        }
+    });
 
     drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
 }
@@ -820,9 +881,10 @@ async fn run_buffered(
     adapter: BufferedAdapter,
     request_done_receiver: UnboundedReceiver<()>,
 ) -> Result<()> {
-    let svc = lambda_runtime::tower::ServiceBuilder::new()
-        .map_request(event_to_request)
-        .service(adapter);
+    let svc = lambda::service_fn(move |event| {
+        let mut adapter = adapter.clone();
+        async move { adapter.call(event_to_request(event)?).await }
+    });
 
     drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Buffered").await
 }
@@ -1439,6 +1501,124 @@ async fn forward_http_request_buffered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rest_event() -> Value {
+        serde_json::json!({
+            "resource": "/{proxy+}", "path": "/echo/nested", "httpMethod": "POST",
+            "headers": {"Host":"private.example.test:8443", "X-Multi":"second", "Content-Type":"application/octet-stream"},
+            "multiValueHeaders": {"Host":["private.example.test:8443"], "X-Multi":["first","second"]},
+            "queryStringParameters": {"key":"second", "space":"a b"},
+            "multiValueQueryStringParameters": {"key":["first","second"], "space":["a b"]},
+            "requestContext": {"httpMethod":"POST", "stage":"private", "domainName":"provider.example.test", "path":"/private/echo/nested"},
+            "body":"AP8BAg==", "isBase64Encoded":true
+        })
+    }
+
+    #[tokio::test]
+    async fn rest_event_forwards_application_path_host_binary_and_repeated_values() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new().fallback(|request: axum::extract::Request| async move {
+            let (parts, body) = request.into_parts();
+            let body = axum::body::to_bytes(body, 1024).await.unwrap();
+            axum::Json(serde_json::json!({
+                "method":parts.method.as_str(), "path":parts.uri.path(), "query":parts.uri.query(),
+                "host":parts.headers["host"].to_str().unwrap(),
+                "multi":parts.headers.get_all("x-multi").iter().map(|value|value.to_str().unwrap()).collect::<Vec<_>>(),
+                "body":body.to_vec()
+            }))
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let request = event_to_request(LambdaEvent::new(rest_event(), Default::default())).unwrap();
+        assert!(matches!(
+            request.request_context_ref(),
+            Some(RequestContext::ApiGatewayV1(_))
+        ));
+        let response = forward_to_app(port, request).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let received: Value = response.json().await.unwrap();
+        assert_eq!(received["method"], "POST");
+        assert_eq!(received["path"], "/echo/nested");
+        assert_eq!(received["host"], "private.example.test:8443");
+        assert_eq!(received["multi"], serde_json::json!(["first", "second"]));
+        assert_eq!(received["body"], serde_json::json!([0, 255, 1, 2]));
+        let url = url::Url::parse(&format!(
+            "http://example.test/?{}",
+            received["query"].as_str().unwrap()
+        ))
+        .unwrap();
+        let mut pairs = url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("key".into(), "first".into()),
+                ("key".into(), "second".into()),
+                ("space".into(), "a b".into())
+            ]
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn http_v2_keeps_raw_target_and_trigger_payloads_remain_events() {
+        let event = serde_json::json!({"version":"2.0", "rawPath":"/a%2Fb", "rawQueryString":"x=1&x=2&space=a%20b",
+            "headers":{"host":"public.example.test"}, "requestContext":{"stage":"$default","http":{"method":"GET","path":"/a/b","protocol":"HTTP/1.1","sourceIp":"127.0.0.1"}}});
+        let request = event_to_request(LambdaEvent::new(event, Default::default())).unwrap();
+        assert_eq!(
+            request.uri().path_and_query().unwrap().as_str(),
+            "/a%2Fb?x=1&x=2&space=a%20b"
+        );
+        assert_eq!(request.headers()["host"], "public.example.test");
+        let payload = sqs_event_json();
+        let request =
+            event_to_request(LambdaEvent::new(payload.clone(), Default::default())).unwrap();
+        assert_eq!(request.uri().path(), "/__event");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&event_body_bytes(&request)).unwrap(),
+            payload
+        );
+        assert!(matches!(classify_event(request), ClassifiedEvent::Task(_)));
+    }
+
+    #[test]
+    fn malformed_http_events_do_not_fall_through_to_application_events() {
+        for event in [
+            serde_json::json!({"version":"2.0"}),
+            serde_json::json!({"httpMethod":"POST", "requestContext":{}}),
+        ] {
+            assert!(event_to_request(LambdaEvent::new(event, Default::default())).is_err());
+        }
+    }
+
+    #[test]
+    fn rest_buffered_response_uses_multi_value_headers_for_cookies_and_binary_body() {
+        let mut response = ApiGatewayV2httpResponse {
+            status_code: 201,
+            body: Some(LambdaBody::Binary(vec![0, 255])),
+            is_base64_encoded: true,
+            cookies: vec!["a=1; Secure".into(), "b=2; Secure".into()],
+            ..Default::default()
+        };
+        response.headers.append("x-repeat", "one".parse().unwrap());
+        response.headers.append("x-repeat", "two".parse().unwrap());
+        let wire = serde_json::to_value(buffered_response(true, response).unwrap()).unwrap();
+        assert_eq!(wire["statusCode"], 201);
+        assert_eq!(wire["body"], "AP8=");
+        assert_eq!(wire["isBase64Encoded"], true);
+        assert_eq!(
+            wire["multiValueHeaders"]["set-cookie"],
+            serde_json::json!(["a=1; Secure", "b=2; Secure"])
+        );
+        assert_eq!(
+            wire["multiValueHeaders"]["x-repeat"],
+            serde_json::json!(["one", "two"])
+        );
+        assert!(wire.get("cookies").is_none());
+    }
 
     #[tokio::test]
     async fn a_streamed_invocation_ends_when_its_body_is_done_not_at_the_headers() {
