@@ -613,6 +613,7 @@ impl Ec2Client {
             // Conflict / already exists errors
             "VpcLimitExceeded"
             | "InternetGatewayLimitExceeded"
+            | "NatGatewayLimitExceeded"
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
@@ -4270,7 +4271,11 @@ mod error_mapping_tests {
 
     #[test]
     fn network_count_limit_errors_decode_as_quotas() {
-        for code in ["VpcLimitExceeded", "InternetGatewayLimitExceeded"] {
+        for code in [
+            "VpcLimitExceeded",
+            "InternetGatewayLimitExceeded",
+            "NatGatewayLimitExceeded",
+        ] {
             assert!(
                 matches!(mapped(code), Some(ErrorData::QuotaExceeded { message }) if message == "m")
             );

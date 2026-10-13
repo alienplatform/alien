@@ -44,8 +44,11 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use alien_preflights::{
-    quotas::{aws_network_quota_identity, evaluate, QuotaDemand, QuotaOutcome},
-    runtime::cloud_quotas::read_elastic_ip_observation,
+    quotas::{
+        aws_nat_gateway_quota_identity, aws_network_quota_identity, evaluate, QuotaDemand,
+        QuotaOutcome,
+    },
+    runtime::{aws_nat::read_nat_gateway_observation, cloud_quotas::read_elastic_ip_observation},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -482,6 +485,66 @@ fn subnets_needing_association<'a>(
         .iter()
         .filter(|s| !already.contains(s.as_str()))
         .collect()
+}
+
+/// The direct controller has selected the public subnet zone before any VPC create.
+/// Reads are optional: lack of quota visibility must never block provisioning.
+async fn preflight_aws_nat_quota(ctx: &ResourceControllerContext<'_>, zone: &str) -> Result<()> {
+    let aws_config = ctx.get_aws_config()?;
+    let ec2 = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
+    let observation = match ctx
+        .service_provider
+        .get_aws_service_quotas_client(aws_config)
+        .await
+    {
+        Ok(quotas) => read_nat_gateway_observation(ec2.as_ref(), quotas.as_ref(), zone).await,
+        Err(error) => {
+            warn!(error = %error, "Could not initialize the optional AWS Service Quotas client");
+            None
+        }
+    };
+    match evaluate(
+        QuotaDemand {
+            peak: 1.0,
+            held: 0.0,
+        },
+        observation,
+    ) {
+        QuotaOutcome::Fail {
+            used,
+            limit,
+            needed,
+        } => {
+            let quota = aws_nat_gateway_quota_identity(&aws_config.region, Some(zone));
+            let message = format!(
+                "{} ({}, {}): used {used}, applied limit {limit}, additional demand {needed}. Request an increase: {}.",
+                quota.name, quota.provider_id, quota.scope, quota.increase_url,
+            );
+            Err(AlienError::new(ErrorData::CloudQuotaExceeded {
+                quota,
+                message,
+            }))
+        }
+        QuotaOutcome::Unknown { reason } => {
+            warn!(zone, reason, "AWS NAT gateway quota preflight is uncertain");
+            Ok(())
+        }
+        QuotaOutcome::Warn { message } => {
+            warn!(zone, message, "AWS NAT gateway quota preflight warning");
+            Ok(())
+        }
+        QuotaOutcome::Pass {
+            used,
+            limit,
+            needed,
+        } => {
+            info!(
+                zone,
+                used, limit, needed, "AWS NAT gateway quota preflight passed"
+            );
+            Ok(())
+        }
+    }
 }
 
 async fn preflight_aws_eip_quota(
@@ -3027,6 +3090,13 @@ impl AwsNetworkController {
             }
         }
 
+        // Public subnets follow this persisted vector, and the NAT uses the first one.
+        // Run after recovery lookups so an already-created VPC is never mistaken for a
+        // pristine network. No provider ordering is inferred for imported/template paths.
+        if let Some(zone) = self.availability_zones.first() {
+            preflight_aws_nat_quota(ctx, zone).await?;
+        }
+
         let vpc_cidr = match &self.cidr_block {
             Some(cidr) => cidr.clone(),
             None => {
@@ -3864,6 +3934,18 @@ impl AwsNetworkController {
                     .build(),
             )
             .await
+            .map_err(|error| {
+                let zone = self
+                    .subnets_by_failure_domain
+                    .iter()
+                    .find_map(|(zone, subnets)| {
+                        subnets
+                            .public_subnet_ids
+                            .contains(public_subnet_id)
+                            .then_some(zone.as_str())
+                    });
+                network_quota_error(error, aws_nat_gateway_quota_identity(&aws_cfg.region, zone))
+            })
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to create NAT Gateway".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -5558,6 +5640,14 @@ mod controller_state_tests {
         provider
             .expect_get_aws_ec2_client()
             .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_service_quotas_client()
+            .returning(|_| {
+                Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Optional quota client unavailable in this fixture".into(),
+                    resource_id: None,
+                }))
+            });
         SingleControllerExecutor::builder()
             .resource(network(cidr))
             .controller(controller)
@@ -5984,6 +6074,166 @@ mod controller_state_tests {
             cidr_block: Some("10.0.0.0/16".to_string()),
             availability_zones: vec!["us-east-1a".to_string(), "us-east-1b".to_string()],
             ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn nat_guard_uses_persisted_first_zone_before_vpc_creation() {
+        for (limit, denied, blocked) in [
+            (1.0, false, true),
+            (2.0, false, false),
+            (f64::NAN, false, false),
+            (1.0, true, false),
+        ] {
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_create_vpc().times(0);
+            ec2.expect_describe_availability_zones().times(0);
+            if !denied {
+                ec2.expect_describe_nat_gateways().times(1).returning(|_| {
+                    Ok(parse(json!({
+                        "natGatewaySet": {"item": [
+                            {"natGatewayId": "nat-a", "subnetId": "subnet-a", "state": "available"},
+                            {"natGatewayId": "nat-b", "subnetId": "subnet-b", "state": "available"}
+                        ]}
+                    })))
+                });
+                ec2.expect_describe_subnets().times(1).returning(|_| {
+                    Ok(parse(json!({
+                        "subnetSet": {"item": [
+                            {"subnetId": "subnet-a", "availabilityZone": "us-east-1a"},
+                            {"subnetId": "subnet-b", "availabilityZone": "us-east-1b"}
+                        ]}
+                    })))
+                });
+            }
+            let mut quotas = MockServiceQuotasApi::new();
+            quotas
+                .expect_get_service_quota()
+                .times(1)
+                .withf(|service, code| service == "vpc" && code == "L-FE5A380F")
+                .returning(move |_, _| {
+                    if denied {
+                        Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                            resource_type: "quota".into(),
+                            resource_name: "test".into(),
+                        }))
+                    } else {
+                        Ok(GetServiceQuotaResponse {
+                            quota: Some(ServiceQuota {
+                                quota_code: Some("L-FE5A380F".into()),
+                                service_code: Some("vpc".into()),
+                                quota_name: None,
+                                value: Some(limit),
+                            }),
+                        })
+                    }
+                });
+            let ec2 = Arc::new(ec2);
+            let quotas = Arc::new(quotas);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_ec2_client()
+                .returning(move |_| Ok(ec2.clone()));
+            provider
+                .expect_get_aws_service_quotas_client()
+                .returning(move |_| Ok(quotas.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(network(Some("10.0.0.0/16")))
+                .controller(AwsNetworkController {
+                    state: AwsNetworkState::CreatingVpc,
+                    availability_zones: vec!["us-east-1b".into(), "us-east-1a".into()],
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(provider))
+                .resource_prefix(PREFIX)
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            let outcome = executor.step().await;
+            if blocked {
+                let error = outcome.expect_err("full selected AZ must block before CreateVpc");
+                assert_eq!(error.code, "CLOUD_QUOTA_EXCEEDED");
+                assert!(!error.retryable);
+                let quota: alien_preflights::quotas::QuotaIdentity =
+                    serde_json::from_value(error.context.as_ref().unwrap()["quota"].clone())
+                        .unwrap();
+                assert_eq!(quota.provider_id, "L-FE5A380F");
+                assert!(quota.scope.ends_with(" / us-east-1b"));
+                assert!(error
+                    .message
+                    .contains("used 1, applied limit 1, additional demand 1"));
+                assert!(error.message.contains(&quota.increase_url));
+                assert_eq!(controller(&executor).vpc_create_token, None);
+            } else {
+                outcome.expect("available or Unknown quota continues");
+                assert!(controller(&executor).vpc_create_token.is_some());
+            }
+            assert_eq!(controller(&executor).vpc_id, None);
+            assert_eq!(
+                controller(&executor).availability_zones,
+                ["us-east-1b", "us-east-1a"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn nat_quota_race_preserves_subnet_zone_and_owned_eip_without_retry() {
+        for known_zone in [true, false] {
+            let mut ec2 = MockEc2Api::new();
+            ec2.expect_create_nat_gateway()
+                .times(1)
+                .withf(|request| request.subnet_id == "subnet-b")
+                .returning(|_| {
+                    Err(AlienError::new(CloudClientErrorData::QuotaExceeded {
+                        message: "NatGatewayLimitExceeded: too many NAT gateways in this zone"
+                            .into(),
+                    }))
+                });
+            ec2.expect_allocate_address().times(0);
+            let mut subnets_by_failure_domain = BTreeMap::new();
+            if known_zone {
+                subnets_by_failure_domain.insert(
+                    "us-east-1b".into(),
+                    AwsFailureDomainSubnets {
+                        public_subnet_ids: vec!["subnet-b".into()],
+                        ..Default::default()
+                    },
+                );
+            }
+            let mut executor = executor(
+                ec2,
+                AwsNetworkController {
+                    public_subnet_ids: vec!["subnet-b".into()],
+                    subnets_by_failure_domain,
+                    eip_allocation_id: Some("eipalloc-1".into()),
+                    nat_gateway_create_token: Some("attempt-1".into()),
+                    ..after_vpc(AwsNetworkState::CreatingNatGateway)
+                },
+                Some("10.0.0.0/16"),
+            )
+            .await;
+            let error = executor.step().await.expect_err("NAT quota race fails");
+            assert!(!error.retryable);
+            let cause = error.source.as_ref().unwrap();
+            assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
+            let quota: alien_preflights::quotas::QuotaIdentity =
+                serde_json::from_value(cause.context.as_ref().unwrap()["quota"].clone()).unwrap();
+            assert_eq!(quota.provider_id, "L-FE5A380F");
+            assert_eq!(quota.service, "vpc");
+            assert!(quota.scope.ends_with(if known_zone {
+                " / us-east-1b"
+            } else {
+                " / availability zone unresolved"
+            }));
+            assert!(cause.message.contains(&quota.increase_url));
+            assert!(cause.message.contains("NatGatewayLimitExceeded"));
+            assert_eq!(
+                controller(&executor).eip_allocation_id.as_deref(),
+                Some("eipalloc-1")
+            );
+            assert_eq!(controller(&executor).nat_gateway_id, None);
         }
     }
 

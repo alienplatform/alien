@@ -32,6 +32,18 @@ pub fn aws_network_quota_identity(region: &str, code: &str, name: &str) -> Quota
     }
 }
 
+/// NAT quota is enforced per AZ; its increase request still belongs to the region.
+/// Old controller state may lack a subnet-to-zone mapping; never invent that zone.
+pub fn aws_nat_gateway_quota_identity(region: &str, zone: Option<&str>) -> QuotaIdentity {
+    let mut quota =
+        aws_network_quota_identity(region, "L-FE5A380F", "NAT gateways per Availability Zone");
+    quota.scope = match zone.filter(|zone| !zone.is_empty()) {
+        Some(zone) => format!("{region} / {zone}"),
+        None => format!("{region} / availability zone unresolved"),
+    };
+    quota
+}
+
 /// Additional capacity required at the peak of this deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
