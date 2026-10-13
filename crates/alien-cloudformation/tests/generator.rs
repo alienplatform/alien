@@ -23,6 +23,7 @@ mod generator {
     pub mod gating_matrix_tests;
     pub mod kubernetes_cluster_tests;
     pub mod network_tests;
+    pub mod network_inputs_tests;
     pub mod output_chunking_tests;
     pub mod plugin_tests;
     pub mod registration_tests;
