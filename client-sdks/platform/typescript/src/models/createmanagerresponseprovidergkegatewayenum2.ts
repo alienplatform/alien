@@ -1035,10 +1035,10 @@ export type CreateManagerResponseContainers1 = {
    */
   memory?: string | null | undefined;
   /**
-   * Persistent volume capacity per replica, in whole GiB. Must be at least
+   * Persistent volume capacity per replica, in whole GiB. Omitted values
    *
    * @remarks
-   * the release's declared capacity. Existing volumes can only grow.
+   * use the release default. Existing volumes can only grow.
    */
   volumeSizeGib?: number | null | undefined;
 };
