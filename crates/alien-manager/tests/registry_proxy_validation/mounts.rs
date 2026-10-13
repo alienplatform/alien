@@ -1,6 +1,6 @@
 //! A cross-repository blob mount reaches the upstream only on the upload-init POST, only with a
 //! valid digest, and only when its source is on the pushed repository's registry route and
-//! pullable by the caller. Refused sources stop the request; malformed mounts become plain uploads.
+//! pullable by the caller. Any other mount becomes a plain upload.
 
 use std::process::Command;
 
@@ -46,7 +46,7 @@ fn mount_queries_outside_the_project(digest: &str, port: u16) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn mount_sources_outside_the_pushed_project_are_refused_or_sanitized() {
+async fn mount_sources_outside_the_pushed_project_become_plain_uploads() {
     let (upstream, seen) = start_upstream().await;
     let manager = start_manager(upstream).await;
     for token in ["deploy-for-prj_a", "group-for-prj_a"] {
@@ -58,10 +58,6 @@ async fn mount_sources_outside_the_pushed_project_are_refused_or_sanitized() {
                 let before = seen.lock().unwrap().len();
                 let response = send(manager.port, "POST", &format!("{init}?{query}"), token).await;
                 let reached = reached_since(&seen, before);
-                if response.status == 403 {
-                    assert!(reached.is_empty(), "{token} {query}: {reached:?}");
-                    continue;
-                }
                 assert_eq!(response.status, 202, "{token} {query}: {}", response.body);
                 assert_eq!(reached.len(), 1, "{token} {query}");
                 assert!(
@@ -84,7 +80,7 @@ async fn mount_sources_outside_the_pushed_project_are_refused_or_sanitized() {
 }
 
 /// Mounts within the pushed project are forwarded for a caller that may pull the project, and
-/// are refused for a push-only caller.
+/// become plain uploads for a push-only caller.
 #[tokio::test]
 async fn mounts_within_the_pushed_project_follow_the_callers_pull_access() {
     let (upstream, seen) = start_upstream().await;
@@ -100,7 +96,6 @@ async fn mounts_within_the_pushed_project_follow_the_callers_pull_access() {
             (format!("{OWN}/copy"), OWN.to_string()),
             (OWN.to_string(), format!("{OWN}/nested")),
         ] {
-            let before = seen.lock().unwrap().len();
             let response = send(
                 manager.port,
                 "POST",
@@ -111,11 +106,9 @@ async fn mounts_within_the_pushed_project_follow_the_callers_pull_access() {
                 token,
             )
             .await;
-            let reached = reached_since(&seen, before);
+            let mut pairs = seen.lock().unwrap().last().unwrap().pairs();
+            pairs.sort();
             if pullable {
-                assert_eq!(reached.len(), 1);
-                let mut pairs = reached[0].pairs();
-                pairs.sort();
                 assert_eq!(
                     response.status, 201,
                     "{token} {from} -> {target}: {}",
@@ -131,14 +124,11 @@ async fn mounts_within_the_pushed_project_follow_the_callers_pull_access() {
                 );
             } else {
                 assert_eq!(
-                    response.status, 403,
+                    response.status, 202,
                     "{token} {from} -> {target}: {}",
                     response.body
                 );
-                assert!(
-                    reached.is_empty(),
-                    "{token} {from} -> {target}: {reached:?}"
-                );
+                assert!(pairs.is_empty(), "{token} {from} -> {target}: {pairs:?}");
             }
         }
     }
@@ -182,7 +172,6 @@ async fn origin_is_never_forwarded() {
             ),
             format!("{origin}=registry.example"),
         ] {
-            let before = seen.lock().unwrap().len();
             let refused = send(
                 manager.port,
                 "POST",
@@ -190,15 +179,9 @@ async fn origin_is_never_forwarded() {
                 "deploy-for-prj_a",
             )
             .await;
-            let reached = reached_since(&seen, before);
-            if query.starts_with("mount=") {
-                assert_eq!(refused.status, 403, "{query}: {}", refused.body);
-                assert!(reached.is_empty(), "{query}: {reached:?}");
-            } else {
-                assert_eq!(refused.status, 202, "{query}: {}", refused.body);
-                assert_eq!(reached.len(), 1);
-                assert!(!reached[0].has_mount_params(), "{query}: {reached:?}");
-            }
+            assert_eq!(refused.status, 202, "{query}: {}", refused.body);
+            let reached = seen.lock().unwrap().last().cloned().unwrap();
+            assert!(!reached.has_mount_params(), "{query}: {reached:?}");
         }
     }
 }
@@ -235,7 +218,6 @@ async fn only_the_lowercase_mount_keys_are_forwarded() {
             true,
         ),
     ] {
-        let before = seen.lock().unwrap().len();
         let response = send(
             manager.port,
             "POST",
@@ -243,11 +225,6 @@ async fn only_the_lowercase_mount_keys_are_forwarded() {
             "deploy-for-prj_a",
         )
         .await;
-        if query.contains(&format!("from={}&from={}", enc(OWN), enc(OTHER))) {
-            assert_eq!(response.status, 403, "{query}: {}", response.body);
-            assert!(reached_since(&seen, before).is_empty());
-            continue;
-        }
         let expected = if forwarded { 201 } else { 202 };
         assert_eq!(response.status, expected, "{query}: {}", response.body);
         let pairs = seen.lock().unwrap().last().unwrap().pairs();
@@ -274,7 +251,7 @@ async fn only_the_lowercase_mount_keys_are_forwarded() {
 
 /// A mount follows the pull rule: a caller that may pull the source may mount from it. A
 /// deployment token pulls only its own project and a deployment-group token pulls nothing, so
-/// their mounts from B are refused; the project-scoped token's mount matches its pull.
+/// their mounts from B become plain uploads; the project-scoped token's mount matches its pull.
 #[tokio::test]
 async fn mounts_follow_the_pull_rule() {
     let (upstream, seen) = start_upstream().await;
@@ -292,7 +269,6 @@ async fn mounts_follow_the_pull_rule() {
         if token != "pusher-for-prj_a" {
             assert!(!may_pull, "{token} pulled {OTHER}: {}", pull.status);
         }
-        let before = seen.lock().unwrap().len();
         let mount = send(
             manager.port,
             "POST",
@@ -303,14 +279,10 @@ async fn mounts_follow_the_pull_rule() {
             token,
         )
         .await;
-        let reached = reached_since(&seen, before);
-        let forwarded = reached.first().is_some_and(|r| r.has_mount_params());
-        if !may_pull {
-            assert!(reached.is_empty(), "{token}: {reached:?}");
-        }
+        let forwarded = seen.lock().unwrap().last().unwrap().has_mount_params();
         assert_eq!(
             (mount.status, forwarded),
-            if may_pull { (201, true) } else { (403, false) },
+            if may_pull { (201, true) } else { (202, false) },
             "{token} (pull status {})",
             pull.status
         );
