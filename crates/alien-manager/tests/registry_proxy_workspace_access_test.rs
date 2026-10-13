@@ -197,7 +197,7 @@ async fn setup() -> Setup {
         .await
         .unwrap();
     deployments
-        .set_desired_release(&admin(), &release.id, Some(Platform::Local))
+        .set_deployment_desired_release(&admin(), &deployment.id, &release.id)
         .await
         .unwrap();
     let manager = start_manager_with_auth(
