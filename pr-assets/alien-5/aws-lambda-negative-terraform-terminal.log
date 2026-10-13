@@ -1,0 +1,9 @@
+$ alien render --format terraform --stack negative-alien.json --stack-settings settings.yaml --output negative-terraform --check-quotas --target aws
+Configuration error: VALIDATION_FAILED: Validation failed with 1 errors and 0 warnings
+Cause:
+  - Validation failed with 1 errors and 0 warnings
+Failed checks:
+  - Concurrent executions (100 must remain unreserved) (L-B99A9384, eu-west-1): used 0, applied limit 10, additional needed 1. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/lambda/quotas/L-B99A9384
+
+[Harness] Process exit status: 1
+[Harness] Verified: no output artifacts; function inventory unchanged.

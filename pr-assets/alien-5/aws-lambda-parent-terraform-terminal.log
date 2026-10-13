@@ -1,0 +1,4 @@
+$ alien-before render --format terraform --stack negative-alien.json --stack-settings settings.yaml --output parent-terraform --target aws
+
+[Harness] Process exit status: 0
+[Harness] Verified: setup artifacts written; worker deployment not attempted.

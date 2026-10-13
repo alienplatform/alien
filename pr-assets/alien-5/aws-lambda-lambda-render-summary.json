@@ -1,0 +1,55 @@
+{
+  "implementationCommit": "afc9ed72eb05626b2915cc24769e8690d1927384",
+  "region": "eu-west-1",
+  "appliedConcurrency": 10,
+  "unreservedConcurrency": 10,
+  "functionCountBefore": 0,
+  "functionCountAfter": 0,
+  "functionIdentitySetsUnchanged": true,
+  "ownedFunctions": 0,
+  "cloudWrites": 0,
+  "quotaOverrides": 0,
+  "parentRenderResults": [
+    {
+      "case": "parent-negative",
+      "format": "cloudformation",
+      "exit": 0
+    },
+    {
+      "case": "parent-negative",
+      "format": "terraform",
+      "exit": 0
+    }
+  ],
+  "featureRenderResults": [
+    {
+      "scenario": "negative",
+      "format": "cloudformation",
+      "exit": 1
+    },
+    {
+      "scenario": "negative",
+      "format": "terraform",
+      "exit": 1
+    },
+    {
+      "scenario": "positive",
+      "format": "cloudformation",
+      "exit": 0
+    },
+    {
+      "scenario": "positive",
+      "format": "terraform",
+      "exit": 0
+    }
+  ],
+  "limitations": [
+    "Render controls generate setup artifacts; they do not deploy a worker.",
+    "Actual deploy negative/positive, late-race mapping and update proof remain open."
+  ],
+  "negativeArtifactsWritten": 0,
+  "positiveFormatsWithArtifacts": [
+    "cloudformation",
+    "terraform"
+  ]
+}
