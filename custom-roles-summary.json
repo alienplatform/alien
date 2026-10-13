@@ -1,0 +1,15 @@
+{
+  "liveRoles": 2,
+  "countedRolesIncludingDeleted": 300,
+  "deletedRoles": 298,
+  "pages": 3,
+  "appliedLimit": 300,
+  "limitSource": "Service Usage consumerQuotaMetrics quotaBuckets.effectiveLimit",
+  "newRoleDemand1": "Fail",
+  "heldRoleDemand1": "Pass (additional0)",
+  "cloudWrites": 0,
+  "quotaOverrides": 0,
+  "limits": [
+    "Reader/evaluator controls only; runtime entry-point demand wiring and parent/deployment proof remain open."
+  ]
+}
