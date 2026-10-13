@@ -2,6 +2,7 @@ mod aws;
 mod aws_private_endpoint;
 mod aws_gateway_config;
 mod aws_gateway_task;
+mod aws_gateway_service;
 pub use aws::*;
 
 mod aws_import;
