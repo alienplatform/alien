@@ -221,8 +221,10 @@ impl Elbv2Client {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
+        // Let the durable caller observe dependency drain and ambiguous mutation
+        // outcomes instead of hiding repeated deletes inside the SDK.
         let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
+            crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
                 .await;
 
         Self::map_result(result, operation, resource, Some(&form_body))
@@ -359,7 +361,7 @@ impl Elbv2Client {
             }
             // Resource in use
             "ResourceInUse" | "ResourceInUseException" => ErrorData::RemoteResourceConflict {
-                message,
+                message: format!("{code}: {message}"),
                 resource_type: "LoadBalancer".into(),
                 resource_name: resource.into(),
             },
@@ -2224,6 +2226,51 @@ mod describe_tags_tests {
             Client::new(),
             AwsCredentialProvider::from_config_sync(config),
         )
+    }
+
+    #[tokio::test]
+    async fn dependency_drain_returns_once_with_provider_code() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock_async(|when, then| {
+            when.method(POST).path("/").body_contains("Action=DeleteTargetGroup");
+            then.status(400).body(r#"<ErrorResponse><Error><Type>Sender</Type><Code>ResourceInUse</Code><Message>A listener still references this resource.</Message></Error><RequestId>test</RequestId></ErrorResponse>"#);
+        }).await;
+        let error = client(&server)
+            .delete_target_group(TARGET_GROUP_ARN)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { ref message, .. }) if message.starts_with("ResourceInUse:"))
+        );
+        mock.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn ambiguous_delete_is_not_resent_inside_the_client() {
+        for action in ["DeleteLoadBalancer", "DeleteTargetGroup"] {
+            let server = MockServer::start_async().await;
+            let mock = server.mock_async(|when, then| {
+                when.method(POST).path("/").body_contains(format!("Action={action}"));
+                then.status(500).body(r#"<ErrorResponse><Error><Type>Receiver</Type><Code>InternalFailure</Code><Message>The response was interrupted.</Message></Error><RequestId>test</RequestId></ErrorResponse>"#);
+            }).await;
+            let client = client(&server);
+            let error = if action == "DeleteLoadBalancer" {
+                client
+                    .delete_load_balancer(LOAD_BALANCER_ARN)
+                    .await
+                    .unwrap_err()
+            } else {
+                client
+                    .delete_target_group(TARGET_GROUP_ARN)
+                    .await
+                    .unwrap_err()
+            };
+            assert!(matches!(
+                error.error,
+                Some(ErrorData::RemoteServiceUnavailable { .. })
+            ));
+            mock.assert_hits_async(1).await;
+        }
     }
 
     #[test]
