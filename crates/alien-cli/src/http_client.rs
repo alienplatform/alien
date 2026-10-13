@@ -132,8 +132,7 @@ mod tests {
 
         let mut fillers = Vec::new();
         loop {
-            match tokio::time::timeout(Duration::from_millis(300), TcpStream::connect(addr)).await
-            {
+            match tokio::time::timeout(Duration::from_millis(300), TcpStream::connect(addr)).await {
                 Ok(Ok(stream)) => fillers.push(stream),
                 Ok(Err(error)) => panic!("filler connect failed: {error}"),
                 // A connect that hangs means the queue is full and SYNs are dropped.
@@ -159,7 +158,10 @@ mod tests {
 
         let elapsed = started.elapsed();
         let error = result.expect_err("nothing answers the connect");
-        assert!(error.is_connect(), "expected a connect error, got {error:?}");
+        assert!(
+            error.is_connect(),
+            "expected a connect error, got {error:?}"
+        );
         let attempts = MAX_CONNECT_RETRIES + 1;
         assert!(
             elapsed >= CONNECT_TIMEOUT * attempts - Duration::from_millis(500),
@@ -261,8 +263,15 @@ mod tests {
             .await
             .expect_err("the server closed the connection");
 
-        assert!(!error.is_connect(), "expected a post-connect error, got {error:?}");
-        assert_eq!(connections.load(Ordering::SeqCst), 1, "no retry after connect");
+        assert!(
+            !error.is_connect(),
+            "expected a post-connect error, got {error:?}"
+        );
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            1,
+            "no retry after connect"
+        );
         server.abort();
     }
 }

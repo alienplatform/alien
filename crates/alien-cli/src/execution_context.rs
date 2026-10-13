@@ -244,8 +244,7 @@ impl ExecutionMode {
             } => Ok(workspace.clone()),
             #[cfg(feature = "platform")]
             Self::Platform {
-                api_key: Some(_),
-                ..
+                api_key: Some(_), ..
             } => self.resolve_api_key_workspace_name().await,
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => {
