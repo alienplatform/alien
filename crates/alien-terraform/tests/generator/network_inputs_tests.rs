@@ -123,7 +123,13 @@ run "network_{index}" {{
 "#));
         }
         files.insert("network.tftest.hcl".to_string(), tests);
-        test_utils::terraform_test(&files).assert_ok(format!(
+        let run = test_utils::terraform_test(&files);
+        // SKIP_LINTERS=1 is an explicit opt-out for machines without Terraform.
+        if let test_utils::LinterStatus::Skipped(reason) = &run.status {
+            eprintln!("skipping Terraform network plans: {reason}");
+            return;
+        }
+        run.assert_ok(format!(
             "network ID normalization plans (static existing network: {is_static})"
         ));
     }
