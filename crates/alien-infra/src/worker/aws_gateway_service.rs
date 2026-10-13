@@ -170,7 +170,10 @@ impl GatewayService {
         if service.status.as_deref() == Some("DRAINING") {
             return Ok(false);
         }
-        self.delete_requested = true;
+        if !self.delete_requested {
+            self.delete_requested = true;
+            return Ok(false); // Persist permission to delete before a process crash can lose the reply.
+        }
         ecs.delete_service(DeleteServiceRequest {
             cluster: self.request.cluster.clone(),
             service: self.expected_arn.clone(),
@@ -224,7 +227,7 @@ impl GatewayService {
             .services
             .into_iter()
             .next()
-            .expect("one service checked above");
+            .ok_or_else(|| invalid("Gateway service response is empty"))?;
         self.verify(&service)?;
         Ok(Some(service))
     }
@@ -370,5 +373,182 @@ fn cloud(message: &str) -> ErrorData {
     ErrorData::CloudPlatformError {
         message: message.into(),
         resource_id: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_aws_clients::ecs::{
+        DescribeServicesResponse, ListTasksResponse, MockEcsApi, ServiceResponse,
+    };
+    use alien_client_core::ErrorData as ClientError;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    fn owner() -> GatewayService {
+        GatewayService::new(serde_json::from_value(json!({
+            "cluster":"arn:aws:ecs:us-east-1:123456789012:cluster/owned", "serviceName":"gateway-generation", "clientToken":"generation",
+            "taskDefinition":"arn:aws:ecs:us-east-1:123456789012:task-definition/owned:1", "desiredCount":2, "launchType":"FARGATE", "platformVersion":"1.4.0",
+            "networkConfiguration":{"awsvpcConfiguration":{"subnets":["subnet-a","subnet-b"],"securityGroups":["sg-owned"],"assignPublicIp":"ENABLED"}},
+            "loadBalancers":[{"targetGroupArn":"owned-target","containerName":"gateway","containerPort":8080}],
+            "deploymentConfiguration":{"minimumHealthyPercent":100,"maximumPercent":200},"healthCheckGracePeriodSeconds":60,
+            "tags":[{"key":"CreateAttempt","value":"generation"}]
+        })).unwrap()).unwrap()
+    }
+
+    fn reload(owner: &GatewayService) -> GatewayService {
+        serde_json::from_value(serde_json::to_value(owner).unwrap()).unwrap()
+    }
+
+    fn service(owner: &GatewayService) -> Service {
+        let request = &owner.request;
+        serde_json::from_value(json!({"serviceArn":owner.expected_arn,"serviceName":request.service_name,"clusterArn":request.cluster,
+            "taskDefinition":request.task_definition,"desiredCount":2,"runningCount":2,"pendingCount":0,"status":"ACTIVE",
+            "launchType":"FARGATE","platformVersion":"1.4.0","networkConfiguration":request.network_configuration,
+            "loadBalancers":request.load_balancers,"tags":request.tags,"deployments":[{"rolloutState":"COMPLETED"}]})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn lost_create_reply_recovers_from_pre_call_checkpoint_without_duplicate_service() {
+        let mut owner = owner();
+        let world = Arc::new(Mutex::new(None::<Service>));
+        let mut ecs = MockEcsApi::new();
+        let read = world.clone();
+        let arn = owner.expected_arn.clone();
+        ecs.expect_describe_services().returning(move |request| {
+            assert_eq!(request.services, vec![arn.clone()]);
+            assert_eq!(request.include, Some(vec!["TAGS".into()]));
+            match &*read.lock().unwrap() {
+                Some(service) => Ok(DescribeServicesResponse {
+                    services: vec![service.clone()],
+                    failures: vec![],
+                }),
+                None => Ok(serde_json::from_value(
+                    json!({"services":[],"failures":[{"arn":arn,"reason":"MISSING"}]}),
+                )
+                .unwrap()),
+            }
+        });
+        let created = service(&owner);
+        ecs.expect_create_service()
+            .times(1)
+            .return_once(move |request| {
+                assert_eq!(request.client_token, "generation");
+                *world.lock().unwrap() = Some(created);
+                Err(AlienError::new(ClientError::Timeout {
+                    message: "committed create reply lost".into(),
+                }))
+            });
+        ecs.expect_list_tasks().times(2).returning(|_| {
+            Ok(ListTasksResponse {
+                task_arns: vec![],
+                next_token: None,
+            })
+        });
+        assert!(!owner.step_create(&ecs).await.unwrap());
+        let checkpoint = reload(&owner);
+        assert!(owner.step_create(&ecs).await.is_err());
+        owner = checkpoint;
+        assert!(owner.step_create(&ecs).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn drain_waits_for_tasks_and_keeps_interface_ids_after_lost_delete_and_crash() {
+        let mut owner = owner();
+        owner.create_permitted = true;
+        owner.observed = true;
+        let world = Arc::new(Mutex::new((service(&owner), false)));
+        let mut ecs = MockEcsApi::new();
+        let read = world.clone();
+        ecs.expect_describe_services().returning(move |_| {
+            Ok(DescribeServicesResponse {
+                services: vec![read.lock().unwrap().0.clone()],
+                failures: vec![],
+            })
+        });
+        let read = world.clone();
+        ecs.expect_list_tasks().returning(move |request| {
+            let stopped = read.lock().unwrap().1;
+            Ok(ListTasksResponse {
+                task_arns: if request.desired_status.as_deref()
+                    == Some(if stopped { "STOPPED" } else { "RUNNING" })
+                {
+                    vec!["owned-task".into()]
+                } else {
+                    vec![]
+                },
+                next_token: None,
+            })
+        });
+        let read = world.clone();
+        let cluster = owner.request.cluster.clone();
+        let definition = owner.request.task_definition.clone();
+        ecs.expect_describe_tasks().returning(move |_| {
+            let stopped = read.lock().unwrap().1;
+            Ok(serde_json::from_value(json!({"tasks":[{"taskArn":"owned-task","clusterArn":cluster,"taskDefinitionArn":definition,
+                "group":"service:gateway-generation","lastStatus":if stopped {"STOPPED"} else {"RUNNING"},
+                "attachments":if stopped {json!([])} else {json!([{"type":"ElasticNetworkInterface","details":[{"name":"networkInterfaceId","value":"eni-owned"}]}])}}],"failures":[]})).unwrap())
+        });
+        let write = world.clone();
+        ecs.expect_update_service()
+            .times(1)
+            .return_once(move |request| {
+                assert_eq!(request.desired_count, Some(0));
+                assert!(request.task_definition.is_none());
+                let mut state = write.lock().unwrap();
+                state.0.desired_count = Some(0);
+                Ok(ServiceResponse {
+                    service: state.0.clone(),
+                })
+            });
+        let write = world.clone();
+        ecs.expect_delete_service()
+            .times(1)
+            .return_once(move |request| {
+                assert!(!request.force);
+                let mut state = write.lock().unwrap();
+                assert!(state.1);
+                assert_eq!(state.0.running_count, Some(0));
+                state.0.status = Some("INACTIVE".into());
+                Err(AlienError::new(ClientError::Timeout {
+                    message: "committed delete reply lost".into(),
+                }))
+            });
+        assert!(!owner.step_delete(&ecs).await.unwrap());
+        owner = reload(&owner);
+        assert!(!owner.step_delete(&ecs).await.unwrap());
+        {
+            let mut state = world.lock().unwrap();
+            state.1 = true;
+            state.0.running_count = Some(0);
+        }
+        assert!(!owner.step_delete(&ecs).await.unwrap());
+        let checkpoint = reload(&owner);
+        assert!(owner.step_delete(&ecs).await.is_err());
+        owner = checkpoint;
+        assert!(owner.step_delete(&ecs).await.unwrap());
+        assert_eq!(
+            owner.network_interface_ids,
+            BTreeSet::from(["eni-owned".into()])
+        );
+    }
+
+    #[tokio::test]
+    async fn foreign_service_tags_prevent_drain_or_delete() {
+        let mut owner = owner();
+        owner.create_permitted = true;
+        let mut foreign = service(&owner);
+        foreign.tags[0].value = "foreign".into();
+        let mut ecs = MockEcsApi::new();
+        ecs.expect_describe_services()
+            .times(1)
+            .return_once(move |_| {
+                Ok(DescribeServicesResponse {
+                    services: vec![foreign],
+                    failures: vec![],
+                })
+            });
+        assert!(owner.step_delete(&ecs).await.is_err());
     }
 }

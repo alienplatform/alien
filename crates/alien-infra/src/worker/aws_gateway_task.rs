@@ -204,7 +204,9 @@ impl GatewayTask {
                     return Ok(false);
                 }
                 Some("INACTIVE") => {
-                    self.delete_requested.insert(arn.clone());
+                    if self.delete_requested.insert(arn.clone()) {
+                        return Ok(false); // Checkpoint before a delete can commit remotely.
+                    }
                     let response = ecs
                         .delete_task_definitions(DeleteTaskDefinitionsRequest {
                             task_definitions: vec![arn.clone()],
@@ -594,6 +596,10 @@ mod tests {
         let task = response(&owner, 1, "INACTIVE");
         let arn = task.task_definition.task_definition_arn.clone();
         let mut ecs = MockEcsApi::new();
+        inventory(&mut ecs, vec![task.clone()]);
+        assert!(!owner.step_delete(&ecs).await.unwrap());
+        owner = reload(&owner);
+        ecs.checkpoint();
         inventory(&mut ecs, vec![task]);
         ecs.expect_delete_task_definitions()
             .times(1)
