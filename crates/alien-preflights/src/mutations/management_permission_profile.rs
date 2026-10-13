@@ -7,7 +7,7 @@ use alien_core::{
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
     Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
     get_permission_set, list_permission_set_ids, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD,
 };
@@ -52,6 +52,16 @@ impl StackMutation for ManagementPermissionProfileMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        alien_core::validate_automatic_setup_resources(
+            &stack,
+            stack_state.platform,
+            config.stack_settings.setup_management,
+        )
+        .context(ErrorData::StackMutationFailed {
+            mutation_name: self.description().to_string(),
+            message: "The stack contains resources that require manual setup".to_string(),
+            resource_id: None,
+        })?;
         let current_management = stack.management().clone();
         if management_profile_contains(&current_management, OBSERVE_PERMISSION_SET_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
@@ -640,6 +650,43 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn automatic_azure_sandbox_is_refused_before_provisioning() {
+        let stack = Stack::new("example".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Azure);
+        let mut config = deployment_config_for_management_permission_test();
+
+        ManagementPermissionProfileMutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .expect("manual Azure setup retains its sandbox support");
+
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        ManagementPermissionProfileMutation
+            .mutate(stack, &state, &config)
+            .await
+            .expect_err("initial setup and later sandbox additions must fail before cloud changes");
+
+        ManagementPermissionProfileMutation
+            .mutate(Stack::new("example".to_string()).build(), &state, &config)
+            .await
+            .expect("automatic Azure management without a sandbox stays supported");
     }
 
     #[tokio::test]

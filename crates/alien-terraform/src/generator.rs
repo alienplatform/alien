@@ -231,6 +231,13 @@ fn generate_terraform_module_internal(
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
     let mut stack_settings = options.stack_settings.clone();
+    if !target.is_kubernetes() {
+        alien_core::validate_automatic_setup_resources(
+            stack,
+            platform,
+            stack_settings.setup_management,
+        )?;
+    }
     if target.is_kubernetes() {
         // Logical compute pools use the cluster's existing nodes. Cloud fleet
         // selections must not become Kubernetes setup inputs or import data.

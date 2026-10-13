@@ -1,4 +1,30 @@
-use crate::{ownership_policy_for_resource_type, ResourceEntry, SetupManagement};
+use crate::{
+    ownership_policy_for_resource_type, ErrorData, Platform, ResourceEntry, Result, Sandbox,
+    SetupManagement, Stack,
+};
+use alien_error::AlienError;
+
+/// Refuse resources whose setup-owned scaffolding cannot yet be created by runtime.
+/// Check both package generation and deployment planning, including later additions.
+pub fn validate_automatic_setup_resources(
+    stack: &Stack,
+    platform: Platform,
+    management: SetupManagement,
+) -> Result<()> {
+    if management == SetupManagement::Automatic && platform == Platform::Azure {
+        for (id, entry) in stack.resources() {
+            if entry.config.downcast_ref::<Sandbox>().is_some() {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: format!(
+                        "automatic infrastructure management for sandbox '{id}'; use manual setup to create and import its sandbox group"
+                    ),
+                    platform: platform.to_string(),
+                }));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Controls configuration exposure, independently of installation authority.
 /// Existing generator entry points retain the complete Advanced interface.
