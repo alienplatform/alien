@@ -6026,8 +6026,10 @@ mod controller_state_tests {
         );
         let cause = error.source.as_ref().expect("quota cause");
         assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
-        let quota: alien_preflights::quotas::QuotaIdentity =
-            serde_json::from_value(cause.context["quota"].clone()).expect("typed quota identity");
+        let quota: alien_preflights::quotas::QuotaIdentity = serde_json::from_value(
+            cause.context.as_ref().expect("quota context")["quota"].clone(),
+        )
+        .expect("typed quota identity");
         assert_eq!(
             quota,
             aws_network_quota_identity(&quota.scope, "L-A4707A72", "Internet gateways per Region")
