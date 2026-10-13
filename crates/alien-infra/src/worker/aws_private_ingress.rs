@@ -385,46 +385,7 @@ impl PrivateWorkerIngress {
         let Some(frontend) = frontend else {
             return Ok(None);
         };
-        if !self.frontend_http_configured {
-            clients
-                .elb
-                .modify_load_balancer_attributes(
-                    ModifyLoadBalancerAttributesRequest::builder()
-                        .load_balancer_arn(frontend.load_balancer_arn.clone())
-                        .attributes(vec![
-                            LoadBalancerAttribute {
-                                key: "routing.http.preserve_host_header.enabled".into(),
-                                value: "true".into(),
-                            },
-                            LoadBalancerAttribute {
-                                key: "idle_timeout.timeout_seconds".into(),
-                                value: "4000".into(),
-                            },
-                        ])
-                        .build(),
-                )
-                .await
-                .context(cloud("Preserve worker Host and streaming idle duration"))?;
-            self.frontend_http_configured = true;
-            return Ok(None);
-        }
-        if !self.frontend_drain_configured {
-            clients
-                .elb
-                .modify_target_group_attributes(
-                    ModifyTargetGroupAttributesRequest::builder()
-                        .target_group_arn(frontend.target_group_arn.clone())
-                        .attributes(vec![TargetGroupAttribute {
-                            key: "deregistration_delay.timeout_seconds".into(),
-                            value: "900".into(),
-                        }])
-                        .build(),
-                )
-                .await
-                .context(cloud(
-                    "Drain gateway targets for the Lambda response duration",
-                ))?;
-            self.frontend_drain_configured = true;
+        if !self.configure_frontend(clients.elb, &frontend).await? {
             return Ok(None);
         }
         if self.task.is_none() {
@@ -571,6 +532,52 @@ impl PrivateWorkerIngress {
             return Ok(None);
         }
         Ok(Some(frontend))
+    }
+
+    async fn configure_frontend(
+        &mut self,
+        elb: &dyn Elbv2Api,
+        frontend: &AwsPreparedVmFrontend,
+    ) -> Result<bool> {
+        if !self.frontend_http_configured {
+            elb.modify_load_balancer_attributes(
+                ModifyLoadBalancerAttributesRequest::builder()
+                    .load_balancer_arn(frontend.load_balancer_arn.clone())
+                    .attributes(vec![
+                        LoadBalancerAttribute {
+                            key: "routing.http.preserve_host_header.enabled".into(),
+                            value: "true".into(),
+                        },
+                        LoadBalancerAttribute {
+                            key: "idle_timeout.timeout_seconds".into(),
+                            value: "4000".into(),
+                        },
+                    ])
+                    .build(),
+            )
+            .await
+            .context(cloud("Preserve worker Host and streaming idle duration"))?;
+            self.frontend_http_configured = true;
+            return Ok(false);
+        }
+        if !self.frontend_drain_configured {
+            elb.modify_target_group_attributes(
+                ModifyTargetGroupAttributesRequest::builder()
+                    .target_group_arn(frontend.target_group_arn.clone())
+                    .attributes(vec![TargetGroupAttribute {
+                        key: "deregistration_delay.timeout_seconds".into(),
+                        value: "900".into(),
+                    }])
+                    .build(),
+            )
+            .await
+            .context(cloud(
+                "Drain gateway targets for the Lambda response duration",
+            ))?;
+            self.frontend_drain_configured = true;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     pub async fn step_delete(&mut self, clients: &PrivateIngressClients<'_>) -> Result<bool> {
@@ -897,5 +904,85 @@ mod tests {
         assert!(ensure_rule(&ec2, "sg-gateway", 8080, 8081, None)
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn stream_attribute_updates_replay_after_lost_replies_and_checkpoint_independently() {
+        let mut ingress = PrivateWorkerIngress::new(plan()).unwrap();
+        let frontend = AwsPreparedVmFrontend {
+            target_group_arn: "target-owned".into(),
+            load_balancer_arn: "lb-owned".into(),
+            listener_arn: "listener-owned".into(),
+            endpoint: alien_core::LoadBalancerEndpoint {
+                dns_name: "private.example.test".into(),
+                hosted_zone_id: None,
+            },
+        };
+        let mut elb = MockElbv2Api::new();
+        let calls = Arc::new(Mutex::new((0, 0)));
+        let world = calls.clone();
+        elb.expect_modify_load_balancer_attributes()
+            .times(2)
+            .returning(move |request| {
+                assert_eq!(request.load_balancer_arn, "lb-owned");
+                assert_eq!(
+                    request
+                        .attributes
+                        .iter()
+                        .map(|attribute| (attribute.key.as_str(), attribute.value.as_str()))
+                        .collect::<Vec<_>>(),
+                    vec![
+                        ("routing.http.preserve_host_header.enabled", "true"),
+                        ("idle_timeout.timeout_seconds", "4000")
+                    ]
+                );
+                let mut calls = world.lock().unwrap();
+                calls.0 += 1;
+                assert_eq!(calls.1, 0, "drain update must follow the HTTP checkpoint");
+                if calls.0 == 1 {
+                    return Err(AlienError::new(ClientError::Timeout {
+                        message: "HTTP attributes committed; reply lost".into(),
+                    }));
+                }
+                Ok(
+                    serde_json::from_value(json!({"ModifyLoadBalancerAttributesResult":{}}))
+                        .unwrap(),
+                )
+            });
+        let world = calls.clone();
+        elb.expect_modify_target_group_attributes()
+            .times(2)
+            .returning(move |request| {
+                assert_eq!(request.target_group_arn, "target-owned");
+                assert_eq!(
+                    request
+                        .attributes
+                        .iter()
+                        .map(|attribute| (attribute.key.as_str(), attribute.value.as_str()))
+                        .collect::<Vec<_>>(),
+                    vec![("deregistration_delay.timeout_seconds", "900")]
+                );
+                let mut calls = world.lock().unwrap();
+                calls.1 += 1;
+                assert_eq!(calls.0, 2);
+                if calls.1 == 1 {
+                    return Err(AlienError::new(ClientError::Timeout {
+                        message: "drain attributes committed; reply lost".into(),
+                    }));
+                }
+                Ok(
+                    serde_json::from_value(json!({"ModifyTargetGroupAttributesResult":{}}))
+                        .unwrap(),
+                )
+            });
+        for expected in [None, Some(false), None, Some(false), Some(true)] {
+            let result = ingress.configure_frontend(&elb, &frontend).await;
+            if let Some(value) = expected {
+                assert_eq!(result.unwrap(), value);
+            } else {
+                assert!(result.unwrap_err().retryable);
+            }
+            ingress = serde_json::from_value(serde_json::to_value(ingress).unwrap()).unwrap();
+        }
+        assert_eq!(*calls.lock().unwrap(), (2, 2));
     }
 }
