@@ -1,5 +1,5 @@
 use crate::{
-    block::{attr, nested, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
@@ -8,10 +8,10 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result,
+    Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result, import::EmitContext,
 };
 use alien_permissions::BindingTarget;
-use hcl::expr::Expression;
+use hcl::{expr::Expression, structure::Block};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKeyEmitter;
@@ -24,6 +24,10 @@ impl TfEmitter for AwsKeyEmitter {
             "aws_kms_key",
             label,
             [
+                attr(
+                    "count",
+                    expr::parse(&format!("var.{label}_existing_key == null ? 1 : 0"))?,
+                ),
                 attr(
                     "description",
                     Expression::String(format!("Alien encryption key '{}'", ctx.resource_id)),
@@ -41,13 +45,49 @@ impl TfEmitter for AwsKeyEmitter {
             ],
         ));
 
+        // The object is known during planning even when its ARN comes from a key
+        // created in the same apply. A bare optional string cannot drive count.
+        fragment.variable_blocks.push(Block::builder("variable")
+            .add_label(format!("{label}_existing_key"))
+            .add_attribute(("type", expr::parse("object({ arn = string })")?))
+            .add_attribute(("default", Expression::Null))
+            .add_attribute(("description", Expression::String(
+                "Existing same-account, same-region KMS key. Omit to create a key. The selection is immutable after setup; the supplying setup owns deletion.".to_string())))
+            .build());
+        fragment.moved_blocks.push(block(
+            "moved",
+            [
+                attr("from", expr::traversal(["aws_kms_key", label])),
+                attr("to", expr::parse(&format!("aws_kms_key.{label}[0]"))?),
+            ],
+        ));
+        let selected = format!(
+            "var.{label}_existing_key == null ? aws_kms_key.{label}[0].arn : var.{label}_existing_key.arn"
+        );
+        // Keep the first accepted ARN in Terraform state. The postcondition stops
+        // a later key substitution before any dependent encryption setting changes.
+        fragment.resource_blocks.push(resource_block("terraform_data", &format!("{label}_key_identity"), [
+            attr("input", expr::parse(&selected)?),
+            nested(block("lifecycle", [
+                attr("ignore_changes", expr::parse("[input]")?),
+                nested(block("postcondition", [
+                    attr("condition", expr::parse(&format!("self.output == ({selected})"))?),
+                    attr("error_message", Expression::String("The encryption key is immutable. Create a new deployment to use a different key.".to_string())),
+                ])),
+                nested(block("postcondition", [
+                    attr("condition", expr::parse(r#"can(regex("^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$", self.output))"#)?),
+                    attr("error_message", Expression::String("The key must be an immutable KMS key ARN in this deployment's AWS account and region. Aliases are not supported.".to_string())),
+                ])),
+            ])),
+        ]));
+
         if let Some(management_label) = management_label(ctx) {
             let permission = PermissionSetReference::from_name("key/management");
             if let Some(permission_set) =
                 permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
             {
                 let context = aws_terraform_permission_context()
-                    .with_resource_name(format!("${{aws_kms_key.{label}.arn}}"));
+                    .with_resource_name(format!("${{terraform_data.{label}_key_identity.output}}"));
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,
                     management_label,
@@ -69,7 +109,7 @@ impl TfEmitter for AwsKeyEmitter {
                 permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
             {
                 let context = aws_terraform_permission_context()
-                    .with_resource_name(format!("${{aws_kms_key.{label}.arn}}"));
+                    .with_resource_name(format!("${{terraform_data.{label}_key_identity.output}}"));
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,
                     access_label,
@@ -91,17 +131,14 @@ impl TfEmitter for AwsKeyEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([(
-            "keyArn",
-            expr::traversal(["aws_kms_key", label, "arn"]),
-        )]))
+        Ok(expr::object([("keyArn", key_arn(label))]))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
         Ok(Some(expr::object([
             ("service", Expression::String("kms".to_string())),
-            ("keyArn", expr::traversal(["aws_kms_key", label, "arn"])),
+            ("keyArn", key_arn(label)),
             ("region", expr::raw("data.aws_region.current.region")),
         ])))
     }
@@ -132,4 +169,9 @@ fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
                 .flatten()
         })
     })?
+}
+
+/// The setup-pinned AWS key identity used by imports and encrypted resources.
+pub fn key_arn(label: &str) -> Expression {
+    expr::traversal(["terraform_data", &format!("{label}_key_identity"), "output"])
 }

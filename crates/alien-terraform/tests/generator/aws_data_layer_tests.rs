@@ -42,11 +42,11 @@ fn aws_key_package_is_valid_and_retained() {
     assert!(rendered.contains("prevent_destroy = true"));
     assert!(rendered.contains("\"kms:Encrypt\""));
     assert!(rendered.contains("\"kms:Decrypt\""));
-    assert!(rendered.contains("aws_kms_key.customer_key.arn"));
+    assert!(rendered.contains("terraform_data.customer_key_key_identity.output"));
     let detach = module
         .get("detach-retained-keys.sh")
         .expect("retained Key detach operation");
-    assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key'"));
+    assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key[0]'"));
     assert!(module
         .get("README.md")
         .unwrap()
@@ -73,7 +73,7 @@ fn retained_key_detach_operation_is_idempotent_and_narrow() {
     fs::write(&detach_path, module.get("detach-retained-keys.sh").unwrap()).unwrap();
     fs::write(
         temp.path().join("state"),
-        "aws_kms_key.customer_key\naws_iam_role.unrelated\n",
+        "aws_kms_key.customer_key[0]\naws_iam_role.unrelated\n",
     )
     .unwrap();
     let terraform_path = temp.path().join("terraform");
@@ -107,7 +107,7 @@ fn retained_key_detach_operation_is_idempotent_and_narrow() {
     );
     assert_eq!(
         fs::read_to_string(temp.path().join("log")).unwrap(),
-        "aws_kms_key.customer_key\n"
+        "aws_kms_key.customer_key[0]\n"
     );
 }
 
@@ -155,7 +155,7 @@ fn aws_storage_uses_customer_managed_key() {
         .join("\n");
 
     assert!(rendered.contains("sse_algorithm     = \"aws:kms\""));
-    assert!(rendered.contains("kms_master_key_id = aws_kms_key.customer_key.arn"));
+    assert!(rendered.contains("kms_master_key_id = terraform_data.customer_key_key_identity.output"));
     assert!(rendered.contains("kms:GenerateDataKey"));
     assert!(rendered.contains("kms:Decrypt"));
     assert_terraform_valid(&module, "aws_encrypted_storage");
@@ -588,4 +588,58 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
             "{reaches_a_session} reaches a session and belongs to the remote caller alone"
         );
     }
+}
+
+#[test]
+fn aws_existing_key_is_pinned_before_consumers_can_change() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let mut files = super::helpers::linter_files(&module);
+    files.insert("key.tftest.hcl".to_string(), r#"
+mock_provider "aws" {
+  mock_data "aws_caller_identity" {
+    defaults = { account_id = "123456789012" }
+  }
+  mock_data "aws_region" {
+    defaults = { region = "us-east-1" }
+  }
+}
+mock_provider "random" {}
+variables {
+  name = "key-test"
+  token = "test"
+  region = "us-east-1"
+  customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/first" }
+}
+run "use_existing_key" {
+  command = apply
+  assert {
+    condition = length(aws_kms_key.customer_key) == 0 && one(one(aws_s3_bucket_server_side_encryption_configuration.data.rule).apply_server_side_encryption_by_default).kms_master_key_id == var.customer_key_existing_key.arn
+    error_message = "Storage must use the existing key without creating a replacement key."
+  }
+}
+run "preserve_key" {
+  command = plan
+}
+run "refuse_key_replacement" {
+  command = plan
+  variables {
+    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/second" }
+  }
+  expect_failures = [terraform_data.customer_key_key_identity]
+}
+"#.to_string());
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("existing encryption key selection and immutability");
 }
