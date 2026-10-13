@@ -1,0 +1,18 @@
+[
+  {
+    "outcome": {
+      "limit": 5.0,
+      "needed": 1.0,
+      "status": "fail",
+      "used": 5.0
+    },
+    "quota": {
+      "increaseUrl": "https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-F678F1CE",
+      "name": "VPCs per Region",
+      "platform": "aws",
+      "providerId": "L-F678F1CE",
+      "scope": "eu-west-1",
+      "service": "vpc"
+    }
+  }
+]
