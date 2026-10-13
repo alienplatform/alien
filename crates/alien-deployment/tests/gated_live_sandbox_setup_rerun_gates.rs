@@ -137,8 +137,8 @@ async fn update(
 fn authorization(installed: &Stack, reimported: &Stack) -> SetupUpdateAuthorization {
     SetupUpdateAuthorization {
         nonce: "rerun".to_string(),
-        baseline_frozen_digest: installed.setup_owned_digest(),
-        target_frozen_digest: reimported.setup_owned_digest(),
+        baseline_frozen_digest: installed.setup_update_digest(),
+        target_frozen_digest: reimported.setup_update_digest(),
         release_id: "release".to_string(),
         setup_target: "target".to_string(),
         setup_fingerprint: "fingerprint".to_string(),
