@@ -344,6 +344,14 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn create_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        // Standalone managers use the repository provisioned with their infrastructure.
+        if project_id == "default" {
+            return Ok(RepositoryResponse {
+                name: format!("{}/{}/default", self.project_id, self.repository_name),
+                uri: None,
+                created_at: None,
+            });
+        }
         let repository = self.project_repository_name(project_id)?;
         let existing = self
             .client
@@ -1060,6 +1068,10 @@ mod tests {
             gcp_config: config,
         };
         assert!(registry.create_repository("prj_A").await.is_err());
+        assert_eq!(
+            registry.create_repository("default").await.unwrap().name,
+            "vendor/artifacts/default"
+        );
         assert!(state.lock().unwrap().repositories.is_empty());
         let own = registry.create_repository("prj_b").await.unwrap();
         let other = registry.create_repository("prj_a").await.unwrap();

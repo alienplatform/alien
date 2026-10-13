@@ -793,7 +793,9 @@ fn gcp_repository_access(
                 continue;
             };
             let repository = path.split('/').next().unwrap_or_default();
-            if repository == format!("{repository_prefix}-shared") {
+            if repository == format!("{repository_prefix}-shared")
+                || (project_id == "default" && repository == repository_prefix)
+            {
                 repositories.insert(format!("{cloud_project}/{repository}"));
             } else if let Some(owner) =
                 alien_core::gar_repository::project_id_for_path(path, repository_prefix)
@@ -2051,6 +2053,28 @@ mod tests {
             vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
         );
         assert_eq!(access.project_numbers, vec!["123456789012"]);
+    }
+
+    #[test]
+    fn standalone_gcp_releases_use_the_configured_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for path in ["worker", "default/worker"] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "manager.example.com/vendor/artifacts/{path}:v1"
+            )));
+            assert_eq!(
+                repository_access(&registry, &state, "default"),
+                (vec!["vendor/artifacts".to_string()], false)
+            );
+            assert_eq!(
+                repository_access(&registry, &state, PROJECT),
+                (vec![], true)
+            );
+        }
     }
 
     #[test]
