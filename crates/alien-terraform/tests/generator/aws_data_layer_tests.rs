@@ -5,7 +5,7 @@
 //! goes through `terraform fmt -check` + `terraform validate` against
 //! the real AWS provider.
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     Ai, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile, Queue, RemoteBindings,
     ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
@@ -47,10 +47,12 @@ fn aws_key_package_is_valid_and_retained() {
         .get("detach-retained-keys.sh")
         .expect("retained Key detach operation");
     assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key[0]'"));
-    assert!(module
-        .get("README.md")
-        .unwrap()
-        .contains("terraform destroy"));
+    assert!(
+        module
+            .get("README.md")
+            .unwrap()
+            .contains("terraform destroy")
+    );
     assert_terraform_valid(&module, "aws_key_package");
 }
 
@@ -155,7 +157,9 @@ fn aws_storage_uses_customer_managed_key() {
         .join("\n");
 
     assert!(rendered.contains("sse_algorithm     = \"aws:kms\""));
-    assert!(rendered.contains("kms_master_key_id = terraform_data.customer_key_key_identity.output"));
+    assert!(
+        rendered.contains("kms_master_key_id = terraform_data.customer_key_key_identity.output")
+    );
     assert!(rendered.contains("kms:GenerateDataKey"));
     assert!(rendered.contains("kms:Decrypt"));
     assert_terraform_valid(&module, "aws_encrypted_storage");
@@ -615,6 +619,7 @@ mock_provider "aws" {
     defaults = { region = "us-east-1" }
   }
 }
+
 mock_provider "random" {}
 variables {
   name = "key-test"
@@ -642,4 +647,78 @@ run "refuse_key_replacement" {
 "#.to_string());
     super::helpers::test_utils::terraform_test(&files)
         .assert_ok("existing encryption key selection and immutability");
+}
+
+#[test]
+fn aws_key_gate_preserves_native_and_existing_selection() {
+    let stack = Stack::new("optional-key".to_string())
+        .inputs(vec![gate_input(
+            "keyEnabled",
+            "Enable key",
+            "Create the key setup.",
+        )])
+        .add_enabled_when(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "keyEnabled",
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let mut files = super::helpers::linter_files(&module);
+    files.insert("key.tftest.hcl".to_string(), r#"
+mock_provider "aws" {
+  mock_data "aws_caller_identity" {
+    defaults = { account_id = "123456789012" }
+  }
+  mock_data "aws_region" {
+    defaults = { region = "us-east-1" }
+  }
+}
+mock_provider "random" {}
+variables {
+  name = "key-test"
+  token = "test"
+  region = "us-east-1"
+}
+run "enabled_native_key" {
+  command = plan
+  variables { input_key_enabled = true }
+  assert {
+    condition = length(aws_kms_key.customer_key) == 1 && length(terraform_data.customer_key_key_identity) == 1
+    error_message = "An enabled native key must create and pin exactly one key."
+  }
+}
+run "disabled_native_key" {
+  command = plan
+  variables { input_key_enabled = false }
+  assert {
+    condition = length(aws_kms_key.customer_key) == 0 && length(terraform_data.customer_key_key_identity) == 0
+    error_message = "A disabled key must create neither the key nor its identity."
+  }
+}
+run "enabled_existing_key" {
+  command = plan
+  variables {
+    input_key_enabled = true
+    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/first" }
+  }
+  assert {
+    condition = length(aws_kms_key.customer_key) == 0 && terraform_data.customer_key_key_identity[0].input == var.customer_key_existing_key.arn
+    error_message = "An enabled existing key must pin the selected ARN without creating a key."
+  }
+}
+run "disabled_existing_key" {
+  command = plan
+  variables {
+    input_key_enabled = false
+    customer_key_existing_key = { arn = "arn:aws:kms:us-east-1:123456789012:key/first" }
+  }
+  assert {
+    condition = length(aws_kms_key.customer_key) == 0 && length(terraform_data.customer_key_key_identity) == 0
+    error_message = "An existing key selection must not override a disabled gate."
+  }
+}
+"#.to_string());
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("gated native and existing encryption key plans");
 }

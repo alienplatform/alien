@@ -10,7 +10,8 @@
             "kms:Decrypt",
             "kms:DescribeKey",
             "kms:GenerateDataKeyWithoutPlaintext",
-            "kms:ReEncrypt*"
+            "kms:ReEncryptFrom",
+            "kms:ReEncryptTo"
           ]
         },
         "binding": {
