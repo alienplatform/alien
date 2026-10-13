@@ -236,7 +236,14 @@ impl CloudRunApi for CloudRunClient {
         );
 
         self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &service_name)
+            // Version 3 preserves conditional bindings during read-modify-write.
+            .execute_request(
+                Method::GET,
+                &path,
+                Some(vec![("options.requestedPolicyVersion", "3".to_string())]),
+                Option::<()>::None,
+                &service_name,
+            )
             .await
     }
 
@@ -1446,7 +1453,59 @@ pub struct BuildInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::Ingress;
+    use super::{CloudRunApi, CloudRunClient, Ingress};
+    use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+    use httpmock::prelude::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn iam_policy_round_trip_preserves_conditions_version_and_etag() {
+        let server = MockServer::start_async().await;
+        let policy = json!({"version":3,"etag":"policy-etag","bindings":[{
+            "role":"roles/run.invoker","members":["serviceAccount:trigger@example-project.iam.gserviceaccount.com"],
+            "condition":{"title":"existing-grant","expression":"request.time < timestamp('2020-01-01T00:00:00Z')"}
+        }]});
+        let get = server.mock_async(|when, then| {
+            when.method(GET).path("/projects/example-project/locations/us-central1/services/worker:getIamPolicy")
+                .query_param("options.requestedPolicyVersion", "3");
+            then.status(200).json_body(policy.clone());
+        }).await;
+        let set = server.mock_async(|when, then| {
+            when.method(POST).path("/projects/example-project/locations/us-central1/services/worker:setIamPolicy")
+                .json_body(json!({"policy":policy}));
+            then.status(200).json_body(policy.clone());
+        }).await;
+        let client = CloudRunClient::new(
+            reqwest::Client::new(),
+            GcpClientConfig {
+                project_id: "example-project".to_string(),
+                region: "us-central1".to_string(),
+                credentials: GcpCredentials::AccessToken {
+                    token: "test-token".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: std::collections::HashMap::from([(
+                        "cloudrun".to_string(),
+                        server.base_url(),
+                    )]),
+                }),
+                project_number: None,
+            },
+        );
+        let received = client
+            .get_service_iam_policy("us-central1".to_string(), "worker".to_string())
+            .await
+            .unwrap();
+        assert_eq!(received.version, Some(3));
+        assert_eq!(received.etag.as_deref(), Some("policy-etag"));
+        let applied = client
+            .set_service_iam_policy("us-central1".to_string(), "worker".to_string(), received)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(applied).unwrap(), policy);
+        get.assert_hits(1);
+        set.assert_hits(1);
+    }
 
     #[test]
     fn serializes_internal_ingress_with_cloud_run_v2_enum_value() {
