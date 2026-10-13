@@ -915,6 +915,20 @@ impl KubernetesContainerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
         let previous = ctx.previous_resource_config::<Container>()?;
+        if previous
+            .persistent_storage
+            .as_ref()
+            .map(|storage| &storage.mount_path)
+            != config
+                .persistent_storage
+                .as_ref()
+                .map(|storage| &storage.mount_path)
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Adding or removing persistent storage or changing its mount path during a Kubernetes update is unsupported".into(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
         let capacity = |container: &Container| {
             container
                 .persistent_storage

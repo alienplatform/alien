@@ -157,7 +157,21 @@ pub fn plan_compute_with_state(
                 .get(id)
                 .and_then(|resource| resource.config.downcast_ref::<Container>())
                 .and_then(|container| container.persistent_storage.as_ref());
+            if previous.is_some() && desired.is_none() {
+                return Err(crate::container_resources::invalid(
+                    id,
+                    "volumeSizeGib",
+                    "removing installed persistent storage is unsupported",
+                ));
+            }
             if let (Some(desired), Some(previous)) = (desired, previous) {
+                if desired.mount_path != previous.mount_path {
+                    return Err(crate::container_resources::invalid(
+                        id,
+                        "volumeSizeGib",
+                        "changing an installed persistent storage mount path is unsupported",
+                    ));
+                }
                 let target = crate::container_resources::parse_volume_size_gib(&desired.size);
                 let installed = crate::container_resources::parse_volume_size_gib(&previous.size);
                 if let (Ok(target), Ok(installed)) = (target, installed) {
@@ -1427,6 +1441,67 @@ mod tests {
             .code,
             "CONTAINER_RESOURCE_SELECTION_INVALID"
         );
+    }
+
+    #[test]
+    fn installed_storage_cannot_be_removed_or_remounted_on_any_provider() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+        ] {
+            let mut release = stack_with_container();
+            release
+                .resources
+                .get_mut("api")
+                .unwrap()
+                .config
+                .downcast_mut::<Container>()
+                .unwrap()
+                .persistent_storage = Some(crate::PersistentStorage {
+                size: "20Gi".into(),
+                mount_path: "/data".into(),
+                backups: crate::VolumeBackups::default(),
+            });
+            let mut installed = StackState::new(platform);
+            installed.resources.insert(
+                "api".into(),
+                crate::StackResourceState::new_pending(
+                    "Container".into(),
+                    release.resources["api"].config.clone(),
+                    None,
+                    vec![],
+                ),
+            );
+            for remove in [false, true] {
+                let mut desired = release.clone();
+                let storage = &mut desired
+                    .resources
+                    .get_mut("api")
+                    .unwrap()
+                    .config
+                    .downcast_mut::<Container>()
+                    .unwrap()
+                    .persistent_storage;
+                if remove {
+                    *storage = None;
+                } else {
+                    storage.as_mut().unwrap().mount_path = "/other".into();
+                }
+                let error = plan_compute_with_state(&desired, platform, None, Some(&installed))
+                    .unwrap_err();
+                assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
+                assert!(
+                    error.to_string().contains(if remove {
+                        "removing installed"
+                    } else {
+                        "mount path"
+                    }),
+                    "{error}"
+                );
+            }
+        }
     }
 
     #[test]
