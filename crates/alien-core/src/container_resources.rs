@@ -57,7 +57,11 @@ pub fn resolve_container_resources(
                     "capacity must be between 1 and 65536 GiB",
                 ));
             }
-            storage.size = format!("{size}Gi");
+            let selected = format!("{size}Gi");
+            // Preserve equivalent release quantities, including immutable PVC templates.
+            if parse_memory_bytes(&storage.size) != parse_memory_bytes(&selected) {
+                storage.size = selected;
+            }
         }
         let choices = container.resource_choices.as_ref();
         resolve_dimension(

@@ -1320,6 +1320,32 @@ mod tests {
         };
         assert_eq!(volume(&deployment), "40Gi");
         assert_eq!(volume(&release), "20Gi");
+        let mut equivalent = release.clone();
+        equivalent
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage
+            .as_mut()
+            .unwrap()
+            .size = "1Ti".into();
+        let same_capacity: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 1024}}
+        }))
+        .unwrap();
+        crate::container_resources::resolve_container_resources(
+            &mut equivalent,
+            Some(&same_capacity),
+        )
+        .unwrap();
+        assert_eq!(
+            volume(&equivalent),
+            "1Ti",
+            "equivalent selections preserve PVC quantities"
+        );
         crate::container_resources::resolve_container_resources(&mut deployment, Some(&settings))
             .unwrap();
         assert_eq!(volume(&deployment), "40Gi");
