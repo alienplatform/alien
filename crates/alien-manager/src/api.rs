@@ -93,6 +93,7 @@ impl Modify for BearerSecurity {
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
         crate::routes::deployments::CreateDeploymentResponse,
+        crate::routes::deployments::RetryDeploymentResponse,
         crate::routes::deployments::DeploymentResponse,
         crate::routes::deployments::DeploymentGroupMinimal,
         crate::routes::deployments::DeleteDeploymentRequest,

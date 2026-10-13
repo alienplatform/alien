@@ -1234,7 +1234,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Retry requested"
+            "description": "Retry requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryDeploymentResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -19460,6 +19467,24 @@
           "submitResponseUrl": {
             "type": "string",
             "description": "URL where deployments submit responses"
+          }
+        }
+      },
+      "RetryDeploymentResponse": {
+        "type": "object",
+        "description": "Accepted retry and optional instructions from the deployment store.",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "success": {
+            "type": "boolean"
           }
         }
       },

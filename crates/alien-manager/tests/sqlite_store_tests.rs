@@ -1464,10 +1464,11 @@ async fn suggested_delay_defers_reacquisition_until_external_work_wakes_it() {
         .expect("acquire should succeed without returning delayed work");
     assert!(delayed.is_empty());
 
-    store
-        .set_retry_requested(&test_subject(), &deployment.id)
+    let message = store
+        .set_retry_requested_with_message(&test_subject(), &deployment.id)
         .await
         .expect("external retry should wake the deployment");
+    assert_eq!(message, None, "standalone stores have no recovery guidance");
     let woken = store
         .acquire(
             &test_subject(),
