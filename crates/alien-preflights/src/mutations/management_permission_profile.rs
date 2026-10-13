@@ -5,7 +5,8 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
     KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
+    Platform, RemoteStackManagement, ResourceLifecycle, Sandbox, Stack, StackState, Storage,
+    Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
 use alien_permissions::{get_permission_set, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
@@ -100,9 +101,63 @@ impl StackMutation for ManagementPermissionProfileMutation {
             }
         }
         add_role_guards(&mut stack, stack_state.platform);
+        capture_management_permission_sets(
+            &mut stack,
+            config.base_platform.unwrap_or(stack_state.platform),
+        )?;
 
         Ok(stack)
     }
+}
+
+/// Named references alone cannot show that setup installed an older set of actions.
+/// Store the actual definitions on the setup-owned identity, after all grant authors ran.
+fn capture_management_permission_sets(stack: &mut Stack, platform: Platform) -> Result<()> {
+    if !stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<RemoteStackManagement>()
+            .is_some()
+    }) {
+        return Ok(());
+    }
+    let mut sets = Vec::new();
+    for reference in stack
+        .management()
+        .profile()
+        .into_iter()
+        .flat_map(|profile| profile.0.values())
+        .flatten()
+    {
+        let mut set = reference
+            .resolve(|id| get_permission_set(id).cloned())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::StackMutationFailed {
+                    mutation_name: "Capture management permission definitions".to_string(),
+                    message: format!("Permission set '{}' is not registered", reference.id()),
+                    resource_id: None,
+                })
+            })?;
+        // A change on another cloud does not require this installation to rerun setup.
+        if platform != Platform::Aws {
+            set.platforms.aws = None;
+        }
+        if platform != Platform::Gcp {
+            set.platforms.gcp = None;
+        }
+        if platform != Platform::Azure {
+            set.platforms.azure = None;
+        }
+        if !sets.contains(&set) {
+            sets.push(set);
+        }
+    }
+    for (_, entry) in stack.resources_mut() {
+        if let Some(management) = entry.config.downcast_mut::<RemoteStackManagement>() {
+            management.management_permission_sets = Some(sets.clone());
+        }
+    }
+    Ok(())
 }
 
 /// Whatever else management is granted on `role/<prefix>-*`, it may not change its own role, nor

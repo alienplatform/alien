@@ -4,7 +4,8 @@ use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Platform,
-    Resource, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
+    RemoteStackManagement, Resource, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount,
+    Stack,
 };
 use alien_error::Context;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +22,25 @@ use std::collections::{HashMap, HashSet};
 /// platforms only.
 pub struct FrozenResourcesUnchangedCheck {
     pub platform: Platform,
+}
+
+/// Removing a definition does not require new grants. Scope changes are checked separately
+/// by PermissionProfilesUnchangedCheck; a changed definition, even under a gated scope,
+/// must still be applied by setup before runtime uses it.
+fn management_definitions_retained(old: &Resource, new: &Resource) -> bool {
+    let (Some(old), Some(new)) = (
+        old.downcast_ref::<RemoteStackManagement>(),
+        new.downcast_ref::<RemoteStackManagement>(),
+    ) else {
+        return false;
+    };
+    let (Some(old_sets), Some(new_sets)) = (
+        &old.management_permission_sets,
+        &new.management_permission_sets,
+    ) else {
+        return false;
+    };
+    old.id == new.id && new_sets.iter().all(|set| old_sets.contains(set))
 }
 
 /// Setup owns the ComputeCluster identity and network boundary, but its
@@ -265,6 +285,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 
                 // Check if configuration changed (only check if still frozen)
                 if old_entry.config != new_entry.config
+                    && !management_definitions_retained(&old_entry.config, &new_entry.config)
                     && !runtime_managed_frozen_change(
                         self.platform,
                         &old_entry.config,

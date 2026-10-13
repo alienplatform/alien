@@ -996,6 +996,7 @@ mod tests {
         let mut management = resource_state(
             Resource::new(alien_core::RemoteStackManagement {
                 id: "management".to_string(),
+                management_permission_sets: None,
             }),
             ResourceLifecycle::Frozen,
             ResourceStatus::ProvisionFailed,

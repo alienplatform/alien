@@ -1,3 +1,4 @@
+use crate::permissions::PermissionSet;
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::RemoteBindingsOutputs;
 use alien_error::AlienError;
@@ -27,6 +28,11 @@ pub struct RemoteStackManagement {
     /// Maximum 64 characters.
     #[builder(start_fn)]
     pub id: String,
+
+    /// Resolved management grants captured by setup, for detecting changes to named sets.
+    /// Missing on older installs; the next setup records the installed definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_permission_sets: Option<Vec<PermissionSet>>,
 }
 
 impl RemoteStackManagement {

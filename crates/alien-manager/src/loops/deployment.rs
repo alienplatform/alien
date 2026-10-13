@@ -1372,6 +1372,7 @@ mod tests {
             .status(ResourceStatus::Running)
             .config(Resource::new(RemoteStackManagement {
                 id: "remote-stack-management".to_string(),
+                management_permission_sets: None,
             }))
             .dependencies(Vec::new());
 

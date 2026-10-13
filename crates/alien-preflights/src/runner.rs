@@ -999,3 +999,187 @@ async fn run_stack_checks(
 
     Ok(results)
 }
+
+#[cfg(all(test, feature = "runtime-checks"))]
+mod management_definition_upgrade_tests {
+    use super::*;
+    use alien_core::{
+        permissions::PermissionProfile, EnvironmentVariablesSnapshot, ExternalBindings,
+        RemoteStackManagement, ResourceLifecycle, StackSettings,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct CloudCheck(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl crate::RuntimeCheck for CloudCheck {
+        fn description(&self) -> &'static str {
+            "Record cloud validation entry"
+        }
+        fn should_run(&self, _: &Stack, _: Platform) -> bool {
+            true
+        }
+        async fn check(
+            &self,
+            _: &Stack,
+            _: &StackState,
+            _: &DeploymentConfig,
+            _: &ClientConfig,
+        ) -> Result<CheckResult> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(CheckResult::success())
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_grant_upgrades_require_exact_setup_before_cloud_checks() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let release = Stack::new("stack".into())
+                .add(
+                    RemoteStackManagement::new("management".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management(alien_core::permissions::ManagementPermissions::Override(
+                    PermissionProfile::new().global(["container/provision"]),
+                ))
+                .build();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mut registry = crate::PreflightRegistry::new();
+            registry.add_mutation(Box::new(
+                crate::mutations::ManagementPermissionProfileMutation,
+            ));
+            registry.add_runtime_check(Box::new(CloudCheck(calls.clone())));
+            let runner = PreflightRunner::with_registry(registry);
+            let state = StackState::new(platform);
+            let client = ClientConfig::Local {
+                state_directory: "/unused".into(),
+            };
+            let prepared = runner
+                .apply_mutations(release.clone(), &state, &config)
+                .await
+                .unwrap();
+            // Persist/reload the installed definitions rather than re-resolving them with
+            // the new binary's registry. The saved grant deliberately predates one entry.
+            for legacy in [false, true] {
+                let mut installed = prepared.clone();
+                let management = installed
+                    .resources
+                    .get_mut("management")
+                    .unwrap()
+                    .config
+                    .downcast_mut::<RemoteStackManagement>()
+                    .unwrap();
+                if legacy {
+                    management.management_permission_sets = None;
+                } else {
+                    let set = management
+                        .management_permission_sets
+                        .as_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|set| set.id == "container/provision")
+                        .unwrap();
+                    match platform {
+                        Platform::Aws => {
+                            assert!(set.platforms.aws.as_mut().unwrap().pop().is_some());
+                        }
+                        Platform::Gcp => {
+                            assert!(set.platforms.gcp.as_mut().unwrap().pop().is_some());
+                        }
+                        Platform::Azure => {
+                            assert!(set.platforms.azure.as_mut().unwrap().pop().is_some());
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let installed: Stack =
+                    serde_json::from_value(serde_json::to_value(installed).unwrap()).unwrap();
+                assert_ne!(
+                    installed.setup_owned_digest(),
+                    prepared.setup_owned_digest()
+                );
+                calls.store(0, Ordering::SeqCst);
+                let error = runner
+                    .run_deployment_time_preflights(
+                        release.clone(),
+                        &state,
+                        &config,
+                        &client,
+                        Some(&installed),
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    0,
+                    "no cloud checks before setup"
+                );
+                let mut authorization = alien_core::SetupUpdateAuthorization {
+                    nonce: "revision".into(),
+                    baseline_frozen_digest: installed.setup_owned_digest(),
+                    target_frozen_digest: installed.setup_owned_digest(),
+                    release_id: "release".into(),
+                    setup_target: "target".into(),
+                    setup_fingerprint: "fingerprint".into(),
+                    setup_fingerprint_version: 1,
+                };
+                runner
+                    .run_deployment_time_preflights(
+                        release.clone(),
+                        &state,
+                        &config,
+                        &client,
+                        Some(&installed),
+                        Some(&authorization),
+                        None,
+                    )
+                    .await
+                    .expect_err("stale setup cannot authorize new grants");
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+                authorization.target_frozen_digest = prepared.setup_owned_digest();
+                let (_, _, authorized) = runner
+                    .run_deployment_time_preflights(
+                        release.clone(),
+                        &state,
+                        &config,
+                        &client,
+                        Some(&installed),
+                        Some(&authorization),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                assert!(authorized);
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+            }
+            runner
+                .run_deployment_time_preflights(
+                    release,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&prepared),
+                    None,
+                    None,
+                )
+                .await
+                .expect("unchanged installed definitions need no setup");
+        }
+    }
+}
