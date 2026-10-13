@@ -18,6 +18,16 @@
       }
     ],
     "gcp": [
+      // Quota values are project metadata; existing roleViewer reads role identities.
+      {
+        "label": "service-account-quota-metadata",
+        "description": "Read applied project quotas",
+        "grant": { "permissions": ["serviceusage.quotas.get"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
       {
         "grant": {
           "predefinedRoles": ["roles/iam.serviceAccountViewer"]

@@ -11,7 +11,7 @@ use alien_aws_clients::{
 };
 use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
-    Platform, ResourceStatus, Stack, StackState, Worker,
+    Platform, RemoteStackManagement, ResourceStatus, ServiceAccount, Stack, StackState, Worker,
 };
 use std::collections::HashSet;
 
@@ -30,10 +30,17 @@ impl RuntimeCheck for CloudQuotasCheck {
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
         matches!(platform, Platform::Aws | Platform::Gcp)
             && stack.resources.values().any(|entry| {
-                entry
-                    .config
-                    .downcast_ref::<Worker>()
-                    .is_some_and(|worker| worker.concurrency_limit.is_some())
+                (platform == Platform::Gcp
+                    && (entry.has_remote_bindings()
+                        || entry.config.downcast_ref::<ServiceAccount>().is_some()
+                        || entry
+                            .config
+                            .downcast_ref::<RemoteStackManagement>()
+                            .is_some()))
+                    || entry
+                        .config
+                        .downcast_ref::<Worker>()
+                        .is_some_and(|worker| worker.concurrency_limit.is_some())
                     || entry.config.downcast_ref::<ComputeCluster>().is_some()
                     || entry
                         .config
@@ -58,8 +65,8 @@ impl RuntimeCheck for CloudQuotasCheck {
                 result.status = Some(CheckStatus::Unknown);
                 return Ok(result);
             };
-            let compute =
-                alien_gcp_clients::ComputeClient::new(reqwest::Client::new(), config.clone());
+            let http = reqwest::Client::new();
+            let compute = alien_gcp_clients::ComputeClient::new(http.clone(), config.clone());
             super::gcp_compute::check(
                 stack,
                 stack_state,
@@ -69,6 +76,9 @@ impl RuntimeCheck for CloudQuotasCheck {
                 &mut result,
             )
             .await;
+            let iam = alien_gcp_clients::IamClient::new(http.clone(), config.clone());
+            let quotas = alien_gcp_clients::ServiceUsageQuotasClient::new(http, config.clone());
+            super::gcp_iam::check(stack, stack_state, config, &iam, &quotas, &mut result).await;
             return Ok(result);
         }
         let Some(config) = client_config.aws_config() else {

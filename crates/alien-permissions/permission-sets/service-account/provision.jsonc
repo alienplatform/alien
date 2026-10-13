@@ -37,6 +37,7 @@
             "iam.roles.create",
             "iam.roles.get",
             "iam.roles.list",
+            "serviceusage.quotas.get",
             "iam.roles.undelete",
             "iam.roles.update",
             "resourcemanager.projects.getIamPolicy",
