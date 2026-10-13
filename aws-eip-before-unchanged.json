@@ -1,0 +1,14 @@
+{
+  "Vpcs": {
+    "identitiesUnchanged": true,
+    "count": 1
+  },
+  "InternetGateways": {
+    "identitiesUnchanged": true,
+    "count": 1
+  },
+  "Addresses": {
+    "identitiesUnchanged": true,
+    "count": 5
+  }
+}

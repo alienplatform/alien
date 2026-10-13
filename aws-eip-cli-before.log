@@ -1,0 +1,4 @@
+Deploying q5-vpc to aws
+Configuration error: Failed to acquire setup deployment lock
+Cause:
+  - Timed out waiting for deployment lock: the manager deferred this deployment. Check its current operation and status before retrying; this command did not acquire the lease.
