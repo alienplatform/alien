@@ -1,0 +1,11 @@
+$ alien deploy --name q5-vpc --platform aws --token-file <protected-token-file>
+
+Deploying q5-vpc to aws
+deployment step loop failed
+Cause:
+  - Preflight checks failed
+  - Validation failed with 1 errors and 0 warnings
+Failed checks:
+  - EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): used 5, applied limit 5, additional needed 1. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-0263D0A3
+
+Exit code: 1
