@@ -45,6 +45,7 @@ pub struct AwsNetworkImportData {
     /// Private route table ID.
     pub private_route_table_id: Option<String>,
     /// Security group ID for private workloads.
+    // Keeps the published schema unchanged: without it, `default` adds `"default": null`.
     #[cfg_attr(feature = "jsonschema", schemars(skip_serializing_if = "Option::is_none"))]
     #[serde(
         default,

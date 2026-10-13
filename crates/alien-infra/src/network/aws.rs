@@ -2848,12 +2848,7 @@ impl AwsNetworkController {
                     .chain(private_subnet_ids)
                     .cloned()
                     .collect();
-                if requested_subnet_ids.is_empty() {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: "Existing AWS networks require at least one subnet ID".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
+                require_existing_subnet_ids(&requested_subnet_ids, &config.id)?;
                 let response = ec2_client
                     .describe_subnets(
                         DescribeSubnetsRequest::builder()
@@ -2919,12 +2914,7 @@ impl AwsNetworkController {
             .chain(&self.private_subnet_ids)
             .cloned()
             .collect();
-        if requested_subnet_ids.is_empty() {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Existing AWS networks require at least one subnet ID".to_string(),
-                resource_id: Some(config.id.clone()),
-            }));
-        }
+        require_existing_subnet_ids(&requested_subnet_ids, &config.id)?;
         let response = ec2_client
             .describe_subnets(
                 DescribeSubnetsRequest::builder()
@@ -4376,12 +4366,7 @@ impl AwsNetworkController {
                 .chain(private_subnet_ids)
                 .cloned()
                 .collect();
-            if requested_subnet_ids.is_empty() {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Existing AWS networks require at least one subnet ID".to_string(),
-                    resource_id: Some(config.id.clone()),
-                }));
-            }
+            require_existing_subnet_ids(&requested_subnet_ids, &config.id)?;
             let response = ec2_client
                 .describe_subnets(
                     DescribeSubnetsRequest::builder()
@@ -5433,6 +5418,18 @@ impl AwsNetworkController {
 /// test drives the real handlers through `SingleControllerExecutor` with a mocked EC2 API.
 /// `SingleControllerExecutor::step` keeps what a failed handler wrote to `self`, like the
 /// real executor, so a failed step followed by another step is a retry.
+/// Existing networks must name at least one subnet. An empty `DescribeSubnets`
+/// filter would list every subnet in the account instead of the network's own.
+fn require_existing_subnet_ids(subnet_ids: &[String], resource_id: &str) -> Result<()> {
+    if subnet_ids.is_empty() {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Existing AWS networks require at least one subnet ID".to_string(),
+            resource_id: Some(resource_id.to_string()),
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod controller_state_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
