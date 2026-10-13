@@ -2008,12 +2008,26 @@ async fn deploy_task_with_environment(
             | DeploymentStatus::RefreshFailed
     )
     {
-        request_deployment_retry(
-            &base_url,
-            setup_token.as_deref().unwrap_or(deployment_token),
-            &tracked_deployment.deployment_id,
-        )
-        .await?;
+        if ctx.is_platform() {
+            request_deployment_retry(
+                &base_url,
+                setup_token.as_deref().unwrap_or(deployment_token),
+                &tracked_deployment.deployment_id,
+            )
+            .await?;
+        } else {
+            lock_client
+                .retry_deployment()
+                .id(&tracked_deployment.deployment_id)
+                .send()
+                .await
+                .into_sdk_error()
+                .await
+                .context(ErrorData::ApiRequestFailed {
+                    message: "retrying deployment before resuming setup".to_string(),
+                    url: None,
+                })?;
+        }
     }
     steps.activate(2, Some("Waiting for execution ownership".to_string()));
 
