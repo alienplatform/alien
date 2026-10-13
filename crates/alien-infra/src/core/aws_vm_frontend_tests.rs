@@ -316,7 +316,11 @@ async fn lost_deletes_resume_the_remaining_children_without_repeating_mutations(
                     deleted = done;
                     frontend = reload(&frontend);
                 }
-                Err(_) => {
+                Err(error) => {
+                    assert!(
+                        error.retryable,
+                        "lost delete responses must remain executor-retryable: {error:?}"
+                    );
                     failures += 1;
                     frontend = saved;
                 }

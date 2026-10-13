@@ -26,6 +26,33 @@ pub(crate) fn is_remote_not_found(error: &AlienError<CloudClientErrorData>) -> b
     )
 }
 
+/// A composite child error must not make the executor skip the parent's
+/// remaining cleanup. Preserve ordinary errors (including retryable timeouts)
+/// intact. Only remove source codes that the executor treats as terminal
+/// best-effort deletion; absence must instead be confirmed by the child.
+pub(crate) fn preserve_composite_cleanup_error(
+    error: AlienError<crate::ErrorData>,
+) -> AlienError<crate::ErrorData> {
+    let skips_cleanup = |code: &str, status: Option<u16>| {
+        matches!(status, Some(401 | 403 | 404))
+            || matches!(code, "REMOTE_ACCESS_DENIED" | "REMOTE_RESOURCE_NOT_FOUND")
+    };
+    let unsafe_code = skips_cleanup(&error.code, error.http_status_code)
+        || std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .any(|source| skips_cleanup(&source.code, source.http_status_code));
+    if !unsafe_code {
+        return error;
+    }
+    let mut protected = AlienError::new(crate::ErrorData::CloudPlatformError {
+        message: error.message,
+        resource_id: None,
+    });
+    protected.retryable = error.retryable;
+    protected.internal = error.internal;
+    protected.hint = error.hint;
+    protected
+}
+
 /// How a delete of an object behind a tag-conditioned grant ended.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TagScopedDelete {

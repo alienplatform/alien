@@ -130,7 +130,11 @@ async fn lost_create_and_delete_resume_from_saved_ownership_without_duplicate_mu
     );
     assert_eq!(world.creates.load(Ordering::SeqCst), 1);
     let before_delete = reload(&restarted);
-    restarted.step_delete(&elb).await.unwrap_err();
+    let error = restarted.step_delete(&elb).await.unwrap_err();
+    assert!(
+        error.retryable,
+        "lost delete response must remain retryable"
+    );
     let mut restarted = before_delete;
     assert!(restarted.step_delete(&elb).await.unwrap());
     assert_eq!(world.deletes.load(Ordering::SeqCst), 1);

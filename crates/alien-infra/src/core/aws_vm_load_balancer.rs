@@ -199,10 +199,9 @@ impl AwsVmLoadBalancer {
             Err(error) if matches!(&error.error, Some(ClientErrorData::RemoteResourceConflict { message, .. }) if message.contains("ResourceInUse") || message.contains("in use")) => {
                 Ok(false)
             }
-            Err(error) => Err(AlienError::new(cloud_data(&format!(
-                "Delete VM frontend load balancer: {}",
-                error.message
-            )))),
+            Err(error) => Err(cleanup_failure(
+                error.context(cloud_data("Delete VM frontend load balancer")),
+            )),
         }
     }
 
@@ -345,7 +344,7 @@ fn cloud_data(message: &str) -> ErrorData {
 // The generic executor must not interpret a denied discovery/metadata read as
 // best-effort deletion of the entire parent and skip later child cleanup.
 fn cleanup_failure(error: AlienError<ErrorData>) -> AlienError<ErrorData> {
-    AlienError::new(cloud_data(&error.message))
+    crate::core::aws_tag_scoped::preserve_composite_cleanup_error(error)
 }
 
 #[cfg(test)]

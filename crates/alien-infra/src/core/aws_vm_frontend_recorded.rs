@@ -428,10 +428,9 @@ fn delete_result(result: alien_client_core::Result<()>) -> Result<bool> {
         Err(error) if matches!(&error.error, Some(ClientErrorData::RemoteResourceConflict { message, .. }) if message.contains("ResourceInUse") || message.contains("in use")) => {
             Ok(false)
         }
-        Err(error) => Err(AlienError::new(cloud_data(&format!(
-            "Delete recorded VM frontend: {}",
-            error.message
-        )))),
+        Err(error) => Err(cleanup_failure(
+            error.context(cloud_data("Delete recorded VM frontend")),
+        )),
     }
 }
 fn invalid(message: &str) -> AlienError<ErrorData> {
@@ -447,5 +446,5 @@ fn cloud_data(message: &str) -> ErrorData {
     }
 }
 fn cleanup_failure(error: AlienError<ErrorData>) -> AlienError<ErrorData> {
-    AlienError::new(cloud_data(&error.message))
+    crate::core::aws_tag_scoped::preserve_composite_cleanup_error(error)
 }

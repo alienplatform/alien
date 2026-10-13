@@ -153,10 +153,9 @@ impl AwsVmTargetGroup {
             Err(error) if matches!(&error.error, Some(ClientErrorData::RemoteResourceConflict {message,..}) if message.contains("ResourceInUse") || message.contains("in use")) => {
                 Ok(false)
             }
-            Err(error) => Err(AlienError::new(cloud_data(&format!(
-                "Delete VM frontend target group: {}",
-                error.message
-            )))),
+            Err(error) => Err(keep_cleanup_failure(
+                error.context(cloud_data("Delete VM frontend target group")),
+            )),
         }
     }
 
@@ -370,7 +369,7 @@ fn cloud_data(message: &str) -> ErrorData {
     }
 }
 fn keep_cleanup_failure(error: AlienError<ErrorData>) -> AlienError<ErrorData> {
-    AlienError::new(cloud_data(&error.message))
+    crate::core::aws_tag_scoped::preserve_composite_cleanup_error(error)
 }
 
 #[cfg(test)]
