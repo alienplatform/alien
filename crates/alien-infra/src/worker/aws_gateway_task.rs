@@ -8,7 +8,7 @@ use alien_aws_clients::ecs::{
     ListTaskDefinitionsRequest, PortMapping, RegisterTaskDefinitionRequest, RuntimePlatform, Tag,
     TaskDefinitionRequest, TaskDefinitionResponse,
 };
-use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+use alien_core::standard_resource_tags;
 use alien_error::{AlienError, Context, ContextError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -52,20 +52,22 @@ impl GatewayTask {
             ));
         }
         let token = Uuid::new_v4().to_string();
-        let tags = [
-            (ALIEN_MANAGED_BY_TAG_KEY, "alien"),
-            (ALIEN_STACK_TAG_KEY, stack_prefix),
-            (ALIEN_RESOURCE_TAG_KEY, resource_id),
-            (CREATE_ATTEMPT_TAG, token.as_str()),
-        ]
-        .into_iter()
-        .map(|(key, value)| Tag {
-            key: key.into(),
-            value: value.into(),
-        })
-        .collect();
+        let family = format!("{stack_prefix}-{resource_id}-gateway-{token}");
+        if family.len() > 255
+            || !family
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(invalid("Gateway task family exceeds ECS naming limits"));
+        }
+        let mut tags = standard_resource_tags(stack_prefix, resource_id);
+        tags.insert(CREATE_ATTEMPT_TAG.into(), token);
+        let tags = tags
+            .into_iter()
+            .map(|(key, value)| Tag { key, value })
+            .collect();
         let request = RegisterTaskDefinitionRequest::builder()
-            .family(format!("alien-worker-gateway-{token}"))
+            .family(family)
             .container_definitions(vec![ContainerDefinition::builder()
                 .name("gateway".into())
                 .image(GATEWAY_IMAGE.into())

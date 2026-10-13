@@ -7,6 +7,10 @@ use alien_aws_clients::ecs::{
     CreateServiceRequest, DeleteServiceRequest, DescribeServicesRequest, DescribeTasksRequest,
     EcsApi, ListTasksRequest, Service, UpdateServiceRequest,
 };
+use alien_core::{
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY,
+    ALIEN_STACK_TAG_KEY,
+};
 use alien_error::{AlienError, Context};
 use serde::{Deserialize, Serialize};
 
@@ -36,11 +40,27 @@ impl GatewayService {
             .iter()
             .map(|tag| (&tag.key, &tag.value))
             .collect();
-        if !cluster_prefix.starts_with("arn:aws:ecs:")
+        let has_boundary_tags = [ALIEN_STACK_TAG_KEY, ALIEN_RESOURCE_TAG_KEY]
+            .into_iter()
+            .all(|key| {
+                request
+                    .tags
+                    .iter()
+                    .any(|tag| tag.key == key && !tag.value.is_empty())
+            })
+            && request.tags.iter().any(|tag| {
+                tag.key == ALIEN_MANAGED_BY_TAG_KEY && tag.value == ALIEN_MANAGED_BY_TAG_VALUE
+            });
+        if !has_boundary_tags
+            || !cluster_prefix.starts_with("arn:aws:ecs:")
             || cluster_name.is_empty()
             || cluster_name.contains('/')
             || request.service_name.is_empty()
             || request.service_name.contains('/')
+            || !request.service_name.ends_with(&request.client_token)
+            || !request
+                .task_definition
+                .starts_with(&format!("{cluster_prefix}:task-definition/"))
             || request.client_token.is_empty()
             || !request.client_token.is_ascii()
             || tags.len() != request.tags.len()
@@ -56,7 +76,19 @@ impl GatewayService {
             ));
         }
         let network = &request.network_configuration.awsvpc_configuration;
-        if network.subnets.len() < 2
+        if network.subnets.iter().collect::<BTreeSet<_>>().len() != network.subnets.len()
+            || network
+                .security_groups
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != network.security_groups.len()
+            || network
+                .subnets
+                .iter()
+                .chain(&network.security_groups)
+                .any(String::is_empty)
+            || network.subnets.len() < 2
             || network.security_groups.is_empty()
             || !matches!(network.assign_public_ip.as_str(), "ENABLED" | "DISABLED")
         {
@@ -393,7 +425,7 @@ mod tests {
             "networkConfiguration":{"awsvpcConfiguration":{"subnets":["subnet-a","subnet-b"],"securityGroups":["sg-owned"],"assignPublicIp":"ENABLED"}},
             "loadBalancers":[{"targetGroupArn":"owned-target","containerName":"gateway","containerPort":8080}],
             "deploymentConfiguration":{"minimumHealthyPercent":100,"maximumPercent":200},"healthCheckGracePeriodSeconds":60,
-            "tags":[{"key":"CreateAttempt","value":"generation"}]
+            "tags":[{"key":"CreateAttempt","value":"generation"},{"key":"managed-by","value":"runtime"},{"key":"deployment","value":"stack"},{"key":"resource","value":"worker"}]
         })).unwrap()).unwrap()
     }
 
