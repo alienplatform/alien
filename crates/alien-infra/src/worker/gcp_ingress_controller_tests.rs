@@ -571,6 +571,19 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             access.private_enabled()
         );
         let live = services.lock().unwrap().live.clone().unwrap();
+        let binding: alien_core::bindings::WorkerBinding = serde_json::from_value(
+            controller.get_binding_params().unwrap().unwrap(),
+        )
+        .unwrap();
+        let alien_core::bindings::WorkerBinding::CloudRun(binding) = binding else {
+            panic!("expected Cloud Run binding");
+        };
+        assert_eq!(
+            binding.private_url,
+            alien_core::bindings::BindingValue::Value(live.uri.clone().unwrap()),
+            "cross-worker invocation must survive retiring either frontend"
+        );
+        assert_eq!(binding.public_url.is_some(), access.internet_enabled());
         assert_eq!(
             live.ingress,
             Some(if access.internet_enabled() {

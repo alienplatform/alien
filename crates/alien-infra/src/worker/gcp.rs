@@ -4821,14 +4821,10 @@ impl GcpWorkerController {
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, CloudRunWorkerBinding, WorkerBinding};
 
-        let private_url = if self.ingress.active {
-            self.ingress
-                .primary_url(&self.ingress.private_endpoints)
-                .or_else(|| self.ingress.primary_url(&self.ingress.public_endpoints))
-                .or(self.service_uri.as_deref())
-        } else {
-            self.url.as_deref()
-        };
+        // Worker bindings invoke the retained service through Direct VPC Egress.
+        // Frontend URLs can disappear during access transitions while a caller
+        // still holds its original environment; keep invocation independent of them.
+        let private_url = self.service_uri.as_deref().or(self.url.as_deref());
         let public_url = if self.ingress.active {
             self.ingress.primary_url(&self.ingress.public_endpoints)
         } else if self.native_public_access || self.forwarding_rule_name.is_some() {
