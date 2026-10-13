@@ -246,11 +246,7 @@ impl ExecutionMode {
             Self::Platform {
                 api_key: Some(_),
                 ..
-            } => Err(AlienError::new(ErrorData::ConfigurationError {
-                message:
-                    "API keys are already scoped to a workspace. This command needs a user workspace name; log in with user credentials or use a project-scoped command such as `alien link --project <name>`."
-                        .to_string(),
-            })),
+            } => self.resolve_api_key_workspace_name().await,
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => {
                 if let Some(workspace) = workspace.clone().or_else(load_workspace) {

@@ -10,7 +10,7 @@ use alien_platform_api::SdkResultExt as _;
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, ValueEnum};
 use console::style;
-use deepstore_client::{DeepstoreClient, SearchParams};
+use deepstore_client::{DeepstoreClient, DeepstoreError, SearchParams};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -665,11 +665,25 @@ async fn fetch_logs(
             ..Default::default()
         })
         .await
-        .map_err(|error| {
-            AlienError::new(ErrorData::ApiRequestFailed {
+        .map_err(|error| match error {
+            DeepstoreError::InvalidRequest(body) => {
+                // Error bodies may be structured or plain text. Show the reason,
+                // rather than embedding the serialized response in the message.
+                let message = serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or(body);
+                AlienError::new(ErrorData::LogSearchRejected { message })
+            }
+            error => AlienError::new(ErrorData::ApiRequestFailed {
                 message: format!("Deepstore search failed: {error}"),
                 url: None,
-            })
+            }),
         })?;
 
     let mut logs = result
@@ -1113,6 +1127,135 @@ fn parse_std_duration_arg(value: &str) -> std::result::Result<StdDuration, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
+    use serde_json::json;
+
+    async fn fetch_from_http(status: u16, body: &str, query: &str) -> Result<LogsOutput> {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .unwrap_or_else(|_| {
+                assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+            });
+        let server = MockServer::start_async().await;
+        let splits = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/databases/db_test/splits")
+                    .header("authorization", "Bearer test-query-token");
+                then.status(200).json_body(json!({"splits": []}));
+            })
+            .await;
+        let search = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/logs/search")
+                    .header("authorization", "Bearer test-query-token");
+                then.status(status).body(body);
+            })
+            .await;
+        let client = DeepstoreClient::builder()
+            .control_plane_url(server.url("/v1"))
+            .auth_proxy_url(server.base_url())
+            .query_token_provider(|| async { Ok("test-query-token".to_string()) })
+            .build()
+            .expect("local search client");
+        let target = LogsTarget {
+            manager_id: "mgr_test".to_string(),
+            project_id: Some("prj_test".to_string()),
+            project_name: None,
+            deployment_id: None,
+            deployment_name: None,
+            deployment_group_name: None,
+            database_id: "db_test".to_string(),
+        };
+        let end = Utc::now();
+        let result = fetch_logs(
+            &client,
+            "db_test",
+            query,
+            &target,
+            end - Duration::hours(1),
+            end,
+            10,
+        )
+        .await;
+        splits.assert_hits_async(1).await;
+        search.assert_hits_async(1).await;
+        result
+    }
+
+    #[tokio::test]
+    async fn rejected_search_keeps_bad_request_status_and_plain_message() {
+        for body in [
+            json!({
+                "error": "INVALID_REQUEST",
+                "message": "Numeric ranges require TO between bounds"
+            })
+            .to_string(),
+            "Numeric ranges require TO between bounds".to_string(),
+        ] {
+            let error = fetch_from_http(400, &body, "count:[10,100]")
+                .await
+                .expect_err("query is refused over HTTP");
+            assert_eq!(error.http_status_code, Some(400));
+            assert_eq!(error.code, "INVALID_REQUEST");
+            assert_eq!(
+                error.message,
+                "Log search rejected: Numeric ranges require TO between bounds"
+            );
+            assert!(!error.retryable);
+            assert!(!error.internal);
+        }
+    }
+
+    #[tokio::test]
+    async fn server_failure_is_not_a_query_rejection() {
+        let body = json!({"error": "UNAVAILABLE", "message": "Search temporarily unavailable"})
+            .to_string();
+        let error = fetch_from_http(503, &body, "*")
+            .await
+            .expect_err("server is unavailable");
+        assert_eq!(error.code, "API_REQUEST_FAILED");
+        assert_ne!(error.http_status_code, Some(400));
+    }
+
+    #[tokio::test]
+    async fn successful_search_still_returns_renderable_logs() {
+        let body = json!({
+            "num_hits": 1,
+            "hits": [{"timestamp_nanos": 1700000000000000000i64, "body": {"message": "hello"}, "severity_text": "INFO"}],
+            "elapsed_time_micros": 123,
+            "errors": []
+        }).to_string();
+        let output = fetch_from_http(200, &body, "*")
+            .await
+            .expect("valid search succeeds");
+        assert_eq!(output.num_hits, 1);
+        assert_eq!(output.logs.len(), 1);
+        assert_eq!(output.logs[0].message, "hello");
+        assert_eq!(output.logs[0].level.as_deref(), Some("INFO"));
+        assert_eq!(output.elapsed_time_micros, 123);
+        assert!(output.errors.is_empty());
+    }
+
+    #[test]
+    fn invalid_log_limits_are_client_validation_errors() {
+        for limit in [0, 2000] {
+            let args = LogsArgs::try_parse_from(["logs", "--limit", &limit.to_string()])
+                .expect("numeric limit parses before semantic validation");
+            let error = validate_args(&args).expect_err("limit outside supported range");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert_eq!(error.http_status_code, Some(400));
+            assert!(!error.retryable);
+            assert!(!error.internal);
+        }
+        let args =
+            LogsArgs::try_parse_from(["logs", "--limit", "1000"]).expect("maximum limit parses");
+        validate_args(&args).expect("maximum supported limit remains valid");
+    }
 
     fn test_query<'a>(
         user_query: &'a str,

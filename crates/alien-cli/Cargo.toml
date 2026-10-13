@@ -20,6 +20,7 @@ otlp = ["dep:alien-worker-runtime", "alien-worker-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open"]
 
 [dependencies]
+bon = { workspace = true }
 alien-core = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }

@@ -22,7 +22,8 @@ pub enum ErrorData {
         code = "VALIDATION_ERROR",
         message = "Validation failed for {field}: {message}",
         retryable = "false",
-        internal = "false"
+        internal = "false",
+        http_status_code = 400
     )]
     ValidationError {
         /// The field or parameter that failed validation
@@ -72,6 +73,19 @@ pub enum ErrorData {
         message: String,
         /// Optional URL that was requested
         url: Option<String>,
+    },
+
+    /// The log search backend rejected the request.
+    #[error(
+        code = "INVALID_REQUEST",
+        message = "Log search rejected: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    LogSearchRejected {
+        /// The backend's human-readable rejection reason.
+        message: String,
     },
 
     /// Network or connectivity issue.
