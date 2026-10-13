@@ -451,6 +451,7 @@ fn platform_onboard_deployment_setup_config(
         public_subdomain,
         validated_release_selection: None,
         policy: Some(types::DeploymentSetupConfigInputPolicy {
+            configuration_profile: None,
             allow_release_pinning: None,
             allowed_ai_providers: Vec::new(),
             allowed_platforms,
