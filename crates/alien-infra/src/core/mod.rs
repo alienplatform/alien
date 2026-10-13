@@ -18,6 +18,11 @@ pub use certificates::*;
 #[cfg(feature = "aws")]
 pub(crate) mod aws_tag_scoped;
 
+#[cfg(feature = "aws")]
+mod aws_acm_import;
+#[cfg(feature = "aws")]
+pub use aws_acm_import::AwsAcmImport;
+
 pub mod state_utils;
 pub use state_utils::*;
 
