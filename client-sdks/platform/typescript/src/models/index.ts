@@ -99,6 +99,7 @@ export * from "./deploymentcredentialrotationvalues.js";
 export * from "./deploymentdetailresponse.js";
 export * from "./deploymentdetailresponsependingpreparedstacktypeenvenum.js";
 export * from "./deploymentdetailresponsepreparedstackoperations.js";
+export * from "./deploymentendpointhealthchangedevent.js";
 export * from "./deploymentgroup.js";
 export * from "./deploymentgroupinfo.js";
 export * from "./deploymentgroupmovedevent.js";

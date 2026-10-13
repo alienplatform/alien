@@ -8,6 +8,11 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export type ArtifactRegistry = {
+  host: string;
+  prefix: string;
+};
+
 export const ManagerManagementConfigsPlatformAws = {
   Aws: "aws",
 } as const;
@@ -76,11 +81,55 @@ export type ManagerManagementConfigsKubernetes = {
  * Per-platform management configurations for cross-account access (self-reported via heartbeat)
  */
 export type ManagerManagementConfigs = {
+  /**
+   * Native artifact registry hosts and project repository prefixes
+   */
+  artifactRegistries?: Array<ArtifactRegistry> | undefined;
   aws?: ManagerManagementConfigsAws | undefined;
   gcp?: ManagerManagementConfigsGcp | undefined;
   azure?: ManagerManagementConfigsAzure | undefined;
   kubernetes?: ManagerManagementConfigsKubernetes | undefined;
 };
+
+/** @internal */
+export const ArtifactRegistry$inboundSchema: z.ZodType<
+  ArtifactRegistry,
+  unknown
+> = z.object({
+  host: z.string(),
+  prefix: z.string(),
+});
+/** @internal */
+export type ArtifactRegistry$Outbound = {
+  host: string;
+  prefix: string;
+};
+
+/** @internal */
+export const ArtifactRegistry$outboundSchema: z.ZodType<
+  ArtifactRegistry$Outbound,
+  ArtifactRegistry
+> = z.object({
+  host: z.string(),
+  prefix: z.string(),
+});
+
+export function artifactRegistryToJSON(
+  artifactRegistry: ArtifactRegistry,
+): string {
+  return JSON.stringify(
+    ArtifactRegistry$outboundSchema.parse(artifactRegistry),
+  );
+}
+export function artifactRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<ArtifactRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ArtifactRegistry' from JSON`,
+  );
+}
 
 /** @internal */
 export const ManagerManagementConfigsPlatformAws$inboundSchema: z.ZodEnum<
@@ -296,6 +345,8 @@ export const ManagerManagementConfigs$inboundSchema: z.ZodType<
   ManagerManagementConfigs,
   unknown
 > = z.object({
+  artifactRegistries: z.array(z.lazy(() => ArtifactRegistry$inboundSchema))
+    .optional(),
   aws: z.lazy(() => ManagerManagementConfigsAws$inboundSchema).optional(),
   gcp: z.lazy(() => ManagerManagementConfigsGcp$inboundSchema).optional(),
   azure: z.lazy(() => ManagerManagementConfigsAzure$inboundSchema).optional(),
@@ -304,6 +355,7 @@ export const ManagerManagementConfigs$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type ManagerManagementConfigs$Outbound = {
+  artifactRegistries?: Array<ArtifactRegistry$Outbound> | undefined;
   aws?: ManagerManagementConfigsAws$Outbound | undefined;
   gcp?: ManagerManagementConfigsGcp$Outbound | undefined;
   azure?: ManagerManagementConfigsAzure$Outbound | undefined;
@@ -315,6 +367,8 @@ export const ManagerManagementConfigs$outboundSchema: z.ZodType<
   ManagerManagementConfigs$Outbound,
   ManagerManagementConfigs
 > = z.object({
+  artifactRegistries: z.array(z.lazy(() => ArtifactRegistry$outboundSchema))
+    .optional(),
   aws: z.lazy(() => ManagerManagementConfigsAws$outboundSchema).optional(),
   gcp: z.lazy(() => ManagerManagementConfigsGcp$outboundSchema).optional(),
   azure: z.lazy(() => ManagerManagementConfigsAzure$outboundSchema).optional(),
