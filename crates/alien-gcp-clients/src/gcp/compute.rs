@@ -70,6 +70,12 @@ impl GcpServiceConfig for ComputeServiceConfig {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ComputeApi: Send + Sync + Debug {
+    /// Reads applied regional quota limits and provider-counted usage.
+    async fn get_region_quotas(&self, region: String) -> Result<QuotaCollection>;
+
+    /// Reads project quotas, including CPUs across all regions when present.
+    async fn get_project_quotas(&self) -> Result<QuotaCollection>;
+
     // --- Zone Operations ---
 
     /// Lists zones in the project.
@@ -616,8 +622,11 @@ pub trait ComputeApi: Send + Sync + Debug {
 
     /// Gets a regional resource policy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/get
-    async fn get_resource_policy(&self, region: String, policy_name: String)
-        -> Result<ResourcePolicy>;
+    async fn get_resource_policy(
+        &self,
+        region: String,
+        policy_name: String,
+    ) -> Result<ResourcePolicy>;
 
     /// Creates a regional resource policy.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/resourcePolicies/insert
@@ -705,6 +714,20 @@ impl ComputeClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ComputeApi for ComputeClient {
+    async fn get_region_quotas(&self, region: String) -> Result<QuotaCollection> {
+        let path = format!("projects/{}/regions/{region}", self.project_id);
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, "region")
+            .await
+    }
+
+    async fn get_project_quotas(&self) -> Result<QuotaCollection> {
+        let path = format!("projects/{}", self.project_id);
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, "project")
+            .await
+    }
+
     // --- Zone Operations ---
 
     async fn list_zones(&self, filter: Option<String>) -> Result<ZoneList> {
@@ -6539,10 +6562,7 @@ mod tests {
                     token: "test-token".to_string(),
                 },
                 service_overrides: Some(GcpServiceOverrides {
-                    endpoints: std::collections::HashMap::from([(
-                        "compute".to_string(),
-                        endpoint,
-                    )]),
+                    endpoints: std::collections::HashMap::from([("compute".to_string(), endpoint)]),
                 }),
                 project_number: None,
             },
@@ -6786,4 +6806,24 @@ mod tests {
             })
         );
     }
+}
+
+/// Quota fields shared by Compute regions.get and projects.get.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCollection {
+    /// Absent quota data is distinct from zero usage.
+    pub quotas: Option<Vec<ComputeQuota>>,
+}
+
+/// Applied quota value and usage reported directly by Compute Engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeQuota {
+    /// Provider metric identity, such as N2_CPUS.
+    pub metric: String,
+    /// Applied limit; absence must not become a catalog default.
+    pub limit: Option<f64>,
+    /// Current provider-counted usage.
+    pub usage: Option<f64>,
 }

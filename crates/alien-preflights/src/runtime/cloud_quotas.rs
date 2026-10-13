@@ -28,7 +28,7 @@ impl RuntimeCheck for CloudQuotasCheck {
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
-        platform == Platform::Aws
+        matches!(platform, Platform::Aws | Platform::Gcp)
             && stack.resources.values().any(|entry| {
                 entry
                     .config
@@ -52,6 +52,25 @@ impl RuntimeCheck for CloudQuotasCheck {
         client_config: &ClientConfig,
     ) -> Result<CheckResult> {
         let mut result = CheckResult::success();
+        if stack_state.platform == Platform::Gcp {
+            let Some(config) = client_config.gcp_config() else {
+                result.add_warning("GCP quota checks could not find target credentials".into());
+                result.status = Some(CheckStatus::Unknown);
+                return Ok(result);
+            };
+            let compute =
+                alien_gcp_clients::ComputeClient::new(reqwest::Client::new(), config.clone());
+            super::gcp_compute::check(
+                stack,
+                stack_state,
+                &config.project_id,
+                &config.region,
+                &compute,
+                &mut result,
+            )
+            .await;
+            return Ok(result);
+        }
         let Some(config) = client_config.aws_config() else {
             result.add_warning("AWS quota checks could not find target credentials".into());
             result.status = Some(CheckStatus::Unknown);
