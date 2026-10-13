@@ -1,0 +1,6 @@
+Deploying q5-vpc to aws
+deployment step loop failed
+Cause:
+  - Deployment failed: 1 resource error(s), 0 interrupted, 1 total
+Failed resources:
+  - default-network: Resource configuration validation failed: Creating the VPC failed 3 times; retry to try again
