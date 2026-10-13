@@ -62,7 +62,11 @@ fn network_quota_error(
     if let Some(CloudClientErrorData::QuotaExceeded { message }) = &error.error {
         let message = format!(
             "{} ({}, {}): {}. Request an increase: {}",
-            quota.name, quota.provider_id, quota.scope, message, quota.increase_url,
+            quota.name,
+            quota.provider_id,
+            quota.scope,
+            message.trim_end_matches('.'),
+            quota.increase_url,
         );
         error
             .context(ErrorData::CloudQuotaExceeded { quota, message })

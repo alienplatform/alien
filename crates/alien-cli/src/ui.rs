@@ -368,7 +368,8 @@ pub(crate) fn failed_resources_from_context(context: Option<&Value>) -> Vec<Stri
 }
 
 /// Walk the source chain of a serialized AlienError to find the root cause message.
-/// Prefers the deepest non-internal error; falls back to the deepest error overall.
+/// Keeps mapped quota guidance; otherwise prefers the deepest non-internal error.
+/// Falls back to the deepest error overall.
 pub(crate) fn root_cause_message(error: &Value) -> Option<String> {
     let mut deepest_non_internal: Option<&str> = None;
     let mut deepest: Option<&str> = None;
@@ -382,6 +383,13 @@ pub(crate) fn root_cause_message(error: &Value) -> Option<String> {
             .unwrap_or(true);
 
         if let Some(m) = msg {
+            // The mapped error adds the provider quota ID, scope and increase link.
+            // Its raw provider source has less actionable information.
+            if !is_internal
+                && current.get("code").and_then(Value::as_str) == Some("CLOUD_QUOTA_EXCEEDED")
+            {
+                return Some(m.to_owned());
+            }
             deepest = Some(m);
             if !is_internal {
                 deepest_non_internal = Some(m);
@@ -409,6 +417,20 @@ mod event_tests {
     };
     use alien_error::Context;
     use std::collections::HashMap;
+
+    #[test]
+    fn saved_quota_race_retains_provider_identity_and_increase_link() {
+        let error: AlienError =
+            serde_json::from_str(include_str!("fixtures/aws-igw-quota-race-error.json"))
+                .expect("redacted real deployment failure");
+        let rendered = render_human_error(&error);
+        assert!(rendered.contains("default-network: Cloud quota exceeded: Internet gateways per Region (L-A4707A72, eu-west-1)"), "{rendered}");
+        assert!(rendered.contains("Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72"), "{rendered}");
+        assert!(
+            !rendered.contains("Failed to create Internet Gateway"),
+            "{rendered}"
+        );
+    }
 
     /// `deployments get` renders the stored deployment error. A deployment failure's own
     /// message only counts the failed resources, so each one is listed with its root cause.
