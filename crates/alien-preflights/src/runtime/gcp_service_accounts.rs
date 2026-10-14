@@ -1,6 +1,10 @@
 //! Project service-account inventory and applied quota reads.
 
-use crate::quotas::QuotaObservation;
+use crate::quotas::{QuotaDemand, QuotaObservation};
+use alien_core::{
+    ArtifactRegistry, ComputeCluster, Platform, RemoteBindings, RemoteStackManagement,
+    ResourceStatus, ServiceAccount, Stack, StackState,
+};
 use alien_gcp_clients::{service_usage_quotas::QuotaMetric, IamApi, ServiceUsageQuotasApi};
 use std::collections::BTreeSet;
 
@@ -27,6 +31,69 @@ pub fn service_account_limit(info: &QuotaMetric) -> Option<f64> {
     }
     let value = bucket.effective_limit.as_deref()?.parse::<u64>().ok()?;
     (value <= (1_u64 << 53)).then_some(value as f64)
+}
+
+/// Count accounts created by desired resources. Credit only identities present in
+/// both stored state and the complete project inventory. Resource removal cannot
+/// fund a create: deletion may happen later. Partial or incompatible state is
+/// unknown rather than a reason to block an update with inflated demand.
+pub fn service_account_demand(
+    stack: &Stack,
+    state: &StackState,
+    emails: &BTreeSet<String>,
+) -> Option<QuotaDemand> {
+    let mut demand = QuotaDemand {
+        peak: 0.0,
+        held: 0.0,
+    };
+    let mut claimed = BTreeSet::new();
+    for (id, entry) in &stack.resources {
+        let fields: &[&str] = if entry.config.downcast_ref::<ArtifactRegistry>().is_some() {
+            &["pullServiceAccountEmail", "pushServiceAccountEmail"]
+        } else if entry.config.downcast_ref::<ServiceAccount>().is_some()
+            || entry
+                .config
+                .downcast_ref::<RemoteStackManagement>()
+                .is_some()
+            || entry.config.downcast_ref::<RemoteBindings>().is_some()
+            || entry.config.downcast_ref::<ComputeCluster>().is_some()
+        {
+            &["serviceAccountEmail"]
+        } else {
+            continue;
+        };
+        demand.peak += fields.len() as f64;
+        let Some(current) = state.resources.get(id) else {
+            continue;
+        };
+        if current.status == ResourceStatus::Deleted {
+            continue;
+        }
+        if current.resource_type != entry.config.resource_type().as_ref()
+            || current
+                .controller_platform
+                .is_some_and(|p| p != Platform::Gcp)
+        {
+            return None;
+        }
+        let Some(internal) = &current.internal_state else {
+            if current.status == ResourceStatus::Pending && current.outputs.is_none() {
+                continue;
+            }
+            return None;
+        };
+        let internal = internal.as_object()?;
+        for field in fields {
+            // An absent identity in a controller that has started may mean a
+            // successful create whose response was not persisted yet.
+            let email = internal.get(*field)?.as_str()?;
+            if !emails.contains(email) || !claimed.insert(email) {
+                return None;
+            }
+            demand.held += 1.0;
+        }
+    }
+    Some(demand)
 }
 
 /// Read every page, including continuations after empty pages. Count all listed
@@ -95,11 +162,159 @@ pub async fn service_account_observation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{ResourceLifecycle, StackResourceState};
     use alien_gcp_clients::{
         iam::{ListServiceAccountsResponse, MockIamApi},
         service_usage_quotas::MockServiceUsageQuotasApi,
     };
     use serde_json::{json, Value};
+
+    fn identity_stack() -> Stack {
+        Stack::new("quota-test".into())
+            .add(
+                ServiceAccount::new("sa".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteBindings::new("bindings".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ComputeCluster::new("cluster".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                ArtifactRegistry::new("registry".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+    }
+
+    fn identity_state(stack: &Stack) -> (StackState, BTreeSet<String>) {
+        let mut state = StackState::with_resource_prefix(Platform::Gcp, "q5-demand".into());
+        let mut emails = BTreeSet::new();
+        for (id, entry) in &stack.resources {
+            let mut resource = StackResourceState::new_pending(
+                entry.config.resource_type().as_ref().into(),
+                entry.config.clone(),
+                Some(entry.lifecycle),
+                vec![],
+            );
+            resource.status = ResourceStatus::Running;
+            resource.controller_platform = Some(Platform::Gcp);
+            let fields: &[&str] = if id == "registry" {
+                &["pullServiceAccountEmail", "pushServiceAccountEmail"]
+            } else {
+                &["serviceAccountEmail"]
+            };
+            let mut internal = serde_json::Map::new();
+            for field in fields {
+                let email = format!("{id}-{field}@test.iam.gserviceaccount.com");
+                emails.insert(email.clone());
+                internal.insert((*field).into(), json!(email));
+            }
+            resource.internal_state = Some(Value::Object(internal));
+            state.resources.insert(id.clone(), resource);
+        }
+        (state, emails)
+    }
+
+    #[test]
+    fn all_five_creators_count_six_accounts_and_updates_credit_observed_identities() {
+        let stack = identity_stack();
+        let empty = StackState::with_resource_prefix(Platform::Gcp, "q5-demand".into());
+        let demand = service_account_demand(&stack, &empty, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            (demand.peak, demand.held, demand.additional()),
+            (6.0, 0.0, Some(6.0))
+        );
+        let (state, emails) = identity_state(&stack);
+        let demand = service_account_demand(&stack, &state, &emails).unwrap();
+        assert_eq!(
+            (demand.peak, demand.held, demand.additional()),
+            (6.0, 6.0, Some(0.0))
+        );
+        let mut updated = stack;
+        updated.resources.shift_remove("registry");
+        let demand = service_account_demand(&updated, &state, &emails).unwrap();
+        assert_eq!(
+            (demand.peak, demand.held, demand.additional()),
+            (4.0, 4.0, Some(0.0))
+        );
+    }
+
+    #[test]
+    fn deleted_and_unstarted_resources_need_new_accounts_without_removed_resource_credit() {
+        let stack = identity_stack();
+        let (mut state, emails) = identity_state(&stack);
+        state.resources.get_mut("sa").unwrap().status = ResourceStatus::Deleted;
+        let registry = state.resources.get_mut("registry").unwrap();
+        registry.status = ResourceStatus::Pending;
+        registry.internal_state = None;
+        let demand = service_account_demand(&stack, &state, &emails).unwrap();
+        assert_eq!(
+            (demand.peak, demand.held, demand.additional()),
+            (6.0, 3.0, Some(3.0))
+        );
+    }
+
+    #[test]
+    fn partial_foreign_missing_and_duplicate_held_identities_are_unknown() {
+        let stack = identity_stack();
+        let (original, emails) = identity_state(&stack);
+        for change in [
+            "missing",
+            "null",
+            "malformed",
+            "foreign",
+            "type",
+            "partial",
+            "duplicate",
+        ] {
+            let mut state = original.clone();
+            let duplicate = state.resources["management"]
+                .internal_state
+                .as_ref()
+                .unwrap()["serviceAccountEmail"]
+                .clone();
+            let resource = state.resources.get_mut("sa").unwrap();
+            match change {
+                "missing" => resource.internal_state = None,
+                "null" => resource.internal_state = Some(json!({"serviceAccountEmail":null})),
+                "malformed" => resource.internal_state = Some(json!([])),
+                "foreign" => resource.controller_platform = Some(Platform::Aws),
+                "type" => resource.resource_type = "storage".into(),
+                "partial" => {
+                    resource.internal_state =
+                        Some(json!({"serviceAccountEmail":"absent@test.iam.gserviceaccount.com"}))
+                }
+                "duplicate" => {
+                    resource.internal_state = Some(json!({"serviceAccountEmail":duplicate}))
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                service_account_demand(&stack, &state, &emails).is_none(),
+                "{change}"
+            );
+        }
+        let mut state = original;
+        state
+            .resources
+            .get_mut("registry")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("pushServiceAccountEmail");
+        assert!(service_account_demand(&stack, &state, &emails).is_none());
+    }
 
     fn account(id: &str, email: &str) -> Value {
         json!({"projectId":"test", "name":format!("projects/test/serviceAccounts/{email}"), "uniqueId":id, "email":email})
