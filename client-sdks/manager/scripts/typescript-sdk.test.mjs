@@ -99,3 +99,23 @@ test("manager compute settings preserve selected per-replica resources on the wi
   assert.deepEqual(JSON.parse(encoded), settings)
   assert.deepEqual(computeSettingsFromJSON(encoded), { ok: true, value: settings })
 })
+
+for (const quotaWarningOverrides of [["L-1216C47A"], []]) {
+  test(`manager SDK saves ${quotaWarningOverrides.length ? "overrides" : "an explicit clear"} without retrying`, async () => {
+    let requests = 0
+    const sdk = new AlienManager({
+      bearer: "test-token",
+      serverURL: "https://sdk-test.invalid",
+      httpClient: new HTTPClient({ fetcher: async request => {
+        requests++
+        assert.equal(request.method, "PATCH")
+        assert.equal(new URL(request.url).pathname, "/v1/deployments/deployment%2Fexample/quota-warning-overrides")
+        assert.equal(request.headers.get("Authorization"), "Bearer test-token")
+        assert.deepEqual(await request.json(), { quotaWarningOverrides })
+        return new Response(null, { status: 204 })
+      } }),
+    })
+    assert.equal(await sdk.deployments.setQuotaWarningOverrides("deployment/example", { quotaWarningOverrides }), undefined)
+    assert.equal(requests, 1)
+  })
+}

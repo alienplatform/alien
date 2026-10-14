@@ -26,6 +26,7 @@ export * from "./releaselease.js";
 export * from "./retrydeployment.js";
 export * from "./setdeploymentchannel.js";
 export * from "./setdeploymentpin.js";
+export * from "./setquotawarningoverrides.js";
 export * from "./setsecret.js";
 export * from "./signdeploymentbundle.js";
 export * from "./storecommandpayload.js";

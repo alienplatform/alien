@@ -6,6 +6,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// A deployment requested an override for an unsupported quota identity.
+    #[error(
+        code = "INVALID_QUOTA_OVERRIDE",
+        message = "Unknown quota override '{quota_id}' for {platform}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    InvalidQuotaOverride { quota_id: String, platform: String },
+
     /// The requested deployment needs choices or resources owned by setup.
     #[error(
         code = "DEPLOYMENT_SETUP_REQUIRED",

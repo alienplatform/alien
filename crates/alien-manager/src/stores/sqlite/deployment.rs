@@ -1103,6 +1103,44 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
+    async fn set_quota_warning_overrides(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        overrides: &[String],
+    ) -> Result<bool, AlienError> {
+        let Some(deployment) = self.get_deployment(caller, id).await? else {
+            return Ok(false);
+        };
+        alien_preflights::quotas::validate_warning_overrides(deployment.platform, overrides)
+            .map_err(AlienError::into_generic)?;
+        let json = serde_json::to_string(overrides)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize quota warning overrides".to_string(),
+            })?;
+
+        // Patch the current JSON in the same conditional write that checks the
+        // execution lease. A read/replace of StackSettings would lose concurrent
+        // changes (including fields this manager version does not understand).
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(
+                Deployments::StackSettings,
+                Expr::cust_with_values(
+                    "json_set(stack_settings, '$.quotaWarningOverrides', json(?))",
+                    [json],
+                ),
+            )
+            .value(Deployments::UpdatedAt, Utc::now().to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::Platform).eq(deployment.platform.as_str()))
+            .and_where(Expr::col(Deployments::LockedBy).is_null())
+            .and_where(Expr::col(Deployments::Status).is_in(["running", "preflights-failed"]))
+            .to_string(SqliteQueryBuilder);
+        Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
+    }
+
     async fn set_retry_requested(
         &self,
         _caller: &crate::auth::Subject,
@@ -2000,6 +2038,119 @@ mod gcp_project_consumer_tests {
             .await
             .expect("create GCP deployment")
             .id
+    }
+
+    #[tokio::test]
+    async fn quota_overrides_patch_only_idle_unlocked_deployments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manager.db");
+        let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
+        let store = SqliteDeploymentStore::new(db.clone());
+        let caller = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &caller,
+                CreateDeploymentGroupParams {
+                    name: "quota-overrides".into(),
+                    max_deployments: 20,
+                    setup: DeploymentGroupSetup::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let overrides = vec!["CPUS".to_string()];
+        for (index, (status, locked, accepted)) in [
+            ("running", false, true),
+            ("preflights-failed", false, true),
+            ("preflights-failed", true, false),
+            ("running", true, false),
+            ("pending", false, false),
+            ("initial-setup", false, false),
+            ("update-pending", false, false),
+            ("provisioning", false, false),
+            ("updating", false, false),
+            ("update-failed", false, false),
+            ("deleting", false, false),
+            ("deleted", false, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = create_gcp_deployment(
+                &store,
+                &group.id,
+                &format!("case-{index}"),
+                SHARED_PROJECT,
+                status,
+            )
+            .await;
+            // Unknown future settings must survive even though StackSettings
+            // would discard them during deserialization.
+            let original = serde_json::json!({
+                "futureSetting": {"keep": true},
+                "quotaWarningOverrides": [],
+            });
+            let sql = sea_query::Query::update()
+                .table(super::Deployments::Table)
+                .value(super::Deployments::StackSettings, original.to_string())
+                .value(super::Deployments::LockedBy, locked.then_some("owner"))
+                .and_where(sea_query::Expr::col(super::Deployments::Id).eq(id.as_str()))
+                .to_string(sea_query::SqliteQueryBuilder);
+            db.execute(&sql).await.unwrap();
+            assert_eq!(
+                store
+                    .set_quota_warning_overrides(&caller, &id, &overrides)
+                    .await
+                    .unwrap(),
+                accepted,
+                "{status}, locked={locked}"
+            );
+            let read_settings = || async {
+                let sql = sea_query::Query::select()
+                    .column(super::Deployments::StackSettings)
+                    .from(super::Deployments::Table)
+                    .and_where(sea_query::Expr::col(super::Deployments::Id).eq(id.as_str()))
+                    .to_string(sea_query::SqliteQueryBuilder);
+                let conn = db.conn().lock().await;
+                let mut rows = conn.query(&sql, ()).await.unwrap();
+                let row = rows.next().await.unwrap().unwrap();
+                serde_json::from_str::<serde_json::Value>(&row.get::<String>(0).unwrap()).unwrap()
+            };
+            let mut expected = original.clone();
+            if accepted {
+                expected["quotaWarningOverrides"] = serde_json::json!(overrides);
+            }
+            assert_eq!(read_settings().await, expected);
+            let error = store
+                .set_quota_warning_overrides(&caller, &id, &["L-1216C47A".into()])
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "INVALID_QUOTA_OVERRIDE");
+            assert_eq!(
+                read_settings().await,
+                expected,
+                "invalid IDs cannot change settings"
+            );
+            assert_eq!(
+                store
+                    .set_quota_warning_overrides(&caller, &id, &[])
+                    .await
+                    .unwrap(),
+                accepted
+            );
+            assert_eq!(
+                read_settings().await,
+                original,
+                "explicit clear preserves all other settings"
+            );
+            let record = store.get_deployment(&caller, &id).await.unwrap().unwrap();
+            assert_eq!(record.status, status);
+            assert!(!record.retry_requested, "saving must not implicitly retry");
+        }
+        assert!(!store
+            .set_quota_warning_overrides(&caller, "missing", &overrides)
+            .await
+            .unwrap());
     }
 
     /// The question a GCP revoke asks before removing a project's shared Cloud Run grant.

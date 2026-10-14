@@ -60,6 +60,7 @@ impl Modify for BearerSecurity {
         crate::routes::deployments::get_deployment_info,
         crate::routes::deployments::delete_deployment,
         crate::routes::deployments::retry_deployment,
+        crate::routes::deployments::set_quota_warning_overrides,
         crate::routes::deployments::redeploy,
         // Releases
         crate::routes::releases::create_release,
@@ -91,6 +92,7 @@ impl Modify for BearerSecurity {
     components(schemas(
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
+        crate::routes::deployments::SetQuotaWarningOverridesRequest,
         crate::routes::deployments::CreateDeploymentResponse,
         crate::routes::deployments::DeploymentResponse,
         crate::routes::deployments::DeploymentGroupMinimal,

@@ -149,6 +149,17 @@ pub async fn status_command(
             None => fetch_remote_deployment_info(&token, &manager_url, &deployment_id).await?,
         };
 
+    let settings: alien_core::StackSettings = deployment
+        .stack_settings
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize deployment stack settings".into(),
+        })?
+        .unwrap_or_default();
+
     if args.json {
         let resources = deployment_info
             .resources
@@ -170,6 +181,7 @@ pub async fn status_command(
             "platform": deployment.platform,
             "managerUrl": manager_url,
             "status": deployment.status,
+            "quotaWarningOverrides": settings.quota_warning_overrides,
             "currentReleaseId": deployment.current_release_id,
             "desiredReleaseId": deployment.desired_release_id,
             "error": deployment.error,
@@ -190,6 +202,12 @@ pub async fn status_command(
     output::status("Platform:", &deployment.platform.to_string());
     output::status("Manager:", &manager_url);
     output::status("Status:", &deployment.status);
+    if !settings.quota_warning_overrides.is_empty() {
+        output::status(
+            "Quota warning overrides:",
+            &settings.quota_warning_overrides.join(", "),
+        );
+    }
 
     if let Some(ref release_id) = deployment.current_release_id {
         output::status("Current Release:", release_id);

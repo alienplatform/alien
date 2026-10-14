@@ -1902,6 +1902,14 @@ export type TargetDeploymentStackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: TargetDeploymentTelemetry | undefined;
@@ -4780,6 +4788,7 @@ export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   telemetry: TargetDeploymentTelemetry$inboundSchema.optional(),
   updates: TargetDeploymentUpdates$inboundSchema.optional(),
 });

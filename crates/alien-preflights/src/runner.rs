@@ -98,6 +98,10 @@ impl PreflightRunner {
         client_config: &ClientConfig,
         platform: Platform,
     ) -> Result<PreflightSummary> {
+        crate::quotas::validate_warning_overrides(
+            platform,
+            &config.stack_settings.quota_warning_overrides,
+        )?;
         info!("Running runtime checks for platform {:?}", platform);
 
         let checks = self.registry.get_runtime_checks(stack, platform);
@@ -115,6 +119,10 @@ impl PreflightRunner {
                     platform: Some(platform.to_string()),
                 })?;
 
+            crate::quotas::apply_warning_overrides(
+                &mut result,
+                &config.stack_settings.quota_warning_overrides,
+            );
             result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
@@ -359,6 +367,13 @@ impl PreflightRunner {
         setup_update_authorization: Option<&alien_core::SetupUpdateAuthorization>,
         setup_authority: Option<alien_core::InitialSetupAuthority>,
     ) -> Result<(Stack, PreflightSummary, bool)> {
+        // Invalid deployment settings must not be hidden by setup or
+        // compatibility failures encountered while preparing the target.
+        crate::quotas::validate_warning_overrides(
+            stack_state.platform,
+            &config.stack_settings.quota_warning_overrides,
+        )?;
+
         // Updates reuse saved allocations across releases. Ignore entries for
         // containers no longer declared, including ones removed several releases
         // ago. Fresh installs and planning still reject unknown container IDs.
@@ -630,6 +645,41 @@ mod setup_update_authorization_tests {
             setup_fingerprint: "fingerprint".to_string(),
             setup_fingerprint_version: 1,
         }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn invalid_quota_override_rejected_even_without_registered_checks() {
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings {
+                quota_warning_overrides: vec!["L-TYPO".into()],
+                ..Default::default()
+            })
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
+        let error = runner
+            .run_runtime_checks(
+                &empty_stack(),
+                &StackState::new(Platform::Aws),
+                &config,
+                &ClientConfig::Local {
+                    state_directory: "/unused".into(),
+                },
+                Platform::Aws,
+            )
+            .await
+            .expect_err(
+                "invalid settings cannot hide behind an empty stack or missing credentials",
+            );
+        assert!(error.to_string().contains("L-TYPO"));
+        assert!(error.to_string().contains("Unknown quota override"));
     }
 
     #[cfg(feature = "runtime-checks")]

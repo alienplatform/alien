@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,14 @@ pub struct CreateDeploymentRequest {
     /// deployment step, like the values a setup collects.
     #[serde(default)]
     pub input_values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Replace the saved quota warning overrides. An empty list explicitly clears them.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetQuotaWarningOverridesRequest {
+    pub quota_warning_overrides: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +293,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
+        .route(
+            "/v1/deployments/{id}/quota-warning-overrides",
+            patch(set_quota_warning_overrides),
+        )
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
 }
 
@@ -416,6 +428,15 @@ async fn create_deployment(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+
+    if let Some(settings) = &req.stack_settings {
+        if let Err(error) = alien_preflights::quotas::validate_warning_overrides(
+            req.platform,
+            &settings.quota_warning_overrides,
+        ) {
+            return error.into_response();
+        }
+    }
 
     // Determine deployment group from the subject's scope or the explicit
     // request body. DG-scoped subjects use their own group; workspace/project
@@ -940,6 +961,63 @@ async fn delete_deployment(
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
+/// Save settings only; retrying a failed deployment remains an explicit operation.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    patch,
+    path = "/v1/deployments/{id}/quota-warning-overrides",
+    tag = "deployments",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Deployment ID")),
+    request_body = SetQuotaWarningOverridesRequest,
+    responses(
+        (status = 204, description = "Overrides saved without scheduling execution"),
+        (status = 400, description = "Invalid quota identity or unsupported store"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 409, description = "Deployment is active or locked"),
+    )
+))]
+async fn set_quota_warning_overrides(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SetQuotaWarningOverridesRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot update quota warning overrides").into_response();
+    }
+    if let Err(e) = alien_preflights::quotas::validate_warning_overrides(
+        deployment.platform,
+        &req.quota_warning_overrides,
+    ) {
+        return e.into_response();
+    }
+    // The store makes the eligibility check and JSON patch in one write. Do not
+    // check status here and then overwrite settings after a manager claims work.
+    match state
+        .deployment_store
+        .set_quota_warning_overrides(&subject, &id, &req.quota_warning_overrides)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => {
+            alien_error::AlienError::new(ErrorData::QuotaOverridesNotSaved { deployment_id: id })
+                .into_response()
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/deployments/{id}/retry",
@@ -1318,10 +1396,16 @@ mod tests {
                 .await
                 .expect("HTTP route should respond");
             let status = response.status();
-            let json = response
-                .json()
+            let bytes = response
+                .bytes()
                 .await
-                .expect("HTTP response should contain JSON");
+                .expect("HTTP response body should load");
+            let json = if status == StatusCode::NO_CONTENT {
+                assert!(bytes.is_empty(), "204 response must be empty");
+                serde_json::Value::Null
+            } else {
+                serde_json::from_slice(&bytes).expect("HTTP response should contain JSON")
+            };
             server.abort();
             assert!(server.await.expect_err("server should stop").is_cancelled());
             return (status, json);
@@ -1374,6 +1458,151 @@ mod tests {
             true,
         )
         .await
+    }
+
+    fn override_request(overrides: &[&str]) -> Request<Body> {
+        Request::builder()
+            .method("PATCH")
+            .uri("/v1/deployments/deployment-1/quota-warning-overrides")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "quotaWarningOverrides": overrides,
+                })
+                .to_string(),
+            ))
+            .expect("override request should build")
+    }
+
+    #[tokio::test]
+    async fn override_patch_saves_clears_and_preserves_atomic_refusal_over_http() {
+        for (overrides, saved, expected) in [
+            (vec!["L-1216C47A"], true, StatusCode::NO_CONTENT),
+            (vec![], true, StatusCode::NO_CONTENT),
+            (vec!["L-1216C47A"], false, StatusCode::CONFLICT),
+        ] {
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .returning(|_, _| Ok(Some(deployment_record())));
+            let expected_ids: Vec<String> = overrides.iter().map(|id| id.to_string()).collect();
+            store
+                .expect_set_quota_warning_overrides()
+                .withf(move |_, id, ids| id == "deployment-1" && ids == expected_ids)
+                .times(1)
+                .return_once(move |_, _, _| Ok(saved));
+            // No retry or other settings mutation is permitted by the mock.
+            let (status, body) =
+                send_with_transport(store, override_request(&overrides), true).await;
+            assert_eq!(status, expected, "{body}");
+            if !saved {
+                assert_eq!(body["code"], "QUOTA_OVERRIDES_NOT_SAVED");
+                assert_eq!(body["retryable"], false);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn override_patch_rejects_invalid_ids_missing_records_and_unsupported_stores() {
+        for (exists, quota, expected) in [
+            (true, "L-TYPO", StatusCode::BAD_REQUEST),
+            (true, "CPUS", StatusCode::BAD_REQUEST),
+            (false, "L-1216C47A", StatusCode::NOT_FOUND),
+            (true, "L-1216C47A", StatusCode::BAD_REQUEST),
+        ] {
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .return_once(move |_, _| Ok(exists.then(deployment_record)));
+            if exists && quota == "L-1216C47A" {
+                store
+                    .expect_set_quota_warning_overrides()
+                    .times(1)
+                    .return_once(|_, _, _| {
+                        Err(ErrorData::bad_request(
+                            "This manager cannot update saved quota warning overrides",
+                        )
+                        .into_generic())
+                    });
+            }
+            let (status, body) = send_with_transport(store, override_request(&[quota]), true).await;
+            assert_eq!(status, expected, "{body}");
+            if quota != "L-1216C47A" {
+                assert_eq!(body["code"], "INVALID_QUOTA_OVERRIDE");
+            }
+        }
+    }
+
+    struct OverrideViewer;
+
+    #[async_trait]
+    impl crate::traits::AuthValidator for OverrideViewer {
+        async fn validate(&self, _: &http::HeaderMap) -> Result<Option<Subject>, AlienError> {
+            Ok(Some(Subject {
+                kind: crate::auth::SubjectKind::ServiceAccount {
+                    id: "viewer".into(),
+                },
+                workspace_id: "default".into(),
+                scope: crate::auth::Scope::Deployment {
+                    project_id: "default".into(),
+                    deployment_id: "deployment-1".into(),
+                },
+                role: crate::auth::Role::DeploymentViewer,
+                bearer_token: "test-token".into(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn override_patch_requires_update_authority_before_validation_or_writes() {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_get_deployment()
+            .times(1)
+            .returning(|_, _| Ok(Some(deployment_record())));
+        let (status, body) = send_with_validator(
+            store,
+            Arc::new(OverrideViewer),
+            override_request(&["L-TYPO"]),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "FORBIDDEN");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_unknown_quota_overrides_before_store_access() {
+        for (platform, quota_id) in [("aws", "L-TYPO"), ("gcp", "L-1216C47A")] {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/deployments")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "q5-override",
+                        "platform": platform,
+                        "deploymentGroupId": "group-1",
+                        "stackSettings": { "quotaWarningOverrides": [quota_id] }
+                    })
+                    .to_string(),
+                ))
+                .expect("create request should build");
+            // No store expectations: invalid settings must not read or create a deployment.
+            let (status, body) =
+                send_with_transport(MockDeploymentStore::new(), request, true).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["code"], "INVALID_QUOTA_OVERRIDE", "{body}");
+            assert_eq!(body["retryable"], false, "{body}");
+            assert!(body["message"]
+                .as_str()
+                .expect("message")
+                .contains(quota_id));
+        }
     }
 
     #[tokio::test]

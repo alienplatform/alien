@@ -179,6 +179,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 * [getDeploymentInfo](docs/sdks/deployments/README.md#getdeploymentinfo)
 * [getDeploymentLogs](docs/sdks/deployments/README.md#getdeploymentlogs)
 * [setDeploymentPin](docs/sdks/deployments/README.md#setdeploymentpin)
+* [setQuotaWarningOverrides](docs/sdks/deployments/README.md#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 * [redeploy](docs/sdks/deployments/README.md#redeploy)
 * [retryDeployment](docs/sdks/deployments/README.md#retrydeployment)
 * [getDeploymentRouting](docs/sdks/deployments/README.md#getdeploymentrouting)
@@ -299,6 +300,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`deploymentsRetryDeployment`](docs/sdks/deployments/README.md#retrydeployment)
 - [`deploymentsSetDeploymentChannel`](docs/sdks/deployments/README.md#setdeploymentchannel)
 - [`deploymentsSetDeploymentPin`](docs/sdks/deployments/README.md#setdeploymentpin)
+- [`deploymentsSetQuotaWarningOverrides`](docs/sdks/deployments/README.md#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 - [`deploymentsSignDeploymentBundle`](docs/sdks/deployments/README.md#signdeploymentbundle)
 - [`healthHealth`](docs/sdks/health/README.md#health)
 - [`leasesAcquireLeases`](docs/sdks/leases/README.md#acquireleases) - Acquire leases for polling deployments
@@ -479,8 +481,8 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 52 methods.*
-* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 52 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 53 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 53 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>
