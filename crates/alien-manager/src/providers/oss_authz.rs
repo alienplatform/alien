@@ -1,14 +1,15 @@
 //! Default authorization policy. One workspace (`"default"`), one project
 //! (`"default"`). The matrix below is the source of truth.
 //!
-//! The Subject's `workspace_id` is always `"default"` here; we don't gate on
-//! it. Authz boils down to role × scope.
+//! The Subject's `workspace_id` is always `"default"` here; only image access,
+//! whose project comes from a [`ProjectStore`](crate::traits::ProjectStore)
+//! lookup, checks it. Otherwise authz boils down to role × scope.
 
 use crate::auth::remote_binding_capability;
 use crate::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use crate::traits::deployment_store::{DeploymentGroupRecord, DeploymentRecord};
 use crate::traits::release_store::ReleaseRecord;
-use crate::traits::TelemetrySignal;
+use crate::traits::{ProjectRecord, TelemetrySignal};
 use alien_core::remote_bindings::RemoteBindingKind;
 
 /// OSS policy: any authenticated token can read any release / deployment-group
@@ -17,6 +18,29 @@ use alien_core::remote_bindings::RemoteBindingKind;
 pub struct OssAuthz;
 
 impl OssAuthz {
+    /// The handler resolves workspace ownership before this role and scope check.
+    fn can_write_image_repository(s: &Subject, project_id: &str) -> bool {
+        if !Self::can_act_on_project(s, project_id) {
+            return false;
+        }
+        let scope_covers_project = match &s.scope {
+            Scope::Workspace => true,
+            Scope::Project { project_id: bound }
+            | Scope::DeploymentGroup {
+                project_id: bound, ..
+            } => bound == project_id,
+            _ => false,
+        };
+        scope_covers_project
+            && matches!(
+                s.role,
+                Role::WorkspaceAdmin
+                    | Role::WorkspaceMember
+                    | Role::ProjectDeveloper
+                    | Role::DeploymentGroupDeployer
+            )
+    }
+
     /// True if the subject has workspace-level write authority. In OSS this
     /// covers the legacy "admin" token (mapped to `WorkspaceAdmin`) and any
     /// workspace-scoped service account with a write role.
@@ -321,21 +345,31 @@ impl Authz for OssAuthz {
 
     // -- Registry proxy ----------------------------------------------------
 
-    fn can_push_image(&self, s: &Subject, project_id: &str, _repo_name: &str) -> bool {
-        if !Self::can_act_on_project(s, project_id) {
+    /// Image pulls belong to the roles that build and run images: workspace writers, the project's
+    /// developers, and a deployment's own token. Viewers and capability tokens pull nothing.
+    fn can_pull_image(&self, s: &Subject, project: &ProjectRecord, _repo_name: &str) -> bool {
+        if s.workspace_id != project.workspace_id {
             return false;
         }
-        matches!(
-            s.role,
-            Role::WorkspaceAdmin
-                | Role::WorkspaceMember
-                | Role::ProjectDeveloper
-                | Role::DeploymentGroupDeployer
-        )
+        match &s.scope {
+            Scope::Workspace => Self::is_workspace_writer(s),
+            Scope::Project { project_id } => {
+                project_id == &project.id && Self::is_project_writer(s)
+            }
+            Scope::Deployment { .. } => s.role == Role::DeploymentManager,
+            _ => false,
+        }
+    }
+
+    fn can_push_image(&self, s: &Subject, project: &ProjectRecord, _repo_name: &str) -> bool {
+        if s.workspace_id != project.workspace_id || !Self::can_act_on_project(s, &project.id) {
+            return false;
+        }
+        Self::can_write_image_repository(s, &project.id)
     }
 
     fn can_provision_image_repository(&self, s: &Subject, project_id: &str) -> bool {
-        self.can_push_image(s, project_id, "")
+        Self::can_write_image_repository(s, project_id)
     }
 
     fn can_act_on_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
@@ -364,6 +398,13 @@ mod tests {
     use super::*;
     use crate::auth::{CommandCapability, GatewayLogSource, SubjectKind, TelemetryCapability};
     use chrono::Utc;
+
+    fn default_project() -> ProjectRecord {
+        ProjectRecord {
+            id: "default".to_string(),
+            workspace_id: "default".to_string(),
+        }
+    }
 
     fn admin() -> Subject {
         Subject {
@@ -574,7 +615,8 @@ mod tests {
                 ),
             };
             assert!(!OssAuthz.can_read_command_context(&subject, &command));
-            assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
+            assert!(!OssAuthz.can_push_image(&subject, &default_project(), "repo"));
+            assert!(!OssAuthz.can_pull_image(&subject, &default_project(), "repo"));
             assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
         }
     }
@@ -851,7 +893,8 @@ mod tests {
         assert!(!OssAuthz.can_read_release(&gateway, &release()));
         assert!(!OssAuthz.can_read_deployment(&gateway, &dep));
         assert!(!OssAuthz.can_sync_deployment(&gateway, &dep));
-        assert!(!OssAuthz.can_push_image(&gateway, "default", "repo"));
+        assert!(!OssAuthz.can_push_image(&gateway, &default_project(), "repo"));
+        assert!(!OssAuthz.can_pull_image(&gateway, &default_project(), "repo"));
     }
 
     #[test]
@@ -887,7 +930,8 @@ mod tests {
             assert!(!authz.can_sync_deployment(subject, &d));
             assert!(!authz.can_dispatch_command(subject, &d));
             assert!(!authz.can_create_release(subject, "default"));
-            assert!(!authz.can_push_image(subject, "default", "repo"));
+            assert!(!authz.can_push_image(subject, &default_project(), "repo"));
+            assert!(!authz.can_pull_image(subject, &default_project(), "repo"));
             assert!(!authz.can_create_deployment_group(subject, "default"));
         }
     }

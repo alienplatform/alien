@@ -202,6 +202,18 @@ pub enum ErrorData {
     )]
     Unauthorized { reason: String },
 
+    /// The credentials could not be checked right now (for example the
+    /// service that verifies them is unreachable). The same request can
+    /// succeed later; this says nothing about whether the credentials are valid.
+    #[error(
+        code = "AUTHENTICATION_UNAVAILABLE",
+        message = "Could not verify the credentials right now; retry the request",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    AuthenticationUnavailable,
+
     /// Forbidden - insufficient permissions
     #[error(
         code = "FORBIDDEN",

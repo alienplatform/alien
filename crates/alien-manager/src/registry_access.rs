@@ -254,6 +254,27 @@ pub async fn reconcile_registry_access(
     project_id: &str,
     state: &mut DeploymentState,
 ) {
+    reconcile_registry_access_with_proxy()
+        .bindings_provider(bindings_provider)
+        .target_bindings_providers(target_bindings_providers)
+        .deployment_id(deployment_id)
+        .project_id(project_id)
+        .state(state)
+        .call()
+        .await;
+}
+
+/// Reconciles registry access, also recognizing worker images published through the configured
+/// manager proxy. The proxy URL must come from manager configuration, never from a release.
+#[bon::builder]
+pub async fn reconcile_registry_access_with_proxy(
+    bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    deployment_id: &str,
+    project_id: &str,
+    state: &mut DeploymentState,
+    proxy_url: Option<&str>,
+) {
     let environment_info = match &state.environment_info {
         Some(env_info) => env_info,
         None => return,
@@ -295,8 +316,15 @@ pub async fn reconcile_registry_access(
         }
     };
 
-    let (repo_ids, refused_any) = repository_access(artifact_registry.as_ref(), state, project_id);
+    let (repo_ids, refused_any) =
+        repository_access_with_proxy(artifact_registry.as_ref(), state, project_id, proxy_url);
     if repo_ids.is_empty() {
+        if refused_any {
+            state
+                .runtime_metadata
+                .get_or_insert_with(RuntimeMetadata::default)
+                .registry_access_granted = false;
+        }
         return;
     }
     let sandbox_declared = declares_sandbox(state);
@@ -342,14 +370,13 @@ pub async fn reconcile_registry_access(
     opened.sort();
     opened.dedup();
     let granted_everything =
-        all_complete && !refused_any && repo_ids.iter().all(|repo_id| opened.contains(repo_id));
+        all_complete && repo_ids.iter().all(|repo_id| opened.contains(repo_id));
     let rm = state
         .runtime_metadata
         .get_or_insert_with(RuntimeMetadata::default);
     // The record says what the policy now holds, so an unchanged one is not rewritten every tick.
-    // The marker says the deployment has everything it asked for, which a refused reference denies
-    // until a later release names a repository this project owns — and that release changes what
-    // is needed, so the comparison above grants it.
+    // The marker tracks completion of the allowed grants, not image validation. A refused
+    // reference must not make an unchanged, successful grant write again on every tick.
     rm.registry_access = Some(RegistryAccess {
         repositories: opened,
         service_types: needed.service_types,
@@ -534,6 +561,35 @@ pub async fn cleanup_deleted_registry_access(
             derived
         }
     });
+    // Older worker grants matched the prefix alone. Keep that derivation for cleanup: a policy
+    // write can precede the save of its record, and the new grant rule must not strand that write.
+    if matches!(platform, Platform::Aws) {
+        let prefix = artifact_registry.upstream_repository_prefix();
+        if !prefix.is_empty() {
+            let mut collect = |stack: &Stack| {
+                for (_, entry) in stack.resources() {
+                    if let Some(image) = resource_image_reference(entry, SandboxImageSource::None) {
+                        if let Some(repository) = ecr_repository_from_image(image, &prefix) {
+                            repo_ids.push(repository);
+                        }
+                    }
+                }
+            };
+            if let Some(release) = &state.current_release {
+                collect(&release.stack);
+            }
+            if let Some(release) = &state.target_release {
+                collect(&release.stack);
+            }
+            if let Some(stack) = state
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.prepared_stack.as_ref())
+            {
+                collect(stack);
+            }
+        }
+    }
     // GAR binds IAM on the registry itself and ignores the repository, so a GCP grant is always
     // named by the prefix even when nothing else names it.
     if repo_ids.is_empty() && recorded_grant && matches!(platform, Platform::Gcp) {
@@ -666,12 +722,20 @@ fn repository_ids_for_access(
     repository_access(artifact_registry, state, project_id).0
 }
 
-/// The repositories to grant, and whether any sandbox base image was refused as not this
-/// project's.
+/// The repositories to grant, and whether any image was refused as not this project's.
 fn repository_access(
     artifact_registry: &dyn ArtifactRegistry,
     state: &DeploymentState,
     project_id: &str,
+) -> (Vec<String>, bool) {
+    repository_access_with_proxy(artifact_registry, state, project_id, None)
+}
+
+fn repository_access_with_proxy(
+    artifact_registry: &dyn ArtifactRegistry,
+    state: &DeploymentState,
+    project_id: &str,
+    proxy_url: Option<&str>,
 ) -> (Vec<String>, bool) {
     let prefix = artifact_registry.upstream_repository_prefix();
     if prefix.is_empty() {
@@ -691,6 +755,7 @@ fn repository_access(
             &prefix,
             &artifact_registry.registry_endpoint(),
             project_id,
+            proxy_url,
             sandbox_source,
             &mut repo_ids,
         );
@@ -874,12 +939,13 @@ fn collect_image_repositories(
     prefix: &str,
     registry_endpoint: &str,
     project_id: &str,
+    proxy_url: Option<&str>,
     sandbox_source: SandboxImageSource,
     repo_ids: &mut HashSet<String>,
 ) -> bool {
     let mut refused = false;
-    // Every project shares the prefix, so a sandbox's free-text base image could otherwise name
-    // a sibling project's repository and open it to this deployment's account.
+    // Every project shares the prefix, so matching the prefix alone would open a repository
+    // outside the deployment's project. Workers and sandbox base images follow the same rule.
     let own_repository = format!("{prefix}-{project_id}");
     let mut collect = |stack: &Stack| {
         for (id, entry) in stack.resources() {
@@ -891,15 +957,25 @@ fn collect_image_repositories(
             };
             // The host too: the grant is written on this registry, so a same-path repository in
             // another account would be granted here and pulled from there.
-            let own_registry = served_by_registry(image, registry_endpoint);
-            if entry.config.downcast_ref::<Sandbox>().is_some()
-                && (repo_id != own_repository || !own_registry)
-            {
+            let is_worker = entry.config.downcast_ref::<Worker>().is_some();
+            let proxy_image = is_worker
+                && proxy_url.is_some_and(|proxy| {
+                    let host = alien_core::image_rewrite::strip_url_scheme(image)
+                        .split_once('/')
+                        .map(|(host, _)| host);
+                    host == Some(alien_core::image_rewrite::strip_url_scheme(proxy))
+                });
+            let own_registry = served_by_registry(image, registry_endpoint) || proxy_image;
+            // Standalone releases publish workers into the bare prefix; the proxy routes that
+            // repository to the canonical default project. Other projects always use a suffix.
+            let own_repository = repo_id == own_repository
+                || (is_worker && project_id == "default" && repo_id == prefix);
+            if !own_repository || !own_registry {
                 warn!(
                     resource_id = %id,
                     repository = %repo_id,
                     project_id = %project_id,
-                    "Refusing registry access for a sandbox base image outside its project's repository"
+                    "Refusing registry access for an image outside its project's repository"
                 );
                 refused = true;
                 continue;
@@ -1244,6 +1320,335 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct RecordingAwsRegistry {
+        grants: Mutex<Vec<String>>,
+        removals: Mutex<Vec<String>>,
+    }
+
+    impl alien_bindings::traits::Binding for RecordingAwsRegistry {}
+
+    #[async_trait]
+    impl ArtifactRegistry for RecordingAwsRegistry {
+        fn registry_endpoint(&self) -> String {
+            TestArtifactRegistry {
+                prefix: String::new(),
+                fail_remove: false,
+                removed_repository_is_gone: false,
+            }
+            .registry_endpoint()
+        }
+
+        fn upstream_repository_prefix(&self) -> String {
+            "alien-artifacts".to_string()
+        }
+
+        async fn create_repository(&self, _: &str) -> BindingResult<RepositoryResponse> {
+            panic!("reconciliation must not create repositories")
+        }
+
+        async fn get_repository(&self, _: &str) -> BindingResult<RepositoryResponse> {
+            panic!("worker reconciliation needs no repository lookup")
+        }
+
+        async fn add_cross_account_access(
+            &self,
+            repository: &str,
+            access: CrossAccountAccess,
+        ) -> BindingResult<()> {
+            let CrossAccountAccess::Aws(access) = access else {
+                panic!("an AWS deployment must grant AWS access");
+            };
+            assert_eq!(access.role_arns, vec!["test-management-role"]);
+            assert_eq!(
+                access.allowed_service_types,
+                vec![ComputeServiceType::Worker]
+            );
+            assert_eq!(access.account_ids.len(), 1);
+            self.grants
+                .lock()
+                .expect("grants lock")
+                .push(repository.to_string());
+            Ok(())
+        }
+
+        async fn remove_cross_account_access(
+            &self,
+            repository: &str,
+            access: CrossAccountAccess,
+        ) -> BindingResult<()> {
+            assert!(matches!(access, CrossAccountAccess::Aws(_)));
+            self.removals
+                .lock()
+                .expect("removals lock")
+                .push(repository.to_string());
+            Ok(())
+        }
+
+        async fn get_cross_account_access(
+            &self,
+            _: &str,
+        ) -> BindingResult<CrossAccountPermissions> {
+            panic!("reconciliation must use the registry grant operation")
+        }
+
+        async fn generate_credentials(
+            &self,
+            _: &str,
+            _: ArtifactRegistryPermissions,
+            _: Option<u32>,
+        ) -> BindingResult<ArtifactRegistryCredentials> {
+            panic!("AWS reconciliation must not mint pull credentials")
+        }
+
+        async fn delete_repository(&self, _: &str) -> BindingResult<()> {
+            panic!("cleanup must revoke access, not delete repositories")
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_proxy_scope_preserves_published_images_and_reuses_the_grant() {
+        for (project, repository) in [
+            (PROJECT, "alien-artifacts-prj_test"),
+            ("default", "alien-artifacts"),
+        ] {
+            let registry = Arc::new(RecordingAwsRegistry::default());
+            let provider = recording_provider(registry.clone());
+            let mut state = worker_grant_state(&format!("manager.example.com/{repository}:latest"));
+            for _ in 0..2 {
+                reconcile_registry_access_with_proxy()
+                    .bindings_provider(&provider)
+                    .target_bindings_providers(&HashMap::new())
+                    .deployment_id("deployment")
+                    .project_id(project)
+                    .state(&mut state)
+                    .proxy_url("https://manager.example.com/")
+                    .call()
+                    .await;
+            }
+            assert_eq!(
+                *registry.grants.lock().expect("grants lock"),
+                vec![repository]
+            );
+            let metadata = state.runtime_metadata.expect("metadata");
+            assert!(metadata.registry_access_granted);
+            let access = metadata.registry_access.expect("record");
+            assert_eq!(access.repositories, vec![repository]);
+            assert_eq!(access.service_types, vec!["worker"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_proxy_scope_rejects_a_different_host_and_another_projects_path() {
+        for image in [
+            "other.example.com/alien-artifacts-prj_test:latest",
+            "manager.example.com/alien-artifacts-other:latest",
+            "manager.example.com/alien-artifacts:latest",
+        ] {
+            let registry = Arc::new(RecordingAwsRegistry::default());
+            let mut state = worker_grant_state(image);
+            reconcile_registry_access_with_proxy()
+                .bindings_provider(&recording_provider(registry.clone()))
+                .target_bindings_providers(&HashMap::new())
+                .deployment_id("deployment")
+                .project_id(PROJECT)
+                .state(&mut state)
+                .proxy_url("https://manager.example.com")
+                .call()
+                .await;
+            assert!(registry.grants.lock().expect("grants lock").is_empty());
+            let metadata = state.runtime_metadata.expect("metadata");
+            assert!(!metadata.registry_access_granted);
+            assert!(metadata.registry_access.is_none());
+        }
+    }
+
+    fn recording_provider(
+        registry: Arc<RecordingAwsRegistry>,
+    ) -> Option<Arc<dyn BindingsProviderApi>> {
+        Some(Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry,
+        }))
+    }
+
+    fn worker_grant_state(image: &str) -> DeploymentState {
+        let mut state = aws_state_with_stack(worker_stack(image));
+        state.stack_state = Some(registered_stack_state("test-management-role"));
+        state
+    }
+
+    async fn assert_worker_grant(repository: &str, other_host: bool, expected: bool) {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let host = if other_host {
+            "https://other.example.com".to_string()
+        } else {
+            registry.registry_endpoint()
+        };
+        let mut state = worker_grant_state(&format!("{host}/{repository}:latest"));
+        reconcile_registry_access(
+            &recording_provider(registry.clone()),
+            &HashMap::new(),
+            "deployment",
+            PROJECT,
+            &mut state,
+        )
+        .await;
+        let grants = registry.grants.lock().expect("grants lock");
+        assert_eq!(
+            *grants,
+            if expected {
+                vec![repository.to_string()]
+            } else {
+                vec![]
+            }
+        );
+        let metadata = state.runtime_metadata.expect("metadata");
+        assert_eq!(metadata.registry_access_granted, expected);
+        assert_eq!(
+            metadata.registry_access.map(|access| access.repositories),
+            expected.then(|| vec![repository.to_string()])
+        );
+        assert!(registry.removals.lock().expect("removals lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn worker_scope_refuses_a_sibling_repository() {
+        assert_worker_grant("alien-artifacts-other", false, false).await;
+    }
+
+    #[tokio::test]
+    async fn worker_scope_grants_its_own_repository() {
+        assert_worker_grant("alien-artifacts-prj_test", false, true).await;
+    }
+
+    #[tokio::test]
+    async fn worker_scope_refuses_another_registry_host() {
+        assert_worker_grant("alien-artifacts-prj_test", true, false).await;
+    }
+
+    #[tokio::test]
+    async fn worker_scope_refuses_the_bare_prefix_for_a_named_project() {
+        assert_worker_grant("alien-artifacts", false, false).await;
+    }
+
+    #[tokio::test]
+    async fn worker_scope_checks_current_target_and_prepared_releases() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let own = format!(
+            "{}/alien-artifacts-prj_test:latest",
+            registry.registry_endpoint()
+        );
+        let other = format!(
+            "{}/alien-artifacts-other:latest",
+            registry.registry_endpoint()
+        );
+        for rejected_slot in 0..3 {
+            let mut state = worker_grant_state(if rejected_slot == 2 { &other } else { &own });
+            let release = |image: &str| ReleaseInfo {
+                release_id: None,
+                version: None,
+                description: None,
+                stack: worker_stack(image),
+            };
+            state.current_release = Some(release(if rejected_slot == 0 { &other } else { &own }));
+            state.target_release = Some(release(if rejected_slot == 1 { &other } else { &own }));
+            registry.grants.lock().expect("grants lock").clear();
+            for _ in 0..2 {
+                reconcile_registry_access(
+                    &recording_provider(registry.clone()),
+                    &HashMap::new(),
+                    "deployment",
+                    PROJECT,
+                    &mut state,
+                )
+                .await;
+            }
+            assert_eq!(
+                *registry.grants.lock().expect("grants lock"),
+                vec!["alien-artifacts-prj_test"]
+            );
+            let metadata = state.runtime_metadata.expect("metadata");
+            assert!(metadata.registry_access_granted);
+            assert_eq!(
+                metadata.registry_access.expect("record").repositories,
+                vec!["alien-artifacts-prj_test"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_scope_clears_a_completed_marker_when_the_next_release_is_refused() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state(&format!(
+            "{}/alien-artifacts-other:latest",
+            registry.registry_endpoint()
+        ));
+        let metadata = state.runtime_metadata.as_mut().expect("metadata");
+        metadata.registry_access_granted = true;
+        metadata.registry_access = Some(RegistryAccess {
+            repositories: vec!["alien-artifacts-other".to_string()],
+            service_types: vec!["worker".to_string()],
+        });
+        reconcile_registry_access(
+            &recording_provider(registry.clone()),
+            &HashMap::new(),
+            "deployment",
+            PROJECT,
+            &mut state,
+        )
+        .await;
+        assert!(registry.grants.lock().expect("grants lock").is_empty());
+        let metadata = state.runtime_metadata.as_ref().expect("metadata");
+        assert!(!metadata.registry_access_granted);
+        assert_eq!(
+            metadata
+                .registry_access
+                .as_ref()
+                .expect("record")
+                .repositories,
+            vec!["alien-artifacts-other"]
+        );
+        state.status = DeploymentStatus::Deleted;
+        cleanup_deleted_registry_access(
+            &MockDeploymentStore::new(),
+            &recording_provider(registry.clone()),
+            &HashMap::new(),
+            "deployment",
+            PROJECT,
+            &state,
+        )
+        .await
+        .expect("recorded grant must revoke");
+        assert_eq!(
+            *registry.removals.lock().expect("removals lock"),
+            vec!["alien-artifacts-other"]
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_scope_cleanup_revokes_an_older_grant_without_a_record() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state =
+            worker_grant_state("https://manager.example.com/alien-artifacts-other:latest");
+        state.status = DeploymentStatus::Deleted;
+        cleanup_deleted_registry_access(
+            &MockDeploymentStore::new(),
+            &recording_provider(registry.clone()),
+            &HashMap::new(),
+            "deployment",
+            PROJECT,
+            &state,
+        )
+        .await
+        .expect("older grant must revoke");
+        assert_eq!(
+            *registry.removals.lock().expect("removals lock"),
+            vec!["alien-artifacts-other"]
+        );
+        assert!(registry.grants.lock().expect("grants lock").is_empty());
+    }
+
     #[derive(Debug)]
     struct TestBindingsProvider {
         binding_name: &'static str,
@@ -1526,12 +1931,12 @@ mod tests {
     #[test]
     fn aws_registry_access_uses_worker_image_repository() {
         let registry = TestArtifactRegistry {
-            prefix: "alien-artifacts-prj_test".to_string(),
+            prefix: "alien-artifacts".to_string(),
             fail_remove: false,
             removed_repository_is_gone: false,
         };
         let state = aws_state_with_stack(worker_stack(
-            "manager.example.com/alien-artifacts-prj_test:test-worker-abc123",
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:test-worker-abc123",
         ));
 
         assert_eq!(
@@ -2028,7 +2433,7 @@ mod tests {
             .add(
                 Worker::new("test-worker".to_string())
                     .code(WorkerCode::Image {
-                        image: "manager.example.com/alien-artifacts-prj_test:test-worker-abc123"
+                        image: "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:test-worker-abc123"
                             .to_string(),
                     })
                     .permissions("execution".to_string())
@@ -2073,7 +2478,7 @@ mod tests {
             .add(
                 Worker::new("test-worker".to_string())
                     .code(WorkerCode::Image {
-                        image: "manager.example.com/alien-artifacts-prj_test:test-worker-abc123"
+                        image: "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:test-worker-abc123"
                             .to_string(),
                     })
                     .permissions("execution".to_string())

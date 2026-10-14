@@ -4,6 +4,7 @@ import {
   type Storage as StorageConfig,
   StorageSchema,
 } from "./generated/index.js"
+import { encryptionKeyRef } from "./key.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { LifecycleRule, Storage as StorageConfig, StorageOutputs } from "./generated/index.js"
@@ -87,12 +88,7 @@ export class Storage extends ResourceBuilder {
    * The Key and Storage must both be added to the same stack.
    */
   public encryptionKey(key: Resource): this {
-    if (key.config.type !== "key") {
-      throw new Error(
-        `Storage.encryptionKey() requires an alien.Key, received '${key.config.type}'`,
-      )
-    }
-    this._config.encryptionKey = key.ref()
+    this._config.encryptionKey = encryptionKeyRef(key)
     return this
   }
 

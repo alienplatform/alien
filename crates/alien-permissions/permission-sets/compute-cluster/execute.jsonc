@@ -231,6 +231,7 @@
           "actions": [
             "Microsoft.Compute/disks/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/attachDetachDataDisks/action",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read"
           ]
         },
@@ -262,12 +263,17 @@
           }
         }
       },
-      // Application Gateway backend pool registration (container runtime)
+      // Application Gateway backend updates reauthorize its existing subnet and public IP.
+      // https://learn.microsoft.com/azure/application-gateway/configuration-infrastructure
       {
         "grant": {
           "actions": [
             "Microsoft.Network/applicationGateways/read",
-            "Microsoft.Network/applicationGateways/write"
+            "Microsoft.Network/applicationGateways/write",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action",
+            "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/publicIPAddresses/join/action"
           ]
         },
         "binding": {

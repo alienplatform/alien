@@ -1444,7 +1444,7 @@ async fn airgapped_manager(platform_url: &str, group_token: &str) -> Result<(Str
     let failed =
         |message: String| AlienError::new(ErrorData::ApiRequestFailed { message, url: None });
     let get = |url: String| async move {
-        let response = reqwest::Client::new()
+        let response = crate::http_client::client()?
             .get(&url)
             .bearer_auth(group_token)
             .send()
@@ -1500,7 +1500,7 @@ async fn register_airgapped(
     signing_key: &str,
     input_values: serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
-    let response = reqwest::Client::new()
+    let response = crate::http_client::client()?
         .post(format!(
             "{}/v1/initialize",
             manager_url.trim_end_matches('/')

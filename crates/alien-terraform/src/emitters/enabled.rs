@@ -13,12 +13,11 @@
 //!   deserializes every entry there into typed import data with required fields
 
 use crate::{block::attr, expr};
-use alien_core::{ErrorData, Result};
-use alien_error::AlienError;
+use alien_core::Result;
 use hcl::{
+    Identifier,
     expr::{Conditional, Expression, FuncCall},
     structure::{Block, Body, Structure},
-    Identifier,
 };
 
 /// Terraform variable carrying the gate's value.
@@ -33,13 +32,6 @@ fn gate_variable(input_id: &str) -> String {
     )
 }
 
-/// `count` for a gated resource block, or `None` when the resource is ungated
-/// and should render exactly as it did before. Private so that [`gate`] stays
-/// the only way a block acquires the gate, and its checks cannot be bypassed.
-fn enabled_count(enabled_when: Option<&str>) -> Option<Expression> {
-    enabled_when.map(|input_id| expr::raw(format!("{} ? 1 : 0", gate_variable(input_id))))
-}
-
 /// Put the resource's gate on a block that is already built. An ungated block
 /// passes through byte-identical, so an existing stack re-renders without a diff.
 ///
@@ -48,43 +40,38 @@ fn enabled_count(enabled_when: Option<&str>) -> Option<Expression> {
 /// blocks it just appended instead of pushing the gate into a signature every
 /// other call site would thread `None` through.
 ///
-/// Fails when the block already carries a `count`. Terraform allows only one, so
-/// prepending a second would render invalid HCL, and silently keeping either one
-/// would drop a meta-argument someone wrote on purpose. No emitter that opts into
-/// `.enabled()` counts its own blocks today; this is here so the first one that
-/// tries finds out at render time.
+/// Preserve an emitter's existing count when enabled, and set it to zero when
+/// disabled. For example, a Key creates its native key only when the installer
+/// has not selected an existing key. Both decisions must hold before creation.
 pub fn gate(block: &mut Block, enabled_when: Option<&str>) -> Result<()> {
-    let Some(count) = enabled_count(enabled_when) else {
+    let Some(input_id) = enabled_when else {
         return Ok(());
     };
-    gate_with_count(block, count)
+    gate_with_condition(block, expr::parse(&gate_variable(input_id))?);
+    Ok(())
 }
 
-/// Shared tail of [`gate`] and [`gate_any`]: install `count` on a block that
-/// does not already declare one.
-fn gate_with_count(block: &mut Block, count: Expression) -> Result<()> {
-    if block
+/// Shared tail of [`gate`] and [`gate_any`]: compose the gate with any existing
+/// count without changing resource instance addresses.
+fn gate_with_condition(block: &mut Block, condition: Expression) {
+    let count = |enabled_count| {
+        Expression::Conditional(Box::new(Conditional::new(
+            condition,
+            enabled_count,
+            Expression::Number(0.into()),
+        )))
+    };
+    if let Some(attribute) = block
         .body
-        .attributes()
-        .any(|attribute| attribute.key.as_str() == "count")
+        .attributes_mut()
+        .find(|attribute| attribute.key.as_str() == "count")
     {
-        let address = block
-            .labels
-            .iter()
-            .map(|label| label.as_str())
-            .collect::<Vec<_>>()
-            .join(".");
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("enabled() on `{address}`"),
-            reason: "the block already declares its own `count`, and Terraform accepts only one \
-                     count per block"
-                .to_string(),
-        }));
+        attribute.expr = count(std::mem::replace(&mut attribute.expr, Expression::Null));
+        return;
     }
     let mut body: Vec<Structure> = std::mem::take(&mut block.body).into_iter().collect();
-    body.insert(0, attr("count", count));
+    body.insert(0, attr("count", count(Expression::Number(1.into()))));
     block.body = Body::from(body);
-    Ok(())
 }
 
 /// Put a merged contribution's gate on a block: the grant exists when ANY of
@@ -107,7 +94,8 @@ pub fn gate_any(block: &mut Block, input_ids: &[String]) -> Result<()> {
                 .map(|input_id| gate_variable(input_id))
                 .collect::<Vec<_>>()
                 .join(" || ");
-            gate_with_count(block, expr::raw(format!("{condition} ? 1 : 0")))
+            gate_with_condition(block, expr::parse(&condition)?);
+            Ok(())
         }
     }
 }
@@ -146,32 +134,6 @@ pub fn registration_list(entries: Vec<(Option<String>, Expression)>) -> Expressi
 mod tests {
     use super::*;
     use crate::block::resource_block;
-
-    /// No emitter counts its own blocks today, so this is the only place the
-    /// collision path runs. Without it the guard would ship unexecuted.
-    #[test]
-    fn gating_a_block_that_already_counts_itself_fails() {
-        let mut block = resource_block(
-            "aws_s3_bucket",
-            "already_counted",
-            [attr("count", Expression::Number(hcl::Number::from(2)))],
-        );
-
-        let error = gate(&mut block, Some("bucketEnabled"))
-            .expect_err("a second count would render invalid HCL");
-
-        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
-        assert!(
-            error.message.contains("aws_s3_bucket.already_counted"),
-            "the error should name the offending block: {}",
-            error.message
-        );
-        assert!(
-            error.message.contains("count"),
-            "the error should say which meta-argument collided: {}",
-            error.message
-        );
-    }
 
     #[test]
     fn gating_an_ungated_block_leaves_it_alone() {

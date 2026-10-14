@@ -374,7 +374,7 @@ pub async fn spawn_pull_aws_loopback(
     let state = PullAwsState {
         proxy_base: aws_proxy_base.to_string(),
         token: client_token.to_string(),
-        http: reqwest::Client::new(),
+        http: crate::http_client::client()?,
     };
     let app: Router = Router::new()
         .route("/{*path}", any(handle))
@@ -703,7 +703,7 @@ async fn spawn_generic_cloud_loopback(
         proxy_base: proxy_base.to_string(),
         token: client_token.to_string(),
         default_host,
-        http: reqwest::Client::new(),
+        http: crate::http_client::client()?,
     };
     let app: Router = Router::new()
         .route("/{*path}", any(handle))

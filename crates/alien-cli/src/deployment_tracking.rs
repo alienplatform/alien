@@ -17,10 +17,7 @@ use alien_platform_api::{
     Client as SdkClient,
 };
 use dirs::config_dir;
-use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
-    Client,
-};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -242,7 +239,7 @@ fn authenticated_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
 
-    let reqwest_client = Client::builder()
+    let reqwest_client = crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()

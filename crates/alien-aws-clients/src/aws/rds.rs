@@ -30,6 +30,7 @@ pub trait RdsApi: Send + Sync + std::fmt::Debug {
     async fn modify_db_cluster(&self, request: ModifyDbClusterRequest) -> Result<()>;
     async fn delete_db_cluster(&self, request: DeleteDbClusterRequest) -> Result<()>;
     async fn describe_db_clusters(&self, identifier: &str) -> Result<Vec<DbCluster>>;
+    async fn start_db_cluster(&self, identifier: &str) -> Result<()>;
     async fn create_db_instance(&self, request: CreateDbInstanceRequest) -> Result<()>;
     async fn delete_db_instance(&self, request: DeleteDbInstanceRequest) -> Result<()>;
     async fn describe_db_instances(&self, cluster_identifier: &str) -> Result<Vec<DbInstance>>;
@@ -47,6 +48,8 @@ pub struct CreateDbSubnetGroupRequest {
 
 #[derive(Debug, Clone)]
 pub struct CreateDbClusterRequest {
+    /// Immutable KMS key ARN used for storage and inherited by cluster snapshots.
+    pub kms_key_id: Option<String>,
     pub identifier: String,
     pub engine_version: String,
     pub master_username: String,
@@ -79,6 +82,8 @@ pub struct DeleteDbClusterRequest {
 
 #[derive(Debug, Clone)]
 pub struct CreateDbInstanceRequest {
+    /// Customer key for Performance Insights; enables Insights when provided.
+    pub performance_insights_kms_key_id: Option<String>,
     pub identifier: String,
     pub cluster_identifier: String,
     pub engine_version: String,
@@ -94,6 +99,10 @@ pub struct DeleteDbInstanceRequest {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct DbCluster {
+    #[serde(default)]
+    pub kms_key_id: Option<String>,
+    #[serde(default)]
+    pub storage_encrypted: Option<bool>,
     #[serde(rename = "DBClusterIdentifier")]
     pub identifier: String,
     pub status: String,
@@ -253,6 +262,9 @@ fn create_db_cluster_form(r: &CreateDbClusterRequest) -> HashMap<String, String>
         r.backup_retention_days.to_string(),
     );
     form.insert("StorageEncrypted".into(), "true".into());
+    if let Some(key) = &r.kms_key_id {
+        form.insert("KmsKeyId".into(), key.clone());
+    }
     tag_members(&mut form, &r.tags);
     form
 }
@@ -296,6 +308,10 @@ fn create_db_instance_form(r: &CreateDbInstanceRequest) -> HashMap<String, Strin
     // flag) so the guarantee holds regardless of the subnet group, matching GCP (`ipv4Enabled=false`)
     // and Azure (`publicNetworkAccess=Disabled`) rather than relying on the subnet group's default.
     form.insert("PubliclyAccessible".into(), "false".into());
+    if let Some(key) = &r.performance_insights_kms_key_id {
+        form.insert("EnablePerformanceInsights".into(), "true".into());
+        form.insert("PerformanceInsightsKMSKeyId".into(), key.clone());
+    }
     form
 }
 
@@ -560,6 +576,13 @@ impl RdsApi for RdsClient {
             .await
     }
 
+    async fn start_db_cluster(&self, identifier: &str) -> Result<()> {
+        let mut form = base_form("StartDBCluster");
+        form.insert("DBClusterIdentifier".into(), identifier.to_string());
+        self.send_form_no_body(form, "StartDBCluster", identifier)
+            .await
+    }
+
     async fn describe_db_clusters(&self, identifier: &str) -> Result<Vec<DbCluster>> {
         let mut form = base_form("DescribeDBClusters");
         form.insert("DBClusterIdentifier".into(), identifier.to_string());
@@ -601,6 +624,7 @@ mod tests {
 
     fn cluster_request() -> CreateDbClusterRequest {
         CreateDbClusterRequest {
+            kms_key_id: None,
             identifier: "stack-db".into(),
             engine_version: "17.4".into(),
             master_username: "alien".into(),
@@ -680,6 +704,7 @@ mod tests {
     #[test]
     fn create_instance_uses_serverless_class_and_is_never_public() {
         let form = create_db_instance_form(&CreateDbInstanceRequest {
+            performance_insights_kms_key_id: None,
             identifier: "stack-db-1".into(),
             cluster_identifier: "stack-db".into(),
             engine_version: "17.4".into(),

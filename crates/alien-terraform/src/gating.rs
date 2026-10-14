@@ -371,7 +371,7 @@ fn rewrite_template_elements(template: &mut Template, gated: &GatedAddresses, ch
 
 /// Fail generation when a gated address survives unindexed in the rendered
 /// output — the net for references hidden in raw strings the AST walk cannot
-/// see. `depends_on = [...]` spans are exempt.
+/// see. `depends_on = [...]` spans and state-address migrations are exempt.
 pub(crate) fn scan_rendered_for_unindexed(
     files: &indexmap::IndexMap<String, String>,
     gated: &GatedAddresses,
@@ -384,7 +384,20 @@ pub(crate) fn scan_rendered_for_unindexed(
         if !file_name.ends_with(".tf") {
             continue;
         }
-        let exempt = depends_on_spans(contents);
+        // A moved block names historical state addresses, not resource values.
+        // In particular, moving a singleton to [0] must retain its old address
+        // even when the destination now has a gate. Parse before excluding these
+        // blocks so text inside a string or comment cannot escape the scan.
+        let body = hcl::parse(contents).map_err(|error| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!("Cannot inspect Terraform references in '{file_name}': {error}"),
+            })
+        })?;
+        let body = Body::from_iter(body.into_iter().filter(|structure| {
+            !matches!(structure, Structure::Block(block) if block.identifier.as_str() == "moved")
+        }));
+        let contents = crate::generator::render_body(body)?;
+        let exempt = depends_on_spans(&contents);
         for address in &addresses {
             let mut search_from = 0;
             while let Some(found) = contents[search_from..].find(address.as_str()) {
@@ -609,7 +622,7 @@ mod tests {
         let mut ok_files = indexmap::IndexMap::new();
         ok_files.insert(
             "main.tf".to_string(),
-            "locals { a = aws_dynamodb_table.analytics[0].name, b = aws_dynamodb_table.analytics[*].name }"
+            "locals {\n a = aws_dynamodb_table.analytics[0].name\n b = aws_dynamodb_table.analytics[*].name\n}"
                 .to_string(),
         );
         scan_rendered_for_unindexed(&ok_files, &gated_analytics())

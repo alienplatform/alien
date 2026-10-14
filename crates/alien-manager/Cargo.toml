@@ -30,6 +30,7 @@ openapi = [
 ]
 
 [dependencies]
+bon = { workspace = true }
 # Core Alien crates
 alien-core = { workspace = true, features = ["bundle-signature"] }
 alien-error = { workspace = true, features = ["axum"] }

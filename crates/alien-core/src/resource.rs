@@ -498,6 +498,12 @@ impl From<&Resource> for ResourceRef {
 /// This trait enables extensibility by allowing new resource output types to be registered
 /// and managed alongside built-in resource outputs.
 pub trait ResourceOutputsDefinition: Debug + Send + Sync + 'static {
+    /// Whether dependents may reconcile. Temporary unavailability preserves their
+    /// identities and controller progress until the dependency recovers.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Returns the resource type for this instance
     fn get_resource_type(&self) -> ResourceType;
 

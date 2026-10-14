@@ -82,6 +82,7 @@ portpicker = { version = "0.1" }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
+h2 = { workspace = true }
 semver = { workspace = true }
 self-replace = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

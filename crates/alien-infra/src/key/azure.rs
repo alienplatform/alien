@@ -20,6 +20,8 @@ use crate::{
 
 #[controller]
 pub struct AzureKeyController {
+    #[serde(default)]
+    pub(crate) available: Option<bool>,
     pub(crate) vault_resource_id: Option<String>,
     pub(crate) key_name: Option<String>,
     pub(crate) lineage_version_id: Option<String>,
@@ -41,6 +43,7 @@ impl AzureKeyController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.available = Some(false);
         let config = ctx.desired_resource_config::<Key>()?;
         let versioned_key_id = self.key_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -73,6 +76,7 @@ impl AzureKeyController {
             }));
         }
         self.key_id = Some(key.key.kid.clone());
+        self.available = Some(key.attributes.enabled == Some(true));
         let (health, lifecycle) = match key.attributes.enabled {
             Some(true) => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
             Some(false) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
@@ -90,7 +94,7 @@ impl AzureKeyController {
                     status: KeyHeartbeatStatus {
                         health,
                         lifecycle,
-                        message: None,
+                        message: (self.available != Some(true)).then(|| "customer key unavailable".to_string()),
                     },
                     key_id: key.key.kid,
                     enabled: key.attributes.enabled,
@@ -103,7 +107,7 @@ impl AzureKeyController {
         });
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(300)),
+            suggested_delay: Some(Duration::from_secs(30)),
         })
     }
 
@@ -117,8 +121,13 @@ impl AzureKeyController {
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn requires_convergence_reconciliation(&self) -> bool {
+        true
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         Some(ResourceOutputs::new(KeyOutputs {
+            available: Some(self.available.unwrap_or(false)),
             fingerprint: KeyFingerprint::Azure {
                 vault_resource_id: self.vault_resource_id.clone()?,
                 key_name: self.key_name.clone()?,
@@ -149,6 +158,15 @@ pub struct AzureKeyImporter;
 impl ResourceImporter for AzureKeyImporter {
     type ImportData = AzureKeyImportData;
 
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> alien_core::Result<StackResourceState> {
+        super::merge_key_reimport(existing, imported, ctx)
+    }
+
     fn import(
         &self,
         data: Self::ImportData,
@@ -157,6 +175,7 @@ impl ResourceImporter for AzureKeyImporter {
         make_imported_state(
             AzureKeyController {
                 state: AzureKeyState::Ready,
+                available: None,
                 vault_resource_id: Some(data.vault_resource_id),
                 key_name: Some(data.key_name),
                 lineage_version_id: Some(data.lineage_version_id),

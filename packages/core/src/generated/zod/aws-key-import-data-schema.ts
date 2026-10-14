@@ -9,7 +9,8 @@ import * as z from "zod";
  * @description AWS KMS key created by the customer-installed setup stack.
  */
 export const AwsKeyImportDataSchema = z.object({
-    "keyArn": z.string().describe("Immutable KMS key ARN. Alias ARNs are not accepted.")
+    "availabilityProbe": z.optional(z.boolean().describe("Setup installed the scoped key availability probe permission.")),
+"keyArn": z.string().describe("Immutable KMS key ARN. Alias ARNs are not accepted.")
     }).describe("AWS KMS key created by the customer-installed setup stack.")
 
 export type AwsKeyImportData = z.infer<typeof AwsKeyImportDataSchema>

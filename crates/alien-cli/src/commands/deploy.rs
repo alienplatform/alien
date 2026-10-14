@@ -562,7 +562,7 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
 
-    let http_client = reqwest::Client::builder()
+    let http_client = crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -1260,7 +1260,7 @@ fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
 
-    reqwest::Client::builder()
+    crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()

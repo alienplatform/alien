@@ -220,7 +220,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         let provider = self.provider_for_target(deployment.platform);
         let base = impersonate_management_sa(&**provider, deployment.platform).await?;
-        let resolved = alien_infra::RemoteAccessResolver::default()
+        let resolved = alien_infra::RemoteAccessResolver::new(std::env::vars().collect())
             .resolve_remote_bindings(
                 base,
                 outputs,
