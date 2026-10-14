@@ -925,7 +925,7 @@ mod tests {
             .permissions("default-profile".to_string())
             .cpu(alien_core::ResourceSpec { min: "0.25".to_string(), desired: "0.25".to_string() })
             .memory(alien_core::ResourceSpec { min: "64Mi".to_string(), desired: "64Mi".to_string() })
-            .code(ContainerCode::Image { image: "alpine:3.22".to_string() })
+            .code(ContainerCode::Image { image: "busybox:1.37.0".to_string() })
             .command(vec!["sh".to_string(), "-c".to_string(), "mkdir -p /tmp/web; echo ready > /tmp/web/health; exec busybox httpd -f -p 8080 -h /tmp/web".to_string()])
             .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 5 })
             .build();
