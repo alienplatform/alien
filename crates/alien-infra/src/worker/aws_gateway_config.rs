@@ -2,7 +2,7 @@
 //! the interface endpoint and REST API policies bound its upstream access.
 
 use alien_error::AlienError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{ErrorData, Result};
 
@@ -46,6 +46,9 @@ pub(super) fn bootstrap(spec: GatewaySpec<'_>) -> Result<Value> {
                 "route": {"cluster": "private_api", "prefix_rewrite": format!("/{PRIVATE_API_STAGE}/"), "timeout": "0s"},
                 "request_headers_to_add": [{
                     "header": {"key": "x-apigw-api-id", "value": spec.api_id},
+                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD"
+                }, {
+                    "header": {"key": alien_core::aws_worker_gateway::ORIGINAL_TARGET_HEADER, "value": "%REQ(:PATH)%"},
                     "append_action": "OVERWRITE_IF_EXISTS_OR_ADD"
                 }]
             }]

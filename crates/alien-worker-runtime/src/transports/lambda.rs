@@ -627,6 +627,7 @@ fn event_to_request(event: LambdaEvent<Value>) -> std::result::Result<LambdaRequ
     if payload.get("httpMethod").is_some() && payload.get("requestContext").is_some() {
         let mut request = serde_json::from_value::<ApiGatewayProxyRequest>(payload)
             .map_err(|_| invocation_failure("Malformed API Gateway REST event"))?;
+        let private_stage = request.request_context.stage.as_deref() == Some("private");
         // REST's stage selects the transport integration, not an application
         // route. The event path already excludes that stage.
         request.request_context.stage = None;
@@ -635,6 +636,29 @@ fn event_to_request(event: LambdaEvent<Value>) -> std::result::Result<LambdaRequ
         // lambda-http merges the single-value map last. Restore the canonical
         // multi-value map so duplicate application headers are not discarded.
         request.headers_mut().extend(multi_headers);
+        if private_stage {
+            // REST events have already decoded the path and lost query ordering.
+            // The gateway overwrites this header before forwarding to REST.
+            let header = alien_core::aws_worker_gateway::ORIGINAL_TARGET_HEADER;
+            if request.headers().get_all(header).iter().count() > 1 {
+                return Err(invocation_failure("Ambiguous private gateway target"));
+            }
+            if let Some(original) = request.headers_mut().remove(header) {
+                let original = original
+                    .to_str()
+                    .map_err(|_| invocation_failure("Invalid private gateway target"))?;
+                if !original.starts_with('/') || original.contains('#') {
+                    return Err(invocation_failure("Invalid private gateway target"));
+                }
+                let target = original
+                    .parse::<lambda_http::http::uri::PathAndQuery>()
+                    .map_err(|_| invocation_failure("Invalid private gateway target"))?;
+                let mut parts = request.uri().clone().into_parts();
+                parts.path_and_query = Some(target);
+                *request.uri_mut() = lambda_http::http::Uri::from_parts(parts)
+                    .map_err(|_| invocation_failure("Invalid private gateway target"))?;
+            }
+        }
         return Ok(request.with_lambda_context(event.context));
     }
 
@@ -1575,6 +1599,46 @@ mod tests {
             ]
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn private_rest_preserves_gateway_target_through_application_forwarding() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new().fallback(|request: axum::extract::Request| async move {
+            assert!(
+                !request
+                    .headers()
+                    .contains_key(alien_core::aws_worker_gateway::ORIGINAL_TARGET_HEADER)
+            );
+            request.uri().path_and_query().unwrap().as_str().to_string()
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut event = rest_event();
+        event["path"] = Value::String("/a/b".into());
+        let target = "/a%2Fb?x=%2B&space=a%20b&x=1&empty=&bare";
+        event["multiValueHeaders"][alien_core::aws_worker_gateway::ORIGINAL_TARGET_HEADER] =
+            serde_json::json!([target]);
+        let request = event_to_request(LambdaEvent::new(event, Default::default())).unwrap();
+        let response = forward_to_app(port, request).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), target);
+        server.abort();
+    }
+
+    #[test]
+    fn private_rest_rejects_ambiguous_or_non_path_gateway_targets() {
+        for targets in [
+            vec!["/first", "/second"],
+            vec!["https://another.example.test/path"],
+            vec!["/path#fragment"],
+            vec!["/bad path"],
+        ] {
+            let mut event = rest_event();
+            event["multiValueHeaders"][alien_core::aws_worker_gateway::ORIGINAL_TARGET_HEADER] =
+                serde_json::json!(targets);
+            assert!(event_to_request(LambdaEvent::new(event, Default::default())).is_err());
+        }
     }
 
     #[tokio::test]

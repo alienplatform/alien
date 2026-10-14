@@ -18,3 +18,7 @@ pub const HTTP_PORT: u16 = 8080;
 
 /// Separate health listener so every application path remains available.
 pub const HEALTH_PORT: u16 = 8081;
+
+/// Gateway-authored application target, before REST API path/query decoding.
+/// The gateway overwrites caller values; the private REST adapter consumes it.
+pub const ORIGINAL_TARGET_HEADER: &str = "x-alien-original-target";

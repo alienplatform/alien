@@ -55,7 +55,7 @@
                       "typed_config": {
                         "@type": "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua",
                         "default_source_code": {
-                          "inline_string": "\nfunction envoy_on_request(handle)\n  local headers = handle:headers()\n  local api, upstream, path = headers:get(\":path\"):match(\"^/__alien_gateway/([a-z0-9]+)/([^/]+)(/.*)$\")\n  if not api or not upstream:match(\"^vpce%-[a-z0-9%-]+%.execute%-api%.[a-z0-9%-]+%.vpce%.amazonaws%.com$\") then\n    handle:respond({[\":status\"] = \"400\"}, \"Invalid gateway route\")\n    return\n  end\n  headers:replace(\"x-apigw-api-id\", api)\n  headers:replace(\":path\", \"/private\" .. path)\n  handle:streamInfo():dynamicMetadata():set(\"alien.gateway\", \"upstream\", upstream)\nend\n"
+                          "inline_string": "\nfunction envoy_on_request(handle)\n  local headers = handle:headers()\n  local api, upstream, path = headers:get(\":path\"):match(\"^/__alien_gateway/([a-z0-9]+)/([^/]+)(/.*)$\")\n  if not api or not upstream:match(\"^vpce%-[a-z0-9%-]+%.execute%-api%.[a-z0-9%-]+%.vpce%.amazonaws%.com$\") then\n    handle:respond({[\":status\"] = \"400\"}, \"Invalid gateway route\")\n    return\n  end\n  headers:replace(\"x-alien-original-target\", path)\n  headers:replace(\"x-apigw-api-id\", api)\n  headers:replace(\":path\", \"/private\" .. path)\n  handle:streamInfo():dynamicMetadata():set(\"alien.gateway\", \"upstream\", upstream)\nend\n"
                         }
                       }
                     },

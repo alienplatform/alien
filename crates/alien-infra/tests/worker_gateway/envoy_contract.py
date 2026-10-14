@@ -68,6 +68,7 @@ class Backend(BaseHTTPRequestHandler):
         else:
             response = json.dumps({'host': self.headers.get('Host'), 'path': self.path,
                 'apiHeaders': self.headers.get_all('x-apigw-api-id'),
+                'originalTargets': self.headers.get_all('x-alien-original-target'),
                 'proto': self.headers.get('x-forwarded-proto'),
                 'bodyHash': hashlib.sha256(body).hexdigest()}).encode()
         self.send_response(200)
@@ -142,11 +143,13 @@ with tempfile.TemporaryDirectory(prefix='alien-envoy-') as temporary:
         for host in ['private-api.example.test', 'tenant.private-api.example.test', 'private-api.example.test:443']:
             connection, response = request('/a%2Fb?x=%2B&x=1', {
                 'Host': host, 'x-apigw-api-id': 'attacker-selected', 'x-forwarded-proto': 'https',
+                'x-alien-original-target': '/attacker-selected',
                 'x-forwarded-for': '192.0.2.123'}, body=payload, method='POST')
             assert response.status == 200, 'Valid upstream TLS/request failed'
             echoed = json.loads(response.read())
             assert echoed['host'] == host and echoed['path'] == '/private/a%2Fb?x=%2B&x=1'
             assert echoed['apiHeaders'] == ['exampleapi']
+            assert echoed['originalTargets'] == ['/a%2Fb?x=%2B&x=1']
             assert echoed['proto'] == 'https', 'TLS termination scheme was lost'
             assert echoed['bodyHash'] == hashlib.sha256(payload).hexdigest()
             assert [value for key, value in response.getheaders() if key.lower() == 'set-cookie'] == ['first=1; Secure; HttpOnly', 'second=2; Secure; HttpOnly']
@@ -156,10 +159,14 @@ with tempfile.TemporaryDirectory(prefix='alien-envoy-') as temporary:
         connection.putheader('Host', 'private-api.example.test')
         connection.putheader('x-apigw-api-id', 'attacker-one')
         connection.putheader('x-apigw-api-id', 'attacker-two')
+        connection.putheader('x-alien-original-target', '/attacker-one')
+        connection.putheader('x-alien-original-target', '/attacker-two')
         connection.endheaders()
         response = connection.getresponse()
         assert response.status == 200
-        assert json.loads(response.read())['apiHeaders'] == ['exampleapi']
+        echoed = json.loads(response.read())
+        assert echoed['apiHeaders'] == ['exampleapi']
+        assert echoed['originalTargets'] == ['/']
         connection.close()
         connection, response = request('/large', {'Host': 'private-api.example.test'})
         assert response.status == 200 and response.read() == payload
