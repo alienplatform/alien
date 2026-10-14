@@ -1,0 +1,25 @@
+Real AWS · missing quota-read permission
+
+Scoped test role: EC2 discovery allowed; servicequotas:GetServiceQuota absent.
+Native GetServiceQuota: AccessDeniedException. EC2 DescribeVpcs: success.
+
+$ alien render --format cloudformation --stack alien.json --stack-settings settings.yaml --output artifacts --check-quotas
+Quota warning: VPCs per Region (L-F678F1CE, eu-west-1): could not verify quota: current usage or applied quota is unavailable
+Quota warning: Internet gateways per Region (L-A4707A72, eu-west-1): could not verify quota: current usage or applied quota is unavailable
+Quota warning: EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): could not verify quota: current usage or applied quota is unavailable
+Exit: 0; role permission: missing; generated files: 1
+
+$ alien render --format terraform --target aws --stack alien.json --stack-settings settings.yaml --output artifacts --check-quotas
+Quota warning: VPCs per Region (L-F678F1CE, eu-west-1): could not verify quota: current usage or applied quota is unavailable
+Quota warning: Internet gateways per Region (L-A4707A72, eu-west-1): could not verify quota: current usage or applied quota is unavailable
+Quota warning: EC2-VPC Elastic IP addresses per Region (L-0263D0A3, eu-west-1): could not verify quota: current usage or applied quota is unavailable
+Exit: 0; role permission: missing; generated files: 10
+
+$ alien render --format cloudformation --stack alien.json --stack-settings settings.yaml --output artifacts --check-quotas
+Exit: 0; role permission: allowed; generated files: 1
+
+$ alien render --format terraform --target aws --stack alien.json --stack-settings settings.yaml --output artifacts --check-quotas
+Exit: 0; role permission: allowed; generated files: 10
+
+Cleanup: temporary reader role deleted; GetRole returns NoSuchEntity.
+Concurrent exact-owned compute fixture roles are tracked separately; no unrelated IAM IDs changed.
