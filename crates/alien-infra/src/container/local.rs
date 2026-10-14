@@ -938,7 +938,7 @@ mod tests {
             .platform(Platform::Local)
             .client_config(client.clone())
             .service_provider(services.clone())
-            .delay_mode(crate::core::controller_test::DelayMode::Real)
+            .real_delays()
             .build()
             .await
             .unwrap();
@@ -966,7 +966,7 @@ mod tests {
                 .platform(Platform::Local)
                 .client_config(client)
                 .service_provider(services.clone())
-                .delay_mode(crate::core::controller_test::DelayMode::Real)
+                .real_delays()
                 .build()
                 .await
                 .unwrap();
