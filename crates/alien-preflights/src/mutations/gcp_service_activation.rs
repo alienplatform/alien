@@ -128,8 +128,11 @@ pub(crate) const CLOUD_KMS_ACTIVATION_ID: &str = "enable-cloud-kms";
 ///
 /// Setups from before the activation existed created the key ring through the Cloud KMS API, so
 /// the API is already enabled in that project. Adding the activation now would be a new
-/// setup-owned resource, which would make the next update require setup for nothing. The
-/// activation joins the stack the next time setup runs, because setup prepares from empty state.
+/// setup-owned resource, which would make the next update require setup for nothing.
+///
+/// A Terraform setup rerun prepares its import from empty state, so it adds the activation, and
+/// later updates keep it. A direct setup update prepares from the installed state and keeps
+/// leaving it out; GCP Keys are imported from Terraform, and the API is already enabled anyway.
 fn kms_used_without_activation(stack_state: &StackState) -> bool {
     stack_state
         .resources
