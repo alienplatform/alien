@@ -108,6 +108,7 @@ async fn revoke_registry_access(
     stack_state: Option<&StackState>,
     deployment_store: &dyn DeploymentStore,
     deployment_id: &str,
+    project_id: &str,
 ) -> Result<()> {
     if let EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) = environment_info {
         if let Some(service_account_email) = extract_rsm_access_configuration(stack_state) {
@@ -127,7 +128,12 @@ async fn revoke_registry_access(
         }
 
         let shared_with_another_deployment = deployment_store
-            .has_other_gcp_project_deployment(&Subject::system(), project_number, deployment_id)
+            .has_other_gcp_project_deployment(
+                &Subject::system(),
+                project_number,
+                project_id,
+                deployment_id,
+            )
             .await
             .context(ErrorData::RegistryAccessCleanupFailed {
                 deployment_id: deployment_id.to_string(),
@@ -456,7 +462,7 @@ fn service_type_name(service_type: &ComputeServiceType) -> String {
 /// AWS also revokes at TeardownRequired, before setup deletion removes its identity and record.
 ///
 /// Cloud Run's service agent is project-scoped, so multiple deployments in
-/// the same GCP project share one GAR reader grant. The final active consumer
+/// the same GCP project and Alien project share one GAR reader grant. The final active consumer
 /// removes that shared grant; every deployment still removes its own remote
 /// management service-account grant.
 pub async fn cleanup_deleted_registry_access(
@@ -618,6 +624,7 @@ pub async fn cleanup_deleted_registry_access(
             state.stack_state.as_ref(),
             deployment_store,
             deployment_id,
+            project_id,
         )
         .await?;
     }
@@ -2126,11 +2133,14 @@ mod tests {
         let mut store = MockDeploymentStore::new();
         store
             .expect_has_other_gcp_project_deployment()
-            .withf(|caller, project_number, excluding| {
-                caller.is_system() && project_number == PROJECT_NUMBER && excluding == "dep_deleted"
+            .withf(|caller, project_number, project_id, excluding| {
+                caller.is_system()
+                    && project_number == PROJECT_NUMBER
+                    && project_id == "default"
+                    && excluding == "dep_deleted"
             })
             .times(1)
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 answer.map_err(|message| {
                     AlienError::new(alien_error::GenericError {
                         message: message.to_string(),
@@ -2152,6 +2162,7 @@ mod tests {
             None,
             store,
             "dep_deleted",
+            "default",
         )
         .await
     }

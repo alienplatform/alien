@@ -2033,21 +2033,46 @@ mod gcp_project_consumer_tests {
 
         assert!(
             !store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, "default", &deleting)
                 .await
                 .expect("consumer check"),
             "neither the deployment itself, one in another project, nor a deleted one shares the grant"
         );
 
+        assert!(!store
+            .has_other_gcp_project_deployment(
+                &Subject::system(),
+                SHARED_PROJECT,
+                "prj_other",
+                &deleting
+            )
+            .await
+            .expect("another Alien project has no consumer"));
+
         let sibling =
             create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT, "running").await;
         assert!(
             store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .has_other_gcp_project_deployment(
+                    &Subject::system(),
+                    SHARED_PROJECT,
+                    "default",
+                    &deleting
+                )
                 .await
                 .expect("consumer check"),
             "a sibling in the same project still pulls through the grant"
         );
+
+        assert!(!store
+            .has_other_gcp_project_deployment(
+                &Subject::system(),
+                SHARED_PROJECT,
+                "prj_other",
+                &deleting
+            )
+            .await
+            .expect("the sibling uses a different Alien repository"));
 
         store
             .delete_deployment(&Subject::system(), &sibling)
@@ -2055,7 +2080,12 @@ mod gcp_project_consumer_tests {
             .expect("delete sibling");
         assert!(
             !store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .has_other_gcp_project_deployment(
+                    &Subject::system(),
+                    SHARED_PROJECT,
+                    "default",
+                    &deleting
+                )
                 .await
                 .expect("consumer check"),
             "a removed sibling no longer shares the grant"
