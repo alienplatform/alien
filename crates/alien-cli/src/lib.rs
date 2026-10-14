@@ -1647,6 +1647,14 @@ async fn watch_dev_deployments_until_ctrl_c(
                     continue;
                 };
 
+                if primary_state.retry_requested {
+                    if let Some(status_file) = status_file {
+                        write_dev_status(status_file, &build_dev_status(port,
+                            alien_core::DevStatusState::Initializing, None, None))?;
+                    }
+                    continue;
+                }
+
                 // Update status file (unchanged — machine-readable contract)
                 if let Some(status_file) = status_file {
                     let snapshot = commands::DevDeploymentSnapshot {

@@ -334,7 +334,19 @@ fn record_to_response(
         current_release_id: r.current_release_id.clone(),
         desired_release_id: r.desired_release_id.clone(),
         import_source: r.import_source,
-        retry_requested: r.retry_requested,
+        // Acquisition consumes the queue bit before reconciliation commits its result.
+        // Local clients must still see that failed checkpoint as an in-flight retry.
+        retry_requested: r.retry_requested
+            || (r.platform == Platform::Local
+                && r.locked_by.is_some()
+                && matches!(
+                    r.status.as_str(),
+                    "preflights-failed"
+                        | "initial-setup-failed"
+                        | "provisioning-failed"
+                        | "update-failed"
+                        | "refresh-failed"
+                )),
         created_at: r.created_at.to_rfc3339(),
         // Platform SDK requires `updatedAt`. Fall back to created_at when
         // no update has happened yet.
@@ -1259,6 +1271,31 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn local_retry_remains_visible_between_acquire_and_reconcile() {
+        let mut deployment = deployment_record();
+        deployment.platform = Platform::Local;
+        deployment.status = "provisioning-failed".to_string();
+        assert!(!record_to_response(&deployment, None).retry_requested);
+        deployment.retry_requested = true;
+        assert!(record_to_response(&deployment, None).retry_requested);
+        // Acquiring clears the queue bit while keeping the failed checkpoint visible.
+        deployment.retry_requested = false;
+        deployment.locked_by = Some("local-manager".to_string());
+        assert!(record_to_response(&deployment, None).retry_requested);
+        deployment.status = "provisioning".to_string();
+        assert!(!record_to_response(&deployment, None).retry_requested);
+        deployment.status = "provisioning-failed".to_string();
+        deployment.locked_by = None;
+        assert!(
+            !record_to_response(&deployment, None).retry_requested,
+            "a newly committed failure is terminal"
+        );
+        deployment.platform = Platform::Aws;
+        deployment.locked_by = Some("cloud-manager".to_string());
+        assert!(!record_to_response(&deployment, None).retry_requested);
     }
 
     async fn cleanup_route_response(deployment_remains: bool) -> (StatusCode, serde_json::Value) {

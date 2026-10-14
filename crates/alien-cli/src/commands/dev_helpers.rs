@@ -88,6 +88,7 @@ pub struct DevDeploymentLiveState {
     pub deployment_name: String,
     pub status: DeploymentStatus,
     pub current_release_id: Option<String>,
+    pub retry_requested: bool,
     pub resources: HashMap<String, DevResourceInfo>,
     pub stack_state: Option<StackState>,
     pub error: Option<serde_json::Value>,
@@ -1294,6 +1295,7 @@ async fn live_state_from_deployment(
         deployment_name: deployment.name.clone(),
         status: parse_deployment_status(&deployment.status)?,
         current_release_id: deployment.current_release_id.clone(),
+        retry_requested: deployment.retry_requested,
         resources,
         stack_state,
         error: deployment
