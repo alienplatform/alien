@@ -35,8 +35,8 @@ use alien_core::{
     GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, HeartbeatsMode,
     KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
     Network, NetworkSettings, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle,
-    ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState, Storage,
-    UpdatesMode, Worker, WorkerCode,
+    ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackResourceState, StackSettings,
+    StackState, Storage, UpdatesMode, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
