@@ -607,7 +607,8 @@
       // resource-group-scoped role assignment.
       {
         "grant": {
-          "actions": ["Microsoft.Compute/skus/read"]
+          // Applied regional quotas and usage; no VM inventory or telemetry.
+          "actions": ["Microsoft.Compute/skus/read", "Microsoft.Compute/locations/usages/read"]
         },
         "binding": {
           "stack": {

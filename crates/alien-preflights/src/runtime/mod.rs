@@ -8,6 +8,8 @@ pub mod aws_lambda;
 #[cfg(feature = "runtime-checks")]
 pub mod aws_nat;
 #[cfg(feature = "runtime-checks")]
+pub mod azure_compute;
+#[cfg(feature = "runtime-checks")]
 pub mod cloud_quotas;
 #[cfg(feature = "runtime-checks")]
 pub mod gcp_compute;

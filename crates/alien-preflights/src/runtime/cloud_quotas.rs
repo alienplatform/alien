@@ -28,7 +28,7 @@ impl RuntimeCheck for CloudQuotasCheck {
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
-        if !matches!(platform, Platform::Aws | Platform::Gcp) {
+        if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
             return false;
         }
         if platform == Platform::Gcp && super::gcp_service_accounts::has_service_accounts(stack) {
@@ -59,6 +59,27 @@ impl RuntimeCheck for CloudQuotasCheck {
     ) -> Result<CheckResult> {
         let mut result = CheckResult::success();
         warn_unresolved_compute_replacements(stack, stack_state, &mut result);
+        if stack_state.platform == Platform::Azure {
+            let Some(config) = client_config.azure_config() else {
+                result.add_warning("Azure quota checks could not find target credentials".into());
+                result.status = Some(CheckStatus::Unknown);
+                return Ok(result);
+            };
+            let Some(http) = quota_http_client(&mut result) else {
+                return Ok(result);
+            };
+            let skus = alien_azure_clients::AzureResourceSkusClient::new(
+                http.clone(),
+                alien_azure_clients::AzureTokenCache::new(config.clone()),
+            );
+            let usages = alien_azure_clients::AzureComputeUsagesClient::new(
+                http,
+                alien_azure_clients::AzureTokenCache::new(config.clone()),
+            );
+            super::azure_compute::check(stack, stack_state, config, &skus, &usages, &mut result)
+                .await;
+            return Ok(result);
+        }
         if stack_state.platform == Platform::Gcp {
             let Some(config) = client_config.gcp_config() else {
                 result.add_warning("GCP quota checks could not find target credentials".into());
@@ -221,7 +242,10 @@ fn warn_unresolved_compute_replacements(
     state: &StackState,
     result: &mut CheckResult,
 ) {
-    if !matches!(state.platform, Platform::Aws | Platform::Gcp) {
+    if !matches!(
+        state.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
         return;
     }
     for (id, entry) in &stack.resources {
@@ -566,7 +590,7 @@ mod tests {
                 state.resources.insert("compute".into(), current.clone());
                 let mut result = CheckResult::success();
                 warn_unresolved_compute_replacements(&desired, &state, &mut result);
-                let warns = matches!(platform, Platform::Aws | Platform::Gcp)
+                let warns = matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
                     && matches!(
                         status,
                         ResourceStatus::Running | ResourceStatus::UpdateFailed

@@ -1218,6 +1218,7 @@ name = "alien-preflights"
 version = "3.3.32"
 dependencies = [
  "alien-aws-clients",
+ "alien-azure-clients",
  "alien-core",
  "alien-error",
  "alien-gcp-clients",
