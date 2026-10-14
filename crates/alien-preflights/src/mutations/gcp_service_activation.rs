@@ -4,7 +4,7 @@ use crate::error::Result;
 use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
+    DeploymentConfig, Key, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
     StackState,
 };
 use async_trait::async_trait;
@@ -73,7 +73,7 @@ impl StackMutation for GcpServiceActivationMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding GCP ServiceActivation resources");
@@ -87,6 +87,12 @@ impl StackMutation for GcpServiceActivationMutation {
                 .iter()
                 .any(|(existing_id, _)| existing_id == &service_id)
             {
+                continue;
+            }
+            if service_id == CLOUD_KMS_ACTIVATION_ID && kms_used_without_activation(stack_state) {
+                debug!(
+                    "Cloud KMS is already in use by the installed Key; not adding its activation"
+                );
                 continue;
             }
 
@@ -113,6 +119,26 @@ impl StackMutation for GcpServiceActivationMutation {
 
         Ok(stack)
     }
+}
+
+/// The Cloud KMS activation. Its id is also the Key's dependency.
+pub(crate) const CLOUD_KMS_ACTIVATION_ID: &str = "enable-cloud-kms";
+
+/// Whether the installed stack already has a Key but no Cloud KMS activation.
+///
+/// Setups from before the activation existed created the key ring through the Cloud KMS API, so
+/// the API is already enabled in that project. Adding the activation now would be a new
+/// setup-owned resource, which would make the next update require setup for nothing.
+///
+/// A Terraform setup rerun prepares its import from empty state, so it adds the activation, and
+/// later updates keep it. A direct setup update prepares from the installed state and keeps
+/// leaving it out; GCP Keys are imported from Terraform, and the API is already enabled anyway.
+fn kms_used_without_activation(stack_state: &StackState) -> bool {
+    stack_state
+        .resources
+        .values()
+        .any(|resource| resource.resource_type == Key::RESOURCE_TYPE.as_ref())
+        && !stack_state.resources.contains_key(CLOUD_KMS_ACTIVATION_ID)
 }
 
 impl GcpServiceActivationMutation {
@@ -144,7 +170,7 @@ impl GcpServiceActivationMutation {
                 }
                 "key" => {
                     services.insert(
-                        "enable-cloud-kms".to_string(),
+                        CLOUD_KMS_ACTIVATION_ID.to_string(),
                         "cloudkms.googleapis.com".to_string(),
                     );
                 }
