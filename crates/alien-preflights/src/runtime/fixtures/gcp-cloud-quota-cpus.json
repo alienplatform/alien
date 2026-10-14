@@ -16,9 +16,7 @@
       "details": {
         "value": "360"
       },
-      "applicableLocations": [
-        "global"
-      ]
+      "applicableLocations": ["global"]
     }
   ]
 }
