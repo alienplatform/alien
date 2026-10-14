@@ -148,31 +148,17 @@ async fn source_reaches_aws_but_not_kubernetes_through_the_runner() {
     assert!(on_aws.success, "AWS builds it: {on_aws:?}");
 }
 
-/// Azure builds a source sandbox too, and Frozen, because its controller pulls the pushed image
-/// with the deployment's own credentials. GCP still has no builder, so it refuses by name.
+/// Azure and GCP build a source sandbox too, and Frozen: Azure's controller pulls the pushed image
+/// with the deployment's own credentials, and GCP's template is created by the release, which runs
+/// after the deployment's registry access exists.
 #[tokio::test]
-async fn source_reaches_azure_frozen_and_is_refused_on_gcp_through_the_runner() {
+async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
     let frozen = alien_core::ResourceLifecycle::Frozen;
-    let on_azure = PreflightRunner::new()
-        .run_compile_time_checks(
-            &stack_with_lifecycle(source_sandbox(), frozen),
-            Platform::Azure,
-        )
-        .await
-        .expect("compile-time checks run");
-    assert!(on_azure.success, "Azure builds it: {on_azure:?}");
-
-    let on_gcp = PreflightRunner::new()
-        .run_compile_time_checks(
-            &stack_with_lifecycle(source_sandbox(), frozen),
-            Platform::Gcp,
-        )
-        .await
-        .expect("compile-time checks run");
-    assert!(!on_gcp.success, "source has no builder on GCP: {on_gcp:?}");
-    let rendered = format!("{on_gcp:?}");
-    assert!(
-        rendered.contains("from source on gcp"),
-        "the failure must name the platform that cannot build it: {rendered}"
-    );
+    for platform in [Platform::Azure, Platform::Gcp] {
+        let summary = PreflightRunner::new()
+            .run_compile_time_checks(&stack_with_lifecycle(source_sandbox(), frozen), platform)
+            .await
+            .expect("compile-time checks run");
+        assert!(summary.success, "{platform} builds it: {summary:?}");
+    }
 }

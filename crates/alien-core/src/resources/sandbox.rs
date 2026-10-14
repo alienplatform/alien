@@ -33,8 +33,9 @@ pub enum SandboxCode {
     },
     /// A Dockerfile `alien build` builds into the sandbox's base image.
     ///
-    /// AWS and Azure only, and docker only: the base image is a root filesystem, not a binary laid
-    /// on one. `alien release` pushes it; on AWS the bundle layers the sandbox agent on afterwards.
+    /// AWS, Azure and GCP, and docker only: the base image is a root filesystem, not a binary laid
+    /// on one. `alien release` pushes it; on AWS the bundle layers the sandbox agent on afterwards,
+    /// and on GCP the release layers it on and pushes the result.
     #[serde(rename_all = "camelCase")]
     Source {
         /// The source directory to build from
@@ -667,12 +668,12 @@ impl Sandbox {
             capabilities.domain_egress_rules = true;
         }
 
-        // `alien build` builds an AWS or Azure sandbox's base image, so source is a declaration
-        // there and the emitters refuse it only if it reaches them unbuilt. Everywhere else the
-        // image is pulled as declared, and an empty image string would schedule a pod that can
-        // never run.
+        // `alien build` builds an AWS, Azure or GCP sandbox's base image, so source is a
+        // declaration there and the emitters refuse it only if it reaches them unbuilt. Everywhere
+        // else the image is pulled as declared, and an empty image string would schedule a pod
+        // that can never run.
         if matches!(&self.code, SandboxCode::Source { .. })
-            && !matches!(platform, Platform::Aws | Platform::Azure)
+            && !matches!(platform, Platform::Aws | Platform::Azure | Platform::Gcp)
         {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -2305,7 +2306,7 @@ mod tests {
         );
     }
 
-    /// `alien build` builds an AWS or Azure sandbox's base image, so source is a declaration
+    /// `alien build` builds an AWS, Azure or GCP sandbox's base image, so source is a declaration
     /// there. On every other platform the image is pulled as declared, and an unbuilt source would
     /// schedule a pod that can never run, so the refusal still has to happen at plan time.
     #[test]
@@ -2332,8 +2333,11 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Azure)
             .expect("an Azure sandbox base image is built by `alien build`");
+        sandbox
+            .validate_for_platform(Platform::Gcp)
+            .expect("a GCP sandbox base image is built by `alien build`");
 
-        for platform in [Platform::Gcp, Platform::Kubernetes, Platform::Local] {
+        for platform in [Platform::Kubernetes, Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no backend builds a sandbox image from source here");

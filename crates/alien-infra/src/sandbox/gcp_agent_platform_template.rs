@@ -20,8 +20,8 @@ use crate::error::{ErrorData, Result};
 use crate::sandbox::GcpAgentPlatformEngineController;
 use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{
-    GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
-    SandboxLimits,
+    DeploymentConfig, GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus,
+    Sandbox, SandboxCode, SandboxLimits,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
@@ -55,8 +55,7 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
         SandboxCode::Image { image } => image.clone(),
         SandboxCode::Source { .. } => {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no sandbox backend builds an image from source; give code.image a \
-                          prebuilt reference"
+                message: "the sandbox still has unbuilt source code. Run 'alien build' first"
                     .to_string(),
                 resource_id: Some(sandbox.id().to_string()),
             }));
@@ -64,6 +63,38 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
     };
     let internet_access = internet_access_or_refuse(sandbox)?;
     Ok((image, sandbox.resolved_limits(), internet_access))
+}
+
+/// The image Agent Platform pulls. It pulls natively and with no credentials, so a reference on the
+/// manager's registry proxy is named by its native registry path. Any other reference is pulled as
+/// declared.
+fn pulled_image(
+    image: &str,
+    deployment_config: &DeploymentConfig,
+    resource_id: &str,
+) -> Result<String> {
+    let Some(manager_url) = deployment_config.manager_url.as_deref() else {
+        return Ok(image.to_string());
+    };
+    let proxy_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
+    let proxied = image
+        .split_once('/')
+        .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host));
+    if !proxied {
+        return Ok(image.to_string());
+    }
+    let refused = |reason: &str| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!("cannot name '{image}' for Agent Platform to pull: {reason}"),
+            resource_id: Some(resource_id.to_string()),
+        })
+    };
+    let native_host = deployment_config
+        .native_image_host
+        .as_deref()
+        .ok_or_else(|| refused("the deployment has no native registry host"))?;
+    alien_core::image_rewrite::resolve_native_image_uri(image, native_host)
+        .ok_or_else(|| refused("the reference has no repository path"))
 }
 
 /// The egress switch, or a refusal naming the sandbox and both accepted modes.
@@ -98,8 +129,10 @@ fn served_internet_access(template: &SandboxEnvironmentTemplate) -> bool {
 fn build_template_body(
     sandbox: &Sandbox,
     display_name: &str,
+    deployment_config: &DeploymentConfig,
 ) -> Result<SandboxEnvironmentTemplate> {
     let (image, limits, internet_access) = template_identity(sandbox)?;
+    let image = pulled_image(&image, deployment_config, sandbox.id())?;
 
     // cpu and memory are the ceilings the API's resource map expresses; disk and max_processes have
     // no field on this template and are enforced by the runtime tier instead.
@@ -193,7 +226,7 @@ impl GcpAgentPlatformTemplateController {
             .engine_id
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name)?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -488,7 +521,7 @@ impl GcpAgentPlatformTemplateController {
         })?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name)?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation =
@@ -1374,8 +1407,8 @@ mod tests {
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
         let sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
-        let body =
-            build_template_body(&sandbox, "agent-sbx").expect("a valid sandbox builds a body");
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
             wire["customContainerEnvironment"]["ports"],
@@ -1396,7 +1429,7 @@ mod tests {
             None,
             None,
         );
-        let error = build_template_body(&sandbox, "agent-sbx")
+        let error = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
             .expect_err("a hostname list has no representation on Agent Platform");
         assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
         let rendered = error.to_string();
@@ -1407,6 +1440,88 @@ mod tests {
         assert!(
             rendered.contains("allow") && rendered.contains("deny"),
             "names both accepted modes: {rendered}"
+        );
+    }
+
+    fn deployment_config(
+        manager_url: Option<&str>,
+        native_image_host: Option<&str>,
+    ) -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .maybe_manager_url(manager_url.map(str::to_string))
+            .maybe_native_image_host(native_image_host.map(str::to_string))
+            .build()
+    }
+
+    fn template_image(image: &str, config: &DeploymentConfig) -> Result<String> {
+        let sandbox = sandbox_with(SandboxEgress::Deny, image, None, None);
+        build_template_body(&sandbox, "agent-sbx", config).map(|body| {
+            body.custom_container_environment
+                .and_then(|environment| environment.custom_container_spec)
+                .expect("the body names an image")
+                .image_uri
+        })
+    }
+
+    /// Agent Platform pulls with no credentials, so it can never pull through the manager's proxy:
+    /// a release-pushed reference reaches it by its native registry path.
+    #[test]
+    fn a_proxied_image_is_sent_by_its_native_registry_path() {
+        let config = deployment_config(
+            Some("https://manager.example.com"),
+            Some("us-central1-docker.pkg.dev"),
+        );
+        assert_eq!(
+            template_image(
+                "manager.example.com/proj/repo/default:sbx-abc-agent",
+                &config
+            )
+            .expect("a proxied image has a native path"),
+            "us-central1-docker.pkg.dev/proj/repo/default:sbx-abc-agent"
+        );
+    }
+
+    /// Only the proxy's own host is rewritten: a native or public reference is already pullable,
+    /// and stripping its host would point at a repository that does not exist.
+    #[test]
+    fn a_native_or_public_image_is_sent_as_declared() {
+        let config = deployment_config(
+            Some("https://manager.example.com"),
+            Some("us-central1-docker.pkg.dev"),
+        );
+        for image in [
+            "us-central1-docker.pkg.dev/proj/repo/sandbox:v1",
+            "ghcr.io/acme/sandbox:v1",
+            "ubuntu:24.04",
+        ] {
+            assert_eq!(
+                template_image(image, &config).expect("a pullable image is accepted"),
+                image
+            );
+        }
+    }
+
+    /// A proxied reference with no native host has no name Agent Platform can pull, so creating a
+    /// template from it would only fail later, at the first session.
+    #[test]
+    fn a_proxied_image_without_a_native_host_is_refused() {
+        let error = template_image(
+            "manager.example.com/proj/repo/default:sbx-abc-agent",
+            &deployment_config(Some("https://manager.example.com"), None),
+        )
+        .expect_err("nothing names the proxied image natively");
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
+        assert!(
+            error.to_string().contains("native registry host"),
+            "says what is missing: {error}"
         );
     }
 }
