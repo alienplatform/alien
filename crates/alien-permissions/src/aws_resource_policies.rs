@@ -1,0 +1,284 @@
+//! Pure selection and naming of inline policies written for workload resources.
+//!
+//! Setup and quota accounting must use the same resolved contexts and explicit
+//! references. Unknown deployment variables are errors, not invented ARN values.
+
+use crate::{
+    generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
+    BindingTarget, PermissionContext, Result,
+};
+use alien_core::{PermissionSet, PermissionSetReference};
+
+/// Inputs used to omit implicit grants already covered by the stack document.
+/// Explicit resource references are retained even when a stack grant covers them.
+pub struct AwsResourcePolicyContext<'a> {
+    pub named_by_resource: &'a [PermissionSetReference],
+    pub stack_sets: &'a [PermissionSet],
+    pub generator: &'a AwsRuntimePermissionsGenerator,
+    pub permission_context: &'a PermissionContext,
+}
+
+impl AwsResourcePolicyContext<'_> {
+    /// Whether setup can omit this resource policy without removing permissions.
+    pub fn is_redundant(&self, reference: &PermissionSetReference) -> Result<bool> {
+        if self.named_by_resource.contains(reference) {
+            return Ok(false);
+        }
+        // Aliases must be resolved before comparing with mutated identity sets.
+        let stack_set = reference
+            .resolve(|name| crate::get_permission_set(name).cloned())
+            .and_then(|resolved| self.stack_sets.iter().find(|set| **set == resolved));
+        let Some(set) = stack_set else {
+            return Ok(false);
+        };
+        let stack =
+            self.generator
+                .generate_policy(set, BindingTarget::Stack, self.permission_context)?;
+        let resource = self.generator.generate_policy(
+            set,
+            BindingTarget::Resource,
+            self.permission_context,
+        )?;
+        Ok(aws_policy_grants(&stack, &resource))
+    }
+}
+
+/// Whether `broad` allows every request `narrow` allows.
+///
+/// Answers yes only when it can prove it: every statement of `narrow` must be an `Allow` with
+/// plain `Resource`s that one `Allow` statement of `broad` matches, with no condition `narrow`
+/// lacks. A `Deny`, a `NotResource` or a differing condition answers no, which keeps the
+/// narrow policy.
+fn aws_policy_grants(broad: &AwsIamPolicy, narrow: &AwsIamPolicy) -> bool {
+    let plain_allow = |statement: &AwsIamStatement| {
+        statement.effect == "Allow" && statement.not_resource.is_empty()
+    };
+    narrow.statement.iter().all(|wanted| {
+        plain_allow(wanted)
+            && broad.statement.iter().any(|granted| {
+                plain_allow(granted)
+                    && (granted.condition.is_none() || granted.condition == wanted.condition)
+                    && wanted.action.iter().all(|action| {
+                        granted.action.iter().any(|pattern| {
+                            iam_pattern_contains(
+                                &pattern.to_ascii_lowercase(),
+                                &action.to_ascii_lowercase(),
+                            )
+                        })
+                    })
+                    && wanted.resource.iter().all(|resource| {
+                        granted
+                            .resource
+                            .iter()
+                            .any(|pattern| iam_pattern_contains(pattern, resource))
+                    })
+            })
+    })
+}
+
+/// Whether every string IAM matches with `narrow` is also matched by `pattern`, both using IAM's
+/// `*` (any run of characters) and `?` (one character).
+///
+/// A wildcard in `narrow` is only accepted against a wildcard in `pattern` at least as wide, so
+/// a `true` is always a real containment; some true containments answer `false`.
+fn iam_pattern_contains(pattern: &str, narrow: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let narrow: Vec<char> = narrow.chars().collect();
+    // covered[j] after processing pattern[..i]: pattern[..i] covers narrow[..j].
+    let mut covered = vec![false; narrow.len() + 1];
+    covered[0] = true;
+    for &p in &pattern {
+        let mut next = vec![false; narrow.len() + 1];
+        for j in 0..=narrow.len() {
+            next[j] = match p {
+                // `*` covers whatever an earlier prefix covered, extended by any character.
+                '*' => covered[j] || (j > 0 && next[j - 1]),
+                // `?` covers one character, or a `?` in `narrow`, never a `*`.
+                '?' => j > 0 && covered[j - 1] && narrow[j - 1] != '*',
+                // A literal never covers a wildcard in `narrow`, which matches more than it.
+                literal => j > 0 && covered[j - 1] && narrow[j - 1] == literal,
+            };
+        }
+        covered = next;
+    }
+    covered[narrow.len()]
+}
+
+/// Inline policy a resource attaches to a profile's service-account role.
+pub fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
+    format!(
+        "alien-{}-{}",
+        resource_id,
+        permission_set_id.replace('/', "-")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_preserves_explicit_and_uncovered_grants() {
+        let reference = PermissionSetReference::from_name("storage/data-read".to_string());
+        let stack_sets = vec![crate::get_permission_set("storage/data-read")
+            .unwrap()
+            .clone()];
+        let generator = AwsRuntimePermissionsGenerator::new();
+        for (resource_name, explicit, expected) in [
+            ("q5-selection-objects", false, true),
+            ("q5-selection-objects", true, false),
+            ("outside-prefix", false, false),
+        ] {
+            let context = PermissionContext::new()
+                .with_stack_prefix("q5-selection".to_string())
+                .with_resource_name(resource_name.to_string());
+            let named = if explicit {
+                vec![reference.clone()]
+            } else {
+                vec![]
+            };
+            let selection = AwsResourcePolicyContext {
+                named_by_resource: &named,
+                stack_sets: &stack_sets,
+                generator: &generator,
+                permission_context: &context,
+            };
+            assert_eq!(selection.is_redundant(&reference).unwrap(), expected);
+        }
+        let selection = AwsResourcePolicyContext {
+            named_by_resource: &[],
+            stack_sets: &[],
+            generator: &generator,
+            permission_context: &PermissionContext::new(),
+        };
+        assert!(!selection.is_redundant(&reference).unwrap());
+    }
+
+    #[test]
+    fn selection_propagates_missing_context_without_claiming_coverage() {
+        let reference = PermissionSetReference::from_name("storage/data-read".to_string());
+        let stack_sets = vec![crate::get_permission_set("storage/data-read")
+            .unwrap()
+            .clone()];
+        let selection = AwsResourcePolicyContext {
+            named_by_resource: &[],
+            stack_sets: &stack_sets,
+            generator: &AwsRuntimePermissionsGenerator::new(),
+            permission_context: &PermissionContext::new(),
+        };
+        let error = selection.is_redundant(&reference).unwrap_err();
+        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+        assert!(!error.retryable);
+    }
+
+    fn aws_policies(set_id: &str, resource_name: &str) -> (AwsIamPolicy, AwsIamPolicy) {
+        let set = crate::get_permission_set(set_id)
+            .unwrap_or_else(|| panic!("permission set '{set_id}' is registered"));
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012".to_string())
+            .with_aws_region("us-east-1".to_string())
+            .with_stack_prefix("p26eed71".to_string())
+            .with_resource_id("res".to_string())
+            .with_resource_name(resource_name.to_string());
+        let generator = AwsRuntimePermissionsGenerator::new();
+        (
+            generator
+                .generate_policy(set, BindingTarget::Stack, &context)
+                .unwrap(),
+            generator
+                .generate_policy(set, BindingTarget::Resource, &context)
+                .unwrap(),
+        )
+    }
+
+    /// Every `"*"` set of a typical worker stack, for resources named under the stack prefix:
+    /// the stack-level policy already grants each one, so none needs a policy per resource.
+    #[test]
+    fn stack_level_policy_grants_wildcard_sets_for_resources_under_the_stack_prefix() {
+        for (set_id, resource_name) in [
+            ("storage/data-read", "p26eed71-test-alien-storage"),
+            ("storage/data-write", "p26eed71-test-alien-storage"),
+            ("build/execute", "p26eed71-test-alien-build"),
+            (
+                "artifact-registry/pull",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            (
+                "artifact-registry/push",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            (
+                "artifact-registry/provision",
+                "p26eed71-test-alien-artifact-registry",
+            ),
+            ("vault/data-read", "p26eed71-test-vault"),
+            ("vault/data-write", "p26eed71-secrets"),
+            ("kv/data-read", "p26eed71-test-alien-kv"),
+            ("kv/data-write", "p26eed71-test-alien-kv"),
+            ("queue/data-read", "p26eed71-test-alien-queue"),
+            ("queue/data-write", "p26eed71-test-alien-queue"),
+        ] {
+            let (stack, resource) = aws_policies(set_id, resource_name);
+            assert!(
+                aws_policy_grants(&stack, &resource),
+                "{set_id} on {resource_name}: stack {stack:#?} resource {resource:#?}"
+            );
+        }
+    }
+
+    /// A bring-your-own bucket is named outside the stack prefix, so only its own policy
+    /// reaches it.
+    #[test]
+    fn stack_level_policy_does_not_grant_a_resource_outside_the_stack_prefix() {
+        for set_id in ["storage/data-read", "storage/data-write"] {
+            let (stack, resource) = aws_policies(set_id, "customer-data");
+            assert!(!aws_policy_grants(&stack, &resource), "{set_id}");
+        }
+    }
+
+    #[test]
+    fn iam_pattern_containment_never_claims_a_wider_pattern() {
+        // (pattern, narrow, pattern matches everything narrow matches)
+        for (pattern, narrow, contains) in [
+            ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket", true),
+            ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket/*", true),
+            (
+                "arn:aws:ecr:*:1:repository/p-*",
+                "arn:aws:ecr:us-east-1:1:repository/p-r-*",
+                true,
+            ),
+            ("role/p-*-pull", "role/p-registry-pull", true),
+            ("*", "*", true),
+            ("a*", "a?", true),
+            ("a?c", "a?c", true),
+            ("arn:aws:s3:::p-*", "arn:aws:s3:::customer", false),
+            ("arn:aws:s3:::p-bucket", "arn:aws:s3:::p-*", false),
+            ("a?c", "a*c", false),
+            ("abc", "a?c", false),
+            ("role/p-*-pull", "role/p-registry-push", false),
+        ] {
+            assert_eq!(
+                iam_pattern_contains(pattern, narrow),
+                contains,
+                "{pattern} vs {narrow}"
+            );
+        }
+    }
+
+    /// A broad statement with a condition grants less than an unconditional one.
+    #[test]
+    fn conditioned_stack_statement_does_not_grant_an_unconditioned_one() {
+        let (mut stack, resource) = aws_policies("kv/data-read", "p26eed71-test-alien-kv");
+        assert!(aws_policy_grants(&stack, &resource));
+        for statement in &mut stack.statement {
+            statement.condition = Some(
+                [(
+                    "StringEquals".to_string(),
+                    [("aws:ResourceTag/owner".to_string(), "x".to_string())].into(),
+                )]
+                .into(),
+            );
+        }
+        assert!(!aws_policy_grants(&stack, &resource));
+    }
+}
