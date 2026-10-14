@@ -523,6 +523,15 @@ async fn preflight_aws_nat_quota(ctx: &ResourceControllerContext<'_>, zone: &str
                 "{} ({}, {}): used {used}, applied limit {limit}, additional demand {needed}. Request an increase: {}.",
                 quota.name, quota.provider_id, quota.scope, quota.increase_url,
             );
+            if ctx
+                .deployment_config
+                .stack_settings
+                .quota_warning_overrides
+                .contains(&quota.provider_id)
+            {
+                warn!("Deployment quota override: {message}");
+                return Ok(());
+            }
             Err(AlienError::new(ErrorData::CloudQuotaExceeded {
                 quota,
                 message,
@@ -601,6 +610,15 @@ async fn preflight_aws_eip_quota(
                 "{} ({}, {}): used {used}, applied limit {limit}, additional demand {needed}. Request an increase: {}. Network '{}' requires one Elastic IP for its NAT gateway.",
                 quota.name, quota.provider_id, quota.scope, quota.increase_url, resource_id,
             );
+            if ctx
+                .deployment_config
+                .stack_settings
+                .quota_warning_overrides
+                .contains(&quota.provider_id)
+            {
+                warn!("Deployment quota override: {message}");
+                return Ok(());
+            }
             Err(AlienError::new(ErrorData::CloudQuotaExceeded {
                 quota,
                 message,
@@ -920,12 +938,13 @@ mod tests {
 
     #[tokio::test]
     async fn create_start_uses_shared_eip_outcomes_before_any_mutation() {
-        for (quota_code, limit, blocked) in [
-            ("L-0263D0A3", 2.0, false),
-            ("L-0263D0A3", 1.0, true),
-            ("L-0263D0A3", f64::NAN, false),
-            ("unrelated-quota", 1.0, false),
-            ("denied", 1.0, false),
+        for (quota_code, limit, blocked, overridden) in [
+            ("L-0263D0A3", 2.0, false, false),
+            ("L-0263D0A3", 1.0, true, false),
+            ("L-0263D0A3", 1.0, false, true),
+            ("L-0263D0A3", f64::NAN, false, false),
+            ("unrelated-quota", 1.0, false, false),
+            ("denied", 1.0, false, false),
         ] {
             let mut ec2 = MockEc2Api::new();
             ec2.expect_create_vpc().times(0);
@@ -999,6 +1018,14 @@ mod tests {
                 .controller(AwsNetworkController::default())
                 .platform(Platform::Aws)
                 .service_provider(Arc::new(provider))
+                .stack_settings(alien_core::StackSettings {
+                    quota_warning_overrides: if overridden {
+                        vec!["L-0263D0A3".into()]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                })
                 .with_test_dependencies()
                 .build()
                 .await
@@ -6075,11 +6102,12 @@ mod controller_state_tests {
 
     #[tokio::test]
     async fn nat_guard_uses_persisted_first_zone_before_vpc_creation() {
-        for (limit, denied, blocked) in [
-            (1.0, false, true),
-            (2.0, false, false),
-            (f64::NAN, false, false),
-            (1.0, true, false),
+        for (limit, denied, blocked, overridden) in [
+            (1.0, false, true, false),
+            (1.0, false, false, true),
+            (2.0, false, false, false),
+            (f64::NAN, false, false, false),
+            (1.0, true, false, false),
         ] {
             let mut ec2 = MockEc2Api::new();
             ec2.expect_create_vpc().times(0);
@@ -6143,6 +6171,14 @@ mod controller_state_tests {
                 .platform(Platform::Aws)
                 .service_provider(Arc::new(provider))
                 .resource_prefix(PREFIX)
+                .stack_settings(alien_core::StackSettings {
+                    quota_warning_overrides: if overridden {
+                        vec!["L-FE5A380F".into()]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                })
                 .with_test_dependencies()
                 .build()
                 .await

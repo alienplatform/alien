@@ -34,6 +34,22 @@ pub async fn read_nat_gateway_observation(
     quotas: &dyn ServiceQuotasApi,
     zone: &str,
 ) -> Option<QuotaObservation> {
+    // The direct network controller may supply clients without HTTP timeouts.
+    // Bound the complete optional observation, including all inventory pages.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        read_nat_gateway_observation_inner(ec2, quotas, zone),
+    )
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn read_nat_gateway_observation_inner(
+    ec2: &dyn Ec2Api,
+    quotas: &dyn ServiceQuotasApi,
+    zone: &str,
+) -> Option<QuotaObservation> {
     if zone.is_empty() {
         return None;
     }
@@ -122,8 +138,58 @@ pub async fn read_nat_gateway_observation(
 mod tests {
     use super::*;
     use crate::quotas::{evaluate, QuotaDemand, QuotaOutcome};
-    use alien_aws_clients::{ec2::MockEc2Api, service_quotas::MockServiceQuotasApi};
+    use alien_aws_clients::{
+        ec2::MockEc2Api, service_quotas::MockServiceQuotasApi, AwsCredentialProvider,
+        ServiceQuotasClient,
+    };
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
     use serde_json::json;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn stalled_optional_nat_read_expires_to_unknown() {
+        let server = httpmock::MockServer::start_async().await;
+        let stalled = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(200).delay(Duration::from_secs(30)).body("{}");
+            })
+            .await;
+        let credentials = AwsCredentialProvider::from_config(AwsClientConfig {
+            account_id: "test".into(),
+            region: "eu-west-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test".into(),
+                secret_access_key: "test".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: [("servicequotas".into(), server.base_url())].into(),
+            }),
+        })
+        .await
+        .unwrap();
+        // The direct controller supplies an HTTP client without its own deadline.
+        let quotas = ServiceQuotasClient::new(reqwest::Client::new(), credentials);
+        let observed = tokio::time::timeout(
+            Duration::from_secs(20),
+            read_nat_gateway_observation(&MockEc2Api::new(), &quotas, "eu-west-1a"),
+        )
+        .await
+        .expect("the optional observation must have its own deadline");
+        assert_eq!(observed, None);
+        assert!(matches!(
+            evaluate(
+                QuotaDemand {
+                    peak: 1.0,
+                    held: 0.0
+                },
+                observed
+            ),
+            QuotaOutcome::Unknown { .. }
+        ));
+        stalled.assert_hits_async(1).await;
+    }
 
     #[test]
     fn placement_preserves_provider_order_and_does_not_fill_unnamed_slots() {

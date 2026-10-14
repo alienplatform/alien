@@ -7,7 +7,6 @@ use alien_core::{
     Platform, StackSettings, StackState,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_preflights::RuntimeCheck;
 use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -213,26 +212,43 @@ async fn prepare_stack_for_render(
                     message: "Load target AWS credentials and region before using --check-quotas"
                         .into(),
                 })?;
-        let check = alien_preflights::runtime::CloudQuotasCheck;
-        let result = check
-            .check(&stack, &stack_state, &config, &client_config)
-            .await
-            .map_err(preflight_error)?
-            .with_check_metadata(check.code(), check.description());
+        check_render_quotas(&runner, &stack, &stack_state, &config, &client_config).await?;
+    }
+    Ok(stack)
+}
+
+async fn check_render_quotas(
+    runner: &alien_preflights::runner::PreflightRunner,
+    stack: &alien_core::Stack,
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+) -> Result<()> {
+    let summary = runner
+        .run_runtime_checks(
+            stack,
+            stack_state,
+            config,
+            client_config,
+            stack_state.platform,
+        )
+        .await
+        .map_err(preflight_error)?;
+    for result in &summary.results {
         for warning in &result.warnings {
             eprintln!("Quota warning: {warning}");
         }
-        if !result.success {
-            return Err(preflight_error(AlienError::new(
-                alien_preflights::error::ErrorData::ValidationFailed {
-                    error_count: 1,
-                    warning_count: result.warnings.len(),
-                    results: vec![result],
-                },
-            )));
-        }
     }
-    Ok(stack)
+    if !summary.success {
+        return Err(preflight_error(AlienError::new(
+            alien_preflights::error::ErrorData::ValidationFailed {
+                error_count: summary.failed_checks,
+                warning_count: summary.warning_count,
+                results: summary.results,
+            },
+        )));
+    }
+    Ok(())
 }
 
 fn render_management_config(platform: Platform) -> Option<ManagementConfig> {
@@ -513,6 +529,79 @@ mod tests {
         AzureStorageAccount, Container, ContainerCode, ResourceLifecycle, ResourceSpec, Sandbox,
         SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack, Storage,
     };
+
+    #[tokio::test]
+    async fn render_quota_checks_honor_saved_overrides_and_reject_invalid_identities() {
+        let server = httpmock::MockServer::start_async().await;
+        let quota = server.mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path("/2016-08-19/account-settings");
+            then.status(200).json_body(serde_json::json!({"AccountLimit": {"ConcurrentExecutions": 1000, "UnreservedConcurrentExecutions": 100}}));
+        }).await;
+        let client = ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "test".into(),
+            region: "eu-west-1".into(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: "test".into(),
+                secret_access_key: "test".into(),
+                session_token: None,
+            },
+            service_overrides: Some(alien_core::AwsServiceOverrides {
+                endpoints: [("lambda".into(), server.base_url())].into(),
+            }),
+        }));
+        let stack = Stack::new("render-quotas".into())
+            .add(
+                alien_core::Worker::new("worker".into())
+                    .permissions("test".into())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "example:latest".into(),
+                    })
+                    .concurrency_limit(60)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let runner = alien_preflights::runner::PreflightRunner::new();
+        for overrides in [
+            vec![],
+            vec!["L-B99A9384".to_string()],
+            vec!["L-TYPO".to_string()],
+        ] {
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    quota_warning_overrides: overrides.clone(),
+                    ..Default::default()
+                })
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = check_render_quotas(
+                &runner,
+                &stack,
+                &StackState::new(Platform::Aws),
+                &config,
+                &client,
+            )
+            .await;
+            match overrides.first().map(String::as_str) {
+                None => {
+                    let error = result.expect_err("unoverridden shortfall stops render");
+                    let rendered = crate::ui::render_human_error(&error);
+                    assert!(rendered.contains("L-B99A9384"), "{rendered}");
+                }
+                Some("L-B99A9384") => result.expect("saved override permits artifact rendering"),
+                _ => {
+                    assert!(crate::ui::render_human_error(&result.unwrap_err()).contains("L-TYPO"))
+                }
+            }
+        }
+        quota.assert_hits_async(2).await;
+    }
 
     #[tokio::test]
     async fn failed_render_preflights_list_the_failed_checks() {

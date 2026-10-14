@@ -76,6 +76,17 @@ pub async fn check(
             // PutFunctionConcurrency(0) disables invocation without consuming capacity.
             continue;
         }
+        // The worker controller only writes concurrency when its configured
+        // limit changes. A code-only update does not restore external drift.
+        if state.resources.get(id).is_some_and(|current| {
+            current.status == ResourceStatus::Running
+                && current
+                    .config
+                    .downcast_ref::<Worker>()
+                    .is_some_and(|previous| previous.concurrency_limit == worker.concurrency_limit)
+        }) {
+            continue;
+        }
         let held = match state.resources.get(id) {
             None => Some(0),
             Some(current) if current.status == ResourceStatus::Deleted => Some(0),
@@ -181,9 +192,15 @@ mod tests {
                     .build()
                     .resources,
             );
+            let mut previous = stack.resources[id]
+                .config
+                .downcast_ref::<Worker>()
+                .unwrap()
+                .clone();
+            previous.concurrency_limit = Some(if id == "grow" { 50 } else { 30 });
             let mut current = StackResourceState::new_pending(
                 id.into(),
-                stack.resources[id].config.clone(),
+                alien_core::Resource::new(previous),
                 None,
                 vec![],
             );
@@ -219,6 +236,43 @@ mod tests {
             }
         );
     }
+    #[tokio::test]
+    async fn unchanged_running_reservation_needs_no_quota_reads_after_external_drift() {
+        let worker = Worker::new("worker".into())
+            .permissions("test".into())
+            .code(WorkerCode::Image {
+                image: "example:new".into(),
+            })
+            .concurrency_limit(60)
+            .build();
+        let stack = Stack::new("quota-test".into())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let mut state = StackState::new(Platform::Aws);
+        let mut current = StackResourceState::new_pending(
+            "worker".into(),
+            stack.resources["worker"].config.clone(),
+            None,
+            vec![],
+        );
+        current.status = ResourceStatus::Running;
+        current.outputs = Some(ResourceOutputs::new(WorkerOutputs {
+            worker_name: "worker".into(),
+            public_endpoints: Default::default(),
+            identifier: None,
+            commands_push_target: None,
+        }));
+        state.resources.insert("worker".into(), current);
+        let mut lambda = MockLambdaApi::new();
+        // A code-only update does not restore a reservation changed outside Alien.
+        lambda.expect_get_function_concurrency().times(0);
+        lambda.expect_get_account_settings().times(0);
+        let mut result = CheckResult::success();
+        check(&stack, &state, "eu-west-1", &lambda, &mut result).await;
+        assert!(result.success);
+        assert!(result.quota_results.is_empty());
+    }
+
     #[tokio::test]
     async fn zero_and_unreserved_workers_consume_no_capacity_and_make_no_read() {
         for reservation in [Some(0), None] {
