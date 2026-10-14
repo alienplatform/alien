@@ -1,7 +1,7 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::long_running_operation::OperationResult;
 use crate::azure::models::{
-    container_apps::{ContainerApp, ContainerAppCollection},
+    container_apps::{ContainerApp, ContainerAppCollection, IpSecurityRestrictionRule},
     jobs::{Job, JobExecution},
     managed_environments::ManagedEnvironment,
     managed_environments_dapr_components::{
@@ -88,6 +88,15 @@ pub trait ContainerAppsApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         container_app_name: &str,
         container_app: &ContainerApp,
+    ) -> Result<ContainerAppOperationResult>;
+
+    /// Replace only ingress IP restrictions. An empty slice explicitly clears them.
+    /// Does not send revision policy, workload template, or other ingress settings.
+    async fn update_container_app_ip_security_restrictions(
+        &self,
+        resource_group_name: &str,
+        container_app_name: &str,
+        restrictions: &[IpSecurityRestrictionRule],
     ) -> Result<ContainerAppOperationResult>;
 
     async fn get_container_app(
@@ -364,6 +373,49 @@ impl ContainerAppsApi for AzureContainerAppsClient {
             .execute_request_with_long_running_support(
                 signed,
                 "UpdateContainerApp",
+                container_app_name,
+            )
+            .await
+    }
+
+    async fn update_container_app_ip_security_restrictions(
+        &self,
+        resource_group_name: &str,
+        container_app_name: &str,
+        restrictions: &[IpSecurityRestrictionRule],
+    ) -> Result<ContainerAppOperationResult> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/containerApps/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name,
+                container_app_name
+            ),
+            Some(vec![("api-version", "2025-07-01".into())]),
+        );
+
+        // The generated Ingress omits empty arrays and Configuration sends a
+        // default revision policy. Neither is suitable for this partial update.
+        let body = serde_json::json!({
+            "properties": {"configuration": {"ingress": {
+                "ipSecurityRestrictions": restrictions
+            }}}
+        })
+        .to_string();
+        let request = AzureRequestBuilder::new(Method::PATCH, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "UpdateContainerAppIpSecurityRestrictions",
                 container_app_name,
             )
             .await
