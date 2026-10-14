@@ -1,8 +1,32 @@
-import { type Key as KeyConfig, KeySchema, type ResourceType } from "./generated/index.js"
+import { z } from "zod/v4"
+import { AlienError, defineError } from "./error.js"
+import {
+  type Key as KeyConfig,
+  KeySchema,
+  type ResourceRef,
+  type ResourceType,
+} from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { Key as KeyConfig, KeyFingerprint, KeyOutputs } from "./generated/index.js"
 export { KeySchema as KeyConfigSchema } from "./generated/index.js"
+
+const InvalidEncryptionKey = defineError({
+  code: "INVALID_ENCRYPTION_KEY",
+  context: z.object({ resourceType: z.string() }),
+  message: ({ resourceType }) => `Encryption requires an alien.Key, received '${resourceType}'`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/** Validates and returns the reference shared by resources with native encryption. */
+export function encryptionKeyRef(key: Resource): ResourceRef {
+  if (key.config.type !== "key") {
+    throw new AlienError(InvalidEncryptionKey.create({ resourceType: key.config.type }))
+  }
+  return key.ref()
+}
 
 /** A customer-managed encryption key. */
 export class Key extends ResourceBuilder {

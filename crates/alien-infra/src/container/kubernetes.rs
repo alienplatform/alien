@@ -914,6 +914,63 @@ impl KubernetesContainerController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
+        let previous = ctx.previous_resource_config::<Container>()?;
+        if previous
+            .persistent_storage
+            .as_ref()
+            .map(|storage| &storage.mount_path)
+            != config
+                .persistent_storage
+                .as_ref()
+                .map(|storage| &storage.mount_path)
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Adding or removing persistent storage or changing its mount path during a Kubernetes update is unsupported".into(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        let capacity = |container: &Container| {
+            container
+                .persistent_storage
+                .as_ref()
+                .map(|storage| {
+                    alien_core::instance_catalog::parse_memory_bytes(&storage.size).map_err(
+                        |message| {
+                            AlienError::new(ErrorData::ResourceConfigInvalid {
+                                message,
+                                resource_id: Some(config.id.clone()),
+                            })
+                        },
+                    )
+                })
+                .transpose()
+        };
+        let unchanged_spelling = previous
+            .persistent_storage
+            .as_ref()
+            .map(|storage| &storage.size)
+            == config
+                .persistent_storage
+                .as_ref()
+                .map(|storage| &storage.size);
+        // Unchanged Kubernetes quantities need no parsing. Keep supporting all
+        // quantities accepted during installation, including decimal exponents.
+        if !unchanged_spelling && capacity(previous)? != capacity(config)? {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Changing persistent storage on Kubernetes requires an explicit PVC expansion and StatefulSet migration; volumeClaimTemplates are immutable".into(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        // Equivalent quantities must retain the installed spelling in the immutable
+        // StatefulSet claim template (for example, 1Ti and 1024Gi).
+        let mut normalized_config = config.clone();
+        if let (Some(installed), Some(desired)) = (
+            &previous.persistent_storage,
+            &mut normalized_config.persistent_storage,
+        ) {
+            desired.size.clone_from(&installed.size);
+        }
+        let config = &normalized_config;
 
         let workload_name = self.workload_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {

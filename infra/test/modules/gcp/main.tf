@@ -165,6 +165,7 @@ locals {
     "roles/iam.serviceAccountUser",          # Bind SAs to resources (actAs)
     "roles/iam.roleAdmin",                   # Custom IAM roles
     "roles/resourcemanager.projectIamAdmin", # Project-level IAM bindings
+    "roles/cloudkms.admin",                  # Key setup and key-version lifecycle
     "roles/secretmanager.admin",             # Secret Manager
     "roles/cloudbuild.builds.editor",        # Cloud Build
     "roles/datastore.owner",                 # Firestore

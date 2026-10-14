@@ -147,6 +147,17 @@ impl Stack {
         format!("{:x}", Sha256::digest(encoded))
     }
 
+    /// Binds a setup update to both its resources and installed permissions.
+    /// Runtime code changes remain outside this authorization.
+    pub fn setup_update_digest(&self) -> String {
+        let mut permissions = serde_json::to_value(&self.permissions)
+            .expect("permission profiles always serialize to JSON");
+        canonicalize_json(&mut permissions);
+        let encoded = serde_json::to_vec(&(self.setup_owned_digest(), permissions))
+            .expect("setup update projection always serializes");
+        format!("{:x}", Sha256::digest(encoded))
+    }
+
     /// Returns an iterator over the resources in the stack, including their lifecycle state.
     pub fn resources(&self) -> impl Iterator<Item = (&String, &ResourceEntry)> {
         self.resources.iter()

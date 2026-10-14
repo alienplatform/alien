@@ -247,7 +247,7 @@ async fn download_artifact(
     let expected = artifact.checksum.as_deref().expect("validated checksum");
     // Artifact URLs can point at a different host (for example, object
     // storage). Never forward the platform API bearer token to that host.
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .https_only(!allow_insecure)
         .build()
         .into_alien_error()

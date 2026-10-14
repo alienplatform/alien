@@ -877,6 +877,7 @@
             "compute.disks.create",
             "compute.disks.delete",
             "compute.disks.get",
+            "compute.disks.resize",
             "compute.zones.list"
           ]
         },

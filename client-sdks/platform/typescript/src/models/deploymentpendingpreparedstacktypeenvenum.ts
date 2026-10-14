@@ -223,6 +223,13 @@ export type DeploymentContainers = {
    * Memory allocation, using binary units such as Mi or Gi.
    */
   memory?: string | null | undefined;
+  /**
+   * Persistent volume capacity per replica, in whole GiB. Omitted values
+   *
+   * @remarks
+   * use the release default. Existing volumes can only grow.
+   */
+  volumeSizeGib?: number | null | undefined;
 };
 
 /**
@@ -2050,6 +2057,7 @@ export const DeploymentContainers$inboundSchema: z.ZodType<
 > = z.object({
   cpu: z.nullable(z.number()).optional(),
   memory: z.nullable(z.string()).optional(),
+  volumeSizeGib: z.nullable(z.int()).optional(),
 });
 
 export function deploymentContainersFromJSON(

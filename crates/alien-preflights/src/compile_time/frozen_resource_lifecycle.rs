@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
-    ownership_policy_for_resource_type, Container, Daemon, Platform, ResourceLifecycle, Sandbox,
-    SandboxCode, Stack, Storage, Worker,
+    ownership_policy_for_resource_type, Container, Daemon, Key, Platform, Postgres,
+    ResourceLifecycle, Sandbox, SandboxCode, Stack, Storage, Worker,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
@@ -129,12 +129,30 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 }
             }
 
-            let Some(storage) = resource_entry.config.downcast_ref::<Storage>() else {
-                continue;
-            };
-            let Some(key_ref) = &storage.encryption_key else {
-                continue;
-            };
+            let storage = resource_entry.config.downcast_ref::<Storage>();
+            let postgres = resource_entry.config.downcast_ref::<Postgres>();
+            let container = resource_entry.config.downcast_ref::<Container>();
+            let key_ref = storage
+                .and_then(|storage| storage.encryption_key.as_ref())
+                .or_else(|| postgres.and_then(|postgres| postgres.encryption_key.as_ref()))
+                .or_else(|| {
+                    container
+                        .and_then(|container| container.persistent_storage.as_ref())
+                        .and_then(|volume| volume.encryption_key.as_ref())
+                });
+            let Some(key_ref) = key_ref else { continue };
+            if key_ref.resource_type != Key::RESOURCE_TYPE {
+                errors.push(format!(
+                    "Resource '{}' encryptionKey must reference a Key",
+                    resource_id
+                ));
+            }
+            if storage.is_none() && platform != Platform::Aws {
+                errors.push(format!(
+                    "Resource '{}' native encryptionKey is supported only on AWS",
+                    resource_id
+                ));
+            }
             if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
                 errors.push(format!(
                     "Storage '{}' uses encryptionKey, which is not supported on platform '{}'",
@@ -142,7 +160,7 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     platform.as_str()
                 ));
             }
-            if resource_entry.lifecycle != ResourceLifecycle::Frozen {
+            if storage.is_some() && resource_entry.lifecycle != ResourceLifecycle::Frozen {
                 errors.push(format!(
                     "Storage '{}' uses encryptionKey and must use the Frozen lifecycle",
                     resource_id

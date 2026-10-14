@@ -585,14 +585,15 @@ async fn reconcile(
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
     preserve_recorded_gate_answers(&mut final_state, &deployment);
-    crate::registry_access::reconcile_registry_access(
-        &state.bindings_provider,
-        &state.target_bindings_providers,
-        &req.deployment_id,
-        &deployment.project_id,
-        &mut final_state,
-    )
-    .await;
+    crate::registry_access::reconcile_registry_access_with_proxy()
+        .bindings_provider(&state.bindings_provider)
+        .target_bindings_providers(&state.target_bindings_providers)
+        .deployment_id(&req.deployment_id)
+        .project_id(&deployment.project_id)
+        .state(&mut final_state)
+        .proxy_url(&state.config.base_url())
+        .call()
+        .await;
 
     // 1a. Inject target_release from the deployment record's
     //     desired_release_id. The CLI's deploy command initializes state with
@@ -1979,14 +1980,15 @@ async fn agent_sync(
                     preserve_recorded_gate_answers(&mut agent_state, &deployment);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
-                    crate::registry_access::reconcile_registry_access(
-                        &state.bindings_provider,
-                        &state.target_bindings_providers,
-                        &req.deployment_id,
-                        &deployment.project_id,
-                        &mut agent_state,
-                    )
-                    .await;
+                    crate::registry_access::reconcile_registry_access_with_proxy()
+                        .bindings_provider(&state.bindings_provider)
+                        .target_bindings_providers(&state.target_bindings_providers)
+                        .deployment_id(&req.deployment_id)
+                        .project_id(&deployment.project_id)
+                        .state(&mut agent_state)
+                        .proxy_url(&state.config.base_url())
+                        .call()
+                        .await;
 
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),

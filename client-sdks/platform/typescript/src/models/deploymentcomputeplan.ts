@@ -166,6 +166,9 @@ export type DeploymentComputePlanMemory = {
 
 export type DeploymentComputePlanContainer = {
   containerId: string;
+  volumeSizeGib?: number | undefined;
+  minimumVolumeSizeGib?: number | undefined;
+  maximumVolumeSizeGib?: number | undefined;
   /**
    * Release-declared choices for each container resource dimension.
    */
@@ -545,6 +548,9 @@ export const DeploymentComputePlanContainer$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   containerId: z.string(),
+  volumeSizeGib: z.int().optional(),
+  minimumVolumeSizeGib: z.int().optional(),
+  maximumVolumeSizeGib: z.int().optional(),
   choices: z.lazy(() => Choices$inboundSchema),
   cpu: z.lazy(() => DeploymentComputePlanCpu$inboundSchema),
   memory: z.lazy(() => DeploymentComputePlanMemory$inboundSchema),

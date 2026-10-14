@@ -325,6 +325,10 @@ impl InfrastructureDependenciesMutation {
             ],
 
             // GCP dependencies
+            (Platform::Gcp, "key") => vec![ResourceRef::new(
+                alien_core::ServiceActivation::RESOURCE_TYPE,
+                "enable-cloud-kms",
+            )],
             (Platform::Gcp, "postgres") => vec![
                 ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,

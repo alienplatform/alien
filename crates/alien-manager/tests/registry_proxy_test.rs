@@ -189,11 +189,15 @@ struct TestSetup {
 
 /// Full test setup: registry + image + manager + deployment.
 async fn setup() -> TestSetup {
+    setup_with_repository("artifacts/test-fn", false).await
+}
+
+async fn setup_with_repository(repository: &str, configure_routing: bool) -> TestSetup {
     let (registry_url, registry_handle) = start_local_registry().await;
 
     // Build and push a real image using dockdash
     // Two-level path required by container-registry: namespace/repo
-    let image_uri = build_and_push_image(&registry_url, "artifacts/test-fn", "v1").await;
+    let image_uri = build_and_push_image(&registry_url, repository, "v1").await;
 
     // Start manager
     let port = free_port();
@@ -368,6 +372,14 @@ async fn setup() -> TestSetup {
     // Create a bindings provider that can load the local artifact registry
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     env_map.insert("ALIEN_ARTIFACTS_BINDING".to_string(), binding_json.clone());
+    // The legacy proxy tests exercise the artifacts binding fallback. Project scoping also
+    // needs the canonical binding that registers a repository route at startup.
+    if configure_routing {
+        env_map.insert(
+            "ALIEN_ARTIFACT_REGISTRY_BINDING".to_string(),
+            binding_json.clone(),
+        );
+    }
     env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
     let bindings_provider = Arc::new(
         alien_bindings::BindingsProvider::from_env(env_map)
@@ -1081,4 +1093,31 @@ async fn image_repository_provisioning_authorizes_first_and_serves_only_cloud_re
         provision(&s.admin_token, "aws").await.unwrap(),
     )
     .await;
+}
+
+/// A release naming another project's repository does not let its deployment pull it.
+#[tokio::test]
+async fn worker_release_cannot_open_another_projects_proxy_repository() {
+    let repository = "artifacts/default-other";
+    let s = setup_with_repository(repository, true).await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/v2/{repository}/manifests/v1", s.manager_url);
+
+    let admin = client
+        .get(&url)
+        .bearer_auth(&s.admin_token)
+        .send()
+        .await
+        .expect("admin manifest request should finish");
+    assert_eq!(admin.status(), reqwest::StatusCode::OK);
+
+    let deployment = client
+        .get(&url)
+        .bearer_auth(&s.deployment_token)
+        .send()
+        .await
+        .expect("deployment manifest request should finish");
+    assert_eq!(deployment.status(), reqwest::StatusCode::FORBIDDEN);
+    let body: serde_json::Value = deployment.json().await.expect("OCI error response");
+    assert_eq!(body["errors"][0]["code"], "DENIED");
 }

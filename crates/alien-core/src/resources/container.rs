@@ -102,6 +102,9 @@ pub struct PersistentStorage {
     pub size: String,
     /// Mount path inside the container
     pub mount_path: String,
+    /// Key used to encrypt this volume and its snapshots. Cannot be changed after creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<ResourceRef>,
     /// Scheduled snapshots of each replica's volume. On by default.
     #[serde(default)]
     pub backups: VolumeBackups,
@@ -781,6 +784,13 @@ impl ResourceDefinition for Container {
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut deps = self.links.clone();
+        if let Some(key) = self
+            .persistent_storage
+            .as_ref()
+            .and_then(|storage| storage.encryption_key.as_ref())
+        {
+            deps.push(key.clone());
+        }
         // Add dependency on the container cluster if explicitly specified.
         // If None, ComputeClusterMutation will auto-assign at deployment time.
         if let Some(cluster) = &self.cluster {
@@ -831,6 +841,21 @@ impl ResourceDefinition for Container {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
                 reason: "the 'stateful' field is immutable".to_string(),
+            }));
+        }
+
+        let old_key = self
+            .persistent_storage
+            .as_ref()
+            .and_then(|storage| storage.encryption_key.as_ref());
+        let new_key = new_container
+            .persistent_storage
+            .as_ref()
+            .and_then(|storage| storage.encryption_key.as_ref());
+        if old_key != new_key {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'persistentStorage.encryptionKey' field is immutable once the resource exists".to_string(),
             }));
         }
 
@@ -995,6 +1020,7 @@ mod tests {
             .stateful(true)
             .replicas(1)
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "100Gi".to_string(),
                 mount_path: "/var/lib/postgresql/data".to_string(),
                 backups: VolumeBackups::default(),

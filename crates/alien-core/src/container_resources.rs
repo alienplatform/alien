@@ -42,6 +42,27 @@ pub fn resolve_container_resources(
             .and_then(|selected| selected.cpu.as_ref())
             .map(ToString::to_string);
         let memory = selected.and_then(|selected| selected.memory.as_deref());
+        if let Some(size) = selected.and_then(|selected| selected.volume_size_gib) {
+            let storage = container.persistent_storage.as_mut().ok_or_else(|| {
+                invalid(
+                    &id,
+                    "volumeSizeGib",
+                    "the release declares no persistent volume",
+                )
+            })?;
+            if size == 0 || size > 65536 {
+                return Err(invalid(
+                    &id,
+                    "volumeSizeGib",
+                    "capacity must be between 1 and 65536 GiB",
+                ));
+            }
+            let selected = format!("{size}Gi");
+            // Preserve equivalent release quantities, including immutable PVC templates.
+            if parse_memory_bytes(&storage.size) != parse_memory_bytes(&selected) {
+                storage.size = selected;
+            }
+        }
         let choices = container.resource_choices.as_ref();
         resolve_dimension(
             &id,
@@ -140,10 +161,38 @@ fn parse_positive_memory(value: &str) -> std::result::Result<u64, String> {
     Ok(bytes)
 }
 
-fn invalid(id: &str, dimension: &str, reason: &str) -> AlienError<ErrorData> {
+pub(crate) fn invalid(id: &str, dimension: &str, reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
         resource_id: id.to_string(),
         dimension: dimension.to_string(),
         reason: reason.to_string(),
     })
+}
+
+/// Parse whole-volume capacities used by cloud block disks. Legacy GB/TB
+/// spellings retain their existing GiB allocation semantics.
+pub fn parse_volume_size_gib(value: &str) -> std::result::Result<u32, String> {
+    let value = value.trim();
+    // Keep historical cloud GB/TB semantics while accepting existing Kubernetes
+    // quantities. Cloud disks allocate whole GiB, so round release quantities up;
+    // deployment selections themselves are unsigned integer GiB.
+    let bytes = if let Some(number) = value.strip_suffix("TB") {
+        parse_memory_bytes(&format!("{number}Gi"))?
+            .checked_mul(1000)
+            .ok_or_else(|| format!("Volume capacity '{value}' is too large"))?
+    } else if let Some(number) = value
+        .strip_suffix("GB")
+        .or_else(|| value.strip_suffix("GiB"))
+    {
+        parse_memory_bytes(&format!("{number}Gi"))?
+    } else if let Some(number) = value.strip_suffix("TiB") {
+        parse_memory_bytes(&format!("{number}Ti"))?
+    } else {
+        parse_memory_bytes(value)?
+    };
+    let gib = bytes.div_ceil(1024 * 1024 * 1024);
+    u32::try_from(gib)
+        .ok()
+        .filter(|n| (1..=65536).contains(n))
+        .ok_or_else(|| format!("Volume capacity '{value}' must be between 1 and 65536 GiB"))
 }

@@ -764,7 +764,7 @@ pub async fn publish_task(
     // rejects a presigned-URL request that also carries an Authorization
     // header ("Only one auth mechanism allowed"). The presigned URL's query
     // string IS the auth; a plain, unauthenticated client is required here.
-    let put_response = reqwest::Client::new()
+    let put_response = crate::http_client::client()?
         .request(Method::PUT, &presign.upload_url)
         .header("content-type", &presign.content_type)
         .body(bytes)

@@ -1220,8 +1220,8 @@ fn reimport_runtime_metadata(
             ),
         })
     })?;
-    let baseline_frozen_digest = baseline_stack.setup_owned_digest();
-    let target_frozen_digest = prepared_stack.setup_owned_digest();
+    let baseline_frozen_digest = baseline_stack.setup_update_digest();
+    let target_frozen_digest = prepared_stack.setup_update_digest();
 
     metadata.setup_update_authorization =
         (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {
@@ -1238,12 +1238,10 @@ fn reimport_runtime_metadata(
 
 /// Refuses setup choices whose change would alter the management permissions setup installed.
 ///
-/// Some settings, such as heartbeats, decide management permission sets. A setup rerun proves
-/// only its Frozen resources (`SetupUpdateAuthorization` digests them, not permissions), so the
-/// update it schedules would fail the permission compatibility preflight after the setup artifact
-/// already reported success. Refusing here, inside the registration the artifact calls
-/// synchronously, fails the setup run itself: CloudFormation rolls the stack back and nothing is
-/// recorded. Both sides are prepared from the same source stack, so only the settings differ.
+/// Settings such as heartbeats remain fixed for an installation. Refusing a change inside
+/// registration fails the setup run itself, so CloudFormation can roll back the change.
+/// Both sides use the same source stack: a new release's explicitly installed permission
+/// changes are instead covered by its exact setup-update authorization.
 async fn refuse_management_permission_changes(
     source_stack: &Stack,
     installed_settings: &StackSettings,
@@ -1969,6 +1967,38 @@ mod setup_update_authorization_tests {
     }
 
     #[test]
+    fn permission_only_reimport_mints_exact_setup_authority() {
+        let baseline = stack("live", "frozen");
+        let mut target = baseline.clone();
+        target.permissions.management = alien_core::permissions::ManagementPermissions::Extend(
+            alien_core::permissions::PermissionProfile::new()
+                .resource("database", ["postgres/key-recovery"]),
+        );
+        let metadata = reimport_runtime_metadata(
+            &record(baseline.clone()),
+            &target,
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("setup may install a new scoped grant");
+        let authority = metadata
+            .setup_update_authorization
+            .expect("permission update authority");
+        assert_eq!(baseline.setup_owned_digest(), target.setup_owned_digest());
+        assert_ne!(
+            authority.baseline_frozen_digest,
+            authority.target_frozen_digest
+        );
+        assert_eq!(
+            authority.baseline_frozen_digest,
+            baseline.setup_update_digest()
+        );
+        assert_eq!(authority.target_frozen_digest, target.setup_update_digest());
+        assert_eq!(metadata.prepared_stack, Some(baseline));
+    }
+
+    #[test]
     fn frozen_reimport_mints_exact_authority_without_losing_runtime_metadata() {
         let baseline = stack("live", "frozen-a");
         let target = stack("live", "frozen-b");
@@ -1986,11 +2016,11 @@ mod setup_update_authorization_tests {
 
         assert_eq!(
             authorization.baseline_frozen_digest,
-            baseline.setup_owned_digest()
+            baseline.setup_update_digest()
         );
         assert_eq!(
             authorization.target_frozen_digest,
-            target.setup_owned_digest()
+            target.setup_update_digest()
         );
         assert_eq!(authorization.release_id, "release");
         assert_eq!(

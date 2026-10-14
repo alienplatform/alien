@@ -32,6 +32,7 @@ fn container(id: &str, image: &str, persistent: bool) -> Container {
     if persistent {
         builder
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),
@@ -525,6 +526,7 @@ async fn deployment_allocations_survive_stateful_install_and_release_preparation
             "database".to_string(),
             ContainerResourceSelection {
                 cpu: Some(serde_json::Number::from(4)),
+                volume_size_gib: Some(40),
                 memory: Some("8Gi".to_string()),
             },
         )]
@@ -568,7 +570,7 @@ async fn deployment_allocations_survive_stateful_install_and_release_preparation
             }
         );
         assert!(database.stateful);
-        assert_eq!(database.persistent_storage.as_ref().unwrap().size, "20Gi");
+        assert_eq!(database.persistent_storage.as_ref().unwrap().size, "40Gi");
         assert_eq!(
             cluster(deployment).capacity_groups,
             cluster(&prepared).capacity_groups

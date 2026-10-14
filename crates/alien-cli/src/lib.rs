@@ -8,6 +8,7 @@ pub mod deployment_tracking;
 pub mod error;
 pub mod execution_context;
 pub mod git_utils;
+pub mod http_client;
 pub mod interaction;
 pub mod manager_profile;
 pub mod output;
@@ -625,7 +626,7 @@ async fn login_to_manager(url: &str, token: Option<String>) -> Result<()> {
             }))
         }
     };
-    let response = reqwest::Client::new()
+    let response = crate::http_client::client()?
         .get(format!("{url}/v1/whoami"))
         .bearer_auth(&token)
         .send()
