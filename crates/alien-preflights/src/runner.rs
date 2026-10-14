@@ -424,6 +424,36 @@ impl PreflightRunner {
                 })
             });
 
+        // Match the deployment values used by the IAM policy writers. Physical
+        // resource names use shared create naming or saved outputs where available.
+        let mut permission_context = alien_permissions::PermissionContext::new();
+        if let Some(aws) = client_config.aws_config() {
+            permission_context = permission_context
+                .with_aws_account_id(aws.account_id.clone())
+                .with_aws_region(aws.region.clone())
+                .with_stack_prefix(stack_state.resource_prefix.clone());
+        }
+
+        if let Some(alien_core::ManagementConfig::Aws(management)) = &config.management_config {
+            permission_context =
+                permission_context.with_managing_role_arn(management.managing_role_arn.clone());
+            if let Some(account) =
+                alien_permissions::PermissionContext::extract_account_id_from_role_arn(
+                    &management.managing_role_arn,
+                )
+            {
+                permission_context = permission_context.with_managing_account_id(account);
+            }
+        }
+
+        all_results.push(crate::compile_time::iam_workload_aggregate::check(
+            &mutated_stack,
+            platform,
+            setup_authority,
+            &permission_context,
+            Some(stack_state),
+        )?);
+
         let prerequisite_summary = self
             .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)
             .await?;
