@@ -43,7 +43,8 @@ impl AzureKeyController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        self.available = Some(false);
+        // A failed check keeps the last observation unless Key Vault answered about
+        // the key itself; a throttle or 5xx must not pause every dependent resource.
         let config = ctx.desired_resource_config::<Key>()?;
         let versioned_key_id = self.key_id.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -65,6 +66,11 @@ impl AzureKeyController {
             .get_azure_key_vault_keys_client(ctx.get_azure_config()?)?
             .get_key(current_key_id)
             .await
+            .inspect_err(|error| {
+                if super::key_revoked_by_status(error) {
+                    self.available = Some(false);
+                }
+            })
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to read Azure Key Vault key metadata".to_string(),
                 resource_id: Some(config.id.clone()),

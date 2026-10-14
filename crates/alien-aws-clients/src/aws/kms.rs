@@ -170,7 +170,8 @@ pub struct DecryptResponse {
 }
 
 /// Checks external key access using public plaintext and an isolated encryption context.
-/// Revocation is an observation, while IAM and malformed-request failures stay errors.
+/// An unavailable external key is an observation; IAM, timeout (`DependencyTimeoutException`)
+/// and malformed-request failures stay errors.
 pub async fn probe_external_key(client: &dyn KmsApi, key_id: &str) -> Result<bool> {
     let result = client
         .encrypt(
@@ -216,7 +217,6 @@ fn external_key_is_unavailable(
             "DisabledException"
                 | "KMSInvalidStateException"
                 | "KeyUnavailableException"
-                | "DependencyTimeoutException"
                 | "XksProxyInvalidResponseException"
                 | "CustomKeyStoreInvalidStateException"
         )

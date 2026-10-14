@@ -41,7 +41,8 @@ impl GcpKeyController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        self.available = Some(false);
+        // A failed check keeps the last observation unless Cloud KMS answered about
+        // the key itself; a throttle or 5xx must not pause every dependent resource.
         let config = ctx.desired_resource_config::<Key>()?;
         let crypto_key_name = self.crypto_key_name.as_deref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -54,6 +55,11 @@ impl GcpKeyController {
             .get_gcp_cloud_kms_client(ctx.get_gcp_config()?)?
             .get_crypto_key(crypto_key_name)
             .await
+            .inspect_err(|error| {
+                if super::key_revoked_by_status(error) {
+                    self.available = Some(false);
+                }
+            })
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to read GCP Cloud KMS key metadata".to_string(),
                 resource_id: Some(config.id.clone()),
