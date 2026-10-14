@@ -2,8 +2,6 @@
 //! configurations. HTTP routes choose a purpose; this module owns the cloud
 //! handoff and expiry rules.
 
-use std::collections::HashMap;
-
 use alien_azure_clients::AzureClientConfigExt;
 use alien_core::{
     AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig,
@@ -25,14 +23,6 @@ pub(crate) const AZURE_AI_SCOPE: &str = "https://cognitiveservices.azure.com/.de
 /// 401 that reads like a missing role. Same constant `sandbox_data_plane::ADC_SCOPE` uses.
 pub(crate) const AZURE_SANDBOX_SCOPE: &str = "https://dynamicsessions.io/.default";
 const REMOTE_STORAGE_DURATION_SECONDS: i32 = 3600;
-const AZURE_MINT_SCOPES: [&str; 5] = [
-    "https://management.azure.com/.default",
-    AZURE_STORAGE_SCOPE,
-    "https://vault.azure.net/.default",
-    "https://servicebus.azure.net/.default",
-    AZURE_AI_SCOPE,
-];
-
 pub(crate) struct MaterializedCredentialLease {
     pub client_config: ClientConfig,
     pub expires_at: DateTime<Utc>,
@@ -66,75 +56,6 @@ impl std::fmt::Debug for MaterializedCredentialLease {
             .field("client_config", &"[REDACTED]")
             .field("expires_at", &self.expires_at)
             .finish()
-    }
-}
-
-/// Convert provider impersonation output into a response-safe credential form.
-/// Refreshable sources and internal service overrides never cross the API.
-pub(crate) async fn materialize_minted_client_config(
-    config: ClientConfig,
-) -> Result<ClientConfig, AlienError<ErrorData>> {
-    match config {
-        ClientConfig::Aws(config)
-            if matches!(
-                &config.credentials,
-                AwsCredentials::SessionCredentials { .. }
-            ) =>
-        {
-            Ok(ClientConfig::Aws(Box::new(AwsClientConfig {
-                account_id: config.account_id,
-                region: config.region,
-                credentials: config.credentials,
-                service_overrides: None,
-            })))
-        }
-        ClientConfig::Aws(_) => Err(ErrorData::internal(
-            "AWS impersonation did not return short-lived session credentials",
-        )),
-        ClientConfig::Gcp(config) => {
-            let token = config
-                .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
-                .await
-                .context(ErrorData::CredentialMaterializationFailed {
-                    platform: Platform::Gcp,
-                    purpose: "credential minting".to_string(),
-                })?;
-            Ok(ClientConfig::Gcp(Box::new(GcpClientConfig {
-                project_id: config.project_id,
-                region: config.region,
-                credentials: GcpCredentials::AccessToken { token },
-                service_overrides: None,
-                project_number: config.project_number,
-            })))
-        }
-        ClientConfig::Azure(config) => {
-            if matches!(&config.credentials, AzureCredentials::AccessToken { .. }) {
-                return Err(ErrorData::internal(
-                    "Azure impersonation returned a single-scope access token; exact per-scope tokens are required",
-                ));
-            }
-            let mut tokens = HashMap::with_capacity(AZURE_MINT_SCOPES.len());
-            for scope in AZURE_MINT_SCOPES {
-                let token = config.get_bearer_token_with_scope(scope).await.context(
-                    ErrorData::CredentialMaterializationFailed {
-                        platform: Platform::Azure,
-                        purpose: format!("credential minting scope '{scope}'"),
-                    },
-                )?;
-                tokens.insert(scope.to_string(), token);
-            }
-            Ok(ClientConfig::Azure(Box::new(AzureClientConfig {
-                subscription_id: config.subscription_id,
-                tenant_id: config.tenant_id,
-                region: config.region,
-                credentials: AzureCredentials::ScopedAccessTokens { tokens },
-                service_overrides: None,
-            })))
-        }
-        other => Err(ErrorData::internal(format!(
-            "Credential impersonation returned unsupported {} client config",
-            other.platform()
-        ))),
     }
 }
 
@@ -266,6 +187,7 @@ fn remote_binding_scope_platform(scope: &RemoteBindingCredentialScope) -> Platfo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn remote_bindings_rejects_provider_mismatch() {
