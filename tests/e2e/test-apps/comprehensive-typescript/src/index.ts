@@ -9,6 +9,7 @@ import { createHash } from "node:crypto"
 import { command, kv, onCronEvent, onQueueMessage, onStorageEvent } from "@alienplatform/sdk"
 import { Hono } from "hono"
 import aiRoutes from "./handlers/ai.js"
+import endpointContinuityRoutes from "./handlers/endpoint-continuity.js"
 import environmentRoutes from "./handlers/environment.js"
 import eventsRoutes from "./handlers/events.js"
 import healthRoutes from "./handlers/health.js"
@@ -27,6 +28,7 @@ const app = new Hono()
 
 // Mount handler routes
 app.route("/", aiRoutes)
+app.route("/", endpointContinuityRoutes)
 app.route("/", healthRoutes)
 app.route("/", environmentRoutes)
 app.route("/", inspectRoutes)
