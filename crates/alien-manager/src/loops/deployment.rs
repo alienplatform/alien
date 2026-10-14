@@ -391,6 +391,11 @@ impl DeploymentLoop {
                     })?;
                 let results: Vec<_> = deployments
                     .iter()
+                    .filter(|deployment| {
+                        deployment.stack_settings.as_ref().is_some_and(|settings| {
+                            settings.deployment_model == alien_core::DeploymentModel::Push
+                        })
+                    })
                     .filter(|deployment| state_dir.join(&deployment.id).join("containers").is_dir())
                     .map(|deployment| {
                         get_or_create_local_bindings_provider(
