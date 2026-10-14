@@ -1,0 +1,15 @@
+$ RUST_LOG=warn alien build --config concrete-only-alien.json --platforms aws --output-dir feature-concrete-only
+Building session57-iam-build for aws
+Output feature-concrete-only
+> Success! Build complete.
+Stack q5-policy-build
+Artifacts 0
+Duration 0.0s
+Next run alien release to push images and create a release.
+Loading configuration
+Running preflights for q5-policy-build (aws)
+2026-10-14T00:59:00.038622Z  WARN alien_preflights::runner:   Warning: IAM inline policy size for permission profile 'reader' is incomplete: grants [resource-scoped grants] need deployment values or could not be rendered. Only rendered global grants were counted; passing does not establish total role headroom. check=IAM role global inline policies fit the 10240 character limit
+2026-10-14T00:59:00.038775Z  WARN alien_build: Preflight warning: IAM role global inline policies fit the 10240 character limit: IAM inline policy size for permission profile 'reader' is incomplete: grants [resource-scoped grants] need deployment values or could not be rendered. Only rendered global grants were counted; passing does not establish total role headroom.
+
+Exit: 0
+Build output files: 1

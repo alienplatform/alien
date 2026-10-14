@@ -1,0 +1,19 @@
+$ RUST_LOG=warn alien build --config mixed-overflow-alien.json --platforms aws --output-dir feature-mixed-overflow
+Building session57-iam-build for aws
+Output feature-mixed-overflow
+Loading configuration
+Running preflights for q5-policy-build (aws)
+2026-10-14T00:59:01.284497Z ERROR alien_preflights::runner: Compile-time check failed check=IAM role global inline policies fit the 10240 character limit
+2026-10-14T00:59:01.284547Z ERROR alien_preflights::runner:   IAM role for permission profile 'reader' needs at least 21311 inline policy characters; the aggregate per-role limit is 10240. Reduce global grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html check=IAM role global inline policies fit the 10240 character limit
+2026-10-14T00:59:01.284557Z  WARN alien_preflights::runner:   Warning: IAM inline policy size for permission profile 'reader' is incomplete: grants [resource-scoped grants] need deployment values or could not be rendered. Only rendered global grants were counted; passing does not establish total role headroom. check=IAM role global inline policies fit the 10240 character limit
+2026-10-14T00:59:01.284584Z ERROR alien_preflights::runner: Build-time preflight checks failed error_count=1 warning_count=1
+Failed: Stack processing failed: Failed to run build-time preflights
+Failed: Stack processing failed: Failed to run build-time preflights
+Stack processing failed: Failed to run build-time preflights
+Cause:
+  - Validation failed with 1 errors and 1 warnings
+Failed checks:
+  - IAM role for permission profile 'reader' needs at least 21311 inline policy characters; the aggregate per-role limit is 10240. Reduce global grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+
+Exit: 1
+Build output files: 0

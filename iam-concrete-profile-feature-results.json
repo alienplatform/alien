@@ -1,0 +1,24 @@
+[
+  {
+    "scenario": "concrete-only",
+    "exit": 0,
+    "files": [
+      "feature-concrete-only/build/aws/stack.json"
+    ],
+    "incompleteWarning": true
+  },
+  {
+    "scenario": "mixed-small",
+    "exit": 0,
+    "files": [
+      "feature-mixed-small/build/aws/stack.json"
+    ],
+    "incompleteWarning": true
+  },
+  {
+    "scenario": "mixed-overflow",
+    "exit": 1,
+    "files": [],
+    "incompleteWarning": true
+  }
+]
