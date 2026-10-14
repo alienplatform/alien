@@ -178,14 +178,32 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     let preflight_summary = AlienEvent::RunningPreflights {
         stack: stack.id().to_string(),
         platform: settings.platform.runtime_platform().as_str().to_string(),
+        warnings: Vec::new(),
     }
-    .in_scope(|_| async {
-        preflight_runner
-            .run_build_time_preflights(&stack, settings.platform.runtime_platform())
-            .await
-            .context(ErrorData::StackProcessorFailed {
-                message: "Failed to run build-time preflights".to_string(),
-            })
+    .in_scope(|handle| {
+        let stack = &stack;
+        let preflight_runner = &preflight_runner;
+        async move {
+            let summary = preflight_runner
+                .run_build_time_preflights(&stack, settings.platform.runtime_platform())
+                .await
+                .context(ErrorData::StackProcessorFailed {
+                    message: "Failed to run build-time preflights".to_string(),
+                })?;
+            if summary.warning_count > 0 {
+                handle
+                    .update(AlienEvent::RunningPreflights {
+                        stack: stack.id().to_string(),
+                        platform: settings.platform.runtime_platform().as_str().to_string(),
+                        warnings: summary.get_warnings(),
+                    })
+                    .await
+                    .context(ErrorData::StackProcessorFailed {
+                        message: "Failed to report build-time preflight warnings".to_string(),
+                    })?;
+            }
+            Ok::<_, alien_error::AlienError<ErrorData>>(summary)
+        }
     })
     .await?;
 

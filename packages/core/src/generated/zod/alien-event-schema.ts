@@ -20,7 +20,8 @@ export const AlienEventSchema = z.union([z.object({
     }), z.object({
     "platform": z.string().describe("Platform being targeted"),
 "stack": z.string().describe("Name of the stack being checked"),
-"type": z.enum(["RunningPreflights"])
+"type": z.enum(["RunningPreflights"]),
+"warnings": z.optional(z.array(z.string()).describe("Non-blocking diagnostics reported by the completed checks."))
     }), z.object({
     "targetTriple": z.string().describe("Target triple for the runtime"),
 "type": z.enum(["DownloadingAlienRuntime"]),
