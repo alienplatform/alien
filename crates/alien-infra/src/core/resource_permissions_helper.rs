@@ -22,7 +22,9 @@ use alien_gcp_clients::iam::{
     Binding, CreateRoleRequest, IamApi, IamPolicy, Role, RoleLaunchStage,
 };
 use alien_permissions::{
-    aws_resource_policies::{aws_resource_policy_name, AwsResourcePolicyContext},
+    aws_resource_policies::{
+        aws_resource_policy_name, render_aws_resource_policy, AwsResourcePolicyContext,
+    },
     generators::*,
     BindingTarget, PermissionContext,
 };
@@ -1774,28 +1776,23 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            let policy = generator
-                .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to generate policy for permission set '{}'",
-                        permission_set.id
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-            let policy_json = serde_json::to_string_pretty(&policy)
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to serialize IAM policy document".to_string(),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-            let policy_name = aws_resource_policy_name(resource_id, &permission_set.id);
+            let policy = render_aws_resource_policy(
+                resource_id,
+                &permission_set,
+                generator,
+                permission_context,
+            )
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to generate policy for permission set '{}'",
+                    permission_set.id
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
-                .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
+                .put_role_policy(&service_account_role_name, &policy.name, &policy.document)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(

@@ -5,9 +5,10 @@
 
 use crate::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
-    BindingTarget, PermissionContext, Result,
+    BindingTarget, ErrorData, PermissionContext, Result,
 };
 use alien_core::{PermissionSet, PermissionSetReference};
+use alien_error::{Context, IntoAlienError};
 
 /// Inputs used to omit implicit grants already covered by the stack document.
 /// Explicit resource references are retained even when a stack grant covers them.
@@ -41,6 +42,35 @@ impl AwsResourcePolicyContext<'_> {
         )?;
         Ok(aws_policy_grants(&stack, &resource))
     }
+}
+
+/// The exact name and document supplied to IAM's PutRolePolicy operation.
+/// Inserting these into a role's map by name models IAM's replacement semantics.
+#[derive(Debug)]
+pub struct AwsNamedResourcePolicy {
+    pub name: String,
+    pub document: String,
+}
+
+/// Render a resolved workload permission set using its controller's context.
+/// Selection and reference resolution happen before this function is called.
+pub fn render_aws_resource_policy(
+    resource_id: &str,
+    permission_set: &PermissionSet,
+    generator: &AwsRuntimePermissionsGenerator,
+    permission_context: &PermissionContext,
+) -> Result<AwsNamedResourcePolicy> {
+    let policy =
+        generator.generate_policy(permission_set, BindingTarget::Resource, permission_context)?;
+    let document = serde_json::to_string_pretty(&policy)
+        .into_alien_error()
+        .context(ErrorData::SerializationError {
+            message: "Failed to serialize IAM policy document".to_string(),
+        })?;
+    Ok(AwsNamedResourcePolicy {
+        name: aws_resource_policy_name(resource_id, &permission_set.id),
+        document,
+    })
 }
 
 /// Whether `broad` allows every request `narrow` allows.
@@ -116,6 +146,33 @@ pub fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_documents_preserve_setup_rendering_and_resolved_resources() {
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let set = crate::get_permission_set("storage/data-read").unwrap();
+        for resource_name in ["q5-render-objects", "q5-render-imported"] {
+            let context = PermissionContext::new().with_resource_name(resource_name.to_string());
+            let named = render_aws_resource_policy("objects", set, &generator, &context).unwrap();
+            let expected = generator
+                .generate_policy(set, BindingTarget::Resource, &context)
+                .unwrap();
+            assert_eq!(named.name, "alien-objects-storage-data-read");
+            assert_eq!(
+                named.document,
+                serde_json::to_string_pretty(&expected).unwrap()
+            );
+            let document: serde_json::Value = serde_json::from_str(&named.document).unwrap();
+            let resources = document["Statement"][0]["Resource"].as_array().unwrap();
+            assert!(resources
+                .iter()
+                .any(|value| value == &format!("arn:aws:s3:::{resource_name}")));
+        }
+        let error =
+            render_aws_resource_policy("objects", set, &generator, &PermissionContext::new())
+                .unwrap_err();
+        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+    }
 
     #[test]
     fn selection_preserves_explicit_and_uncovered_grants() {
