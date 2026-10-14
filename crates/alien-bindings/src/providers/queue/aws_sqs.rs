@@ -41,7 +41,15 @@ pub(crate) fn create_http_client() -> Result<Client> {
             },
         )?;
         resolver.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
-        builder.dns_resolver(Arc::new(SqsDnsResolver(resolver.build())))
+        let resolver =
+            resolver
+                .build()
+                .into_alien_error()
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "queue.sqs".to_string(),
+                    reason: "Failed to build DNS resolver".to_string(),
+                })?;
+        builder.dns_resolver(Arc::new(SqsDnsResolver(resolver)))
     };
 
     builder
