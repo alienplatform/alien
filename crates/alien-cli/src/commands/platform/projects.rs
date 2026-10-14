@@ -126,8 +126,9 @@ pub enum CapabilityCommand {
         /// keep the saved image, or to use the platform's default images when none is saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
-        /// Directory with a Dockerfile. The image is built locally with Docker and pushed to the
-        /// project's private repository. A private image runs on AWS only.
+        /// Directory with a Dockerfile. The image is built locally with Docker for AWS and, when
+        /// the project has an Azure manager, for Azure, and each is pushed to the project's
+        /// private repository on that cloud. It does not run on GCP yet.
         #[arg(long)]
         src: Option<PathBuf>,
         /// Dockerfile path relative to --src (default: Dockerfile).
@@ -483,29 +484,24 @@ async fn capabilities_task(
                                 json,
                             )
                             .await?;
-                            let azure_image = match build_and_push_sandbox_base_image(
-                                ctx,
-                                http,
-                                workspace,
-                                project,
-                                &source,
-                                Platform::Azure,
-                                json,
-                            )
-                            .await
-                            {
-                                Ok(image) => Some(image),
-                                Err(error) if error.http_status_code == Some(404) => {
-                                    if !json {
-                                        println!(
-                                            "{} azure: the project has no Azure manager",
-                                            dim_label("Skipped")
-                                        );
-                                    }
-                                    None
-                                }
-                                Err(error) => return Err(error),
-                            };
+                            let azure_image = azure_image_unless_no_manager(
+                                build_and_push_sandbox_base_image(
+                                    ctx,
+                                    http,
+                                    workspace,
+                                    project,
+                                    &source,
+                                    Platform::Azure,
+                                    json,
+                                )
+                                .await,
+                            )?;
+                            if azure_image.is_none() && !json {
+                                println!(
+                                    "{} azure: the project has no Azure manager",
+                                    dim_label("Skipped")
+                                );
+                            }
                             (Some(aws_image), azure_image)
                         }
                         None => (None, None),
@@ -705,6 +701,16 @@ fn remote_sandbox_request(
         ),
         azure_idle_suspend_seconds: saved.azure_idle_suspend_seconds,
     })
+}
+
+/// The Azure image a `--src` run configures, or `None` when the project has no Azure manager,
+/// which resolving it answers with a 404.
+fn azure_image_unless_no_manager(published: Result<String>) -> Result<Option<String>> {
+    match published {
+        Ok(image) => Ok(Some(image)),
+        Err(error) if error.http_status_code == Some(404) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Resolves the sandbox base image for `source` on `platform` in the project's private repository
@@ -1880,6 +1886,31 @@ mod tests {
             serde_json::to_value(request).expect("request should serialize")["customImage"],
             serde_json::json!(base_image),
         );
+    }
+
+    #[test]
+    fn only_a_missing_azure_manager_skips_the_azure_image() {
+        let refused = |status: u16| {
+            let mut error = AlienError::new(ErrorData::ApiRequestFailed {
+                message: "Failed to resolve manager for azure platform".to_string(),
+                url: None,
+            });
+            error.http_status_code = Some(status);
+            Err(error)
+        };
+        assert_eq!(
+            azure_image_unless_no_manager(Ok("manager.example/prj_x@sha256:aaa".to_string()))
+                .expect("a published image is configured"),
+            Some("manager.example/prj_x@sha256:aaa".to_string())
+        );
+        assert_eq!(
+            azure_image_unless_no_manager(refused(404)).expect("no Azure manager is a skip"),
+            None
+        );
+        for status in [401, 403, 500] {
+            azure_image_unless_no_manager(refused(status))
+                .expect_err("any other refusal fails the command");
+        }
     }
 
     #[test]
