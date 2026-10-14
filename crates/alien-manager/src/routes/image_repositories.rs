@@ -107,7 +107,7 @@ async fn provision(
         .await
         .context(failed())?;
     let repository = registry
-        .create_repository(project_id)
+        .create_project_repository(project_id)
         .await
         .context(failed())?;
     Ok(repository.name)

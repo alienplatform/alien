@@ -16,7 +16,7 @@ use alien_gcp_clients::{
 };
 use async_trait::async_trait;
 use chrono;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// The Google-managed service agent a compute service pulls as.
 ///
@@ -72,7 +72,23 @@ fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
     members
 }
 
+/// The GAR repository a routable name resolves to.
+#[derive(Debug, PartialEq, Eq)]
+enum GarTarget {
+    /// The binding's own repository. `path` is the image path inside it, when the name has one.
+    Binding { path: Option<String> },
+    /// One Alien project's repository, from [`ArtifactRegistry::create_project_repository`].
+    Project(String),
+}
+
 /// GCP Artifact Registry implementation of the ArtifactRegistry binding.
+///
+/// The binding names one GAR repository. [`ArtifactRegistry::create_repository`] returns image
+/// paths inside it and creates nothing, so a stack needs no permission beyond that repository.
+/// GAR has no IAM below a repository, so every name shares the repository's access: per-name
+/// grants to other principals are refused rather than widened to the whole repository. A
+/// registry shared by many Alien projects, such as a manager's, uses
+/// [`ArtifactRegistry::create_project_repository`] for one repository per project instead.
 #[derive(Debug)]
 pub struct GarArtifactRegistry {
     client: ArtifactRegistryClient,
@@ -124,6 +140,11 @@ impl GarArtifactRegistry {
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract repository_name from binding".to_string(),
             })?;
+
+        // Terraform setups pass the repository's full resource ID; IAM and image paths use its name.
+        let repository_name = repository_name
+            .rsplit_once("/repositories/")
+            .map_or(repository_name.clone(), |(_, name)| name.to_string());
 
         let pull_service_account_email = config
             .pull_service_account_email
@@ -200,18 +221,51 @@ impl GarArtifactRegistry {
         }))
     }
 
-    /// The repository a revoke targets. Deployments granted before per-project repositories
-    /// recorded their grant on the binding's shared repository itself, so a revoke also accepts
-    /// that one exact repository: refusing it would fail their teardown on every retry. Grants
-    /// and reads never target it.
-    fn revoke_repository_name(&self, repo_id: &str) -> Result<String> {
+    /// Resolves a routable name to the binding's own repository or to a project repository.
+    ///
+    /// Deployments granted before per-project repositories recorded their grant on the binding's
+    /// repository itself, so that name resolves too: a revoke there must not fail teardown.
+    fn target(&self, repo_id: &str) -> Result<GarTarget> {
         let path = repo_id
             .strip_prefix(&format!("{}/", self.project_id))
             .unwrap_or(repo_id);
-        if path.split('/').next() == Some(self.repository_name.as_str()) {
-            return Ok(self.repository_name.clone());
+        let (repository, image_path) = match path.split_once('/') {
+            Some((repository, image_path)) => (repository, Some(image_path)),
+            None => (path, None),
+        };
+        if repository == self.repository_name {
+            return Ok(GarTarget::Binding {
+                path: image_path
+                    .filter(|image_path| !image_path.is_empty())
+                    .map(str::to_string),
+            });
         }
-        self.iam_repository_name(repo_id)
+        self.iam_repository_name(repo_id).map(GarTarget::Project)
+    }
+
+    /// Whether a grant names nothing but this binding's own pull and push accounts.
+    fn names_only_own_accounts(&self, access: &GcpCrossAccountAccess) -> bool {
+        let own: Vec<String> = [
+            &self.pull_service_account_email,
+            &self.push_service_account_email,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|email| format!("serviceAccount:{email}"))
+        .collect();
+        let members = cross_account_members(access);
+        !members.is_empty() && members.iter().all(|member| own.contains(member))
+    }
+
+    /// A grant on one name would reach every name's images, so it is refused, never widened.
+    fn per_name_access_refused(&self, operation: &str) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: operation.to_string(),
+            reason: format!(
+                "per-repository access grants aren't supported on GCP: the names of binding '{}' are image paths in the one GAR repository '{}', so a grant would cover every name's images. Use a separate artifact-registry binding per tenant",
+                self.binding_name, self.repository_name
+            ),
+        })
     }
 
     /// Observe GAR's asynchronous operation; failed reads return immediately.
@@ -438,7 +492,36 @@ impl ArtifactRegistry for GarArtifactRegistry {
         format!("{}/{}", self.project_id, self.repository_name)
     }
 
-    async fn create_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+    async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
+        // An image path inside the binding's repository: GAR creates it on first push, so
+        // nothing is created here and the stack needs no permission outside that repository.
+        // OCI path components: lowercase alphanumerics joined by '.', '_' or '-'.
+        let valid = repo_name.split('/').all(|component| {
+            let bytes = component.as_bytes();
+            let alphanumeric = |byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+            bytes.first().is_some_and(alphanumeric)
+                && bytes.last().is_some_and(alphanumeric)
+                && bytes
+                    .iter()
+                    .all(|byte| alphanumeric(byte) || b"._-".contains(byte))
+        });
+        if !valid {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "Creating a GAR image repository".to_string(),
+                details: format!(
+                    "'{repo_name}' is not a valid image path: use lowercase letters, digits, '.', '_', '-' and '/'"
+                ),
+                field_name: Some("repo_name".to_string()),
+            }));
+        }
+        Ok(RepositoryResponse {
+            name: format!("{}/{repo_name}", self.upstream_repository_prefix()),
+            uri: None,
+            created_at: None,
+        })
+    }
+
+    async fn create_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
         let repository = self.project_repository_name(project_id)?;
         let existing = self
             .client
@@ -514,7 +597,21 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        let name = self.iam_repository_name(repo_id)?;
+        let name = match self.target(repo_id)? {
+            GarTarget::Project(name) => name,
+            GarTarget::Binding { path } => {
+                // Image paths are implicit; the routable name and its pull URI are all there is.
+                let path = path.map(|path| format!("/{path}")).unwrap_or_default();
+                return Ok(RepositoryResponse {
+                    name: format!("{}{path}", self.upstream_repository_prefix()),
+                    uri: Some(format!(
+                        "{}-docker.pkg.dev/{}/{}{path}",
+                        self.location, self.project_id, self.repository_name
+                    )),
+                    created_at: None,
+                });
+            }
+        };
         let repository = self
             .client
             .get_repository(self.project_id.clone(), self.location.clone(), name.clone())
@@ -541,8 +638,6 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let repo_name = self.iam_repository_name(repo_id)?;
-
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
             _ => {
@@ -551,6 +646,15 @@ impl ArtifactRegistry for GarArtifactRegistry {
                     binding_name: self.binding_name.clone(),
                     reason: "GCP artifact registry can only accept GCP cross-account access configuration".to_string(),
                 }));
+            }
+        };
+        let repo_name = match self.target(repo_id)? {
+            GarTarget::Project(repository) => repository,
+            GarTarget::Binding { .. } if self.names_only_own_accounts(&gcp_access) => {
+                self.repository_name.clone()
+            }
+            GarTarget::Binding { .. } => {
+                return Err(self.per_name_access_refused("add_cross_account_access"))
             }
         };
 
@@ -649,8 +753,6 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let repo_name = self.revoke_repository_name(repo_id)?;
-
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
             _ => {
@@ -659,6 +761,18 @@ impl ArtifactRegistry for GarArtifactRegistry {
                     binding_name: self.binding_name.clone(),
                     reason: "GCP artifact registry can only accept GCP cross-account access configuration".to_string(),
                 }));
+            }
+        };
+        // Revoking on one name would take the members off every name, so only the whole
+        // repository, or the binding's own accounts, can be named.
+        let repo_name = match self.target(repo_id)? {
+            GarTarget::Project(repository) => repository,
+            GarTarget::Binding { path: None } => self.repository_name.clone(),
+            GarTarget::Binding { .. } if self.names_only_own_accounts(&gcp_access) => {
+                self.repository_name.clone()
+            }
+            GarTarget::Binding { .. } => {
+                return Err(self.per_name_access_refused("remove_cross_account_access"))
             }
         };
 
@@ -706,7 +820,10 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {
-        let repo_name = self.iam_repository_name(repo_id)?;
+        let repo_name = match self.target(repo_id)? {
+            GarTarget::Project(repository) => repository,
+            GarTarget::Binding { .. } => self.repository_name.clone(),
+        };
 
         info!(
             repo_name = %repo_name,
@@ -905,7 +1022,15 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
-        let repository = self.iam_repository_name(repo_id)?;
+        let repository = match self.target(repo_id)? {
+            GarTarget::Project(repository) => repository,
+            GarTarget::Binding { .. } => {
+                // An image path is not a GAR resource, and the binding's repository belongs to
+                // alien-infra, which deletes it with the stack.
+                debug!(repo_id = %repo_id, "GAR image path has no repository to delete");
+                return Ok(());
+            }
+        };
         match self
             .client
             .delete_repository(
@@ -1049,6 +1174,178 @@ mod tests {
             vec!["serviceAccount:management@test-project.iam.gserviceaccount.com"]
         );
     }
+    /// A stack's binding names one repository its setup already granted. Its names are image
+    /// paths there: creating one makes no GAR call, its pull path is in that repository, and its
+    /// own accounts can be granted on it. A grant to anyone else on one name would open every
+    /// name's images, so it is refused and nothing is written.
+    #[tokio::test]
+    async fn binding_names_are_image_paths_in_its_one_repository() {
+        async fn api(
+            State(calls): State<Arc<Mutex<Vec<String>>>>,
+            method: Method,
+            uri: Uri,
+            body: String,
+        ) -> impl IntoResponse {
+            let path = uri.path().to_string();
+            calls.lock().unwrap().push(format!("{method} {path}"));
+            if path.ends_with(":getIamPolicy") {
+                return (
+                    StatusCode::OK,
+                    Json(json!({"etag":"original", "bindings":[]})),
+                );
+            }
+            if path.ends_with(":setIamPolicy") {
+                let input: Value = serde_json::from_str(&body).unwrap();
+                return (StatusCode::OK, Json(input["policy"].clone()));
+            }
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":{"code":404,"message":"no such repository"}})),
+            )
+        }
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(api).with_state(calls.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = GcpClientConfig {
+            project_id: "customer".to_string(),
+            region: "region".to_string(),
+            project_number: None,
+            credentials: GcpCredentials::AccessToken {
+                token: "synthetic-local-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+            }),
+        };
+        let binding = |repository_name: &str| {
+            ArtifactRegistryBinding::gar(
+                repository_name.to_string(),
+                Some("stack-pull@customer.iam.gserviceaccount.com".to_string()),
+                Some("stack-push@customer.iam.gserviceaccount.com".to_string()),
+            )
+        };
+        let registry =
+            GarArtifactRegistry::new("images".to_string(), binding("stack-images"), &config)
+                .await
+                .unwrap();
+
+        let created = registry.create_repository("prj_tenant1").await;
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "creating a name calls no GAR API: {:?}",
+            calls.lock().unwrap()
+        );
+        let created = created.unwrap();
+        assert_eq!(created.name, "customer/stack-images/prj_tenant1");
+        // Terraform setups pass the repository's full resource ID; the names are the same.
+        let from_terraform = GarArtifactRegistry::new(
+            "images".to_string(),
+            binding("projects/customer/locations/region/repositories/stack-images"),
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            from_terraform
+                .create_repository("prj_tenant1")
+                .await
+                .unwrap()
+                .name,
+            created.name
+        );
+        let repository = registry.get_repository(&created.name).await.unwrap();
+        assert_eq!(repository.name, created.name);
+        assert_eq!(
+            repository.uri.as_deref(),
+            Some("region-docker.pkg.dev/customer/stack-images/prj_tenant1")
+        );
+        assert!(registry.create_repository("Tenant").await.is_err());
+        for invalid in ["../other", "a//b", "/a", "a/", "a/-b", ""] {
+            assert!(
+                registry.create_repository(invalid).await.is_err(),
+                "{invalid:?}"
+            );
+        }
+        assert!(registry.create_repository("team-a/app.v2_x").await.is_ok());
+
+        // The stack's own accounts may be granted on the repository that holds the name.
+        let own = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+            project_numbers: Vec::new(),
+            allowed_service_types: Vec::new(),
+            service_account_emails: vec!["stack-pull@customer.iam.gserviceaccount.com".to_string()],
+        });
+        registry
+            .add_cross_account_access(&created.name, own.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "GET /projects/customer/locations/region/repositories/stack-images:getIamPolicy",
+                "POST /projects/customer/locations/region/repositories/stack-images:setIamPolicy",
+            ]
+        );
+        registry
+            .remove_cross_account_access(&created.name, own)
+            .await
+            .unwrap();
+        calls.lock().unwrap().clear();
+
+        // Anyone else, alone or beside the stack's accounts, is refused on a name and nothing is
+        // written: GAR would grant the whole repository.
+        for access in [
+            GcpCrossAccountAccess {
+                project_numbers: vec!["123456789012".to_string()],
+                allowed_service_types: vec![ComputeServiceType::Worker],
+                service_account_emails: Vec::new(),
+            },
+            GcpCrossAccountAccess {
+                project_numbers: Vec::new(),
+                allowed_service_types: Vec::new(),
+                service_account_emails: vec![
+                    "stack-pull@customer.iam.gserviceaccount.com".to_string(),
+                    "tenant@elsewhere.iam.gserviceaccount.com".to_string(),
+                ],
+            },
+        ] {
+            let access = CrossAccountAccess::Gcp(access);
+            for result in [
+                registry
+                    .add_cross_account_access(&created.name, access.clone())
+                    .await,
+                registry
+                    .add_cross_account_access("customer/stack-images", access.clone())
+                    .await,
+                registry
+                    .remove_cross_account_access(&created.name, access.clone())
+                    .await,
+            ] {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+                assert!(!error.retryable);
+                assert!(error
+                    .to_string()
+                    .contains("per-repository access grants aren't supported on GCP"));
+            }
+        }
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "{:?}",
+            calls.lock().unwrap()
+        );
+
+        // Deleting a name deletes no repository.
+        registry.delete_repository(&created.name).await.unwrap();
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "{:?}",
+            calls.lock().unwrap()
+        );
+        server.abort();
+    }
+
     #[tokio::test]
     async fn project_provisioning_and_reader_changes_use_distinct_gar_resources() {
         #[derive(Default)]
@@ -1176,9 +1473,13 @@ mod tests {
             push_service_account_email: None,
             gcp_config: config,
         };
-        assert!(registry.create_repository("prj_A").await.is_err());
+        assert!(registry.create_project_repository("prj_A").await.is_err());
         assert_eq!(
-            registry.create_repository("default").await.unwrap().name,
+            registry
+                .create_project_repository("default")
+                .await
+                .unwrap()
+                .name,
             "vendor/artifacts-default/default"
         );
         assert!(state
@@ -1186,11 +1487,15 @@ mod tests {
             .unwrap()
             .repositories
             .contains_key("artifacts-default"));
-        let own = registry.create_repository("prj_b").await.unwrap();
-        let other = registry.create_repository("prj_a").await.unwrap();
+        let own = registry.create_project_repository("prj_b").await.unwrap();
+        let other = registry.create_project_repository("prj_a").await.unwrap();
         assert_ne!(own.name, other.name);
         assert_eq!(
-            registry.create_repository("prj_b").await.unwrap().name,
+            registry
+                .create_project_repository("prj_b")
+                .await
+                .unwrap()
+                .name,
             own.name
         );
         let access = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
@@ -1236,11 +1541,7 @@ mod tests {
                 .policies
                 .contains_key(other.name.split('/').nth(1).unwrap()));
         }
-        for invalid in [
-            "vendor/artifacts",
-            "vendor/artifacts-shared",
-            "vendor/artifacts-prj-b/prj_a",
-        ] {
+        for invalid in ["vendor/artifacts-shared", "vendor/artifacts-prj-b/prj_a"] {
             assert!(registry
                 .add_cross_account_access(invalid, access.clone())
                 .await
@@ -1264,7 +1565,11 @@ mod tests {
         );
         registry.delete_repository(&own.name).await.unwrap();
         assert_eq!(
-            registry.create_repository("prj_b").await.unwrap().name,
+            registry
+                .create_project_repository("prj_b")
+                .await
+                .unwrap()
+                .name,
             own.name
         );
         state.lock().unwrap().deletion_fails = true;
@@ -1331,7 +1636,7 @@ mod tests {
         for project in ["prj_a", "prj_c"] {
             let repository = format!("artifacts-{}", project.replace('_', "-"));
             let previous = state.lock().unwrap().policies.get(&repository).cloned();
-            registry.create_repository(project).await.unwrap();
+            registry.create_project_repository(project).await.unwrap();
             let policy = state.lock().unwrap().policies[&repository].clone();
             for (role, member) in [
                 (
@@ -1368,7 +1673,7 @@ mod tests {
                 }
             }
             let writes = state.lock().unwrap().writes.len();
-            registry.create_repository(project).await.unwrap();
+            registry.create_project_repository(project).await.unwrap();
             assert_eq!(
                 state.lock().unwrap().writes.len(),
                 writes,
@@ -1379,14 +1684,14 @@ mod tests {
         state.lock().unwrap().policy_write_fails = true;
         assert_eq!(
             registry
-                .create_repository("prj_d")
+                .create_project_repository("prj_d")
                 .await
                 .unwrap_err()
                 .http_status_code,
             Some(403)
         );
         state.lock().unwrap().policy_write_fails = false;
-        registry.create_repository("prj_d").await.unwrap();
+        registry.create_project_repository("prj_d").await.unwrap();
         assert!(state
             .lock()
             .unwrap()

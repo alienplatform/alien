@@ -359,6 +359,16 @@ pub trait ArtifactRegistry: Binding {
     /// routable name.
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse>;
 
+    /// Creates the repository that holds one Alien project's images in a registry many projects
+    /// share, such as a manager's registry.
+    ///
+    /// GAR gives each project its own repository, `<repositoryName>-prj-<id>`, so IAM on it
+    /// reaches that project's images alone. Other platforms already narrow access per
+    /// repository and return [`Self::create_repository`] for `project_id`.
+    async fn create_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        self.create_repository(project_id).await
+    }
+
     /// Gets repository details. `repo_id` is the routable name returned by
     /// [`Self::create_repository`]; implementations MUST NOT re-apply
     /// prefixing.
@@ -370,7 +380,11 @@ pub trait ArtifactRegistry: Binding {
     /// `repo_id` is the routable name from [`Self::create_repository`].
     ///
     /// For AWS: grants access to specified account IDs with configurable principals and compute service types (ECR repository policy).
-    /// For GCP: grants access to serverless robots and service accounts on the parent GAR registry (image-path-level IAM is not supported).
+    /// For GCP: grants access on the GAR repository itself. A name from [`Self::create_repository`]
+    /// is an image path inside the binding's one repository, and GAR has no IAM below a
+    /// repository, so a grant there would reach every name's images: it is refused with
+    /// `OperationNotSupported` unless it names only the binding's own pull and push accounts. A
+    /// repository from [`Self::create_project_repository`] takes any grant.
     /// For Azure: not supported — returns `OperationNotSupported`.
     async fn add_cross_account_access(
         &self,
@@ -383,7 +397,9 @@ pub trait ArtifactRegistry: Binding {
     /// `repo_id` is the routable name from [`Self::create_repository`].
     ///
     /// For AWS: removes access from the ECR repository policy.
-    /// For GCP: removes IAM bindings on the parent GAR registry.
+    /// For GCP: removes IAM bindings on the GAR repository, refused like
+    /// [`Self::add_cross_account_access`] for a name inside the binding's one repository. Naming the
+    /// binding's repository itself removes the members from all of it.
     /// For Azure: not supported — returns `OperationNotSupported`.
     async fn remove_cross_account_access(
         &self,
