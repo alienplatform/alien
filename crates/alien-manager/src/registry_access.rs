@@ -656,11 +656,15 @@ pub async fn cleanup_deleted_registry_access(
         }
     }
 
-    repo_ids.extend(legacy_shared_repository(
-        artifact_registry.as_ref(),
-        state,
-        &platform,
-    ));
+    // Every GCP teardown also revokes on the binding's shared repository. A legacy grant there
+    // is kept while any deployment remains in the GCP project, so whichever deployment is last,
+    // old or new, must be the one that removes it; a missing repository revokes nothing.
+    if platform == Platform::Gcp {
+        let shared = artifact_registry.upstream_repository_prefix();
+        if !shared.is_empty() {
+            repo_ids.push(shared);
+        }
+    }
     repo_ids.sort();
     repo_ids.dedup();
     if repo_ids.is_empty() {
@@ -2219,6 +2223,26 @@ mod tests {
         store
     }
 
+    /// A store for a GCP teardown, which asks once for its project's repository and once, across
+    /// every Alien project, for the binding's shared repository.
+    fn store_answering_teardown(answer: bool) -> MockDeploymentStore {
+        let mut store = MockDeploymentStore::new();
+        for project in [Some("default".to_string()), None] {
+            store
+                .expect_has_other_gcp_project_deployment()
+                .withf(move |caller, project_number, project_id, excluding| {
+                    caller.is_system()
+                        && project_number == PROJECT_NUMBER
+                        && *project_id == project
+                        && excluding == "dep_deleted"
+                })
+                .times(1)
+                .returning(move |_, _, _, _| Ok(answer));
+        }
+        store.expect_list_deployments().times(0);
+        store
+    }
+
     async fn revoke_gcp(
         registry: &RecordingGcpRegistry,
         store: &MockDeploymentStore,
@@ -2288,7 +2312,7 @@ mod tests {
         });
         let providers = Some(provider);
         let targets = HashMap::new();
-        let store = store_answering(Ok(true));
+        let store = store_answering_teardown(true);
         let email = "management@test-project.iam.gserviceaccount.com";
         let mut state = gcp_state_with_stack(worker_stack(
             "us-central1-docker.pkg.dev/vendor-project/alien-artifacts-default/default:latest",
@@ -2306,14 +2330,15 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+        // The deployment's own account leaves both its project repository and the shared one.
         assert_eq!(
             *registry.removals.lock().unwrap(),
-            vec![(Vec::<String>::new(), vec![email.to_string()])]
+            vec![(Vec::<String>::new(), vec![email.to_string()]); 2]
         );
         registry.removals.lock().unwrap().clear();
         // Imported setup may be forgotten after this handoff, without reaching Deleted.
         // A sibling has also reached the persisted runtime teardown handoff.
-        let store = store_answering(Ok(false));
+        let store = store_answering_teardown(false);
         revoke_after_persisting(
             &store,
             &providers,
@@ -2327,6 +2352,8 @@ mod tests {
         assert_eq!(
             *registry.removals.lock().unwrap(),
             vec![
+                (Vec::<String>::new(), vec![email.to_string()]),
+                (vec![PROJECT_NUMBER.to_string()], Vec::<String>::new()),
                 (Vec::<String>::new(), vec![email.to_string()]),
                 (vec![PROJECT_NUMBER.to_string()], Vec::<String>::new()),
             ]
@@ -3390,9 +3417,11 @@ mod tests {
                 .await
                 .expect("the deletion checkpoint should succeed");
 
+            let statuses = harness.statuses_at_revoke();
+            assert!(!statuses.is_empty());
             assert_eq!(
-                harness.statuses_at_revoke(),
-                vec!["deleted".to_string()],
+                statuses,
+                vec!["deleted".to_string(); statuses.len()],
                 "the shared grant is removed only when no other deployment in the project is \
                  saved as active, so each deletion must be saved before it asks: two deletions \
                  asking first would each see the other active and both keep the grant"
@@ -3628,5 +3657,117 @@ mod tests {
                 );
             }
         }
+    }
+    /// A legacy deployment torn down beside a newer one keeps the shared repository's grant for
+    /// it. The newer deployment, the last one in the GCP project, must remove that grant at its own
+    /// teardown even though nothing it ran came from the shared repository.
+    #[tokio::test]
+    async fn the_last_gcp_deployment_removes_a_shared_grant_an_older_one_left() {
+        use alien_bindings::providers::artifact_registry::GarArtifactRegistry;
+        use alien_core::bindings::{
+            ArtifactRegistryBinding, BindingValue, GarArtifactRegistryBinding,
+        };
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use axum::{extract::State, http::Uri, Json, Router};
+
+        const AGENT: &str =
+            "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com";
+        type Policies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+        async fn gar(
+            State(written): State<Policies>,
+            uri: Uri,
+            body: String,
+        ) -> Json<serde_json::Value> {
+            if let Some(path) = uri.path().strip_suffix(":setIamPolicy") {
+                let input: serde_json::Value = serde_json::from_str(&body).unwrap();
+                written
+                    .lock()
+                    .unwrap()
+                    .push((path.to_string(), input["policy"].clone()));
+                return Json(input["policy"].clone());
+            }
+            Json(serde_json::json!({"etag": "e1", "bindings": [
+                {"role": "roles/artifactregistry.reader", "members": [AGENT]}
+            ]}))
+        }
+
+        let written: Policies = Arc::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(gar).with_state(written.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = GcpClientConfig {
+            project_id: "vendor".to_string(),
+            region: "us-central1".to_string(),
+            project_number: None,
+            credentials: GcpCredentials::AccessToken {
+                token: "local".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+            }),
+        };
+        let registry = GarArtifactRegistry::new(
+            "artifact-registry".to_string(),
+            ArtifactRegistryBinding::Gar(GarArtifactRegistryBinding {
+                repository_name: BindingValue::Value("alien-artifacts".to_string()),
+                pull_service_account_email: None,
+                push_service_account_email: None,
+            }),
+            &config,
+        )
+        .await
+        .unwrap();
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry: Arc::new(registry),
+        });
+        let providers = Some(provider);
+        let mut state = gcp_state_with_stack(worker_stack(
+            "us-central1-docker.pkg.dev/vendor/alien-artifacts-prj-test/prj_test/worker:v2",
+        ));
+        state.status = DeploymentStatus::Deleted;
+        state.runtime_metadata = Some(RuntimeMetadata {
+            registry_access_granted: true,
+            registry_access: Some(RegistryAccess {
+                repositories: vec!["vendor/alien-artifacts-prj-test".to_string()],
+                service_types: vec!["worker".to_string()],
+            }),
+            ..Default::default()
+        });
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_has_other_gcp_project_deployment()
+            .times(2)
+            .returning(|_, _, _, _| Ok(false));
+        let result = revoke_after_persisting(
+            &store,
+            &providers,
+            &HashMap::new(),
+            "dep_new",
+            PROJECT,
+            &state,
+        )
+        .await;
+        server.abort();
+        assert!(result.is_ok(), "{result:?}");
+        let mut repositories: Vec<String> = written
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(path, policy)| {
+                assert!(
+                    policy["bindings"].as_array().is_none_or(Vec::is_empty),
+                    "{path}: {policy}"
+                );
+                path.rsplit('/').next().unwrap().to_string()
+            })
+            .collect();
+        repositories.sort();
+        assert_eq!(
+            repositories,
+            vec!["alien-artifacts", "alien-artifacts-prj-test"],
+            "both the project repository and the shared one lose the service agent"
+        );
     }
 }

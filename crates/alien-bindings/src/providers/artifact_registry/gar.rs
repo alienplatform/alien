@@ -438,6 +438,14 @@ impl GarArtifactRegistry {
                 }
             }
         } else {
+            let member_count = |policy: &IamPolicy| -> usize {
+                policy
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.members.len())
+                    .sum()
+            };
+            let members_before = member_count(&current_policy);
             // Remove the selected members from every reader binding, retaining other
             // members and their conditions. A conditional binding is not a new grant target.
             for binding in &mut current_policy.bindings {
@@ -455,6 +463,12 @@ impl GarArtifactRegistry {
             current_policy
                 .bindings
                 .retain(|binding| !binding.members.is_empty());
+            // Nothing to remove writes nothing: every GCP teardown asks the shared repository,
+            // and most hold none of its members.
+            if member_count(&current_policy) == members_before {
+                info!(repo_name = %repo_name, "No members to remove from GCP Artifact Registry repository");
+                return Ok(current_policy);
+            }
         }
 
         // Set the updated policy with the original etag for optimistic concurrency control
