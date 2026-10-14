@@ -372,6 +372,43 @@ impl DeploymentLoop {
     }
 
     pub(crate) async fn shutdown_local_runtimes(&self) -> crate::error::Result<()> {
+        // Deferred deployments may have saved containers without a provider in this process.
+        let recovery: crate::error::Result<()> = async {
+            if let Some(state_dir) = &self.config.state_dir {
+                let deployments = self
+                    .deployment_store
+                    .list_deployments(
+                        &Subject::system(),
+                        &DeploymentFilter {
+                            platforms: Some(vec![Platform::Local]),
+                            deployment_model: Some(alien_core::DeploymentModel::Push),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .context(crate::error::ErrorData::InternalError {
+                        message: "Failed to load saved local workloads for shutdown".to_string(),
+                    })?;
+                let results: Vec<_> = deployments
+                    .iter()
+                    .filter(|deployment| state_dir.join(&deployment.id).join("containers").is_dir())
+                    .map(|deployment| {
+                        get_or_create_local_bindings_provider(
+                            &self.local_bindings_cache,
+                            state_dir,
+                            &deployment.id,
+                        )
+                    })
+                    .collect();
+                for result in results {
+                    result.context(crate::error::ErrorData::InternalError {
+                        message: "Failed to restore saved local workload ownership".to_string(),
+                    })?;
+                }
+            }
+            Ok(())
+        }
+        .await;
         let providers: Vec<_> = {
             let mut cache = self
                 .local_bindings_cache
@@ -388,6 +425,7 @@ impl DeploymentLoop {
                 })
         }))
         .await;
+        recovery?;
         for result in results {
             result?;
         }

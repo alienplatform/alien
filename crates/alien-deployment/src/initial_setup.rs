@@ -577,7 +577,9 @@ pub async fn handle_initial_setup_failed(
         );
     }
     if current.platform == alien_core::Platform::Local {
-        if let Some(metadata) = next.runtime_metadata.as_mut() {
+        if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        }) {
             metadata.pending_prepared_release_id = next
                 .target_release
                 .as_ref()

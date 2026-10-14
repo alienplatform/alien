@@ -208,7 +208,8 @@ async fn shutdown_stops_owned_ids_and_leaves_a_same_named_replacement_running() 
         "sleep",
         "300",
     ]);
-    let result = manager.shutdown_all().await;
+    let recovered = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+    let result = recovered.shutdown().await;
     let foreign_running = docker(&["inspect", "--format", "{{.State.Running}}", &foreign]);
     let owned_running = docker(&[
         "inspect",

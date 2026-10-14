@@ -377,7 +377,7 @@ pub async fn handle_provisioning_failed(
         );
     }
 
-    if current.platform == alien_core::Platform::Local {
+    if local_setup_retry {
         if let Some(metadata) = next.runtime_metadata.as_mut() {
             metadata.pending_prepared_release_id = next
                 .target_release

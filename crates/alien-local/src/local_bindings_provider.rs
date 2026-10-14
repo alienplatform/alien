@@ -195,6 +195,12 @@ impl LocalBindingsProvider {
         let container_manager = { self.container_manager.read().unwrap().clone() };
         let container_result = if let Some(manager) = container_manager {
             manager.shutdown_all().await
+        } else if self.state_dir.join("containers").is_dir() {
+            // A resumed manager can stop before its first reconciliation loads Docker.
+            match LocalContainerManager::new(self.state_dir.clone()) {
+                Ok(manager) => manager.shutdown_all().await,
+                Err(error) => Err(error),
+            }
         } else {
             Ok(())
         };
