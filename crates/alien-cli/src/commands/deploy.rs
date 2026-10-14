@@ -845,11 +845,11 @@ fn duplicate_deployment_name_message(
         .join(", ");
     let update_hint = match existing {
         [deployment] => format!(
-            "To update it from this machine, create a deployment key with `alien deployments token {}` and pass it with `alien deploy --token-file <file> --name {name}`.",
+            "To update it from this machine, save a deployment key with `alien deployments token {} > deployment-token.txt` and run `alien deploy --token-file deployment-token.txt --name {name}`.",
             deployment.id.as_str()
         ),
         _ => format!(
-            "To update one of them from this machine, create a deployment key with `alien deployments token <id>` and pass it with `alien deploy --token-file <file> --name {name}`."
+            "To update one of them from this machine, save its deployment key with `alien deployments token <id> > deployment-token.txt` and run `alien deploy --token-file deployment-token.txt --name {name}`."
         ),
     };
     format!(

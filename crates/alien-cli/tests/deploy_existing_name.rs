@@ -148,7 +148,9 @@ fn refuses_to_create_a_same_named_deployment_in_a_new_group() {
         "{text}"
     );
     assert!(
-        text.contains(&format!("alien deployments token {EXISTING_ID}")),
+        text.contains(&format!(
+            "`alien deployments token {EXISTING_ID} > deployment-token.txt` and run `alien deploy --token-file deployment-token.txt --name nt-1`"
+        )),
         "{text}"
     );
     first.assert_hits(1);
