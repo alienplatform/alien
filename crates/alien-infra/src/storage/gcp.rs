@@ -1037,15 +1037,21 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
         LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
-    use alien_gcp_clients::gcs::{Bucket, MockGcsApi};
-    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi};
+    use alien_gcp_clients::{
+        gcp_request_utils::map_gcp_error,
+        gcs::{Bucket, MockGcsApi},
+        iam::{Binding, IamPolicy, MockIamApi},
+    };
     use rstest::{fixture, rstest};
 
     use crate::core::{
@@ -1631,6 +1637,76 @@ mod tests {
 
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// Setup undeletes a soft-deleted custom role and binds it within seconds,
+    /// while Cloud Storage still sees the role as deleted. That rejection must
+    /// fail the step as retryable so the executor retries it instead of failing
+    /// the bucket; the retried write succeeds once the undelete propagates.
+    #[tokio::test]
+    async fn bucket_policy_write_rejected_while_role_undelete_propagates_is_retryable() {
+        let storage = Storage::new("public-test".to_string())
+            .public_read(true)
+            .build();
+        let writes = Arc::new(AtomicUsize::new(0));
+
+        let mut mock_gcs = MockGcsApi::new();
+        mock_gcs
+            .expect_create_bucket()
+            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+        mock_gcs
+            .expect_get_bucket()
+            .returning(|_| Ok(create_successful_bucket_response("test-public-test")));
+        mock_gcs
+            .expect_update_bucket()
+            .returning(|bucket_name, _| Ok(create_successful_bucket_response(&bucket_name)));
+        mock_gcs
+            .expect_get_bucket_iam_policy()
+            .returning(|_| Ok(IamPolicy::default()));
+        let attempts = writes.clone();
+        mock_gcs
+            .expect_set_bucket_iam_policy()
+            .returning(move |bucket_name, policy| {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(map_gcp_error(
+                            400,
+                            r#"{"error":{"code":400,"message":"Cannot add new grants to deleted role (projects/p/roles/role_test_storage_data_write).","errors":[{"message":"Cannot add new grants to deleted role (projects/p/roles/role_test_storage_data_write).","domain":"global","reason":"invalid"}]}}"#,
+                            &format!("https://storage.googleapis.com/storage/v1/b/{bucket_name}/iam"),
+                            "SetBucketIamPolicy",
+                            &bucket_name,
+                            "GCS",
+                            None,
+                    )));
+                }
+                Ok(policy)
+            });
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(GcpStorageController::default())
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(Arc::new(mock_gcs)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the first policy write is rejected");
+        assert!(
+            error.retryable,
+            "the executor must retry this step, not fail the bucket: {error:?}"
+        );
+        assert_eq!(executor.status(), ResourceStatus::Provisioning);
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the retried step succeeds");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(writes.load(Ordering::SeqCst), 2);
     }
 }
 
