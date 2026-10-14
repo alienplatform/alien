@@ -588,6 +588,11 @@ impl DeploymentLoop {
             )
             .await
             .map_err(|error| error.into_generic())?;
+            if state_after.status == DeploymentStatus::Deleted {
+                self.deployment_store
+                    .delete_deployment(&system, &deployment_id)
+                    .await?;
+            }
             return Ok(false);
         }
 
@@ -2142,6 +2147,129 @@ mod tests {
         let (target, current) = supplied_release_stacks(&record);
         assert!(target.is_none());
         assert!(current.is_none());
+    }
+
+    #[cfg(feature = "sqlite")]
+    struct NoRuntimeCredentials;
+
+    #[cfg(feature = "sqlite")]
+    #[async_trait::async_trait]
+    impl crate::traits::CredentialResolver for NoRuntimeCredentials {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            panic!("a rejected first install must not resolve runtime credentials");
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn credential_free_destroy_removes_sqlite_deployment() {
+        let directory = TempDir::new().unwrap();
+        let manager = crate::server::AlienManager::builder(crate::config::ManagerConfig {
+            db_path: Some(directory.path().join("manager.db")),
+            state_dir: Some(directory.path().to_path_buf()),
+            ..Default::default()
+        })
+        .credential_resolver(std::sync::Arc::new(NoRuntimeCredentials))
+        .with_standalone_defaults(&crate::standalone_config::ManagerTomlConfig::default())
+        .await
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+        let subject = crate::auth::Subject::system();
+        let group = manager
+            .deployment_store
+            .create_deployment_group(
+                &subject,
+                crate::traits::CreateDeploymentGroupParams {
+                    name: "rejected-installs".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let processor = super::DeploymentLoop::new(
+            manager.config.clone(),
+            manager.deployment_store.clone(),
+            manager.release_store.clone(),
+            manager.credential_resolver.clone(),
+            manager.server_bindings.clone(),
+            None,
+        );
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let created = manager
+                .deployment_store
+                .create_with_state(
+                    &subject,
+                    crate::traits::CreateImportedDeploymentParams {
+                        name: format!("rejected-{platform}"),
+                        deployment_group_id: group.id.clone(),
+                        platform,
+                        deployment_protocol_version:
+                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings::default(),
+                        stack_state: StackState::new(platform),
+                        environment_info: None,
+                        runtime_metadata: Default::default(),
+                        status: "delete-pending".to_string(),
+                        current_release_id: None,
+                        desired_release_id: Some("rejected-release".to_string()),
+                        import_source: None,
+                        setup_metadata: None,
+                        setup_target: "test".to_string(),
+                        setup_fingerprint: format!("test-{platform}"),
+                        setup_fingerprint_version: 1,
+                        deployment_token: None,
+                        management_config: None,
+                        input_values: Default::default(),
+                    },
+                )
+                .await
+                .unwrap();
+            let mut acquired = manager
+                .deployment_store
+                .acquire(
+                    &subject,
+                    "destroy-test",
+                    &crate::traits::DeploymentFilter {
+                        statuses: Some(vec!["delete-pending".to_string()]),
+                        ..Default::default()
+                    },
+                    1,
+                )
+                .await
+                .unwrap();
+            assert_eq!(acquired.len(), 1);
+            let mut acquired = acquired.remove(0);
+            assert_eq!(acquired.deployment.id, created.id);
+            acquired.deployment.supplied_stacks = Some(SuppliedStacks {
+                current: None,
+                desired: Some(Stack::new("rejected-stack".to_string()).build()),
+            });
+            processor
+                .process_deployment_inner(
+                    acquired.deployment,
+                    acquired.execution_claim,
+                    "destroy-test",
+                    super::ProcessOptions::deployment_tick(),
+                )
+                .await
+                .expect("destroy without management credentials");
+            assert!(
+                manager
+                    .deployment_store
+                    .get_deployment(&subject, &created.id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{platform}: deleted record must be removed"
+            );
+        }
     }
 
     #[tokio::test]
