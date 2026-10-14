@@ -1313,6 +1313,7 @@ mod tests {
             size: "20Gi".into(),
             mount_path: "/data".into(),
             backups: crate::VolumeBackups::default(),
+            encryption_key: None,
         });
         let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
             "containers": {"api": {"volumeSizeGib": 40}}
@@ -1463,6 +1464,7 @@ mod tests {
                 size: "20Gi".into(),
                 mount_path: "/data".into(),
                 backups: crate::VolumeBackups::default(),
+                encryption_key: None,
             });
             let mut installed = StackState::new(platform);
             installed.resources.insert(
@@ -1519,6 +1521,7 @@ mod tests {
                 size: size.into(),
                 mount_path: "/data".into(),
                 backups: crate::VolumeBackups::default(),
+                encryption_key: None,
             });
             let error = plan_compute(&stack, platform, None).unwrap_err();
             assert_eq!(error.code, "CONTAINER_RESOURCE_SELECTION_INVALID");
