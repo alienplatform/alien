@@ -33,8 +33,10 @@ use axum::{
     Router,
 };
 use sha2::{Digest, Sha256};
+use tracing::info;
 
 use alien_core::{
+    container_resources::keep_volume_sizes_over_setup_source,
     import::{
         ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
         CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
@@ -297,6 +299,27 @@ pub async fn stack_import(
                 return ErrorData::bad_request(
                     "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
                 ).into_response();
+            }
+            // A compute update can grow a volume without the setup source
+            // learning about it, so its stale lower value keeps the installed
+            // capacity instead of failing the next update as a shrink.
+            if let Some(compute) = req.stack_settings.compute.as_mut() {
+                for kept in keep_volume_sizes_over_setup_source(
+                    compute,
+                    existing.stack_state.as_ref(),
+                    existing
+                        .stack_settings
+                        .as_ref()
+                        .and_then(|settings| settings.compute.as_ref()),
+                ) {
+                    info!(
+                        deployment_id = %existing.id,
+                        container_id = %kept.container_id,
+                        requested_gib = kept.requested_gib,
+                        kept_gib = kept.kept_gib,
+                        "Setup registration asked for a smaller volume than the deployment has; keeping the larger size"
+                    );
+                }
             }
             // This write replaces the stored map and the request never carries
             // a generated secret, so keep the value the deployment holds.
