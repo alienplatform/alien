@@ -10,6 +10,11 @@ use crate::{
 use alien_core::{PermissionSet, PermissionSetReference, ServiceAccount, Stack, Worker};
 use alien_error::{Context, IntoAlienError};
 
+/// Physical name used by the AWS Storage, Queue and KV create controllers.
+pub fn aws_prefixed_resource_name(prefix: &str, resource_id: &str) -> String {
+    format!("{prefix}-{resource_id}")
+}
+
 /// Extra stack-policy statements required for managed Lambda image pulls.
 /// Match the ServiceAccount writer, including its empty-stack-set early return.
 pub fn aws_service_account_injected_statements(

@@ -1,3 +1,4 @@
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -22,11 +23,6 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
-/// Generates the full, prefixed AWS DynamoDB table name.
-fn get_aws_table_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
-}
-
 #[controller]
 pub struct AwsKvController {
     /// The actual DynamoDB table name (includes stack name prefix).
@@ -49,7 +45,7 @@ impl AwsKvController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let aws_config = ctx.get_aws_config()?;
-        let table_name = get_aws_table_name(&ctx.resource_prefix, &config.id);
+        let table_name = aws_prefixed_resource_name(&ctx.resource_prefix, &config.id);
 
         info!(id=%config.id, table_name=%table_name, "Creating DynamoDB table for KV store");
 

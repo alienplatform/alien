@@ -1,18 +1,22 @@
 //! Definite setup-owned workload role overflow after identity mutation.
 //!
-//! Missing controller names remain unresolved. No hypothetical physical names
+//! Unavailable controller names remain unresolved. No hypothetical physical names
 //! or live IAM reads are used to claim complete role headroom.
 
 use crate::{
     error::{ErrorData, Result},
     CheckResult,
 };
-use alien_core::{InitialSetupAuthority, Platform, ResourceLifecycle, ServiceAccount, Stack};
+use alien_core::{
+    InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, ResourceLifecycle, ServiceAccount,
+    Stack, StackState, StorageOutputs,
+};
 use alien_error::{Context, IntoAlienError};
 use alien_permissions::{
     aws_resource_policies::{
-        aws_resource_policy_name, aws_service_account_injected_statements,
-        render_aws_resource_policy, AwsResourcePolicyContext,
+        aws_prefixed_resource_name, aws_resource_policy_name,
+        aws_service_account_injected_statements, render_aws_resource_policy,
+        AwsResourcePolicyContext,
     },
     generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
@@ -25,6 +29,7 @@ pub(crate) fn check(
     platform: Platform,
     authority: Option<InitialSetupAuthority>,
     context: &PermissionContext,
+    state: Option<&StackState>,
 ) -> Result<CheckResult> {
     let mut result = CheckResult::success().with_check_metadata(
         Some("IAM_WORKLOAD_INLINE_AGGREGATE"),
@@ -108,11 +113,39 @@ pub(crate) fn check(
                     .flatten()
                     .filter(|reference| reference.id().starts_with(&prefix)),
             );
+            let mut resource_context = context.clone().with_resource_id(id.to_string());
+            // Existing/imported resources keep their recorded physical names. Never
+            // infer a new name for a resource whose controller has already run.
+            let name = match state.and_then(|state| state.resources.get(id)) {
+                Some(saved) => {
+                    saved
+                        .outputs
+                        .as_ref()
+                        .and_then(|outputs| match resource_type.as_str() {
+                            "storage" => outputs
+                                .downcast_ref::<StorageOutputs>()
+                                .map(|o| o.bucket_name.clone()),
+                            "queue" => outputs
+                                .downcast_ref::<QueueOutputs>()
+                                .map(|o| o.queue_name.clone()),
+                            "kv" => outputs
+                                .downcast_ref::<KvOutputs>()
+                                .map(|o| o.store_name.clone()),
+                            _ => None,
+                        })
+                }
+                None if matches!(resource_type.as_str(), "storage" | "queue" | "kv") => context
+                    .stack_prefix
+                    .as_deref()
+                    .map(|prefix| aws_prefixed_resource_name(prefix, id)),
+                None => None,
+            };
+            resource_context.resource_name = name;
             let selection = AwsResourcePolicyContext {
                 named_by_resource: explicit,
                 stack_sets: &account.stack_permission_sets,
                 generator: &generator,
-                permission_context: context,
+                permission_context: &resource_context,
             };
             for reference in refs {
                 let Some(set) =
@@ -124,9 +157,11 @@ pub(crate) fn check(
                 let name = aws_resource_policy_name(id, &set.id);
                 let document = match selection.is_redundant(reference) {
                     Ok(true) => continue,
-                    Ok(false) => render_aws_resource_policy(id, &set, &generator, context)
-                        .ok()
-                        .map(|policy| policy.document),
+                    Ok(false) => {
+                        render_aws_resource_policy(id, &set, &generator, &resource_context)
+                            .ok()
+                            .map(|policy| policy.document)
+                    }
                     Err(_) => None,
                 };
                 incomplete |= document.is_none();
@@ -166,7 +201,7 @@ mod tests {
         platform: Platform,
         authority: Option<InitialSetupAuthority>,
     ) -> Result<CheckResult> {
-        super::check(stack, platform, authority, &PermissionContext::new())
+        super::check(stack, platform, authority, &PermissionContext::new(), None)
     }
 
     fn grant(id: &str, count: usize, dynamic: bool) -> PermissionSetReference {
@@ -223,6 +258,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn physical_names_count_fresh_and_imported_documents_without_guessing() {
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let context = PermissionContext::new().with_stack_prefix("q5-names");
+        for resource_type in ["storage", "queue", "kv"] {
+            let mut stack = prepared(100, vec![grant("read", 100, true)]).await;
+            // Both documents must use physical names and logical resource IDs.
+            stack
+                .permissions
+                .profiles
+                .get_mut("reader")
+                .unwrap()
+                .0
+                .insert("objects-a".into(), vec![grant("read", 100, true)]);
+            for id in ["objects-a", "objects-b"] {
+                let config = match resource_type {
+                    "queue" => alien_core::Resource::new(alien_core::Queue::new(id.into()).build()),
+                    "kv" => alien_core::Resource::new(alien_core::Kv::new(id.into()).build()),
+                    _ => alien_core::Resource::new(Storage::new(id.into()).build()),
+                };
+                stack.resources.get_mut(id).unwrap().config = config;
+            }
+            let expected_size = |names: [&str; 2]| {
+                ["objects-a", "objects-b"]
+                    .into_iter()
+                    .zip(names)
+                    .map(|(id, name)| {
+                        let set = stack.permissions.profiles["reader"].0[id][0]
+                            .resolve(|_| None)
+                            .unwrap();
+                        render_aws_resource_policy(
+                            id,
+                            &set,
+                            &generator,
+                            &context
+                                .clone()
+                                .with_resource_id(id)
+                                .with_resource_name(name),
+                        )
+                        .unwrap()
+                        .document
+                        .chars()
+                        .filter(|c| !c.is_ascii_whitespace())
+                        .count()
+                    })
+                    .sum::<usize>()
+            };
+            let fresh_size = expected_size(["q5-names-objects-a", "q5-names-objects-b"]);
+            assert!(fresh_size > 10240);
+            let fresh = super::check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context,
+                Some(&StackState::new(Platform::Aws)),
+            )
+            .unwrap();
+            assert_eq!(fresh.errors.len(), 1);
+            assert!(fresh.errors[0].contains(&fresh_size.to_string()));
+
+            let mut state = StackState::new(Platform::Aws);
+            for id in ["objects-a", "objects-b"] {
+                let mut saved = alien_core::StackResourceState::new_pending(
+                    resource_type.into(),
+                    stack.resources[id].config.clone(),
+                    None,
+                    vec![],
+                );
+                let name = format!("q5-imported-long-name-{id}");
+                saved.outputs = Some(match resource_type {
+                    "queue" => alien_core::ResourceOutputs::new(QueueOutputs {
+                        queue_name: name,
+                        identifier: None,
+                    }),
+                    "kv" => alien_core::ResourceOutputs::new(KvOutputs {
+                        store_name: name,
+                        identifier: None,
+                        endpoint: None,
+                    }),
+                    _ => alien_core::ResourceOutputs::new(StorageOutputs { bucket_name: name }),
+                });
+                state.resources.insert(id.into(), saved);
+            }
+            let imported_size = expected_size([
+                "q5-imported-long-name-objects-a",
+                "q5-imported-long-name-objects-b",
+            ]);
+            assert_ne!(fresh_size, imported_size);
+            let imported = super::check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context,
+                Some(&state),
+            )
+            .unwrap();
+            assert_eq!(imported.errors.len(), 1);
+            assert!(imported.errors[0].contains(&imported_size.to_string()));
+            for saved in state.resources.values_mut() {
+                saved.outputs = None;
+            }
+            let unknown = super::check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context,
+                Some(&state),
+            )
+            .unwrap();
+            assert!(unknown.success);
+            assert_eq!(unknown.warnings.len(), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn injected_lambda_grants_can_overflow_an_otherwise_fitting_role() {
         let set = serde_json::from_value(serde_json::json!({
             "id": "q5-global", "description": "Synthetic size boundary",
@@ -272,6 +421,7 @@ mod tests {
             Platform::Aws,
             Some(InitialSetupAuthority::DirectSetup),
             &context,
+            None,
         )
         .unwrap();
         assert_eq!(result.errors.len(), 1);
@@ -291,7 +441,8 @@ mod tests {
                 &stack,
                 Platform::Aws,
                 Some(InitialSetupAuthority::DirectSetup),
-                &context
+                &context,
+                None,
             )
             .unwrap()
             .success
@@ -517,14 +668,15 @@ mod tests {
             aggregate.errors
         );
         assert_eq!(aggregate.warnings.len(), 1);
-        // Missing physical names still do not become guessed deployment-prefix names.
+        // Without a deployment prefix, fresh physical names remain unresolved.
         let unresolved = prepared(100, vec![grant("read", 200, true)]).await;
         assert!(
             super::check(
                 &unresolved,
                 Platform::Aws,
                 Some(InitialSetupAuthority::DirectSetup),
-                &context
+                &PermissionContext::new(),
+                None,
             )
             .unwrap()
             .success

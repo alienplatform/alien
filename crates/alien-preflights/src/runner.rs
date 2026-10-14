@@ -410,7 +410,7 @@ impl PreflightRunner {
             });
 
         // Match the deployment values used by the IAM policy writers. Physical
-        // resource names remain unresolved until their controller inputs are known.
+        // resource names use shared create naming or saved outputs where available.
         let mut permission_context = alien_permissions::PermissionContext::new();
         if let Some(aws) = client_config.aws_config() {
             permission_context = permission_context
@@ -436,6 +436,7 @@ impl PreflightRunner {
             platform,
             setup_authority,
             &permission_context,
+            Some(stack_state),
         )?);
 
         let prerequisite_summary = self
