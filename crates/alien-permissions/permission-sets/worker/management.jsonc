@@ -4,6 +4,12 @@
   "platforms": {
     "aws": [
       {
+        "label": "read-lambda-account-quota",
+        "description": "Read Lambda account allocation limits and unreserved concurrency; no function code or telemetry.",
+        "grant": { "actions": ["lambda:GetAccountSettings"] },
+        "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+      },
+      {
         "label": "update-lambda-functions",
         "description": "Update Lambda code, configuration, versions, aliases, function URLs, and event source mappings owned by this application.",
         "grant": {
@@ -20,6 +26,7 @@
             "lambda:DeleteFunctionEventInvokeConfig",
             "lambda:GetFunction",
             "lambda:GetFunctionConfiguration",
+            "lambda:GetFunctionConcurrency",
             "lambda:ListVersionsByFunction",
             "lambda:ListAliases",
             "lambda:GetPolicy",

@@ -175,6 +175,31 @@ pub struct CapacityGroup {
     pub nested_virtualization: Option<bool>,
 }
 
+impl CapacityGroup {
+    /// AWS root volume size, including filesystem headroom and runtime overhead.
+    pub fn aws_root_volume_size_gib(&self) -> i32 {
+        self.aws_filesystem_size_gib()
+            .saturating_add(12)
+            .max(20)
+            .min(i32::MAX as u64) as i32
+    }
+
+    /// AWS runtime data volume required by nested virtualization.
+    pub fn aws_runtime_data_volume_size_gib(&self) -> Option<i32> {
+        (self.nested_virtualization == Some(true))
+            .then(|| self.aws_filesystem_size_gib().max(20).min(i32::MAX as u64) as i32)
+    }
+
+    fn aws_filesystem_size_gib(&self) -> u64 {
+        self.profile
+            .as_ref()
+            .map_or(0, |profile| profile.ephemeral_storage_bytes)
+            .div_ceil(1024 * 1024 * 1024)
+            .saturating_mul(5)
+            .div_ceil(4)
+    }
+}
+
 /// ComputeCluster resource for running long-running container workloads.
 ///
 /// A ComputeCluster provides the setup-owned machine boundary for containers.
@@ -446,6 +471,39 @@ impl ResourceDefinition for ComputeCluster {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aws_disk_sizing_preserves_rounding_minimums_and_saturation() {
+        let gib = 1024 * 1024 * 1024;
+        for (bytes, root, data) in [
+            (0, 20, 20),
+            (gib, 20, 20),
+            (20 * gib, 37, 25),
+            (20 * gib + 1, 39, 27),
+            (u64::MAX, i32::MAX, i32::MAX),
+        ] {
+            let mut group = CapacityGroup {
+                group_id: "general".into(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "4.0".into(),
+                    memory_bytes: 8 * gib,
+                    ephemeral_storage_bytes: bytes,
+                    architecture: None,
+                    gpu: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            };
+            assert_eq!(group.aws_root_volume_size_gib(), root);
+            assert_eq!(group.aws_runtime_data_volume_size_gib(), None);
+            group.nested_virtualization = Some(true);
+            assert_eq!(group.aws_root_volume_size_gib(), root);
+            assert_eq!(group.aws_runtime_data_volume_size_gib(), Some(data));
+        }
+    }
 
     #[test]
     fn test_compute_cluster_creation() {
