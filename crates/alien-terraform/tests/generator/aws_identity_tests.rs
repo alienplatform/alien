@@ -1714,7 +1714,10 @@ fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
         "arn:aws:lambda:{PARITY_REGION}:{PARITY_ACCOUNT}:microvm-image:{PARITY_PREFIX}-agents"
     );
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-        let module = granted_sandbox_module(lifecycle, &["sandbox/management", "sandbox/execute"]);
+        let module = granted_sandbox_module(
+            lifecycle,
+            PermissionProfile::new().resource("agents", ["sandbox/management", "sandbox/execute"]),
+        );
         if lifecycle == ResourceLifecycle::Live {
             assert_terraform_valid(&module, "live sandbox with profile grants");
         }
@@ -1751,7 +1754,10 @@ fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
 /// lifecycle control.
 #[test]
 fn an_execute_only_profile_cannot_start_sessions() {
-    let module = granted_sandbox_module(ResourceLifecycle::Frozen, &["sandbox/execute"]);
+    let module = granted_sandbox_module(
+        ResourceLifecycle::Frozen,
+        PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+    );
     let granted = granted_actions(&module, "execution_sa");
     assert_eq!(
         granted.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -1759,10 +1765,59 @@ fn an_execute_only_profile_cannot_start_sessions() {
     );
 }
 
-/// A deny sandbox whose `execution` profile is granted `sets` on it, next to that profile's role.
+/// A set granted under `"*"` reaches the sandbox through the service account's stack-wide policy,
+/// so the sandbox must not attach a second, image-scoped copy: every copy counts against the
+/// role's 10,240-character inline policy limit. A set granted on the sandbox by id is attached
+/// by the sandbox alone, and must still be.
+#[test]
+fn a_stack_wide_sandbox_grant_is_attached_once() {
+    let stack_wide = format!("microvm-image:{PARITY_PREFIX}-*");
+    let this_image = format!("microvm-image:{PARITY_PREFIX}-agents");
+    for (profile, expected_policies, granted_on) in [
+        (
+            PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]),
+            vec![],
+            &stack_wide,
+        ),
+        (
+            PermissionProfile::new().resource("agents", ["sandbox/management", "sandbox/execute"]),
+            vec![
+                "execution_sa_agents_sandbox-management",
+                "execution_sa_agents_sandbox-execute",
+            ],
+            &this_image,
+        ),
+    ] {
+        let module = granted_sandbox_module(ResourceLifecycle::Frozen, profile.clone());
+        let sandbox_policies: Vec<String> = module
+            .iter()
+            .filter(|(file, _)| file.ends_with(".tf"))
+            .flat_map(|(file, contents)| {
+                let body: hcl::Body =
+                    hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
+                resource_blocks(&body, "aws_iam_role_policy")
+                    .map(|block| block.labels()[1].as_str().to_string())
+                    .filter(|label| label.starts_with("execution_sa_agents_"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(sandbox_policies, expected_policies, "{profile:?}");
+
+        let run = granted_actions(&module, "execution_sa")
+            .remove("lambda:RunMicrovm")
+            .unwrap_or_else(|| panic!("{profile:?}: the role must be able to start a session"));
+        assert_eq!(run.len(), 1, "{profile:?}: granted once: {run:?}");
+        assert!(
+            run[0].ends_with(granted_on.as_str()),
+            "{profile:?}: {run:?}"
+        );
+    }
+}
+
+/// A deny sandbox next to the role of an `execution` profile holding `profile`.
 fn granted_sandbox_module(
     lifecycle: ResourceLifecycle,
-    sets: &[&str],
+    profile: PermissionProfile,
 ) -> alien_terraform::ModuleFiles {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
@@ -1772,14 +1827,14 @@ fn granted_sandbox_module(
         ..StackSettings::default()
     };
     let stack = Stack::new("acme-sandbox-grants".to_string())
-        .permission(
-            "execution",
-            PermissionProfile::new().resource("agents", sets.iter().copied()),
-        )
         .add(
-            ServiceAccount::new("execution-sa".to_string()).build(),
+            ServiceAccount::from_permission_profile("execution-sa".to_string(), &profile, |name| {
+                alien_permissions::get_permission_set(name).cloned()
+            })
+            .expect("every set in the profile is registered"),
             ResourceLifecycle::Frozen,
         )
+        .permission("execution", profile)
         .add(
             Network::new("default-network".to_string())
                 .settings(settings.network.clone().expect("network"))

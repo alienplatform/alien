@@ -632,8 +632,12 @@ fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment)
     )
 }
 
-/// Attaches each profile's granted `sandbox/*` sets to that profile's role, scoped to this
-/// sandbox's image.
+/// Attaches the `sandbox/*` sets a profile grants on this sandbox by id to that profile's role,
+/// scoped to this sandbox's image.
+///
+/// A set granted under `"*"` is left out: the service account already carries it stack-wide on
+/// `microvm-image:${local.resource_prefix}-*`, and a second copy per sandbox only adds to the
+/// role's inline policy size, which IAM caps.
 ///
 /// Emitted for both lifecycles: a Live image is built after apply, under the same
 /// `${local.resource_prefix}-<id>` name, so a name-scoped grant written now covers it. Without
@@ -647,9 +651,10 @@ fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Re
             continue;
         };
         let mut seen = std::collections::HashSet::new();
-        let granted = [ctx.resource_id, "*"]
+        let granted = profile
+            .0
+            .get(ctx.resource_id)
             .into_iter()
-            .filter_map(|key| profile.0.get(key))
             .flatten()
             .filter(|reference| reference.id().starts_with(PERMISSION_SET_PREFIX))
             .filter(|reference| seen.insert(reference.id().to_string()));
