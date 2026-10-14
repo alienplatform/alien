@@ -77,13 +77,7 @@ async fn fixture() -> (Fixture, Arc<AtomicUsize>) {
         config: managed_aws_config(),
         calls: calls.clone(),
     });
-    let fixture = build(
-        Platform::Aws,
-        HashMap::new(),
-        resolver,
-        Arc::new(Mutex::new(None)),
-    )
-    .await;
+    let fixture = build(resolver).await;
     persist_remote_storage_state(&fixture).await;
 
     (fixture, calls)
@@ -171,13 +165,7 @@ async fn resolves_remote_storage_with_stack_identity_credentials_and_disables_re
         },
         calls: calls.clone(),
     });
-    let fixture = build(
-        Platform::Aws,
-        HashMap::new(),
-        resolver,
-        Arc::new(Mutex::new(None)),
-    )
-    .await;
+    let fixture = build(resolver).await;
     persist_remote_storage_state(&fixture).await;
 
     let (status, headers, json) = post_resolve_binding(
@@ -220,14 +208,12 @@ async fn resolves_remote_storage_with_stack_identity_credentials_and_disables_re
 #[tokio::test]
 async fn denies_unscoped_deployment_token_before_resolving_credentials() {
     let (fixture, calls) = fixture().await;
-    let unscoped_token = mint_token(
-        &fixture.state.token_store,
-        TokenType::Deployment,
-        "ax_deploy_",
-        None,
-        None,
-    )
-    .await;
+    let unscoped_token = create_token()
+        .token_store(&fixture.state.token_store)
+        .token_type(TokenType::Deployment)
+        .prefix("ax_deploy_")
+        .call()
+        .await;
 
     let (status, _, _) = post_resolve_binding(
         &fixture,
@@ -284,7 +270,6 @@ fn with_subject(fixture: &Fixture, subject: Subject) -> Fixture {
         token_b: fixture.token_b.clone(),
         admin_token: fixture.admin_token.clone(),
         group_token: fixture.group_token.clone(),
-        captured: fixture.captured.clone(),
     }
 }
 
@@ -299,7 +284,7 @@ fn sandbox_only_stack() -> Stack {
             idle_pause_seconds: None,
         })
         .build();
-    let mut stack = mint_test_stack(Platform::Aws);
+    let mut stack = test_stack(Platform::Aws);
     stack.resources.shift_remove("files");
     stack.resources.insert(
         "box".to_string(),
@@ -591,7 +576,7 @@ async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_a_da
             idle_pause_seconds: None,
         })
         .build();
-    let mut stack = mint_test_stack(Platform::Aws);
+    let mut stack = test_stack(Platform::Aws);
     stack.resources.insert(
         "box".to_string(),
         alien_core::ResourceEntry {

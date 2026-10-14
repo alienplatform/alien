@@ -3,12 +3,12 @@
   "description": "Allows managing the worker fleet inside a setup-owned ComputeCluster boundary.",
   "platforms": {
     "aws": [
-      // EC2 Describe actions do not support resource-level permissions or
-      // conditions. Runtime needs this metadata read to adopt a launch template
-      // created by an interrupted attempt.
+      // These EC2 discovery reads require Resource "*". Runtime adopts launch
+      // templates after interrupted attempts and inspects existing security-group
+      // ingress while reconciling controller-owned groups.
       {
         "grant": {
-          "actions": ["ec2:DescribeLaunchTemplates"]
+          "actions": ["ec2:DescribeLaunchTemplates", "ec2:DescribeSecurityGroups"]
         },
         "binding": {
           "stack": {

@@ -25,21 +25,11 @@ use tokio::sync::Mutex;
 
 use crate::error::{ErrorData, Result};
 
-/// The shared workload credential resolver, resolved fresh on each authorization so a
-/// long-lived gateway re-mints short-lived credentials before they expire. Held behind an
-/// `Arc` because every route the mint-gated workload serves shares one provider (one mint
-/// cache, one refresh clock).
+/// The workload credential resolver shared by routes.
 type Managed = Arc<LazyEnvBindingsProvider>;
 
-/// AWS credentials provider backed by the runtime-less resolver. The SigV4 signer calls
-/// `provide_credentials` on every request, and `LazyEnvBindingsProvider::provider` re-mints
-/// only when the cached credential is near expiry, so this refreshes transparently.
-///
-/// The resolver is native-first: it yields minted keys only when the workload has no
-/// projected identity. So both shapes reach here, and an `Imds` / `Profile` / `WebIdentity`
-/// config is resolved through the SDK default chain — the same fallback
-/// [`AwsSigV4Cred::from_client_config`] uses. Rejecting it would fail every request on a
-/// mint-gated workload that has a projected identity.
+/// AWS credentials backed by the workload resolver. Projected identity configs
+/// use the SDK default chain, which resolves and refreshes their credentials.
 #[derive(Debug)]
 struct ManagedAwsCredentials {
     provider: Managed,
@@ -243,8 +233,7 @@ impl AwsSigV4Cred {
         }
     }
 
-    /// Sign with credentials the runtime-less resolver mints and refreshes. Each request
-    /// re-resolves through the shared provider, so minted credentials never go stale.
+    /// Sign with credentials from the shared workload resolver.
     pub fn managed(region: impl Into<String>, provider: Managed) -> Self {
         Self {
             region: region.into(),
@@ -253,8 +242,7 @@ impl AwsSigV4Cred {
     }
 
     /// Build from the workload's resolved `ClientConfig` — the identity the runtime-less
-    /// credential resolver selected: the native/projected identity, or Alien-minted
-    /// short-lived credentials. Explicit keys/session credentials are signed directly;
+    /// credential resolver selected: native, projected, or explicit credentials. Explicit keys/session credentials are signed directly;
     /// an instance-role/profile config falls back to the SDK default chain, which
     /// resolves (and refreshes) them.
     pub async fn from_client_config(
@@ -410,10 +398,8 @@ enum BearerSource {
     Static {
         token: String,
     },
-    /// The runtime-less resolver: re-resolve the workload's bearer token on each request,
-    /// re-minting when the short-lived credential is near expiry. The resolver is
-    /// native-first, so it may instead select the workload's projected identity, which
-    /// carries no bearer token — `native` is the metadata source that issues one.
+    /// The workload resolver. For projected identities, `native` supplies a
+    /// bearer token from the metadata service.
     Managed {
         provider: Managed,
         native: Box<BearerSource>,
@@ -427,7 +413,7 @@ enum BearerSource {
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Attaches an ambient bearer token — fetched and cached from the cloud metadata endpoint,
-/// or supplied directly (static / minted).
+/// or supplied directly.
 pub struct BearerTokenCred {
     source: BearerSource,
     client: reqwest::Client,
@@ -514,8 +500,7 @@ impl BearerTokenCred {
 
     async fn token(&self) -> Result<String> {
         match &self.source {
-            // A supplied token has no refresh clock of its own, and the resolver holds one
-            // for minted credentials, so neither uses the local metadata cache.
+            // Explicit tokens are used as supplied; projected identities use the metadata cache.
             BearerSource::Static { token } => Ok(token.clone()),
             BearerSource::Managed { provider, native } => {
                 match self.managed_token(provider, native).await? {

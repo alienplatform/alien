@@ -4,7 +4,6 @@ pub mod bindings;
 pub mod build_config;
 pub mod charts;
 pub mod commands;
-pub mod credentials;
 pub mod deployment_groups;
 pub mod deployments;
 pub mod health;
@@ -207,7 +206,6 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         // Sync (acquire / reconcile / release / agent-sync)
         .merge(sync::router())
         // Credentials
-        .merge(credentials::router())
         // Remote resource bindings
         .merge(bindings::router())
         // Vault secrets
