@@ -130,6 +130,8 @@ fn profiles_differ_outside_gates(
     false
 }
 
+/// `new_management` must already be without the migration grants
+/// ([`without_added_migration_grants`]).
 fn management_differs_outside_gates(
     old_stack: &Stack,
     new_stack: &Stack,
@@ -138,10 +140,7 @@ fn management_differs_outside_gates(
     gated: &GatedContributions,
     allow_email_heartbeat_migration: bool,
 ) -> bool {
-    match (
-        old_management,
-        &without_added_migration_grants(old_stack, old_management, new_management),
-    ) {
+    match (old_management, new_management) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
             ManagementPermissions::Extend(old_profile),
@@ -366,16 +365,19 @@ fn check_permission_profiles(
         }
     }
 
-    // Check management permissions
+    // Check management permissions. Both the comparison and the narrowing allowance see the new
+    // profile without the migration grants, so an update that adds one and removes another
+    // grant still only narrows.
+    let new_management =
+        without_added_migration_grants(old_stack, old_stack.management(), new_stack.management());
     if management_differs_outside_gates(
         old_stack,
         new_stack,
         old_stack.management(),
-        new_stack.management(),
+        &new_management,
         &gated,
         allow_email_heartbeat_migration,
-    ) && !(allow_narrowing
-        && management_narrowed(old_stack.management(), new_stack.management()))
+    ) && !(allow_narrowing && management_narrowed(old_stack.management(), &new_management))
     {
         errors.push("Management permissions configuration was modified".to_string());
     }
@@ -621,6 +623,24 @@ mod tests {
             key_update_passes(
                 &["customer-key"],
                 PermissionProfile::new().resource("customer-key", ["key/management"]),
+                &["customer-key"],
+                PermissionProfile::new()
+                    .resource("customer-key", ["key/availability", "key/management"]),
+            )
+            .await
+        );
+    }
+
+    /// The first update after the probe existed may also drop another grant, such as a removed
+    /// Live table's `kv/provision`.
+    #[tokio::test]
+    async fn gaining_the_probe_while_dropping_another_grant_still_only_narrows() {
+        assert!(
+            key_update_passes(
+                &["customer-key"],
+                PermissionProfile::new()
+                    .global(["kv/provision"])
+                    .resource("customer-key", ["key/management"]),
                 &["customer-key"],
                 PermissionProfile::new()
                     .resource("customer-key", ["key/availability", "key/management"]),
