@@ -1,0 +1,7 @@
+$ aws cloudformation delete-stack --stack-name q5-c59-parent
+Exit: 0
+$ aws cloudformation delete-stack --stack-name q5-c59-small
+Exit: 0
+Both subsequent describe-stacks: stack does not exist.
+Final provider IAM lists: owned roles 0; owned managed policies 0.
+All non-owned RoleIds/PolicyIds captured at parent failure preserved.

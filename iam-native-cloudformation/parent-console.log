@@ -1,0 +1,16 @@
+$ aws cloudformation create-stack --stack-name q5-c59-parent --template-body file://parent-template.yaml
+  --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
+  --parameters file://private-management-role.json --tags Key=quota-proof,Value=q5-c59 --disable-rollback
+$ aws cloudformation describe-stack-events --stack-name q5-c59-parent
+q5-c59-parent  CREATE_IN_PROGRESS  User Initiated
+q5-c59-parent  CREATE_IN_PROGRESS  Transformation succeeded
+ManagementRole  CREATE_IN_PROGRESS
+ExecutionSaRole  CREATE_IN_PROGRESS
+ManagementRole  CREATE_IN_PROGRESS  Resource creation Initiated
+ExecutionSaRole  CREATE_IN_PROGRESS  Resource creation Initiated
+ExecutionSaRole  CREATE_FAILED  Resource handler returned message: "Maximum policy size of 10240 bytes exceeded for role q5-c59-parent-execution-sa (Service: Iam, Status Code: 409, Request ID: 0637a38c-22b8-44ad-99ed-6f1c8a0cc727) (SDK Attempt Count: 1)" (RequestToken: 374790ea-ecd7-2d81-a7bf-1f550154d460, HandlerErrorCode: ServiceLimitExceeded)
+ManagementRole  CREATE_COMPLETE
+ManagementRoleManagementPolicy1  CREATE_IN_PROGRESS
+ManagementRoleManagementPolicy1  CREATE_IN_PROGRESS  Resource creation Initiated
+ManagementRoleManagementPolicy1  CREATE_COMPLETE
+q5-c59-parent  CREATE_FAILED  The following resource(s) failed to create: [ExecutionSaRole]. 

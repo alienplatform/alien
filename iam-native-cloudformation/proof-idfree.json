@@ -1,0 +1,18 @@
+{
+  "roles": {
+    "parentPartialOwned": 2,
+    "smallOwned": 2,
+    "finalOwned": 0,
+    "nonOwnedIdentitiesAtParentFailurePreserved": true
+  },
+  "policies": {
+    "parentPartialOwned": 1,
+    "smallOwned": 1,
+    "finalOwned": 0,
+    "nonOwnedIdentitiesAtParentFailurePreserved": true
+  },
+  "parentStackDeleted": true,
+  "smallStackDeleted": true,
+  "smallInlineCharacters": 647,
+  "inventoryLimitation": "Initial inventory filenames were overwritten by the final read. Baseline preservation compares non-owned identities captured at parent failure, not original pre-create inventory."
+}

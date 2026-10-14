@@ -1,0 +1,9 @@
+$ alien render --format cloudformation --stack oversized-alien.json --stack-settings settings.yaml --output feature-oversized
+Configuration error: VALIDATION_FAILED: Validation failed with 1 errors and 0 warnings
+Cause:
+  - Validation failed with 1 errors and 0 warnings
+Failed checks:
+  - IAM role for service account 'execution-sa' needs at least 21317 inline policy characters; the aggregate per-role limit is 10240. Reduce global grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+
+Exit: 1
+Generated artifact files: 0

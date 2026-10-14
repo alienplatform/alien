@@ -1,0 +1,766 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Application setup stack for q5-policy-control
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Network
+      Parameters:
+      - NetworkMode
+      - VpcCidr
+      - AvailabilityZones
+      - VpcId
+      - PublicSubnetIds
+      - PrivateSubnetIds
+      - SecurityGroupIds
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      AvailabilityZones:
+        default: Availability zones
+      HeartbeatsMode:
+        default: Heartbeats
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      NetworkMode:
+        default: Network
+      PrivateSubnetIds:
+        default: Private subnet IDs
+      PublicSubnetIds:
+        default: Public subnet IDs
+      SecurityGroupIds:
+        default: Security group IDs
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+      VpcCidr:
+        default: VPC CIDR
+      VpcId:
+        default: VPC ID
+Parameters:
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: use-default
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  VpcCidr:
+    Type: String
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
+    Default: ''
+  AvailabilityZones:
+    Type: Number
+    Description: Only used with create-new. Number of availability zones for the new VPC.
+    Default: 2
+    AllowedValues:
+    - 1
+    - 2
+    - 3
+  VpcId:
+    Type: String
+    Description: Only used with use-existing. Existing VPC ID.
+    Default: ''
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing public subnet IDs.
+    Default: ''
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing private subnet IDs.
+    Default: ''
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing security group IDs.
+    Default: ''
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: "off"
+    AllowedValues:
+    - "off"
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "off"
+    AllowedValues:
+    - "off"
+    - "on"
+Conditions:
+  HasPublicSubnetIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: PublicSubnetIds
+      - ''
+  HasPrivateSubnetIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: PrivateSubnetIds
+      - ''
+  HasSecurityGroupIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: SecurityGroupIds
+      - ''
+  NetworkModeCreate:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - create-new
+  NetworkModeUseExisting:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - use-existing
+  HasVpcCidr:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: VpcCidr
+      - ''
+Resources:
+  ExecutionSaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-execution-sa
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+            - ec2.amazonaws.com
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: deployment-permissions
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Action:
+            - s3:GetObject
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0000
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0001
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0002
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0003
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0004
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0005
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0006
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0007
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0008
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0009
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0010
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0011
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0012
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0013
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0014
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0015
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0016
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0017
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0018
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0019
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0020
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0021
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0022
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0023
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0024
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0025
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0026
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0027
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0028
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0029
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0030
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0031
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0032
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0033
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0034
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0035
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0036
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0037
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0038
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0039
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0040
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0041
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0042
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0043
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0044
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0045
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0046
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0047
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0048
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0049
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0050
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0051
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0052
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0053
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0054
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0055
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0056
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0057
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0058
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0059
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0060
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0061
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0062
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0063
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0064
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0065
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0066
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0067
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0068
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0069
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0070
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0071
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0072
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0073
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0074
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0075
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0076
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0077
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0078
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0079
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0080
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0081
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0082
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0083
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0084
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0085
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0086
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0087
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0088
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0089
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0090
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0091
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0092
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0093
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0094
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0095
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0096
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0097
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0098
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0099
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0100
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0101
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0102
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0103
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0104
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0105
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0106
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0107
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0108
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0109
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0110
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0111
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0112
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0113
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0114
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0115
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0116
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0117
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0118
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0119
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0120
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0121
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0122
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0123
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0124
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0125
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0126
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0127
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0128
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0129
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0130
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0131
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0132
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0133
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0134
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0135
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0136
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0137
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0138
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0139
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0140
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0141
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0142
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0143
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0144
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0145
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0146
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0147
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0148
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0149
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0150
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0151
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0152
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0153
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0154
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0155
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0156
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0157
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0158
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0159
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0160
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0161
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0162
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0163
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0164
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0165
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0166
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0167
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0168
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0169
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0170
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0171
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0172
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0173
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0174
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0175
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0176
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0177
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0178
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0179
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0180
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0181
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0182
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0183
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0184
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0185
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0186
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0187
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0188
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0189
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0190
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0191
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0192
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0193
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0194
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0195
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0196
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0197
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0198
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0199
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0200
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0201
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0202
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0203
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0204
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0205
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0206
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0207
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0208
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0209
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0210
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0211
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0212
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0213
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0214
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0215
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0216
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0217
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0218
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0219
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0220
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0221
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0222
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0223
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0224
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0225
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0226
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0227
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0228
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0229
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0230
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0231
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0232
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0233
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0234
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0235
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0236
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0237
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0238
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0239
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0240
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0241
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0242
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0243
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0244
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0245
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0246
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0247
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0248
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0249
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0250
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0251
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0252
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0253
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0254
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0255
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0256
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0257
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0258
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0259
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0260
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0261
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0262
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0263
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0264
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0265
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0266
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0267
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0268
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0269
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0270
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0271
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0272
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0273
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0274
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0275
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0276
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0277
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0278
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0279
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0280
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0281
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0282
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0283
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0284
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0285
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0286
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0287
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0288
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0289
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0290
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0291
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0292
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0293
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0294
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0295
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0296
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0297
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0298
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0299
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0300
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0301
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0302
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0303
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0304
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0305
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0306
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0307
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0308
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0309
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0310
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0311
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0312
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0313
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0314
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0315
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0316
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0317
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0318
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0319
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0320
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0321
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0322
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0323
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0324
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0325
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0326
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0327
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0328
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0329
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0330
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0331
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0332
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0333
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0334
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0335
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0336
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0337
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0338
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0339
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0340
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0341
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0342
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0343
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0344
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0345
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0346
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0347
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0348
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0349
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0350
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0351
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0352
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0353
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0354
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0355
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0356
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0357
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0358
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0359
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0360
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0361
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0362
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0363
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0364
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0365
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0366
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0367
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0368
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0369
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0370
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0371
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0372
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0373
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0374
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0375
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0376
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0377
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0378
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0379
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0380
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0381
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0382
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0383
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0384
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0385
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0386
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0387
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0388
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0389
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0390
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0391
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0392
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0393
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0394
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0395
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0396
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0397
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0398
+            - Fn::Sub: arn:${AWS::Partition}:s3:::q5-policy-control/objects/object-0399
+            Sid: Q5PolicyRead
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: execution-sa
+      - Key: resource-type
+        Value: service-account
+  ManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-management
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowManagingRole
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: ManagingRoleArn
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:PrincipalArn:
+                Ref: ManagingRoleArn
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: management
+      - Key: resource-type
+        Value: management
+  ManagementRoleManagementPolicy1:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - iam:AttachRolePolicy
+          - iam:DeleteRole
+          - iam:DeleteRolePermissionsBoundary
+          - iam:DeleteRolePolicy
+          - iam:DetachRolePolicy
+          - iam:PutRolePermissionsBoundary
+          - iam:PutRolePolicy
+          - iam:TagRole
+          - iam:UntagRole
+          - iam:UpdateAssumeRolePolicy
+          - iam:UpdateRole
+          Effect: Deny
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+          Sid: DenyManagementRoleChanges
+        - Sid: ReadOwnManagementRole
+          Effect: Allow
+          Action: iam:GetRole
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentResourcePrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Stable physical resource prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: render-preview
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup registration payload format version.
+  DeploymentSetupFingerprintVersion:
+    Value: 1
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Deployment registration management configuration JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        endpointAccess:
+          Ref: EndpointAccess
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Fn::If:
+          - NetworkModeCreate
+          - type: create
+            cidr:
+              Fn::If:
+              - HasVpcCidr
+              - Ref: VpcCidr
+              - Ref: AWS::NoValue
+            availability_zones:
+              Ref: AvailabilityZones
+          - Fn::If:
+            - NetworkModeUseExisting
+            - type: byo-vpc-aws
+              vpc_id:
+                Ref: VpcId
+              public_subnet_ids:
+                Fn::If:
+                - HasPublicSubnetIds
+                - Ref: PublicSubnetIds
+                - []
+              private_subnet_ids:
+                Fn::If:
+                - HasPrivateSubnetIds
+                - Ref: PrivateSubnetIds
+                - []
+              security_group_ids:
+                Fn::If:
+                - HasSecurityGroupIds
+                - Ref: SecurityGroupIds
+                - []
+            - type: use-default
+    Description: Deployment registration settings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: execution-sa
+        type: service-account
+        importData:
+          roleName:
+            Ref: ExecutionSaRole
+          roleArn:
+            Fn::GetAtt:
+            - ExecutionSaRole
+            - Arn
+          stackPermissionsApplied: true
+      - id: default-network
+        type: network
+        importData:
+          publicSubnetIds: []
+          privateSubnetIds: []
+          availabilityZones: []
+          isByoVpc: true
+      - id: management
+        type: remote-stack-management
+        importData:
+          roleName:
+            Ref: ManagementRole
+          roleArn:
+            Fn::GetAtt:
+            - ManagementRole
+            - Arn
+          managementPermissionsApplied: true
+    Description: Deployment registration resources JSON.

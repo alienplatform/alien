@@ -1,0 +1,17 @@
+$ aws cloudformation create-stack --stack-name q5-c59-small --template-body file://small-template.yaml
+  --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
+  --parameters file://private-management-role.json --tags Key=quota-proof,Value=q5-c59 --disable-rollback
+$ aws cloudformation describe-stack-events --stack-name q5-c59-small
+q5-c59-small  CREATE_IN_PROGRESS  User Initiated
+q5-c59-small  CREATE_IN_PROGRESS  Transformation succeeded
+ExecutionSaRole  CREATE_IN_PROGRESS
+ManagementRole  CREATE_IN_PROGRESS
+ManagementRole  CREATE_IN_PROGRESS  Resource creation Initiated
+ExecutionSaRole  CREATE_IN_PROGRESS  Resource creation Initiated
+ManagementRole  CREATE_COMPLETE
+ManagementRoleManagementPolicy1  CREATE_IN_PROGRESS
+ManagementRoleManagementPolicy1  CREATE_IN_PROGRESS  Resource creation Initiated
+ExecutionSaRole  CREATE_COMPLETE
+ManagementRoleManagementPolicy1  CREATE_COMPLETE
+q5-c59-small  CREATE_COMPLETE
+Provider GetRolePolicy: 647 characters, 10 resource grants.
