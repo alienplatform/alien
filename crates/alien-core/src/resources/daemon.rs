@@ -1,8 +1,8 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
-    ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, PublicEndpointOutput,
-    ResourceSpec, ToolchainConfig, APEX_HOST_LABEL,
+    ComputeCluster, HealthCheck, PublicEndpoint, PublicEndpointOutput, ResourceSpec,
+    ToolchainConfig, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use bon::Builder;
@@ -154,12 +154,6 @@ impl Daemon {
                 apex_endpoint_name = Some(endpoint.name.as_str());
             }
             backend_ports.insert(endpoint.port);
-            if endpoint.protocol != ExposeProtocol::Http {
-                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                    resource_id: self.id.clone(),
-                    reason: "daemon public endpoints currently support only HTTP".to_string(),
-                }));
-            }
         }
 
         if backend_ports.len() > 1 {
@@ -391,6 +385,7 @@ impl ResourceOutputsDefinition for DaemonOutputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ExposeProtocol;
 
     #[test]
     fn daemon_without_permissions_preserves_links_without_an_identity() {
@@ -496,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_rejects_multiple_backend_ports_or_non_http_public_endpoints() {
+    fn daemon_rejects_multiple_backend_ports() {
         let multiple = Daemon::new("gateway".to_string())
             .code(DaemonCode::Image {
                 image: "gateway:latest".to_string(),
@@ -518,10 +513,13 @@ mod tests {
             .permissions("gateway".to_string())
             .build();
         assert!(multiple.validate_public_endpoints().is_err());
+    }
 
+    #[test]
+    fn daemon_with_tcp_endpoint_accepts_image_and_environment_update() {
         let tcp = Daemon::new("gateway".to_string())
             .code(DaemonCode::Image {
-                image: "gateway:latest".to_string(),
+                image: "gateway:v1".to_string(),
             })
             .public_endpoint(PublicEndpoint {
                 name: "api".to_string(),
@@ -532,7 +530,23 @@ mod tests {
             })
             .permissions("gateway".to_string())
             .build();
-        assert!(tcp.validate_public_endpoints().is_err());
+        let mut updated = tcp.clone();
+        updated.code = DaemonCode::Image {
+            image: "gateway:v2".to_string(),
+        };
+        updated
+            .environment
+            .insert("VERSION".to_string(), "v2".to_string());
+        tcp.validate_update(&updated)
+            .expect("TCP endpoints must permit workload updates");
+
+        updated.public_endpoints[0].port = 9090;
+        let error = tcp
+            .validate_update(&updated)
+            .expect_err("endpoint port remains immutable");
+        assert!(error
+            .to_string()
+            .contains("the 'publicEndpoints' field is immutable"));
     }
 
     #[test]
