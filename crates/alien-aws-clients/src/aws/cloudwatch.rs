@@ -602,11 +602,14 @@ mod tests {
         let server = MockServer::start_async().await;
         let mock = server.mock_async(|when, then| {
             when.method(POST).path("/").body_contains("Action=ListMetrics")
-                .body_contains("Dimensions.member.1.Name=Service");
+                .body_contains("Dimensions.member.1.Name=Service")
+                .body_contains("Dimensions.member.2.Name=Class");
             then.status(200).body(r#"<ListMetricsResponse><ListMetricsResult>
                 <Metrics><member><Namespace>AWS/Usage</Namespace><MetricName>ResourceCount</MetricName>
-                <Dimensions><member><Name>Service</Name><Value>EC2</Value></member></Dimensions></member></Metrics>
-                <NextToken>next-page</NextToken><OwningAccounts><member>000000000000</member></OwningAccounts>
+                <Dimensions><member><Name>Service</Name><Value>EC2</Value></member>
+                <member><Name>Class</Name><Value>Standard/OnDemand</Value></member></Dimensions></member>
+                <member><Namespace>AWS/EC2</Namespace><MetricName>CPUUtilization</MetricName><Dimensions/></member></Metrics>
+                <NextToken>next-page</NextToken><OwningAccounts><member>000000000000</member><member>111111111111</member></OwningAccounts>
                 </ListMetricsResult></ListMetricsResponse>"#);
         }).await;
         let response = client(&server)
@@ -614,10 +617,16 @@ mod tests {
             .list_metrics(ListMetricsRequest {
                 namespace: Some("AWS/Usage".into()),
                 metric_name: None,
-                dimensions: vec![DimensionFilter {
-                    name: "Service".into(),
-                    value: Some("EC2".into()),
-                }],
+                dimensions: vec![
+                    DimensionFilter {
+                        name: "Service".into(),
+                        value: Some("EC2".into()),
+                    },
+                    DimensionFilter {
+                        name: "Class".into(),
+                        value: Some("Standard/OnDemand".into()),
+                    },
+                ],
                 next_token: None,
                 recently_active: None,
                 include_linked_accounts: None,
@@ -626,11 +635,78 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.next_token.as_deref(), Some("next-page"));
-        assert_eq!(response.metrics.len(), 1);
+        assert_eq!(response.metrics.len(), 2);
         assert_eq!(response.metrics[0].namespace.as_deref(), Some("AWS/Usage"));
-        assert_eq!(response.metrics[0].dimensions.len(), 1);
+        assert_eq!(response.metrics[0].dimensions.len(), 2);
         assert_eq!(response.metrics[0].dimensions[0].value, "EC2");
-        assert_eq!(response.owning_accounts, vec!["000000000000"]);
+        assert_eq!(response.metrics[0].dimensions[1].name, "Class");
+        assert_eq!(response.metrics[0].dimensions[1].value, "Standard/OnDemand");
+        assert_eq!(
+            response.metrics[1].metric_name.as_deref(),
+            Some("CPUUtilization")
+        );
+        assert!(response.metrics[1].dimensions.is_empty());
+        assert_eq!(
+            response.owning_accounts,
+            vec!["000000000000", "111111111111"]
+        );
+        mock.assert_async().await;
+    }
+    #[tokio::test]
+    async fn query_lists_preserve_multiple_queries_samples_and_empty_series() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock_async(|when, then| {
+            when.method(POST).path("/")
+                .body_contains("MetricDataQueries.member.1.Id=first")
+                .body_contains("MetricDataQueries.member.2.Id=empty")
+                .body_contains("MetricDataQueries.member.2.Expression=1%2B1");
+            then.status(200).body(r#"<GetMetricDataResponse><GetMetricDataResult><MetricDataResults>
+                <member><Id>first</Id><StatusCode>Complete</StatusCode><Timestamps>
+                <member>2026-10-13T00:00:00Z</member><member>2026-10-13T00:01:00Z</member>
+                </Timestamps><Values><member>12.0</member><member>13.0</member></Values></member>
+                <member><Id>empty</Id><StatusCode>Complete</StatusCode><Timestamps/><Values/></member>
+                </MetricDataResults></GetMetricDataResult></GetMetricDataResponse>"#);
+        }).await;
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-10-13T00:00:00Z")
+            .unwrap()
+            .timestamp();
+        let queries = ["first", "empty"]
+            .into_iter()
+            .map(|id| MetricDataQuery {
+                id: id.into(),
+                expression: Some("1+1".into()),
+                label: None,
+                period: None,
+                return_data: Some(true),
+                metric_stat: None,
+            })
+            .collect();
+        let response = client(&server)
+            .await
+            .get_metric_data(GetMetricDataRequest {
+                start_time: timestamp,
+                end_time: timestamp + 120,
+                metric_data_queries: queries,
+                max_datapoints: None,
+                next_token: None,
+                scan_by: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.metric_data_results.len(), 2);
+        assert_eq!(response.metric_data_results[0].id, "first");
+        assert_eq!(
+            response.metric_data_results[0].timestamps,
+            vec![timestamp, timestamp + 60]
+        );
+        assert_eq!(response.metric_data_results[0].values, vec![12.0, 13.0]);
+        assert_eq!(response.metric_data_results[1].id, "empty");
+        assert_eq!(
+            response.metric_data_results[1].status_code.as_deref(),
+            Some("Complete")
+        );
+        assert!(response.metric_data_results[1].timestamps.is_empty());
+        assert!(response.metric_data_results[1].values.is_empty());
         mock.assert_async().await;
     }
 }
