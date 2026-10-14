@@ -68,6 +68,13 @@ pub trait IamApi: Send + Sync + Debug {
 
     async fn get_service_account(&self, service_account_name: String) -> Result<ServiceAccount>;
 
+    /// Read one page of account metadata in the configured target project.
+    async fn list_service_accounts(
+        &self,
+        page_size: Option<i32>,
+        page_token: Option<String>,
+    ) -> Result<ListServiceAccountsResponse>;
+
     async fn patch_service_account(
         &self,
         service_account_name: String,
@@ -210,6 +217,32 @@ impl IamApi for IamClient {
                 None,
                 Option::<()>::None,
                 &service_account_name,
+            )
+            .await
+    }
+
+    /// Lists service accounts without reading their IAM policies or credentials.
+    /// https://cloud.google.com/iam/docs/reference/rest/v1/projects.serviceAccounts/list
+    async fn list_service_accounts(
+        &self,
+        page_size: Option<i32>,
+        page_token: Option<String>,
+    ) -> Result<ListServiceAccountsResponse> {
+        let path = format!("projects/{}/serviceAccounts", self.project_id);
+        let mut query_params = Vec::new();
+        if let Some(size) = page_size {
+            query_params.push(("pageSize", size.to_string()));
+        }
+        if let Some(token) = page_token {
+            query_params.push(("pageToken", token));
+        }
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                Some(query_params).filter(|params| !params.is_empty()),
+                Option::<()>::None,
+                "serviceAccounts",
             )
             .await
     }
@@ -515,6 +548,17 @@ pub struct ServiceAccount {
     /// Deprecated. Do not use.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
+}
+
+/// One page of service-account metadata. Empty protobuf JSON lists can be absent.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ListServiceAccountsResponse {
+    /// Accounts returned on this page; callers must follow the continuation token.
+    #[serde(default)]
+    pub accounts: Vec<ServiceAccount>,
+    /// Opaque cursor for the next page, absent on the last page.
+    pub next_page_token: Option<String>,
 }
 
 /// Request message for creating a service account.
