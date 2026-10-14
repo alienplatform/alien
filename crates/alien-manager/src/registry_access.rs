@@ -3332,4 +3332,111 @@ mod tests {
             );
         }
     }
+
+    /// A deployment granted before per-project GAR repositories recorded its grant on the
+    /// binding's shared repository. Its teardown must revoke that grant through the real GAR
+    /// binding instead of failing every retry with a repository outside the project namespace.
+    #[tokio::test]
+    async fn gcp_teardown_revokes_a_grant_recorded_on_the_shared_repository() {
+        use alien_bindings::providers::artifact_registry::GarArtifactRegistry;
+        use alien_core::bindings::{
+            ArtifactRegistryBinding, BindingValue, GarArtifactRegistryBinding,
+        };
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use axum::{extract::State, http::Uri, Json, Router};
+
+        const AGENT: &str =
+            "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com";
+        type Policies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+        async fn gar(
+            State(written): State<Policies>,
+            uri: Uri,
+            body: String,
+        ) -> Json<serde_json::Value> {
+            if let Some(path) = uri.path().strip_suffix(":setIamPolicy") {
+                let input: serde_json::Value = serde_json::from_str(&body).unwrap();
+                written
+                    .lock()
+                    .unwrap()
+                    .push((path.to_string(), input["policy"].clone()));
+                return Json(input["policy"].clone());
+            }
+            Json(serde_json::json!({"etag": "e1", "bindings": [
+                {"role": "roles/artifactregistry.reader", "members": [AGENT, "user:keep@example.com"]}
+            ]}))
+        }
+
+        for status in [
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::Deleted,
+        ] {
+            let written: Policies = Arc::default();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let app = Router::new().fallback(gar).with_state(written.clone());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let config = GcpClientConfig {
+                project_id: "vendor".to_string(),
+                region: "us-central1".to_string(),
+                project_number: None,
+                credentials: GcpCredentials::AccessToken {
+                    token: "local".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+                }),
+            };
+            let registry = GarArtifactRegistry::new(
+                "artifact-registry".to_string(),
+                ArtifactRegistryBinding::Gar(GarArtifactRegistryBinding {
+                    repository_name: BindingValue::Value("alien-artifacts".to_string()),
+                    pull_service_account_email: None,
+                    push_service_account_email: None,
+                }),
+                &config,
+            )
+            .await
+            .unwrap();
+            let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+                binding_name: "artifact-registry",
+                registry: Arc::new(registry),
+            });
+            let providers = Some(provider);
+            let mut state = gcp_state_with_stack(worker_stack(
+                "us-central1-docker.pkg.dev/vendor/alien-artifacts/prj_test/worker:v1",
+            ));
+            state.status = status;
+            state.runtime_metadata = Some(RuntimeMetadata {
+                registry_access: Some(RegistryAccess {
+                    repositories: vec!["vendor/alien-artifacts".to_string()],
+                    service_types: vec!["worker".to_string()],
+                }),
+                registry_access_granted: true,
+                ..Default::default()
+            });
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_has_other_gcp_project_deployment()
+                .returning(|_, _, _, _| Ok(false));
+            let targets = HashMap::new();
+            let result = if status == DeploymentStatus::TeardownRequired {
+                revoke_before_persisting(&store, &providers, &targets, "dep_old", PROJECT, state)
+                    .await
+                    .map(|state| assert_eq!(state.status, DeploymentStatus::TeardownRequired))
+            } else {
+                revoke_after_persisting(&store, &providers, &targets, "dep_old", PROJECT, &state)
+                    .await
+            };
+            server.abort();
+            assert!(result.is_ok(), "{status:?} teardown failed: {result:?}");
+            let written = written.lock().unwrap();
+            assert_eq!(written.len(), 1, "{status:?}: {written:?}");
+            assert!(written[0].0.ends_with("/repositories/alien-artifacts"));
+            assert_eq!(
+                written[0].1["bindings"][0]["members"],
+                serde_json::json!(["user:keep@example.com"]),
+                "{status:?}: the shared grant is removed and unrelated members kept"
+            );
+        }
+    }
 }

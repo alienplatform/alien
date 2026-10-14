@@ -47,12 +47,16 @@ pub async fn test_artifact_registry(
             binding_name: binding_name.clone(),
         })?;
 
-    // Generate a unique repository name for testing
-    let test_repo_name = request
+    // A unique repository named like a project ID: GAR provisions one repository per
+    // `prj_<lowercase alphanumerics>` name and refuses any other, and ECR and ACR accept it.
+    let prefix: String = request
         .as_ref()
-        .and_then(|req| req.repo_name_prefix.as_ref())
-        .map(|prefix| format!("{}-{}", prefix, Utc::now().timestamp_millis()))
-        .unwrap_or_else(|| format!("test-repo-{}", Utc::now().timestamp_millis()));
+        .and_then(|req| req.repo_name_prefix.as_deref())
+        .unwrap_or("test")
+        .chars()
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .collect();
+    let test_repo_name = format!("prj_{prefix}{}", Utc::now().timestamp_millis());
 
     let skip_docker = request
         .as_ref()

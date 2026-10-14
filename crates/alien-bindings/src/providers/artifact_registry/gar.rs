@@ -200,6 +200,20 @@ impl GarArtifactRegistry {
         }))
     }
 
+    /// The repository a revoke targets. Deployments granted before per-project repositories
+    /// recorded their grant on the binding's shared repository itself, so a revoke also accepts
+    /// that one exact repository: refusing it would fail their teardown on every retry. Grants
+    /// and reads never target it.
+    fn revoke_repository_name(&self, repo_id: &str) -> Result<String> {
+        let path = repo_id
+            .strip_prefix(&format!("{}/", self.project_id))
+            .unwrap_or(repo_id);
+        if path.split('/').next() == Some(self.repository_name.as_str()) {
+            return Ok(self.repository_name.clone());
+        }
+        self.iam_repository_name(repo_id)
+    }
+
     /// Observe GAR's asynchronous operation; failed reads return immediately.
     async fn await_repository_operation(
         &self,
@@ -635,7 +649,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
         repo_id: &str,
         access: CrossAccountAccess,
     ) -> Result<()> {
-        let repo_name = self.iam_repository_name(repo_id)?;
+        let repo_name = self.revoke_repository_name(repo_id)?;
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
