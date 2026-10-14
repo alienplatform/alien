@@ -1,0 +1,19 @@
+ALIEN-1481 · real AWS permission proof
+
+$ generate policies with AwsRuntimePermissionsGenerator
+$ install generated discovery statements on tagged temporary test role
+$ assume role with matching session policy; read EC2 metadata
+
+BEFORE (main 51d3f1c88):
+before management DescribeInstances=PASS DescribeSecurityGroups=254
+before provision DescribeInstances=PASS DescribeSecurityGroups=254
+Security group inventory unchanged; no compute mutations
+
+AFTER:
+after management DescribeInstances=PASS DescribeSecurityGroups=0
+after provision DescribeInstances=PASS DescribeSecurityGroups=0
+Security group inventory unchanged; no compute mutations
+Temporary role deleted; GetRole=NoSuchEntity
+
+254 = AWS CLI UnauthorizedOperation; 0 = success
+No instances launched; no security-group changes.
