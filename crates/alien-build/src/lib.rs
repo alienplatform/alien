@@ -1608,7 +1608,6 @@ pub async fn push_stack(
         .into_iter()
         .map(|target| {
             let resource_name = target.resource_name().to_string();
-            let display_resource_name = target.display_resource_name();
             let resource_names = target.resource_names.clone();
             let platform = platform.clone();
             let repository = push_settings.repository.clone();
@@ -1641,31 +1640,15 @@ pub async fn push_stack(
                     }
 
                     let artifact_push_started = Instant::now();
-                    let push = async {
-                        let image_uri = push_resource_images(
-                            &display_resource_name,
-                            &resource_name,
-                            target.resource_type,
-                            &target.local_image_dir,
+                    let agent_image = gcp_sandbox_image::sandbox_agent_image();
+                    let result = tokio::select! {
+                        result = push_target(
+                            &target,
                             &platform,
                             &repository,
                             &push_opts,
-                        )
-                        .await?;
-                        if platform == Platform::Gcp && target.resource_type == "sandbox" {
-                            push_gcp_sandbox_image(
-                                &resource_name,
-                                &target.local_image_dir,
-                                &image_uri,
-                                &push_opts,
-                            )
-                            .await
-                        } else {
-                            Ok(image_uri)
-                        }
-                    };
-                    let result = tokio::select! {
-                        result = push => result,
+                            &agent_image,
+                        ) => result,
                         _ = cancel_token.cancelled() => {
                             info!("Push for {} '{}' was cancelled", target.resource_type, resource_name);
                             Err(AlienError::new(ErrorData::BuildCanceled {
@@ -2014,12 +1997,46 @@ async fn push_resource_images(
     Ok(image_uri)
 }
 
+/// Pushes one target's images and returns the reference its resources run. A GCP sandbox runs
+/// with `agent_image` layered onto the pushed base.
+async fn push_target(
+    target: &ResourcePushTarget,
+    platform: &Platform,
+    repository: &str,
+    push_options: &dockdash::PushOptions,
+    agent_image: &str,
+) -> Result<String> {
+    let image_uri = push_resource_images(
+        &target.display_resource_name(),
+        target.resource_name(),
+        target.resource_type,
+        &target.local_image_dir,
+        platform,
+        repository,
+        push_options,
+    )
+    .await?;
+    if *platform == Platform::Gcp && target.resource_type == "sandbox" {
+        push_gcp_sandbox_image(
+            target.resource_name(),
+            &target.local_image_dir,
+            &image_uri,
+            agent_image,
+            push_options,
+        )
+        .await
+    } else {
+        Ok(image_uri)
+    }
+}
+
 /// Layers the sandbox agent onto the GCP sandbox base just pushed to `base_uri`, pushes the result
 /// beside it, and returns that reference: Agent Platform runs the image as pushed.
 async fn push_gcp_sandbox_image(
     resource_name: &str,
     images_dir: &Path,
     base_uri: &str,
+    agent_image: &str,
     push_options: &dockdash::PushOptions,
 ) -> Result<String> {
     let tarball = images_dir.join(format!(
@@ -2047,9 +2064,10 @@ async fn push_gcp_sandbox_image(
         protocol => protocol.clone(),
     };
     let image = gcp_sandbox_image::build_gcp_sandbox_image(
+        resource_name,
         &base,
         base_uri,
-        &gcp_sandbox_image::sandbox_agent_image(),
+        agent_image,
         protocol,
         push_options.auth.clone(),
     )
@@ -2339,8 +2357,7 @@ async fn build_resource(
     // This ensures the executor detects code changes between builds
     let content_hash = artifact_hash(
         compute_function_content_hash(&resource_dir).await?,
-        settings,
-        workload,
+        layered_sandbox_agent(settings, workload).as_deref(),
     );
     let short_hash = &content_hash[..8];
 
@@ -2396,12 +2413,8 @@ fn layered_sandbox_agent(
 /// The hash an artifact directory is named by: its tarballs' content hash, and the layered agent
 /// for a GCP sandbox, since a rebuilt base can be byte-identical to the one an older agent was
 /// layered onto.
-fn artifact_hash(
-    content_hash: String,
-    settings: &BuildSettings,
-    workload: toolchain::WorkloadKind,
-) -> String {
-    match layered_sandbox_agent(settings, workload) {
+fn artifact_hash(content_hash: String, layered_agent: Option<&str>) -> String {
+    match layered_agent {
         Some(agent) => format!("{:x}", Sha256::digest(format!("{content_hash}\0{agent}"))),
         None => content_hash,
     }
@@ -5021,14 +5034,21 @@ mod tests {
             "nothing is layered onto other GCP artifacts"
         );
 
-        let agent = gcp_sandbox_image::sandbox_agent_image();
-        assert_eq!(
-            artifact_hash("tarballs".to_string(), &gcp, sandbox),
-            format!("{:x}", Sha256::digest(format!("tarballs\0{agent}")))
+        let agent = layered_sandbox_agent(&gcp, sandbox);
+        assert_eq!(agent, Some(gcp_sandbox_image::sandbox_agent_image()));
+        assert_eq!(layered_sandbox_agent(&azure, sandbox), None);
+        assert_eq!(layered_sandbox_agent(&gcp, container), None);
+        let tarballs = || "tarballs".to_string();
+        assert_ne!(
+            artifact_hash(tarballs(), Some("registry.example.com/agent:v1")),
+            artifact_hash(tarballs(), Some("registry.example.com/agent:v2")),
+            "identical tarballs under a new agent get a new name"
         );
+        assert_ne!(artifact_hash(tarballs(), agent.as_deref()), tarballs());
         assert_eq!(
-            artifact_hash("tarballs".to_string(), &azure, sandbox),
-            "tarballs"
+            artifact_hash(tarballs(), None),
+            tarballs(),
+            "an artifact nothing is layered onto keeps its content hash"
         );
     }
 
@@ -6357,34 +6377,54 @@ mod sandbox_push_tests {
     }
 
     /// A built GCP sandbox is released as the base with the agent layered on, because Agent
-    /// Platform runs the image as pushed; Azure takes the base as built. Pulls this version's
-    /// published agent from its public registry.
+    /// Platform runs the image as pushed; Azure takes the base as built. The agent is a stand-in
+    /// on the same plain-HTTP registry, which the agent pull reaches only through that registry's
+    /// HTTPS exception.
     #[tokio::test]
     async fn a_gcp_sandbox_is_released_with_the_agent_layered_on() {
         let (_registry, host) = dockdash::test_utils::setup_local_registry()
             .await
             .expect("local registry");
-        let layer = DockDashLayer::builder()
-            .and_then(|layer| layer.data("/marker", b"built\n", Some(0o644)))
-            .expect("layer");
-        let (base, _) = DockDashImage::builder()
-            .platform("linux", &dockdash::Arch::Amd64)
-            .layer(layer.build().await.expect("layer builds"))
-            .build()
+        let options = dockdash::PushOptions {
+            auth: dockdash::RegistryAuth::Anonymous,
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        };
+        let image_with = |path: &'static str| async move {
+            let layer = DockDashLayer::builder()
+                .and_then(|layer| layer.data(path, b"#!/bin/sh\n", Some(0o755)))
+                .expect("layer");
+            DockDashImage::builder()
+                .platform("linux", &dockdash::Arch::Amd64)
+                .layer(layer.build().await.expect("layer builds"))
+                .build()
+                .await
+                .expect("image builds")
+                .0
+        };
+        let agent_image = format!("{host}/alien/agent:test");
+        image_with(alien_core::sandbox_image::AGENT_PATH)
             .await
-            .expect("base builds");
+            .push(&agent_image, &options)
+            .await
+            .expect("the stand-in agent pushes");
+        let base = image_with("/marker").await;
         let built = tempfile::tempdir().expect("temp dir");
         std::fs::copy(base.path(), built.path().join("linux-x64.oci.tar")).expect("tarball");
-        let push_settings = PushSettings {
-            repository: format!("{host}/proj/sandbox"),
-            destination_label: None,
-            options: dockdash::PushOptions {
-                auth: dockdash::RegistryAuth::Anonymous,
-                protocol: dockdash::ClientProtocol::Http,
-                ..Default::default()
-            },
-        };
-        let config_of = |image: String| async move {
+        let stack = Stack::new("sandboxes".to_string())
+            .add(
+                sandbox("box", &built.path().to_string_lossy()),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let targets = collect_push_targets(&stack).expect("collects");
+        let repository = format!("{host}/proj/sandbox");
+
+        for (platform, layered) in [(Platform::Gcp, true), (Platform::Azure, false)] {
+            let image = push_target(&targets[0], &platform, &repository, &options, &agent_image)
+                .await
+                .expect("the sandbox pushes");
+            assert_eq!(image.ends_with("-agent"), layered, "{platform}: {image}");
             let reference = Reference::try_from(image.as_str()).expect("reference");
             let (_, _, config) = OciClient::new(OciClientConfig {
                 protocol: dockdash::ClientProtocol::Http,
@@ -6393,22 +6433,7 @@ mod sandbox_push_tests {
             .pull_manifest_and_config(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
             .await
             .expect("the released image reads back");
-            serde_json::from_str::<serde_json::Value>(&config).expect("config")
-        };
-
-        for (platform, layered) in [(Platform::Gcp, true), (Platform::Azure, false)] {
-            let stack = Stack::new("sandboxes".to_string())
-                .add(
-                    sandbox("box", &built.path().to_string_lossy()),
-                    ResourceLifecycle::Frozen,
-                )
-                .build();
-            let pushed = push_stack(stack, platform, &push_settings)
-                .await
-                .expect("the sandbox pushes");
-            let image = image_of(&pushed, "box");
-            assert_eq!(image.ends_with("-agent"), layered, "{platform}: {image}");
-            let config = config_of(image).await;
+            let config: serde_json::Value = serde_json::from_str(&config).expect("config");
             assert_eq!(config["architecture"], "amd64", "{platform}");
             let user = &config["config"]["User"];
             if layered {

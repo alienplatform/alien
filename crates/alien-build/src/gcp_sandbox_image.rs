@@ -27,8 +27,10 @@ pub fn sandbox_agent_image() -> String {
 
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
-/// same image, read for its `/etc/passwd` and `/etc/group`.
+/// same image, read for its `/etc/passwd` and `/etc/group`. `resource_name` is the sandbox the
+/// image is for, named in any error.
 pub async fn build_gcp_sandbox_image(
+    resource_name: &str,
     base: &Image,
     base_image: &str,
     agent_image: &str,
@@ -36,16 +38,16 @@ pub async fn build_gcp_sandbox_image(
     base_auth: RegistryAuth,
 ) -> Result<Image> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
-        resource_name: base_image.to_string(),
+        resource_name: resource_name.to_string(),
         reason,
         build_output: None,
     };
-    let passwd = read_identity_file(base, "/etc/passwd", base_image).await?;
-    let group = read_identity_file(base, "/etc/group", base_image).await?;
+    let passwd = read_identity_file(base, "/etc/passwd", resource_name).await?;
+    let group = read_identity_file(base, "/etc/group", resource_name).await?;
 
     // The agent image is public, so no registry credential is sent to its registry.
     let pulling_agent = format!("Pulling the agent image {agent_image}");
-    let agent = build_with_retry(agent_image, &pulling_agent, || async {
+    let agent = build_with_retry(resource_name, agent_image, &pulling_agent, || async {
         Ok(Image::builder()
             .from(agent_image)
             .platform("linux", &Arch::Amd64)
@@ -89,7 +91,7 @@ pub async fn build_gcp_sandbox_image(
     );
 
     let assembling = format!("Assembling the image from {base_image} and the agent layer");
-    build_with_retry(base_image, &assembling, || async {
+    build_with_retry(resource_name, base_image, &assembling, || async {
         // A layer is consumed by the image builder, so each attempt builds its own.
         let layer = Layer::builder()
             .and_then(|layer| layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0))
@@ -128,7 +130,12 @@ pub async fn build_gcp_sandbox_image(
 
 /// Builds the image `prepare` describes, retrying a transient pull of `reference`. `step` names
 /// what failed when the build does.
-async fn build_with_retry<F, Fut>(reference: &str, step: &str, prepare: F) -> Result<Image>
+async fn build_with_retry<F, Fut>(
+    resource_name: &str,
+    reference: &str,
+    step: &str,
+    prepare: F,
+) -> Result<Image>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<ImageBuilder>>,
@@ -155,7 +162,7 @@ where
                 return Err(error)
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        resource_name: reference.to_string(),
+                        resource_name: resource_name.to_string(),
                         reason: step.to_string(),
                         build_output: None,
                     });
@@ -168,9 +175,13 @@ where
 
 /// `None` for a base with no such file, which is how a scratch or distroless base looks. A link
 /// or directory in its place is an error: following it could read a file the runtime never uses.
-async fn read_identity_file(base: &Image, path: &str, base_image: &str) -> Result<Option<String>> {
+async fn read_identity_file(
+    base: &Image,
+    path: &str,
+    resource_name: &str,
+) -> Result<Option<String>> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
-        resource_name: base_image.to_string(),
+        resource_name: resource_name.to_string(),
         reason,
         build_output: None,
     };
@@ -263,6 +274,7 @@ mod tests {
 
         let protocol = ClientProtocol::HttpsExcept(vec![host.to_string()]);
         let layered = build_gcp_sandbox_image(
+            "box",
             &base,
             &base_image,
             &agent_image,
