@@ -2242,7 +2242,7 @@ impl ResourcePermissionsHelper {
 }
 
 pub(crate) fn aws_remote_access_policy_name(resource_id: &str) -> String {
-    format!("alien-{resource_id}-remote-access")
+    alien_permissions::aws_resource_policies::aws_remote_access_policy_name(resource_id)
 }
 
 pub(crate) fn aws_remote_access_policy(
@@ -2251,26 +2251,13 @@ pub(crate) fn aws_remote_access_policy(
     permission_context: &PermissionContext,
     resource_id: &str,
 ) -> Result<AwsIamPolicy> {
-    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
-        .cloned()
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Remote Bindings permission set '{}' is not registered",
-                    definition.permission_set
-                ),
-                resource_id: Some(resource_id.to_string()),
-            })
-        })?;
-    generator
-        .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to generate Remote Bindings policy '{}'",
-                definition.permission_set
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })
+    alien_permissions::aws_resource_policies::aws_remote_access_policy(
+        generator, definition, permission_context,
+    )
+    .context(ErrorData::CloudPlatformError {
+        message: format!("Failed to generate Remote Bindings policy '{}'", definition.permission_set),
+        resource_id: Some(resource_id.to_string()),
+    })
 }
 
 #[cfg(test)]

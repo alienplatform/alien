@@ -8,13 +8,15 @@ use crate::{
     CheckResult,
 };
 use alien_core::{
-    BuildOutputs, InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, RemoteStackManagement,
-    ResourceLifecycle, ServiceAccount, Stack, StackState, StorageOutputs, WorkerOutputs,
+    BuildOutputs, InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackState, StorageOutputs,
+    WorkerOutputs,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_permissions::{
     aws_resource_policies::{
-        aws_management_resource_policy_name, aws_prefixed_resource_name, aws_resource_policy_name,
+        aws_management_resource_policy_name, aws_prefixed_resource_name, aws_remote_access_policy,
+        aws_remote_access_policy_name, aws_resource_policy_name,
         aws_service_account_injected_statements, render_aws_resource_policy,
         AwsResourcePolicyContext,
     },
@@ -144,53 +146,7 @@ pub(crate) fn check(
             let mut resource_context = context.clone().with_resource_id(id.to_string());
             // Existing/imported resources keep their recorded physical names. Never
             // infer a new name for a resource whose controller has already run.
-            let name = if matches!(
-                resource_type.as_str(),
-                "artifact-registry" | "service-account" | "ai" | "sandbox"
-            ) {
-                // These writers deliberately pass the logical ID, including on
-                // updates. Their outputs identify other objects, not this context.
-                Some(id.to_string())
-            } else {
-                match state.and_then(|state| state.resources.get(id)) {
-                    Some(saved) => {
-                        saved
-                            .outputs
-                            .as_ref()
-                            .and_then(|outputs| match resource_type.as_str() {
-                                "storage" => outputs
-                                    .downcast_ref::<StorageOutputs>()
-                                    .map(|o| o.bucket_name.clone()),
-                                "queue" => outputs
-                                    .downcast_ref::<QueueOutputs>()
-                                    .map(|o| o.queue_name.clone()),
-                                "kv" => outputs
-                                    .downcast_ref::<KvOutputs>()
-                                    .map(|o| o.store_name.clone()),
-                                "worker" => outputs
-                                    .downcast_ref::<WorkerOutputs>()
-                                    .map(|o| o.worker_name.clone()),
-                                "build" => outputs
-                                    .downcast_ref::<BuildOutputs>()
-                                    .and_then(|o| o.identifier.split_once(":project/"))
-                                    .filter(|(_, name)| !name.is_empty())
-                                    .map(|(_, name)| name.to_string()),
-                                _ => None,
-                            })
-                    }
-                    None if matches!(
-                        resource_type.as_str(),
-                        "storage" | "queue" | "kv" | "worker" | "build" | "vault"
-                    ) =>
-                    {
-                        context
-                            .stack_prefix
-                            .as_deref()
-                            .map(|prefix| aws_prefixed_resource_name(prefix, id))
-                    }
-                    None => None,
-                }
-            };
+            let name = resource_name(&resource_type, id, context, state);
             resource_context.resource_name = name;
             let selection = AwsResourcePolicyContext {
                 named_by_resource: explicit,
@@ -247,7 +203,112 @@ pub(crate) fn check(
             result.add_warning(format!("IAM inline policy coverage for {role} is incomplete: only resolved setup documents were counted. Controller names, injected grants, remote bindings and retained policies may consume additional quota; passing does not establish total role headroom."));
         }
     }
+    // A separate setup identity receives only registered published-resource grants.
+    // Do not combine its documents with workload or management role documents.
+    if stack.resources().any(|(_, entry)| {
+        entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE
+            && entry.lifecycle == ResourceLifecycle::Frozen
+            && entry.enabled_when.is_none()
+    }) {
+        let mut documents = IndexMap::new();
+        let mut incomplete = false;
+        for (id, entry) in stack.resources() {
+            if entry.lifecycle != ResourceLifecycle::Frozen || entry.enabled_when.is_some() {
+                continue;
+            }
+            let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(entry)
+            else {
+                continue;
+            };
+            // Key has a distinct writer; Live sandbox scaffolding is not a direct
+            // resource-helper write. Neither is inferred from the common layout.
+            if !matches!(
+                definition.resource_type,
+                "storage" | "queue" | "kv" | "ai" | "sandbox"
+            ) {
+                incomplete = true;
+                continue;
+            }
+            let mut resource_context = context.clone().with_resource_id(id.to_string());
+            resource_context.resource_name =
+                resource_name(definition.resource_type, id, context, state);
+            let document = aws_remote_access_policy(&generator, definition, &resource_context)
+                .ok()
+                .and_then(|policy| serde_json::to_string(&policy).ok());
+            incomplete |= document.is_none();
+            documents.insert(aws_remote_access_policy_name(id), document);
+        }
+        let size: usize = documents
+            .values()
+            .flatten()
+            .map(|document| {
+                document
+                    .chars()
+                    .filter(|c| !c.is_ascii_whitespace())
+                    .count()
+            })
+            .sum();
+        if size > 10_240 {
+            result.add_error(format!("IAM Remote Bindings role needs at least {size} inline policy characters across setup resources; the aggregate per-role limit is 10240. Reduce published resources. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html"));
+        }
+        if incomplete || !documents.is_empty() {
+            result.add_warning("IAM inline policy coverage for Remote Bindings is incomplete: only resolved setup documents were counted; retained policies and other controller layouts may consume additional quota. Passing does not establish total role headroom.".into());
+        }
+    }
     Ok(result)
+}
+
+fn resource_name(
+    resource_type: &str,
+    id: &str,
+    context: &PermissionContext,
+    state: Option<&StackState>,
+) -> Option<String> {
+    if matches!(
+        resource_type,
+        "artifact-registry" | "service-account" | "ai" | "sandbox"
+    ) {
+        // These writers deliberately pass the logical ID, including on
+        // updates. Their outputs identify other objects, not this context.
+        Some(id.to_string())
+    } else {
+        match state.and_then(|state| state.resources.get(id)) {
+            Some(saved) => saved
+                .outputs
+                .as_ref()
+                .and_then(|outputs| match resource_type {
+                    "storage" => outputs
+                        .downcast_ref::<StorageOutputs>()
+                        .map(|o| o.bucket_name.clone()),
+                    "queue" => outputs
+                        .downcast_ref::<QueueOutputs>()
+                        .map(|o| o.queue_name.clone()),
+                    "kv" => outputs
+                        .downcast_ref::<KvOutputs>()
+                        .map(|o| o.store_name.clone()),
+                    "worker" => outputs
+                        .downcast_ref::<WorkerOutputs>()
+                        .map(|o| o.worker_name.clone()),
+                    "build" => outputs
+                        .downcast_ref::<BuildOutputs>()
+                        .and_then(|o| o.identifier.split_once(":project/"))
+                        .filter(|(_, name)| !name.is_empty())
+                        .map(|(_, name)| name.to_string()),
+                    _ => None,
+                }),
+            None if matches!(
+                resource_type,
+                "storage" | "queue" | "kv" | "worker" | "build" | "vault"
+            ) =>
+            {
+                context
+                    .stack_prefix
+                    .as_deref()
+                    .map(|prefix| aws_prefixed_resource_name(prefix, id))
+            }
+            None => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -317,6 +378,95 @@ mod tests {
             .mutate(stack, &StackState::new(Platform::Aws), &config)
             .await
             .unwrap()
+    }
+
+    #[test]
+    fn remote_bindings_aggregate_uses_registered_grants_and_saved_physical_names() {
+        let context = PermissionContext::new().with_stack_prefix("q5-remote");
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let mut stack = Stack::new("q5-remote".into())
+            .add(
+                RemoteBindings::new("access".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut expected = 0;
+        for index in 0..30 {
+            let id = format!("objects-{index:02}");
+            let entry = alien_core::ResourceEntry {
+                config: alien_core::Resource::new(Storage::new(id.clone()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                enabled_when: None,
+                dependencies: vec![],
+                remote_access: true,
+            };
+            let definition = alien_core::remote_bindings::remote_binding_for_entry(&entry).unwrap();
+            let policy = aws_remote_access_policy(
+                &generator,
+                definition,
+                &context
+                    .clone()
+                    .with_resource_id(id.clone())
+                    .with_resource_name(format!("q5-remote-{id}")),
+            )
+            .unwrap();
+            let size = serde_json::to_string(&policy).unwrap().len();
+            assert!(size < 10240);
+            expected += size;
+            stack.resources.insert(id, entry);
+        }
+        assert!(expected > 10240);
+        let run = |stack: &Stack, context: &PermissionContext, state: Option<&StackState>| {
+            super::check(
+                stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                context,
+                state,
+            )
+            .unwrap()
+        };
+        let result = run(&stack, &context, None);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("Remote Bindings role"));
+        assert!(result.errors[0].contains(&expected.to_string()));
+        assert_eq!(result.warnings.len(), 1);
+        // An unavailable physical name is Unknown rather than a guessed failure.
+        let unresolved = run(&stack, &PermissionContext::new(), None);
+        assert!(unresolved.success);
+        assert_eq!(unresolved.warnings.len(), 1);
+        let mut state = StackState::new(Platform::Aws);
+        for (id, entry) in stack.resources() {
+            if entry.config.resource_type() == Storage::RESOURCE_TYPE {
+                let mut saved = alien_core::StackResourceState::new_pending(
+                    "storage".into(),
+                    entry.config.clone(),
+                    None,
+                    vec![],
+                );
+                saved.outputs = Some(alien_core::ResourceOutputs::new(StorageOutputs {
+                    bucket_name: format!("q5-remote-{id}"),
+                }));
+                state.resources.insert(id.to_string(), saved);
+            }
+        }
+        assert_eq!(
+            run(&stack, &PermissionContext::new(), Some(&state)).errors,
+            result.errors
+        );
+        // Explicit profiles are irrelevant: turning publication off revokes the grant.
+        for entry in stack.resources.values_mut() {
+            entry.remote_access = false;
+        }
+        let unpublished = run(&stack, &context, None);
+        assert!(unpublished.success);
+        assert!(unpublished.warnings.is_empty());
+        stack.resources.get_mut("objects-00").unwrap().remote_access = true;
+        assert!(run(&stack, &context, None).success);
+        stack.resources.shift_remove("access");
+        let absent = run(&stack, &context, None);
+        assert!(absent.success);
+        assert!(absent.warnings.is_empty());
     }
 
     #[tokio::test]

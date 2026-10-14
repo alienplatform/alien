@@ -123,6 +123,28 @@ pub fn render_aws_resource_policy(
     })
 }
 
+/// Stable inline policy name for a published resource's Remote Bindings grant.
+pub fn aws_remote_access_policy_name(resource_id: &str) -> String {
+    format!("alien-{resource_id}-remote-access")
+}
+
+/// Render the registered Remote Bindings grant using the resource writer's context.
+pub fn aws_remote_access_policy(
+    generator: &AwsRuntimePermissionsGenerator,
+    definition: &alien_core::remote_bindings::RemoteBindingDefinition,
+    permission_context: &PermissionContext,
+) -> Result<AwsIamPolicy> {
+    let set = crate::get_permission_set(definition.permission_set).ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::InvalidPermissionSet {
+            message: format!(
+                "Remote Bindings permission set '{}' is not registered",
+                definition.permission_set
+            ),
+        })
+    })?;
+    generator.generate_policy(set, BindingTarget::Resource, permission_context)
+}
+
 /// Whether `broad` allows every request `narrow` allows.
 ///
 /// Answers yes only when it can prove it: every statement of `narrow` must be an `Allow` with
