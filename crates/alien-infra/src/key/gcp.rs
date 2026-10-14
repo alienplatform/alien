@@ -127,7 +127,9 @@ impl GcpKeyController {
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         Some(ResourceOutputs::new(KeyOutputs {
-            available: Some(self.available.unwrap_or(false)),
+            // A key whose checks kept failing until RefreshFailed is no longer
+            // observed, so its last value would never change again.
+            available: Some(self.state == GcpKeyState::Ready && self.available == Some(true)),
             fingerprint: KeyFingerprint::Gcp {
                 crypto_key_name: self.crypto_key_name.clone()?,
             },

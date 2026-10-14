@@ -134,7 +134,9 @@ impl AzureKeyController {
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         Some(ResourceOutputs::new(KeyOutputs {
-            available: Some(self.available.unwrap_or(false)),
+            // A key whose checks kept failing until RefreshFailed is no longer
+            // observed, so its last value would never change again.
+            available: Some(self.state == AzureKeyState::Ready && self.available == Some(true)),
             fingerprint: KeyFingerprint::Azure {
                 vault_resource_id: self.vault_resource_id.clone()?,
                 key_name: self.key_name.clone()?,

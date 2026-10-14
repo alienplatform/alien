@@ -329,9 +329,9 @@ fn storage_ready_checks(state: &StackState) -> u32 {
 
 /// Drives a Key with a dependent Storage from Running through two kinds of
 /// failed check. A check without an answer about the key (`TRANSIENT`, a
-/// transport failure) must keep the Storage running through every retry and the
-/// final RefreshFailed. A disabled key or a revocation must pause it until the
-/// key is healthy again.
+/// transport failure) must keep the Storage running through every retry; once
+/// the retries end in RefreshFailed the key is unchecked and pauses it. A
+/// disabled key or a revocation must pause it until the key is healthy again.
 async fn check(platform: Platform, mode: Arc<AtomicU8>, provider: MockPlatformServiceProvider) {
     let mut registry = ResourceRegistry::with_built_ins();
     registry
@@ -386,27 +386,66 @@ async fn check(platform: Platform, mode: Arc<AtomicU8>, provider: MockPlatformSe
     for failure in [TRANSIENT, TRANSPORT] {
         mode.store(failure, Ordering::SeqCst);
         let mut state = running.clone();
-        // MAX_RETRIES (10) failed checks end in RefreshFailed.
-        for step in 1..=12 {
+        // The executor retries the check up to MAX_RETRIES (10) times; meanwhile the
+        // key keeps its last observation and the dependent keeps running.
+        for step in 1..=9 {
             state = executor.step(state).await.unwrap().next_state;
             assert_eq!(
                 key_available(&state),
                 Some(true),
                 "failure mode {failure}, step {step}: a failed check must keep the last observation"
             );
-            if step <= 10 {
-                assert!(state.resources[KEY_ID].error.is_some());
-            }
+            assert_eq!(state.resources[KEY_ID].status, ResourceStatus::Running);
+            assert!(state.resources[KEY_ID].error.is_some());
+        }
+        // The 10th failure ends in RefreshFailed. The key is no longer checked, so it
+        // stops counting as available: a revocation during the outage can't be missed.
+        for step in 10..=12 {
+            state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(
+                state.resources[KEY_ID].status,
+                ResourceStatus::RefreshFailed
+            );
+            assert_eq!(
+                key_available(&state),
+                Some(false),
+                "failure mode {failure}, step {step}: an unchecked key must not stay available"
+            );
         }
         assert_eq!(
-            state.resources[KEY_ID].status,
-            ResourceStatus::RefreshFailed
-        );
-        assert_eq!(
             storage_ready_checks(&state),
-            storage_ready_checks(&running) + 12,
-            "failure mode {failure}: the dependent must keep being reconciled"
+            storage_ready_checks(&running) + 10,
+            "failure mode {failure}: the dependent runs through the retries, then pauses"
         );
+        let paused_checks = storage_ready_checks(&state);
+
+        // The key was revoked during the outage: a retry checks it again and keeps
+        // the dependent paused.
+        mode.store(REVOKED, Ordering::SeqCst);
+        assert!(state
+            .resources
+            .get_mut(KEY_ID)
+            .unwrap()
+            .retry_failed()
+            .unwrap());
+        for _ in 0..2 {
+            state = executor.step(state).await.unwrap().next_state;
+        }
+        assert_eq!(key_available(&state), Some(false));
+        assert_eq!(state.resources[KEY_ID].status, ResourceStatus::Running);
+        // The retry restores the key's last Ready observation, so the dependent
+        // runs in the one step that checks the key again, and then pauses.
+        assert_eq!(storage_ready_checks(&state), paused_checks + 1);
+        let paused_checks = storage_ready_checks(&state);
+
+        // Access is restored: the dependent resumes.
+        mode.store(HEALTHY, Ordering::SeqCst);
+        for _ in 0..2 {
+            state = executor.step(state).await.unwrap().next_state;
+        }
+        assert_eq!(key_available(&state), Some(true));
+        assert!(state.resources[KEY_ID].error.is_none());
+        assert!(storage_ready_checks(&state) > paused_checks);
     }
 
     for pause in [DISABLED, REVOKED] {
