@@ -1,0 +1,483 @@
+$ terraform destroy -input=false -no-color
+random_id.resource_prefix: Refreshing state... [id=6OtfBA]
+data.aws_vpc.default_network_default: Reading...
+data.aws_partition.current: Reading...
+data.aws_region.current: Reading...
+data.aws_caller_identity.current: Reading...
+aws_iam_role.management: Refreshing state... [id=q5-t58-small-management]
+aws_iam_role.execution_sa: Refreshing state... [id=q5-t58-small-execution-sa]
+data.aws_partition.current: Read complete after 0s [id=aws]
+data.aws_region.current: Read complete after 0s [id=eu-west-1]
+data.aws_caller_identity.current: Read complete after 0s [id=[ACCOUNT REDACTED]]
+aws_iam_policy.management_managed_policy_0: Refreshing state... [id=arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0]
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Refreshing state... [id=q5-t58-small-management/arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0]
+aws_iam_role_policy.management_self_read: Refreshing state... [id=q5-t58-small-management:deployment-management-self-read]
+aws_iam_role_policy.execution_sa_set_0: Refreshing state... [id=q5-t58-small-execution-sa:q5-policy-read-0]
+terraform_data.deployment_registration: Refreshing state... [id=7d6add4d-e522-0ff2-97e2-2830e306f496]
+data.aws_vpc.default_network_default: Read complete after 1s [id=[RESOURCE ID REDACTED]]
+data.aws_subnets.default_network_default: Reading...
+data.aws_subnets.default_network_default: Read complete after 0s [id=eu-west-1]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  - destroy
+
+Terraform will perform the following actions:
+
+  # aws_iam_policy.management_managed_policy_0 will be destroyed
+  - resource "aws_iam_policy" "management_managed_policy_0" {
+      - arn              = "arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0" -> null
+      - attachment_count = 1 -> null
+      - id               = "arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0" -> null
+      - name             = "q5-t58-small-deployment-management-0" -> null
+      - path             = "/" -> null
+      - policy           = jsonencode(
+            {
+              - Statement = [
+                  - {
+                      - Action   = [
+                          - "iam:DeleteRole",
+                          - "iam:PutRolePolicy",
+                          - "iam:DeleteRolePolicy",
+                          - "iam:AttachRolePolicy",
+                          - "iam:DetachRolePolicy",
+                          - "iam:UpdateAssumeRolePolicy",
+                          - "iam:PutRolePermissionsBoundary",
+                          - "iam:DeleteRolePermissionsBoundary",
+                          - "iam:UpdateRole",
+                          - "iam:TagRole",
+                          - "iam:UntagRole",
+                        ]
+                      - Effect   = "Deny"
+                      - Resource = [
+                          - "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management",
+                        ]
+                      - Sid      = "DenyManagementRoleChanges"
+                    },
+                ]
+              - Version   = "2012-10-17"
+            }
+        ) -> null
+      - policy_id        = "ANPATLKJAW4BZFK2C4AP2" -> null
+      - tags             = {} -> null
+      - tags_all         = {
+          - "quota-proof" = "q5-t58"
+        } -> null
+        # (2 unchanged attributes hidden)
+    }
+
+  # aws_iam_role.execution_sa will be destroyed
+  - resource "aws_iam_role" "execution_sa" {
+      - arn                   = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-execution-sa" -> null
+      - assume_role_policy    = jsonencode(
+            {
+              - Statement = [
+                  - {
+                      - Action    = "sts:AssumeRole"
+                      - Effect    = "Allow"
+                      - Principal = {
+                          - Service = [
+                              - "codebuild.amazonaws.com",
+                              - "ec2.amazonaws.com",
+                              - "lambda.amazonaws.com",
+                            ]
+                        }
+                    },
+                ]
+              - Version   = "2012-10-17"
+            }
+        ) -> null
+      - create_date           = "2026-10-14T01:04:44Z" -> null
+      - force_detach_policies = false -> null
+      - id                    = "q5-t58-small-execution-sa" -> null
+      - managed_policy_arns   = [] -> null
+      - max_session_duration  = 3600 -> null
+      - name                  = "q5-t58-small-execution-sa" -> null
+      - path                  = "/" -> null
+      - tags                  = {
+          - "deployment"    = "q5-t58-small"
+          - "managed-by"    = "setup"
+          - "resource"      = "execution-sa"
+          - "resource-type" = "service-account"
+        } -> null
+      - tags_all              = {
+          - "deployment"    = "q5-t58-small"
+          - "managed-by"    = "setup"
+          - "quota-proof"   = "q5-t58"
+          - "resource"      = "execution-sa"
+          - "resource-type" = "service-account"
+        } -> null
+      - unique_id             = "AROATLKJAW4BQZT2NMRBX" -> null
+        # (3 unchanged attributes hidden)
+
+      - inline_policy {
+          - name   = "q5-policy-read-0" -> null
+          - policy = jsonencode(
+                {
+                  - Statement = [
+                      - {
+                          - Action   = [
+                              - "s3:GetObject",
+                            ]
+                          - Effect   = "Allow"
+                          - Resource = [
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                              - "arn:aws:s3:::q5-policy-control/objects/object-0009",
+                            ]
+                          - Sid      = "Q5PolicyRead"
+                        },
+                    ]
+                  - Version   = "2012-10-17"
+                }
+            ) -> null
+        }
+    }
+
+  # aws_iam_role.management will be destroyed
+  - resource "aws_iam_role" "management" {
+      - arn                   = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management" -> null
+      - assume_role_policy    = jsonencode(
+            {
+              - Statement = [
+                  - {
+                      - Action    = "sts:AssumeRole"
+                      - Condition = {
+                          - StringEquals = {
+                              - "aws:PrincipalArn" = "[MANAGEMENT ROLE REDACTED]"
+                            }
+                        }
+                      - Effect    = "Allow"
+                      - Principal = {
+                          - AWS = "[MANAGEMENT ROLE REDACTED]"
+                        }
+                      - Sid       = "AllowManagingRole"
+                    },
+                ]
+              - Version   = "2012-10-17"
+            }
+        ) -> null
+      - create_date           = "2026-10-14T01:04:44Z" -> null
+      - force_detach_policies = false -> null
+      - id                    = "q5-t58-small-management" -> null
+      - managed_policy_arns   = [
+          - "arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0",
+        ] -> null
+      - max_session_duration  = 3600 -> null
+      - name                  = "q5-t58-small-management" -> null
+      - path                  = "/" -> null
+      - tags                  = {
+          - "deployment"    = "q5-t58-small"
+          - "managed-by"    = "setup"
+          - "resource"      = "management"
+          - "resource-type" = "management"
+        } -> null
+      - tags_all              = {
+          - "deployment"    = "q5-t58-small"
+          - "managed-by"    = "setup"
+          - "quota-proof"   = "q5-t58"
+          - "resource"      = "management"
+          - "resource-type" = "management"
+        } -> null
+      - unique_id             = "AROATLKJAW4BYFGT3HFRY" -> null
+        # (3 unchanged attributes hidden)
+
+      - inline_policy {
+          - name   = "deployment-management-self-read" -> null
+          - policy = jsonencode(
+                {
+                  - Statement = [
+                      - {
+                          - Action   = "iam:GetRole"
+                          - Effect   = "Allow"
+                          - Resource = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management"
+                          - Sid      = "ReadOwnManagementRole"
+                        },
+                    ]
+                  - Version   = "2012-10-17"
+                }
+            ) -> null
+        }
+    }
+
+  # aws_iam_role_policy.execution_sa_set_0 will be destroyed
+  - resource "aws_iam_role_policy" "execution_sa_set_0" {
+      - id          = "q5-t58-small-execution-sa:q5-policy-read-0" -> null
+      - name        = "q5-policy-read-0" -> null
+      - policy      = jsonencode(
+            {
+              - Statement = [
+                  - {
+                      - Action   = [
+                          - "s3:GetObject",
+                        ]
+                      - Effect   = "Allow"
+                      - Resource = [
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                          - "arn:aws:s3:::q5-policy-control/objects/object-0009",
+                        ]
+                      - Sid      = "Q5PolicyRead"
+                    },
+                ]
+              - Version   = "2012-10-17"
+            }
+        ) -> null
+      - role        = "q5-t58-small-execution-sa" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # aws_iam_role_policy.management_self_read will be destroyed
+  - resource "aws_iam_role_policy" "management_self_read" {
+      - id          = "q5-t58-small-management:deployment-management-self-read" -> null
+      - name        = "deployment-management-self-read" -> null
+      - policy      = jsonencode(
+            {
+              - Statement = [
+                  - {
+                      - Action   = "iam:GetRole"
+                      - Effect   = "Allow"
+                      - Resource = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management"
+                      - Sid      = "ReadOwnManagementRole"
+                    },
+                ]
+              - Version   = "2012-10-17"
+            }
+        ) -> null
+      - role        = "q5-t58-small-management" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # aws_iam_role_policy_attachment.management_managed_policy_0_attachment will be destroyed
+  - resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {
+      - id         = "q5-t58-small-management/arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0" -> null
+      - policy_arn = "arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0" -> null
+      - role       = "q5-t58-small-management" -> null
+    }
+
+  # random_id.resource_prefix will be destroyed
+  - resource "random_id" "resource_prefix" {
+      - b64_std     = "6OtfBA==" -> null
+      - b64_url     = "6OtfBA" -> null
+      - byte_length = 4 -> null
+      - dec         = "3907739396" -> null
+      - hex         = "e8eb5f04" -> null
+      - id          = "6OtfBA" -> null
+    }
+
+  # terraform_data.deployment_registration will be destroyed
+  - resource "terraform_data" "deployment_registration" {
+      - id     = "7d6add4d-e522-0ff2-97e2-2830e306f496" -> null
+      - input  = {
+          - inputValues                 = {}
+          - management_config           = {
+              - managingRoleArn = "[MANAGEMENT ROLE REDACTED]"
+              - platform        = "aws"
+            }
+          - management_url              = ""
+          - name                        = "q5-t58-small"
+          - platform                    = "aws"
+          - resource_prefix             = "q5-t58-small"
+          - resources                   = [
+              - {
+                  - id         = "execution-sa"
+                  - importData = {
+                      - roleArn                 = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-execution-sa"
+                      - roleName                = "q5-t58-small-execution-sa"
+                      - stackPermissionsApplied = true
+                    }
+                  - type       = "service-account"
+                },
+              - {
+                  - id         = "default-network"
+                  - importData = {
+                      - availabilityZones   = []
+                      - cidrBlock           = null
+                      - eipAllocationId     = null
+                      - internetGatewayId   = null
+                      - isByoVpc            = true
+                      - natGatewayId        = null
+                      - privateRouteTableId = null
+                      - privateSubnetIds    = []
+                      - publicRouteTableId  = null
+                      - publicSubnetIds     = []
+                      - securityGroupId     = null
+                      - vpcId               = null
+                    }
+                  - type       = "network"
+                },
+              - {
+                  - id         = "management"
+                  - importData = {
+                      - managementPermissionsApplied = true
+                      - roleArn                      = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management"
+                      - roleName                     = "q5-t58-small-management"
+                    }
+                  - type       = "remote-stack-management"
+                },
+            ]
+          - setup_fingerprint           = ""
+          - setup_fingerprint_version   = 0
+          - setup_import_format_version = 1
+          - setup_target                = ""
+          - stack_settings              = (sensitive value)
+          - token                       = (sensitive value)
+        } -> null
+      - output = {
+          - inputValues                 = {}
+          - management_config           = {
+              - managingRoleArn = "[MANAGEMENT ROLE REDACTED]"
+              - platform        = "aws"
+            }
+          - management_url              = ""
+          - name                        = "q5-t58-small"
+          - platform                    = "aws"
+          - resource_prefix             = "q5-t58-small"
+          - resources                   = [
+              - {
+                  - id         = "execution-sa"
+                  - importData = {
+                      - roleArn                 = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-execution-sa"
+                      - roleName                = "q5-t58-small-execution-sa"
+                      - stackPermissionsApplied = true
+                    }
+                  - type       = "service-account"
+                },
+              - {
+                  - id         = "default-network"
+                  - importData = {
+                      - availabilityZones   = []
+                      - cidrBlock           = null
+                      - eipAllocationId     = null
+                      - internetGatewayId   = null
+                      - isByoVpc            = true
+                      - natGatewayId        = null
+                      - privateRouteTableId = null
+                      - privateSubnetIds    = []
+                      - publicRouteTableId  = null
+                      - publicSubnetIds     = []
+                      - securityGroupId     = null
+                      - vpcId               = null
+                    }
+                  - type       = "network"
+                },
+              - {
+                  - id         = "management"
+                  - importData = {
+                      - managementPermissionsApplied = true
+                      - roleArn                      = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management"
+                      - roleName                     = "q5-t58-small-management"
+                    }
+                  - type       = "remote-stack-management"
+                },
+            ]
+          - setup_fingerprint           = ""
+          - setup_fingerprint_version   = 0
+          - setup_import_format_version = 1
+          - setup_target                = ""
+          - stack_settings              = {
+              - deploymentModel = "push"
+              - endpointAccess  = "internet"
+              - heartbeats      = "off"
+              - network         = {
+                  - type = "use-default"
+                }
+              - telemetry       = "off"
+              - updates         = "auto"
+            }
+          - token                       = "q5-synthetic-unused"
+        } -> null
+    }
+
+Plan: 0 to add, 0 to change, 8 to destroy.
+
+Changes to Outputs:
+  - deployment_management_config           = jsonencode(
+        {
+          - managingRoleArn = "[MANAGEMENT ROLE REDACTED]"
+          - platform        = "aws"
+        }
+    ) -> null
+  - deployment_platform                    = "aws" -> null
+  - deployment_region                      = "eu-west-1" -> null
+  - deployment_resource_prefix             = "q5-t58-small" -> null
+  - deployment_resources                   = jsonencode(
+        [
+          - {
+              - id         = "execution-sa"
+              - importData = {
+                  - roleArn                 = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-execution-sa"
+                  - roleName                = "q5-t58-small-execution-sa"
+                  - stackPermissionsApplied = true
+                }
+              - type       = "service-account"
+            },
+          - {
+              - id         = "default-network"
+              - importData = {
+                  - availabilityZones   = []
+                  - cidrBlock           = null
+                  - eipAllocationId     = null
+                  - internetGatewayId   = null
+                  - isByoVpc            = true
+                  - natGatewayId        = null
+                  - privateRouteTableId = null
+                  - privateSubnetIds    = []
+                  - publicRouteTableId  = null
+                  - publicSubnetIds     = []
+                  - securityGroupId     = null
+                  - vpcId               = null
+                }
+              - type       = "network"
+            },
+          - {
+              - id         = "management"
+              - importData = {
+                  - managementPermissionsApplied = true
+                  - roleArn                      = "arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management"
+                  - roleName                     = "q5-t58-small-management"
+                }
+              - type       = "remote-stack-management"
+            },
+        ]
+    ) -> null
+  - deployment_setup_fingerprint           = "" -> null
+  - deployment_setup_fingerprint_version   = 0 -> null
+  - deployment_setup_import_format_version = 1 -> null
+  - deployment_setup_target                = "" -> null
+  - deployment_stack_settings              = (sensitive value) -> null
+  - deployment_target                      = "aws" -> null
+terraform_data.deployment_registration: Destroying... [id=7d6add4d-e522-0ff2-97e2-2830e306f496]
+terraform_data.deployment_registration: Destruction complete after 0s
+aws_iam_role_policy.management_self_read: Destroying... [id=q5-t58-small-management:deployment-management-self-read]
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Destroying... [id=q5-t58-small-management/arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0]
+aws_iam_role_policy.execution_sa_set_0: Destroying... [id=q5-t58-small-execution-sa:q5-policy-read-0]
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Destruction complete after 0s
+aws_iam_policy.management_managed_policy_0: Destroying... [id=arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0]
+aws_iam_role_policy.management_self_read: Destruction complete after 0s
+aws_iam_role.management: Destroying... [id=q5-t58-small-management]
+aws_iam_role_policy.execution_sa_set_0: Destruction complete after 0s
+aws_iam_role.execution_sa: Destroying... [id=q5-t58-small-execution-sa]
+aws_iam_policy.management_managed_policy_0: Destruction complete after 0s
+aws_iam_role.execution_sa: Destruction complete after 0s
+aws_iam_role.management: Destruction complete after 0s
+random_id.resource_prefix: Destroying... [id=6OtfBA]
+random_id.resource_prefix: Destruction complete after 0s
+
+Destroy complete! Resources: 8 destroyed.
+
+Exit: 0

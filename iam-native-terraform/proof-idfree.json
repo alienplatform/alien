@@ -1,0 +1,29 @@
+{
+  "roles": {
+    "baseline_identities_preserved": true,
+    "owned_remaining": 0,
+    "unrelated_additions": 1
+  },
+  "policies": {
+    "baseline_identities_preserved": true,
+    "owned_remaining": 0,
+    "unrelated_additions": 0
+  },
+  "parent_apply_exit": 1,
+  "parent_native_error": "IAM PutRolePolicy409 LimitExceeded / Maximum policy size of 10240 bytes exceeded",
+  "parent_partial_roles": 2,
+  "parent_partial_managed_policies": 1,
+  "parent_destroy_exit": 0,
+  "feature_render_exit": 1,
+  "feature_render_files": 0,
+  "small_apply_exit": 0,
+  "small_provider_inline_chars": 647,
+  "small_provider_object_grants": 10,
+  "small_destroy_exit": 0,
+  "original_parent": "aa42e2f38",
+  "feature": "4f621b3d4",
+  "provider": "hashicorp/aws6.68.0",
+  "terraform": "1.9.8",
+  "artifact_override": "Provider default_tags only; generated infrastructure and policy expressions unchanged",
+  "scope": "Full Terraform setup module; terraform_data registration emitted locally; no runtime import/application deployment claimed"
+}

@@ -1,0 +1,35 @@
+$ terraform apply -input=false -no-color q5-plan
+random_id.resource_prefix: Creating...
+random_id.resource_prefix: Creation complete after 0s [id=6OtfBA]
+aws_iam_policy.management_managed_policy_0: Creating...
+aws_iam_role.execution_sa: Creating...
+aws_iam_role.management: Creating...
+aws_iam_role.execution_sa: Creation complete after 0s [id=q5-t58-small-execution-sa]
+aws_iam_role_policy.execution_sa_set_0: Creating...
+aws_iam_role.management: Creation complete after 0s [id=q5-t58-small-management]
+aws_iam_role_policy.management_self_read: Creating...
+aws_iam_policy.management_managed_policy_0: Creation complete after 1s [id=arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0]
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Creating...
+aws_iam_role_policy.execution_sa_set_0: Creation complete after 1s [id=q5-t58-small-execution-sa:q5-policy-read-0]
+aws_iam_role_policy.management_self_read: Creation complete after 1s [id=q5-t58-small-management:deployment-management-self-read]
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Creation complete after 0s [id=q5-t58-small-management/arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-small-deployment-management-0]
+terraform_data.deployment_registration: Creating...
+terraform_data.deployment_registration: Creation complete after 0s [id=7d6add4d-e522-0ff2-97e2-2830e306f496]
+
+Apply complete! Resources: 8 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+deployment_management_config = "{\"managingRoleArn\":\"[MANAGEMENT ROLE REDACTED]\",\"platform\":\"aws\"}"
+deployment_platform = "aws"
+deployment_region = "eu-west-1"
+deployment_resource_prefix = "q5-t58-small"
+deployment_resources = "[{\"id\":\"execution-sa\",\"importData\":{\"roleArn\":\"arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-execution-sa\",\"roleName\":\"q5-t58-small-execution-sa\",\"stackPermissionsApplied\":true},\"type\":\"service-account\"},{\"id\":\"default-network\",\"importData\":{\"availabilityZones\":[],\"cidrBlock\":null,\"eipAllocationId\":null,\"internetGatewayId\":null,\"isByoVpc\":true,\"natGatewayId\":null,\"privateRouteTableId\":null,\"privateSubnetIds\":[],\"publicRouteTableId\":null,\"publicSubnetIds\":[],\"securityGroupId\":null,\"vpcId\":null},\"type\":\"network\"},{\"id\":\"management\",\"importData\":{\"managementPermissionsApplied\":true,\"roleArn\":\"arn:aws:iam::[ACCOUNT REDACTED]:role/q5-t58-small-management\",\"roleName\":\"q5-t58-small-management\"},\"type\":\"remote-stack-management\"}]"
+deployment_setup_fingerprint = ""
+deployment_setup_fingerprint_version = 0
+deployment_setup_import_format_version = 1
+deployment_setup_target = ""
+deployment_stack_settings = <sensitive>
+deployment_target = "aws"
+
+Exit: 0

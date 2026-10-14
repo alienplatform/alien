@@ -1,0 +1,23 @@
+$ terraform apply -input=false -no-color q5-plan
+random_id.resource_prefix: Creating...
+random_id.resource_prefix: Creation complete after 0s [id=C6gymw]
+aws_iam_role.execution_sa: Creating...
+aws_iam_policy.management_managed_policy_0: Creating...
+aws_iam_role.management: Creating...
+aws_iam_role.execution_sa: Creation complete after 1s [id=q5-t58-parent-execution-sa]
+aws_iam_role.management: Creation complete after 1s [id=q5-t58-parent-management]
+aws_iam_role_policy.management_self_read: Creating...
+aws_iam_role_policy.execution_sa_set_0: Creating...
+aws_iam_policy.management_managed_policy_0: Creation complete after 1s [id=arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-parent-deployment-management-0]
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Creating...
+aws_iam_role_policy_attachment.management_managed_policy_0_attachment: Creation complete after 0s [id=q5-t58-parent-management/arn:aws:iam::[ACCOUNT REDACTED]:policy/q5-t58-parent-deployment-management-0]
+aws_iam_role_policy.management_self_read: Creation complete after 0s [id=q5-t58-parent-management:deployment-management-self-read]
+
+Error: putting IAM Role (q5-t58-parent-execution-sa) Policy (q5-policy-read-0): operation error IAM: PutRolePolicy, https response error StatusCode: 409, RequestID: 80cc1968-47ff-409b-b02a-62cdb75a5b57, LimitExceeded: Maximum policy size of 10240 bytes exceeded for role q5-t58-parent-execution-sa
+
+  with aws_iam_role_policy.execution_sa_set_0,
+  on execution_sa.tf line 12, in resource "aws_iam_role_policy" "execution_sa_set_0":
+  12: resource "aws_iam_role_policy" "execution_sa_set_0" {
+
+
+Exit: 1
