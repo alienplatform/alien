@@ -1,14 +1,74 @@
 //! Project service-account inventory and applied quota reads.
 
-use crate::quotas::{QuotaDemand, QuotaObservation};
+use crate::quotas::{
+    evaluate, gcp_service_account_quota_identity, QuotaDemand, QuotaObservation, QuotaOutcome,
+    QuotaResult,
+};
+use crate::CheckResult;
 use alien_core::{
     ArtifactRegistry, ComputeCluster, Platform, RemoteBindings, RemoteStackManagement,
-    ResourceStatus, ServiceAccount, Stack, StackState,
+    ResourceEntry, ResourceStatus, ServiceAccount, Stack, StackState,
 };
 use alien_gcp_clients::{service_usage_quotas::QuotaMetric, IamApi, ServiceUsageQuotasApi};
 use std::collections::BTreeSet;
 
 const ACCOUNT_METRIC: &str = "iam.googleapis.com/quota/service-account-count";
+
+fn service_account_fields(entry: &ResourceEntry) -> &'static [&'static str] {
+    if entry.config.downcast_ref::<ArtifactRegistry>().is_some() {
+        &["pullServiceAccountEmail", "pushServiceAccountEmail"]
+    } else if entry.config.downcast_ref::<ServiceAccount>().is_some()
+        || entry
+            .config
+            .downcast_ref::<RemoteStackManagement>()
+            .is_some()
+        || entry.config.downcast_ref::<RemoteBindings>().is_some()
+        || entry.config.downcast_ref::<ComputeCluster>().is_some()
+    {
+        &["serviceAccountEmail"]
+    } else {
+        &[]
+    }
+}
+
+pub(super) fn has_service_accounts(stack: &Stack) -> bool {
+    stack
+        .resources
+        .values()
+        .any(|entry| !service_account_fields(entry).is_empty())
+}
+
+/// Project identity metadata and applied quota only; unavailable reads never block.
+pub async fn check(
+    stack: &Stack,
+    state: &StackState,
+    project: &str,
+    iam: &dyn IamApi,
+    quotas: &dyn ServiceUsageQuotasApi,
+    result: &mut CheckResult,
+) {
+    if !has_service_accounts(stack) {
+        return;
+    }
+    let outcome = match service_account_observation(iam, quotas, project).await {
+        Some((observation, emails)) => match service_account_demand(stack, state, &emails) {
+            Some(demand) => evaluate(demand, Some(observation)),
+            None => QuotaOutcome::Unknown {
+                reason: "held service-account identities could not be verified from deployment state".into(),
+            },
+        },
+        None => QuotaOutcome::Unknown {
+            reason: "project service-account inventory or applied quota is unavailable; verify iam.serviceAccounts.list and serviceusage.quotas.get permissions".into(),
+        },
+    };
+    super::cloud_quotas::record(
+        result,
+        QuotaResult {
+            quota: gcp_service_account_quota_identity(project),
+            outcome,
+        },
+    );
+}
 
 /// Only an unambiguous project-wide effective limit is usable; defaults are not.
 pub fn service_account_limit(info: &QuotaMetric) -> Option<f64> {
@@ -48,20 +108,10 @@ pub fn service_account_demand(
     };
     let mut claimed = BTreeSet::new();
     for (id, entry) in &stack.resources {
-        let fields: &[&str] = if entry.config.downcast_ref::<ArtifactRegistry>().is_some() {
-            &["pullServiceAccountEmail", "pushServiceAccountEmail"]
-        } else if entry.config.downcast_ref::<ServiceAccount>().is_some()
-            || entry
-                .config
-                .downcast_ref::<RemoteStackManagement>()
-                .is_some()
-            || entry.config.downcast_ref::<RemoteBindings>().is_some()
-            || entry.config.downcast_ref::<ComputeCluster>().is_some()
-        {
-            &["serviceAccountEmail"]
-        } else {
+        let fields = service_account_fields(entry);
+        if fields.is_empty() {
             continue;
-        };
+        }
         demand.peak += fields.len() as f64;
         let Some(current) = state.resources.get(id) else {
             continue;
@@ -314,6 +364,153 @@ mod tests {
             .unwrap()
             .remove("pushServiceAccountEmail");
         assert!(service_account_demand(&stack, &state, &emails).is_none());
+    }
+
+    #[tokio::test]
+    async fn runtime_blocks_new_accounts_credits_updates_and_warns_on_partial_state() {
+        let stack = identity_stack();
+        let (held, emails) = identity_state(&stack);
+        for mode in ["create", "update", "partial"] {
+            let mut state = if mode == "create" {
+                StackState::with_resource_prefix(Platform::Gcp, "q5-runtime".into())
+            } else {
+                held.clone()
+            };
+            if mode == "partial" {
+                state.resources.get_mut("sa").unwrap().internal_state = None;
+            }
+            let mut quotas = MockServiceUsageQuotasApi::new();
+            quotas
+                .expect_get_quota_metric()
+                .times(1)
+                .withf(|service, metric| {
+                    service == "iam.googleapis.com" && metric == ACCOUNT_METRIC
+                })
+                .returning(|_, _| {
+                    let mut value: Value = serde_json::from_str(include_str!(
+                        "fixtures/gcp-service-account-quota.json"
+                    ))
+                    .unwrap();
+                    value["consumerQuotaLimits"][0]["quotaBuckets"][0]["effectiveLimit"] =
+                        json!("6");
+                    Ok(serde_json::from_value(value).unwrap())
+                });
+            let accounts: Vec<_> = emails
+                .iter()
+                .enumerate()
+                .map(|(i, email)| account(&(i + 1).to_string(), email))
+                .collect();
+            let mut iam = MockIamApi::new();
+            iam.expect_list_service_accounts()
+                .times(1)
+                .return_once(move |_, _| {
+                    Ok(serde_json::from_value(json!({"accounts":accounts})).unwrap())
+                });
+            let mut result = CheckResult::success();
+            check(&stack, &state, "test", &iam, &quotas, &mut result).await;
+            assert_eq!(result.quota_results.len(), 1);
+            assert_eq!(
+                result.quota_results[0].quota,
+                gcp_service_account_quota_identity("test")
+            );
+            assert_eq!(result.success, mode != "create");
+            match mode {
+                "create" => {
+                    assert_eq!(
+                        result.quota_results[0].outcome,
+                        QuotaOutcome::Fail {
+                            used: 6.0,
+                            limit: 6.0,
+                            needed: 6.0
+                        }
+                    );
+                    assert_eq!(result.errors.len(), 1);
+                    assert!(result.errors[0].contains(ACCOUNT_METRIC));
+                    assert!(result.errors[0].contains(
+                        "https://console.cloud.google.com/iam-admin/quotas?project=test"
+                    ));
+                }
+                "update" => {
+                    assert_eq!(
+                        result.quota_results[0].outcome,
+                        QuotaOutcome::Pass {
+                            used: 6.0,
+                            limit: 6.0,
+                            needed: 0.0
+                        }
+                    );
+                    assert!(result.warnings.is_empty());
+                }
+                _ => {
+                    assert!(matches!(
+                        result.quota_results[0].outcome,
+                        QuotaOutcome::Unknown { .. }
+                    ));
+                    assert_eq!(result.status, Some(crate::CheckStatus::Unknown));
+                    assert_eq!(result.warnings.len(), 1);
+                    assert!(result.errors.is_empty());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_denied_read_warns_and_unrelated_stack_skips_cloud_calls() {
+        let mut quotas = MockServiceUsageQuotasApi::new();
+        quotas.expect_get_quota_metric().times(1).returning(|_, _| {
+            Err(alien_error::AlienError::new(
+                alien_gcp_clients::ErrorData::RemoteAccessDenied {
+                    resource_type: "QuotaMetric".into(),
+                    resource_name: ACCOUNT_METRIC.into(),
+                },
+            ))
+        });
+        let state = StackState::with_resource_prefix(Platform::Gcp, "q5-runtime".into());
+        let mut result = CheckResult::success();
+        check(
+            &identity_stack(),
+            &state,
+            "test",
+            &MockIamApi::new(),
+            &quotas,
+            &mut result,
+        )
+        .await;
+        assert!(result.success);
+        assert!(result.errors.is_empty());
+        assert_eq!(result.status, Some(crate::CheckStatus::Unknown));
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("iam.serviceAccounts.list"));
+        let mut empty = CheckResult::success();
+        check(
+            &Stack::new("empty".into()).build(),
+            &state,
+            "test",
+            &MockIamApi::new(),
+            &MockServiceUsageQuotasApi::new(),
+            &mut empty,
+        )
+        .await;
+        assert!(empty.success);
+        assert!(empty.quota_results.is_empty());
+        assert!(empty.warnings.is_empty());
+    }
+
+    #[test]
+    fn every_creator_schedules_the_runtime_check_only_on_cloud_platforms() {
+        use crate::RuntimeCheck;
+        let stack = identity_stack();
+        for (id, entry) in stack.resources {
+            let mut single = Stack::new("single".into()).build();
+            single.resources.insert(id.clone(), entry);
+            assert!(
+                super::super::cloud_quotas::CloudQuotasCheck.should_run(&single, Platform::Gcp),
+                "{id}"
+            );
+            for platform in [Platform::Local, Platform::Kubernetes] {
+                assert!(!super::super::cloud_quotas::CloudQuotasCheck.should_run(&single, platform));
+            }
+        }
     }
 
     fn account(id: &str, email: &str) -> Value {

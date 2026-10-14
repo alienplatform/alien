@@ -11,7 +11,7 @@ use alien_aws_clients::{
 };
 use alien_core::{
     ClientConfig, ComputeCluster, DeploymentConfig, Network, NetworkOutputs, NetworkSettings,
-    Platform, RemoteStackManagement, ResourceStatus, ServiceAccount, Stack, StackState, Worker,
+    Platform, ResourceStatus, Stack, StackState, Worker,
 };
 use std::collections::HashSet;
 
@@ -28,27 +28,26 @@ impl RuntimeCheck for CloudQuotasCheck {
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
-        matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-            && stack.resources.values().any(|entry| {
-                (platform == Platform::Gcp
-                    && (entry.has_remote_bindings()
-                        || entry.config.downcast_ref::<ServiceAccount>().is_some()
-                        || entry
-                            .config
-                            .downcast_ref::<RemoteStackManagement>()
-                            .is_some()))
-                    || entry
-                        .config
-                        .downcast_ref::<Worker>()
-                        .is_some_and(|worker| worker.concurrency_limit.is_some())
-                    || entry.config.downcast_ref::<ComputeCluster>().is_some()
-                    || entry
-                        .config
-                        .downcast_ref::<Network>()
-                        .is_some_and(|network| {
-                            matches!(network.settings, NetworkSettings::Create { .. })
-                        })
-            })
+        if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+            return false;
+        }
+        if platform == Platform::Gcp && super::gcp_service_accounts::has_service_accounts(stack) {
+            return true;
+        }
+        stack.resources.values().any(|entry| {
+            (platform == Platform::Gcp && entry.has_remote_bindings())
+                || entry
+                    .config
+                    .downcast_ref::<Worker>()
+                    .is_some_and(|worker| worker.concurrency_limit.is_some())
+                || entry.config.downcast_ref::<ComputeCluster>().is_some()
+                || entry
+                    .config
+                    .downcast_ref::<Network>()
+                    .is_some_and(|network| {
+                        matches!(network.settings, NetworkSettings::Create { .. })
+                    })
+        })
     }
 
     async fn check(
@@ -101,6 +100,15 @@ impl RuntimeCheck for CloudQuotasCheck {
             let iam = alien_gcp_clients::IamClient::new(http.clone(), config.clone());
             let quotas = alien_gcp_clients::ServiceUsageQuotasClient::new(http, config.clone());
             super::gcp_iam::check(stack, stack_state, config, &iam, &quotas, &mut result).await;
+            super::gcp_service_accounts::check(
+                stack,
+                stack_state,
+                &config.project_id,
+                &iam,
+                &quotas,
+                &mut result,
+            )
+            .await;
             return Ok(result);
         }
         let Some(config) = client_config.aws_config() else {

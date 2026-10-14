@@ -58,6 +58,20 @@ pub fn gcp_custom_role_quota_identity(project: &str) -> QuotaIdentity {
     }
 }
 
+/// Project service-account quota shared by early and deployment-time checks.
+pub fn gcp_service_account_quota_identity(project: &str) -> QuotaIdentity {
+    QuotaIdentity {
+        platform: Platform::Gcp,
+        service: "iam.googleapis.com".into(),
+        provider_id: "iam.googleapis.com/quota/service-account-count".into(),
+        name: "Service accounts per project".into(),
+        scope: project.into(),
+        increase_url: format!(
+            "https://console.cloud.google.com/iam-admin/quotas?project={project}"
+        ),
+    }
+}
+
 /// Additional capacity required at the peak of this deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
