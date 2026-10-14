@@ -36,7 +36,7 @@
       "usage": 0.0
     },
     {
-      "limit": 9.223372036854776e+18,
+      "limit": 9.223372036854776e18,
       "metric": "LOCAL_SSD_TOTAL_GB",
       "usage": 0.0
     },
@@ -311,7 +311,7 @@
       "usage": 0.0
     },
     {
-      "limit": 9.223372036854776e+18,
+      "limit": 9.223372036854776e18,
       "metric": "AFFINITY_GROUPS",
       "usage": 0.0
     },
