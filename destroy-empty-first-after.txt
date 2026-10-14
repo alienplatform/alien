@@ -1,0 +1,10 @@
+
+Alien Deploy — Destroy
+
+  Deployment:          [DEPLOYMENT]
+  Manager:             [MANAGER URL]
+[1/3] Requesting deployment deletion...
+[2/3] Loading target credentials and running deletion...
+✔ Deployment deleted successfully.
+[3/3] Done!
+✔ Deployment destroyed successfully.
