@@ -695,7 +695,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // any other compute image; the bundle layers the sandbox agent on afterwards, and AWS builds
     // the MicroVM from that bundle inside the customer's account.
     if !sandboxes_to_build.is_empty() {
-        let build_targets = settings.get_targets();
+        // The base boots on the cloud's sandbox runtime (an arm64 MicroVM on AWS, an amd64 disk
+        // image on Azure), not on the compute the stack's other targets were chosen for.
+        let sandbox_settings = {
+            let mut s = settings.clone();
+            s.targets = Some(BinaryTarget::defaults_for_platform(
+                settings.platform.runtime_platform(),
+            ));
+            s
+        };
+        let build_targets = sandbox_settings.get_targets();
 
         info!(
             "Building {} sandbox base images for {} target(s): {:?}",
@@ -712,7 +721,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             .map(|(resource_id, sandbox, src, toolchain)| {
                 let sandbox_id = sandbox.id.clone();
                 let stack_id = stack_id.clone();
-                let settings = settings.clone();
+                let settings = sandbox_settings.clone();
                 let output_dir = output_dir.clone();
                 let bus = current_bus.clone();
                 let cancel_token = cancel_token.clone();
@@ -1520,10 +1529,7 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                 SandboxCode::Source { .. } => {
                     return Err(AlienError::new(ErrorData::InvalidResourceConfig {
                         resource_id: sandbox.id.clone(),
-                        reason: "Sandbox has source code instead of built image. No sandbox \
-                                 backend builds an image from source; give code.image a prebuilt \
-                                 reference or a local image directory."
-                            .to_string(),
+                        reason: "Sandbox has source code instead of built image. Run 'alien build' first.".to_string(),
                     }));
                 }
             }
@@ -6195,8 +6201,8 @@ mod sandbox_push_tests {
         assert_eq!(types, vec!["sandbox", "worker"]);
     }
 
-    /// No sandbox backend builds from source, so a release says so rather than queueing a push of
-    /// a directory nothing ever wrote.
+    /// An unbuilt source sandbox has no directory to push, so a release says so rather than
+    /// queueing a push of a directory nothing ever wrote.
     #[test]
     fn a_source_sandbox_is_refused_at_release() {
         let stack = Stack::new("source".to_string())
@@ -6218,8 +6224,8 @@ mod sandbox_push_tests {
         let error = collect_push_targets(&stack).expect_err("source sandboxes are refused");
         assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
         assert!(
-            error.to_string().contains("from source"),
-            "the refusal must name the reason, got: {error}"
+            error.to_string().contains("Run 'alien build' first"),
+            "the refusal must name the fix, got: {error}"
         );
     }
 }

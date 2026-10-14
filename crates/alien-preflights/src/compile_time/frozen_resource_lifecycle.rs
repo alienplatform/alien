@@ -59,11 +59,9 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 ));
             }
 
-            // Two reasons, and the second outlives the first. Only AWS has a runtime sandbox
-            // controller, so elsewhere a Live sandbox is emitted nowhere and provisioned by
-            // nobody. And a remote grant on Azure or GCP names a parent that must exist when the
-            // package applies, which only the package that creates it can do — so publishing a
-            // Live sandbox stays impossible on those clouds even once they gain a controller.
+            // A remote grant on Azure or GCP names a parent that must exist when the package
+            // applies, which only the package that creates it can do, so a Live sandbox stays
+            // AWS-only even where a runtime sandbox controller exists, as on Azure.
             if resource_entry.config.downcast_ref::<Sandbox>().is_some()
                 && resource_entry.lifecycle == ResourceLifecycle::Live
                 && platform != Platform::Aws
@@ -88,14 +86,18 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                             resource_id
                         ));
                     }
-                    // Refused on the declaration rather than on the field it becomes: the release
-                    // pushes a source build to the project's own repository, so it is private by
-                    // the time anything reads it, and by then setup has already tried to pull.
-                    if matches!(&sandbox.code, SandboxCode::Source { .. }) {
+                    // Refused on the declaration rather than on the field it becomes: on AWS the
+                    // release pushes a source build to the project's own ECR repository, so it is
+                    // private by the time anything reads it, and by then setup has already tried
+                    // to pull. Azure pulls it through the registry proxy with the deployment's
+                    // own credentials, so no customer account has to be opened first.
+                    if matches!(&sandbox.code, SandboxCode::Source { .. })
+                        && platform == Platform::Aws
+                    {
                         errors.push(format!(
                             "Sandbox '{}' is built from source, which requires the Live \
-                             lifecycle; the release pushes it to a private repository the \
-                             registry cannot open to a customer account setup has not yet \
+                             lifecycle on AWS; the release pushes it to a private ECR repository \
+                             the registry cannot open to a customer account setup has not yet \
                              reported",
                             resource_id
                         ));
@@ -515,7 +517,7 @@ mod tests {
     /// The release makes a source build private, so the declaration is refused rather than the
     /// field it becomes — by the time that field exists, setup has already tried to pull.
     #[tokio::test]
-    async fn source_is_refused_on_a_frozen_sandbox() {
+    async fn source_is_refused_on_a_frozen_aws_sandbox() {
         let with_source = |lifecycle| {
             let mut stack = sandbox_stack(lifecycle);
             let entry = stack.resources.get_mut("agents").expect("sandbox entry");
@@ -545,8 +547,8 @@ mod tests {
             frozen
                 .errors
                 .iter()
-                .any(|error| error.contains("built from source")),
-            "the refusal must name the declaration: {:?}",
+                .any(|error| error.contains("built from source") && error.contains("ECR")),
+            "the refusal must name the declaration and the reason: {:?}",
             frozen.errors
         );
 
@@ -557,6 +559,15 @@ mod tests {
         assert!(
             live.success,
             "Live is where a source build belongs: {live:?}"
+        );
+
+        let azure = FrozenResourceLifecycleCheck
+            .check(&with_source(ResourceLifecycle::Frozen), Platform::Azure)
+            .await
+            .expect("the check runs");
+        assert!(
+            azure.success,
+            "Azure builds a Frozen source sandbox: {azure:?}"
         );
     }
 

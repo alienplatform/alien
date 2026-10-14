@@ -113,14 +113,14 @@ fn source_sandbox() -> Sandbox {
         .build()
 }
 
-/// `alien build` turns a sandbox's source into an image on AWS, and nowhere else. Driven through
+/// `alien build` turns a sandbox's source into an image on AWS, never on Kubernetes. Driven through
 /// the runner rather than the method, because the runtime's empty-image fallback on Kubernetes
 /// rests on this gate being registered, not merely on the method refusing when called.
 ///
 /// Live, because the release pushes a source build to a private repository and a Frozen one is
 /// built before the registry can open it.
 #[tokio::test]
-async fn source_reaches_no_platform_but_aws_through_the_runner() {
+async fn source_reaches_aws_but_not_kubernetes_through_the_runner() {
     let live = alien_core::ResourceLifecycle::Live;
     let summary = PreflightRunner::new()
         .run_compile_time_checks(
@@ -146,4 +146,33 @@ async fn source_reaches_no_platform_but_aws_through_the_runner() {
         .expect("compile-time checks run");
 
     assert!(on_aws.success, "AWS builds it: {on_aws:?}");
+}
+
+/// Azure builds a source sandbox too, and Frozen, because its controller pulls the pushed image
+/// with the deployment's own credentials. GCP still has no builder, so it refuses by name.
+#[tokio::test]
+async fn source_reaches_azure_frozen_and_is_refused_on_gcp_through_the_runner() {
+    let frozen = alien_core::ResourceLifecycle::Frozen;
+    let on_azure = PreflightRunner::new()
+        .run_compile_time_checks(
+            &stack_with_lifecycle(source_sandbox(), frozen),
+            Platform::Azure,
+        )
+        .await
+        .expect("compile-time checks run");
+    assert!(on_azure.success, "Azure builds it: {on_azure:?}");
+
+    let on_gcp = PreflightRunner::new()
+        .run_compile_time_checks(
+            &stack_with_lifecycle(source_sandbox(), frozen),
+            Platform::Gcp,
+        )
+        .await
+        .expect("compile-time checks run");
+    assert!(!on_gcp.success, "source has no builder on GCP: {on_gcp:?}");
+    let rendered = format!("{on_gcp:?}");
+    assert!(
+        rendered.contains("from source on gcp"),
+        "the failure must name the platform that cannot build it: {rendered}"
+    );
 }
