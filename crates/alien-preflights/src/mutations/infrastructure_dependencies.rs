@@ -2,6 +2,7 @@
 
 use crate::compile_time::network_required::resource_requires_network;
 use crate::error::Result;
+use crate::mutations::gcp_service_activation::CLOUD_KMS_ACTIVATION_ID;
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Network, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
@@ -325,10 +326,18 @@ impl InfrastructureDependenciesMutation {
             ],
 
             // GCP dependencies
-            (Platform::Gcp, "key") => vec![ResourceRef::new(
-                alien_core::ServiceActivation::RESOURCE_TYPE,
-                "enable-cloud-kms",
-            )],
+            // An installed Key from before the activation existed has none.
+            (Platform::Gcp, "key") => stack
+                .resources
+                .contains_key(CLOUD_KMS_ACTIVATION_ID)
+                .then(|| {
+                    ResourceRef::new(
+                        alien_core::ServiceActivation::RESOURCE_TYPE,
+                        CLOUD_KMS_ACTIVATION_ID,
+                    )
+                })
+                .into_iter()
+                .collect(),
             (Platform::Gcp, "postgres") => vec![
                 ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,
