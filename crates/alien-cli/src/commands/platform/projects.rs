@@ -19,9 +19,9 @@ use alien_platform_api::types::{
     ConfigureProjectDeploymentsBodyMethodsItem, ConfigureProjectKeysBody,
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, ConfigureRemoteSandboxRequest,
-    ConfigureRemoteSandboxRequestCustomImage, CreateProjectBody, CreateProjectBodyName,
-    CreateProjectWorkspace, DeleteProjectWorkspace, ListProjectsWorkspace,
-    ProjectIdOrNamePathParam, SandboxBaseImageRepository,
+    ConfigureRemoteSandboxRequestAzureImage, ConfigureRemoteSandboxRequestCustomImage,
+    CreateProjectBody, CreateProjectBodyName, CreateProjectWorkspace, DeleteProjectWorkspace,
+    ListProjectsWorkspace, ProjectIdOrNamePathParam, SandboxBaseImageRepository,
 };
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -468,19 +468,52 @@ async fn capabilities_task(
                         })),
                         (None, None) => None,
                     };
-                    let custom_image = match source {
-                        Some(SandboxImageSource::Image(image)) => Some(image),
-                        Some(SandboxImageSource::Source(source)) => Some(
-                            build_and_push_sandbox_base_image(
-                                ctx, http, workspace, project, &source, json,
+                    let (custom_image, azure_image) = match source {
+                        Some(SandboxImageSource::Image(image)) => (Some(image), None),
+                        Some(SandboxImageSource::Source(source)) => {
+                            // Runs first: a 404 from resolving the Azure manager then means no
+                            // Azure manager, because a missing project already failed here.
+                            let aws_image = build_and_push_sandbox_base_image(
+                                ctx,
+                                http,
+                                workspace,
+                                project,
+                                &source,
+                                Platform::Aws,
+                                json,
                             )
-                            .await?,
-                        ),
-                        None => None,
+                            .await?;
+                            let azure_image = match build_and_push_sandbox_base_image(
+                                ctx,
+                                http,
+                                workspace,
+                                project,
+                                &source,
+                                Platform::Azure,
+                                json,
+                            )
+                            .await
+                            {
+                                Ok(image) => Some(image),
+                                Err(error) if error.http_status_code == Some(404) => {
+                                    if !json {
+                                        println!(
+                                            "{} azure: the project has no Azure manager",
+                                            dim_label("Skipped")
+                                        );
+                                    }
+                                    None
+                                }
+                                Err(error) => return Err(error),
+                            };
+                            (Some(aws_image), azure_image)
+                        }
+                        None => (None, None),
                     };
                     let saved = saved_remote_sandbox_settings(http, workspace, project).await?;
                     let body = remote_sandbox_request(
                         custom_image.as_deref(),
+                        azure_image.as_deref(),
                         max_lifetime_seconds,
                         saved,
                     )?;
@@ -584,8 +617,9 @@ fn remote_sandbox_lifetime(
 }
 
 /// The configure endpoint replaces the whole sandbox configuration, so an omitted value returns
-/// to its default. Returns the saved image, lifetime and Azure idle time, which a command keeps
-/// unless a flag replaces them. The request has no Azure catalog image: the API always picks it.
+/// to its default, except the Azure registry image, which the API keeps while the custom image is
+/// unchanged. Returns the saved image, lifetime and Azure idle time, which a command keeps unless a
+/// flag replaces them. The request has no Azure catalog image: the API always picks it.
 async fn saved_remote_sandbox_settings(
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
@@ -625,6 +659,7 @@ async fn saved_remote_sandbox_settings(
         .transpose()?;
     Ok(ConfigureRemoteSandboxRequest {
         custom_image,
+        azure_image: None,
         max_lifetime_seconds: sandbox.max_lifetime_seconds,
         azure_idle_suspend_seconds: sandbox.azure.map(|azure| azure.idle_suspend_seconds),
     })
@@ -632,9 +667,11 @@ async fn saved_remote_sandbox_settings(
 
 /// A flag replaces the saved value. Without either, the API picks the default images and the
 /// lifetime is `DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS`. No flag sets the Azure idle time, so the
-/// saved one is always resent, with or without a custom image.
+/// saved one is always resent, with or without a custom image. `azure_image` is the image a `--src`
+/// run built for Azure, never read from the saved configuration.
 fn remote_sandbox_request(
     custom_image: Option<&str>,
+    azure_image: Option<&str>,
     max_lifetime_seconds: Option<NonZeroU64>,
     saved: ConfigureRemoteSandboxRequest,
 ) -> Result<ConfigureRemoteSandboxRequest> {
@@ -648,8 +685,19 @@ fn remote_sandbox_request(
                 })
         })
         .transpose()?;
+    let azure_image = azure_image
+        .map(|image| {
+            ConfigureRemoteSandboxRequestAzureImage::try_from(image)
+                .into_alien_error()
+                .context(ErrorData::ValidationError {
+                    field: "azureImage".to_string(),
+                    message: format!("'{image}' is not a valid image reference"),
+                })
+        })
+        .transpose()?;
     Ok(ConfigureRemoteSandboxRequest {
         custom_image: custom_image.or(saved.custom_image),
+        azure_image,
         max_lifetime_seconds: Some(
             max_lifetime_seconds
                 .or(saved.max_lifetime_seconds)
@@ -659,15 +707,16 @@ fn remote_sandbox_request(
     })
 }
 
-/// Resolves the sandbox base image for `source` in the project's private repository and returns
-/// the digest reference to configure. An unchanged source reuses the image already tagged with
-/// its input hash, from any machine, without building.
+/// Resolves the sandbox base image for `source` on `platform` in the project's private repository
+/// and returns the digest reference to configure. An unchanged source reuses the image already
+/// tagged with its input hash, from any machine, without building.
 async fn build_and_push_sandbox_base_image(
     ctx: &ExecutionMode,
     http: &crate::auth::AuthHttp,
     workspace: Option<&str>,
     project: &str,
     source: &SandboxSource,
+    platform: Platform,
     json: bool,
 ) -> Result<String> {
     // Kept apart from `alien release`'s output so neither overwrites the other's stack.json.
@@ -679,7 +728,7 @@ async fn build_and_push_sandbox_base_image(
         target: None,
     };
     let mut settings =
-        auto_build_settings_for_platform(Platform::Aws.as_str(), &output_dir, None, None, None)?;
+        auto_build_settings_for_platform(platform.as_str(), &output_dir, None, None, None)?;
     // The registry tag is this command's cache. The local artifact cache's key skips what the
     // input hash covers (node_modules, the executable bit, symlinks), so a hit there after a
     // registry miss would push the older image under the new tag.
@@ -687,25 +736,43 @@ async fn build_and_push_sandbox_base_image(
     settings.pull_base_images = source.rebuild;
     let input_hash = source_input_hash(&src, &toolchain, &settings).await?;
 
-    let manager = ctx
-        .resolve_manager_metadata_only(project, Platform::Aws.as_str())
-        .await?;
-    let mut request = http
-        .sdk_client()
-        .ensure_project_sandbox_base_image_repository()
-        .id_or_name(project);
-    if let Some(workspace) = workspace {
-        request = request.workspace(workspace);
-    }
-    let destination = request
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to prepare the project's sandbox image repository".to_string(),
-            url: None,
-        })?
-        .into_inner();
+    let (manager, destination) = if platform == Platform::Aws {
+        let manager = ctx
+            .resolve_manager_metadata_only(project, platform.as_str())
+            .await?;
+        let mut request = http
+            .sdk_client()
+            .ensure_project_sandbox_base_image_repository()
+            .id_or_name(project);
+        if let Some(workspace) = workspace {
+            request = request.workspace(workspace);
+        }
+        let destination = request
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to prepare the project's sandbox image repository".to_string(),
+                url: None,
+            })?
+            .into_inner();
+        (manager, destination)
+    } else {
+        // The project's repository on this platform's manager, the one `alien release` pushes a
+        // stack to. The image is named under the manager's host, which the API accepts as this
+        // platform's image.
+        let manager = ctx.resolve_manager(project, platform.as_str()).await?;
+        let repository = manager.repository_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("The {platform} manager returned no repository for the project"),
+            })
+        })?;
+        let destination = SandboxBaseImageRepository {
+            registry_host: manager.manager_url.clone(),
+            repository,
+        };
+        (manager, destination)
+    };
     let push_settings = manager_proxy_push_settings(
         &destination.registry_host,
         &destination.repository,
@@ -737,10 +804,12 @@ async fn build_and_push_sandbox_base_image(
             if !json {
                 println!("{} {}", dim_label("Building"), src.display());
             }
-            let built =
-                alien_build::build_stack(sandbox_source_stack(&src, toolchain.clone()), &settings)
-                    .await
-                    .context(ErrorData::BuildFailed)?;
+            let built = alien_build::build_stack(
+                sandbox_source_stack(&src, toolchain.clone(), platform),
+                &settings,
+            )
+            .await
+            .context(ErrorData::BuildFailed)?;
             // The tag is shared by every machine with this tree, so it must not name an image
             // built from a tree that was edited mid-build.
             ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
@@ -749,7 +818,7 @@ async fn build_and_push_sandbox_base_image(
             }
             // No push cache: the source tag already skips unchanged sources, and a cached
             // reference the registry has since dropped would leave nothing to tag.
-            let pushed = alien_build::push_stack(built, Platform::Aws, &push_settings)
+            let pushed = alien_build::push_stack(built, platform, &push_settings)
                 .await
                 .context(publish_failed())?;
             alien_build::registry::tag_manifest(
@@ -808,7 +877,7 @@ fn source_directory(src: &Path) -> Result<PathBuf> {
         })
 }
 
-fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig) -> Stack {
+fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig, platform: Platform) -> Stack {
     let sandbox = Sandbox::new("remote-sandbox".to_string())
         .code(SandboxCode::Source {
             src: src.display().to_string(),
@@ -820,8 +889,14 @@ fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig) -> Stack {
             idle_pause_seconds: None,
         })
         .build();
+    // A source sandbox must be Live on AWS, and only AWS accepts a Live sandbox at all.
+    let lifecycle = if platform == Platform::Aws {
+        ResourceLifecycle::Live
+    } else {
+        ResourceLifecycle::Frozen
+    };
     Stack::new("remote-sandbox".to_string())
-        .add(sandbox, ResourceLifecycle::Live)
+        .add(sandbox, lifecycle)
         .build()
 }
 
@@ -906,7 +981,7 @@ fn validate_capability_options(
     if capability == CapabilityName::RemoteSandbox {
         let max_lifetime_seconds = remote_sandbox_lifetime(sandbox.max_session_lifetime_seconds)?;
         if let Some(image) = sandbox.image {
-            remote_sandbox_request(Some(image), max_lifetime_seconds, Default::default())?;
+            remote_sandbox_request(Some(image), None, max_lifetime_seconds, Default::default())?;
         }
         if let Some(src) = sandbox.src {
             let dockerfile = src.join(sandbox.dockerfile.unwrap_or("Dockerfile"));
@@ -1532,7 +1607,8 @@ mod tests {
             ),
         ];
         for (image, lifetime, saved, expected) in cases {
-            let request = remote_sandbox_request(image, lifetime, saved).expect("valid request");
+            let request =
+                remote_sandbox_request(image, None, lifetime, saved).expect("valid request");
             assert_eq!(
                 serde_json::to_value(request).expect("request should serialize"),
                 expected,
@@ -1550,8 +1626,8 @@ mod tests {
             }))
             .expect("the saved configuration should parse")
         };
-        let request =
-            remote_sandbox_request(None, NonZeroU64::new(7200), saved_defaults()).expect("valid");
+        let request = remote_sandbox_request(None, None, NonZeroU64::new(7200), saved_defaults())
+            .expect("valid");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({ "maxLifetimeSeconds": 7200, "azureIdleSuspendSeconds": 900 }),
@@ -1559,6 +1635,7 @@ mod tests {
 
         let request = remote_sandbox_request(
             Some("public.ecr.aws/example/analysis:v1"),
+            None,
             None,
             saved_defaults(),
         )
@@ -1577,7 +1654,7 @@ mod tests {
             "azureIdleSuspendSeconds": 900,
         }))
         .expect("the saved configuration should parse");
-        let request = remote_sandbox_request(None, None, saved_custom).expect("valid");
+        let request = remote_sandbox_request(None, None, None, saved_custom).expect("valid");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({
@@ -1792,12 +1869,78 @@ mod tests {
             format!("host.docker.internal:8090/acme-sandbox@{digest}")
         );
 
-        let request =
-            remote_sandbox_request(Some(&base_image), NonZeroU64::new(3600), Default::default())
-                .expect("the configured reference is a valid base image");
+        let request = remote_sandbox_request(
+            Some(&base_image),
+            None,
+            NonZeroU64::new(3600),
+            Default::default(),
+        )
+        .expect("the configured reference is a valid base image");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize")["customImage"],
             serde_json::json!(base_image),
+        );
+    }
+
+    #[test]
+    fn remote_sandbox_request_sends_the_azure_leg_image() {
+        const AWS_IMAGE: &str = "aws-manager.example/acme-sandbox@sha256:aaa";
+        const AZURE_IMAGE: &str = "azure-manager.example/prj_x@sha256:bbb";
+        let request = remote_sandbox_request(
+            Some(AWS_IMAGE),
+            Some(AZURE_IMAGE),
+            NonZeroU64::new(3600),
+            Default::default(),
+        )
+        .expect("valid request");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({
+                "customImage": AWS_IMAGE,
+                "azureImage": AZURE_IMAGE,
+                "maxLifetimeSeconds": 3600,
+            }),
+        );
+    }
+
+    /// `build_stack` runs these preflights before building, so a lifecycle a platform refuses
+    /// would fail every `--src` run there.
+    #[tokio::test]
+    async fn the_source_stack_passes_the_build_time_preflights_on_each_platform() {
+        let src = tempfile::tempdir().expect("temp dir");
+        for platform in [Platform::Aws, Platform::Azure] {
+            let toolchain = ToolchainConfig::Docker {
+                dockerfile: None,
+                build_args: None,
+                target: None,
+            };
+            alien_preflights::runner::PreflightRunner::new()
+                .run_build_time_preflights(
+                    &sandbox_source_stack(src.path(), toolchain, platform),
+                    platform,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{platform}: {error}"));
+        }
+    }
+
+    /// The Azure leg names its image under the manager URL, which carries a scheme; the API
+    /// compares the reference against the manager's bare host.
+    #[test]
+    fn configure_names_the_image_under_a_manager_url_without_its_scheme() {
+        let destination = SandboxBaseImageRepository {
+            registry_host: "https://manager-azure.example".to_string(),
+            repository: "alien/prj_x".to_string(),
+        };
+        let digest = "sha256:7d5463a6f1c2b3e4d5c6b7a8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a69788";
+        assert_eq!(
+            configured_base_image(
+                &format!("manager-azure.example/alien/prj_x@{digest}"),
+                "manager-azure.example/alien/prj_x",
+                &destination,
+            )
+            .expect("the pushed image is in the pushed repository"),
+            format!("manager-azure.example/alien/prj_x@{digest}")
         );
     }
 

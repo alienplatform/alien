@@ -670,13 +670,16 @@ impl ExecutionMode {
                             url: Some(resolve_url),
                         }));
                     } else {
-                        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                        let mut error = AlienError::new(ErrorData::ApiRequestFailed {
                             message: format!(
                                 "Failed to resolve manager for {} platform (HTTP {}): {}",
                                 platform, status, body
                             ),
                             url: Some(resolve_url),
-                        }));
+                        });
+                        // Carried so a caller can tell a missing manager (404) from any other refusal.
+                        error.http_status_code = Some(status.as_u16());
+                        return Err(error);
                     }
                 };
 
@@ -1207,5 +1210,42 @@ mod tests {
             .unwrap();
         assert_eq!(ctx.name, "demo");
         assert_eq!(ctx.query, Some("demo".to_string()));
+    }
+
+    /// A caller tells "this project has no manager on the platform" apart from any other failure
+    /// by the status the resolve endpoint answered with.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn resolving_a_platform_without_a_manager_keeps_the_404() {
+        use axum::{http::StatusCode, routing::get, Router};
+
+        let app = Router::new().route(
+            "/v1/resolve",
+            get(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    r#"{"code":"NO_SYSTEM_MANAGER","message":"No system manager found for platform 'azure'."}"#,
+                )
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let mode = ExecutionMode::Platform {
+            base_url,
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: None,
+            project: None,
+        };
+        let error = mode
+            .resolve_manager("prj_test", "azure")
+            .await
+            .err()
+            .expect("a project with no Azure manager does not resolve one");
+        server.abort();
+
+        assert_eq!(error.http_status_code, Some(404));
     }
 }
