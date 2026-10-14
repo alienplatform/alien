@@ -1,0 +1,16 @@
+$ alien build --config oversized-alien.json --platforms aws --output-dir feature-oversized
+Building session53-iam-build for aws
+Output feature-oversized
+Loading configuration
+Running preflights for q5-policy-build (aws)
+Failed: Stack processing failed: Failed to run build-time preflights
+Failed: Stack processing failed: Failed to run build-time preflights
+Stack processing failed: Failed to run build-time preflights
+Cause:
+  - Validation failed with 1 errors and 0 warnings
+Failed checks:
+  - IAM role for permission profile 'execution' needs at least 10783 inline policy characters; the aggregate per-role limit is 10240. Reduce global grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+  - IAM role for permission profile 'reader' needs at least 10783 inline policy characters; the aggregate per-role limit is 10240. Reduce global grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+
+Exit: 1
+Build output files: 0

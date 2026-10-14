@@ -1,0 +1,16 @@
+[
+  {
+    "scenario": "oversized",
+    "exit": 0,
+    "files": [
+      "predecessor-oversized/build/aws/stack.json"
+    ]
+  },
+  {
+    "scenario": "small",
+    "exit": 0,
+    "files": [
+      "predecessor-small/build/aws/stack.json"
+    ]
+  }
+]

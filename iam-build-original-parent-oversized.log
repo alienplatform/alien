@@ -1,0 +1,13 @@
+$ alien build --config oversized-alien.json --platforms aws --output-dir original-parent-oversized
+Building session53-iam-build for aws
+Output original-parent-oversized
+> Success! Build complete.
+Stack q5-policy-build
+Artifacts 0
+Duration 0.0s
+Next run alien release to push images and create a release.
+Loading configuration
+Running preflights for q5-policy-build (aws)
+
+Exit: 0
+Build output files: 1

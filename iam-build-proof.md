@@ -1,0 +1,1 @@
+Actual CLI build: original parent accepts two combined global grant sets per role; feature rejects both execution and reader at10783/10240 before output files. Small two10-object-set control passes. Synthetic stack has no workloads, credentials or cloud calls. This proves early CLI build behavior; it does not prove native IAM apply or full direct role-document aggregation.

@@ -1,0 +1,140 @@
+{
+  "id": "q5-policy-build",
+  "resources": {},
+  "permissions": {
+    "profiles": {
+      "execution": {
+        "*": [
+          {
+            "id": "first",
+            "description": "Read synthetic objects",
+            "platforms": {
+              "aws": [
+                {
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject"
+                    ]
+                  },
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0009"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "second",
+            "description": "Read synthetic objects",
+            "platforms": {
+              "aws": [
+                {
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject"
+                    ]
+                  },
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0009"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "reader": {
+        "*": [
+          {
+            "id": "first",
+            "description": "Read synthetic objects",
+            "platforms": {
+              "aws": [
+                {
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject"
+                    ]
+                  },
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0009"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "second",
+            "description": "Read synthetic objects",
+            "platforms": {
+              "aws": [
+                {
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject"
+                    ]
+                  },
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0009"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
