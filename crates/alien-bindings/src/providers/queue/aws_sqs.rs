@@ -405,6 +405,11 @@ mod tests {
                     assert!(end <= length);
                     let kind = u16::from_be_bytes([buffer[end - 4], buffer[end - 3]]);
                     let missing = &buffer[13..20] == b"missing";
+                    let ttl = if &buffer[13..20] == b"expired" {
+                        0u32
+                    } else {
+                        60u32
+                    };
                     let mut response = buffer[..12].to_vec();
                     response[2..12].copy_from_slice(&[
                         0x81,
@@ -427,7 +432,9 @@ mod tests {
                         };
                         response.extend_from_slice(&[0xc0, 0x0c]);
                         response.extend_from_slice(&kind.to_be_bytes());
-                        response.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, address.len() as u8]);
+                        response.extend_from_slice(&[0, 1]);
+                        response.extend_from_slice(&ttl.to_be_bytes());
+                        response.extend_from_slice(&[0, address.len() as u8]);
                         response.extend(address);
                     }
                     socket.send_to(&response, peer).await.unwrap();
@@ -472,18 +479,20 @@ mod tests {
                     requests,
                     "cached lookups must not send more DNS queries"
                 );
-                tokio::time::sleep(Duration::from_millis(1100)).await;
-                let refreshed: HashSet<_> = resolver
-                    .resolve("queue.fixture.test.".parse().unwrap())
-                    .await
-                    .unwrap()
-                    .collect();
-                assert_eq!(refreshed, addresses);
-                assert_eq!(
-                    queries.load(Ordering::SeqCst),
-                    requests + 2,
-                    "expired answers must be resolved again"
-                );
+                // A zero-TTL answer is already expired; no short wall-clock window is needed.
+                for attempt in 1..=2 {
+                    let expired: HashSet<_> = resolver
+                        .resolve("expired.fixture.test.".parse().unwrap())
+                        .await
+                        .unwrap()
+                        .collect();
+                    assert_eq!(expired, addresses);
+                    assert_eq!(
+                        queries.load(Ordering::SeqCst),
+                        requests + attempt * 2,
+                        "expired answers must be resolved again"
+                    );
+                }
             })
             .await
             .expect("wire DNS must finish without blocking");
