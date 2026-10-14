@@ -602,8 +602,11 @@ async fn destroy_tracked_deployment(
 
     // Acquire → step loop → reconcile → release
     let session = format!("cli-destroy-{}", Uuid::new_v4());
+    // The deletion this command requested removes the deployment's own token
+    // with its record, so confirm a refused acquire with the operator's access.
     let acquire_outcome = acquire_setup_delete_deployment(
         &manager_client,
+        &operator_client,
         &tracked_deployment.deployment_id,
         &session,
         stack_settings.deployment_model,

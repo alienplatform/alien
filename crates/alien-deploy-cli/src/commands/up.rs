@@ -7329,7 +7329,7 @@ async fn run_setup_deletion(
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
     let acquire_outcome =
-        acquire_setup_delete_deployment(client, deployment_id, &session, deployment_model)
+        acquire_setup_delete_deployment(client, client, deployment_id, &session, deployment_model)
             .await
             .context(ErrorData::DeploymentFailed {
                 operation: "acquire setup teardown lock".to_string(),
