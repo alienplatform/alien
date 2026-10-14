@@ -234,6 +234,15 @@ resource "azurerm_user_assigned_identity" "management" {
   ]
 }
 
+resource "azurerm_role_assignment" "management_self_read" {
+  scope                = azurerm_user_assigned_identity.management.id
+  role_definition_name = "Reader"
+  principal_id         = azurerm_user_assigned_identity.management.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 resource "azurerm_role_definition" "management_management_role" {
   name               = "${local.resource_prefix}-management-role"
   role_definition_id = uuidv5("oid", "deployment:azure:mgmt-role-def:${local.resource_prefix}")
@@ -360,6 +369,7 @@ resource "terraform_data" "deployment_registration" {
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_user_assigned_identity.management,
+    azurerm_role_assignment.management_self_read,
     azurerm_role_definition.management_management_role,
     azurerm_role_assignment.management_management_uami_assignment_0,
     azurerm_role_assignment.management_management_uami_assignment_3,

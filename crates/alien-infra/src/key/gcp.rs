@@ -20,6 +20,8 @@ use crate::{
 
 #[controller]
 pub struct GcpKeyController {
+    #[serde(default)]
+    pub(crate) available: Option<bool>,
     pub(crate) crypto_key_name: Option<String>,
     pub(crate) primary_version: Option<String>,
 }
@@ -39,6 +41,8 @@ impl GcpKeyController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // A failed check keeps the last observation unless Cloud KMS answered about
+        // the key itself; a throttle or 5xx must not pause every dependent resource.
         let config = ctx.desired_resource_config::<Key>()?;
         let crypto_key_name = self.crypto_key_name.as_deref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -51,6 +55,11 @@ impl GcpKeyController {
             .get_gcp_cloud_kms_client(ctx.get_gcp_config()?)?
             .get_crypto_key(crypto_key_name)
             .await
+            .inspect_err(|error| {
+                if super::key_revoked_by_status(error, crypto_key_name) {
+                    self.available = Some(false);
+                }
+            })
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to read GCP Cloud KMS key metadata".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -70,6 +79,7 @@ impl GcpKeyController {
             }
             _ => (ObservedHealth::Degraded, ProviderLifecycleState::Unknown),
         };
+        self.available = Some(primary_state == Some("ENABLED"));
         self.primary_version = key.primary.as_ref().map(|version| version.name.clone());
         ctx.emit_heartbeat(ResourceHeartbeat {
             deployment_id: None,
@@ -83,7 +93,8 @@ impl GcpKeyController {
                     status: KeyHeartbeatStatus {
                         health,
                         lifecycle,
-                        message: None,
+                        message: (self.available != Some(true))
+                            .then(|| "customer key unavailable".to_string()),
                     },
                     crypto_key_name: key.name,
                     purpose: key.purpose,
@@ -96,7 +107,7 @@ impl GcpKeyController {
         });
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(300)),
+            suggested_delay: Some(Duration::from_secs(30)),
         })
     }
 
@@ -110,8 +121,15 @@ impl GcpKeyController {
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn requires_convergence_reconciliation(&self) -> bool {
+        true
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         Some(ResourceOutputs::new(KeyOutputs {
+            // A key whose checks kept failing until RefreshFailed is no longer
+            // observed, so its last value would never change again.
+            available: Some(self.state == GcpKeyState::Ready && self.available == Some(true)),
             fingerprint: KeyFingerprint::Gcp {
                 crypto_key_name: self.crypto_key_name.clone()?,
             },
@@ -140,6 +158,15 @@ pub struct GcpKeyImporter;
 impl ResourceImporter for GcpKeyImporter {
     type ImportData = GcpKeyImportData;
 
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> alien_core::Result<StackResourceState> {
+        super::merge_key_reimport(existing, imported, ctx)
+    }
+
     fn import(
         &self,
         data: Self::ImportData,
@@ -148,6 +175,7 @@ impl ResourceImporter for GcpKeyImporter {
         make_imported_state(
             GcpKeyController {
                 state: GcpKeyState::Ready,
+                available: None,
                 crypto_key_name: Some(data.crypto_key_name),
                 primary_version: Some(data.primary_version),
                 _internal_stay_count: None,

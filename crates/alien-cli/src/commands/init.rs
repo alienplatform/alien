@@ -297,7 +297,7 @@ async fn download_and_extract(template: &str, target_dir: &Path) -> Result<()> {
     let url = "https://codeload.github.com/alienplatform/alien/tar.gz/main";
     let prefix = format!("alien-main/examples/{}/", template);
 
-    let client = reqwest::Client::new();
+    let client = crate::http_client::client()?;
     let response = client
         .get(url)
         .header("User-Agent", "alien-cli")

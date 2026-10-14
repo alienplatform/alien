@@ -179,6 +179,7 @@ async fn state() -> (AppState, String) {
     let state = AppState {
         deployment_store,
         release_store,
+        project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
         token_store,
         auth_validator: Arc::new(RoleValidator(subjects)),
         authz: Arc::new(OssAuthz),

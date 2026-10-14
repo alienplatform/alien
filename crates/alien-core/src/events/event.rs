@@ -55,6 +55,9 @@ pub enum AlienEvent {
         stack: String,
         /// Platform being targeted
         platform: String,
+        /// Non-blocking diagnostics reported by the completed checks.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
 
     /// Downloading alien runtime event
@@ -418,5 +421,25 @@ mod tests {
             }
             _ => panic!("Wrong event type"),
         }
+    }
+    #[test]
+    fn preflight_events_accept_legacy_payloads_and_preserve_warnings() {
+        let legacy = serde_json::json!({
+            "type": "RunningPreflights", "stack": "example", "platform": "aws"
+        });
+        let event: AlienEvent = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(
+            matches!(&event, AlienEvent::RunningPreflights { warnings, .. } if warnings.is_empty())
+        );
+        assert_eq!(serde_json::to_value(event).unwrap(), legacy);
+
+        let mut completed = legacy;
+        completed["warnings"] = serde_json::json!(["Check the optional binding"]);
+        let event: AlienEvent = serde_json::from_value(completed.clone()).unwrap();
+        assert!(
+            matches!(&event, AlienEvent::RunningPreflights { warnings, .. }
+            if warnings == &["Check the optional binding"])
+        );
+        assert_eq!(serde_json::to_value(event).unwrap(), completed);
     }
 }

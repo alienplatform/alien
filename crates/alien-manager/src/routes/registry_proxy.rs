@@ -7,9 +7,16 @@
 //!
 //! ## Auth
 //!
-//! **Push** (POST/PUT/PATCH): Admin or developer token only.
-//! **Pull** (GET/HEAD): Deployment token — validates the requested repo exists
-//! in the deployment's release.
+//! Both directions resolve the repository's project through the
+//! [`crate::traits::ProjectStore`] and ask [`crate::auth::Authz`]:
+//!
+//! **Push** (POST/PUT/PATCH): `can_push_image` on the repository's project.
+//! **Pull** (GET/HEAD): `can_pull_image` on the repository's project. A
+//! deployment token is further limited to its own project's repositories and
+//! those its release names.
+//!
+//! Charts and the Operator image are not project repositories and are served
+//! by their own handlers before this check.
 //!
 //! ## Performance
 //!
@@ -38,10 +45,14 @@ use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
 };
 use alien_bindings::BindingsProviderApi;
-use alien_core::Platform;
+use alien_core::{
+    classify_azure_sandbox_image, image_rewrite::strip_registry_host, AzureSandboxImage, Container,
+    ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, Worker, WorkerCode,
+};
 
 use super::AppState;
 use crate::auth::{Role, Scope, Subject};
+use crate::traits::ProjectRecord;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -490,7 +501,7 @@ async fn proxy_push(
             Ok(s) => s,
             Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
         };
-        if let Err(e) = require_push_auth(&state, &subject, &oci.repo) {
+        if let Err(e) = require_push_auth(&state, &subject, &oci.repo).await {
             return e;
         }
         let mut query = query;
@@ -685,7 +696,7 @@ async fn proxy_upload_session(
         return invalid_upload_session_auth();
     }
 
-    if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
+    if let Err(e) = require_push_auth(&state, &subject, &repo_name).await {
         return e;
     }
 
@@ -1231,18 +1242,47 @@ fn upload_session_payload(upload_path: &str, repo_name: &str, expires_at: i64) -
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-/// Validate that the caller has push permissions. The project_id comes
-/// from the **routing table** — each provider composes repo names as
-/// `{prefix}{sep}{name}` (`-` for ECR, `/` for GAR/ACR/Local), so the
-/// routing-table prefix lookup gives us the project's name unambiguously.
-/// Pushes that don't match any prefix fall back to `"default"`; the
-/// configured [`crate::auth::Authz`] impl decides whether to allow.
-fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Result<(), Response> {
+/// The project that owns `repo_name`, looked up as `subject`. The project id comes from the
+/// **routing table**: each provider composes repo names as `{prefix}{sep}{name}` (`-` for ECR,
+/// `/` for GAR/ACR/Local), so the prefix lookup gives the project's id unambiguously. A repository
+/// that matches no prefix belongs to `"default"`. A project the store does not return is refused,
+/// and a failed lookup refuses too: access is granted only on a resolved project.
+async fn repository_project(
+    state: &AppState,
+    subject: &Subject,
+    repo_name: &str,
+) -> Result<ProjectRecord, Response> {
     let project_id = state
         .registry_routing_table
         .project_id_for_repo(repo_name)
         .unwrap_or("default");
-    if state.authz.can_push_image(subject, project_id, repo_name) {
+    match state.project_store.get_project(subject, project_id).await {
+        Ok(Some(project)) => Ok(project),
+        Ok(None) => Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Repository does not belong to a project the caller can access.",
+        )),
+        Err(e) => {
+            warn!(error = %e, %project_id, "Failed to resolve the project of a registry repository");
+            Err(oci_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "Failed to resolve repository project",
+            ))
+        }
+    }
+}
+
+/// Validate that the caller may push to `repo_name`, through
+/// [`crate::auth::Authz::can_push_image`] on the repository's project.
+async fn require_push_auth(
+    state: &AppState,
+    subject: &Subject,
+    repo_name: &str,
+) -> Result<(), Response> {
+    let project = repository_project(state, subject, repo_name).await?;
+    if state.authz.can_push_image(subject, &project, repo_name) {
         Ok(())
     } else {
         Err(oci_error(
@@ -1253,9 +1293,8 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
-/// Credentials that exist to provision or push images pull nothing. A project-scoped capability
-/// shares the scope whose pulls skip repo validation, so it is refused before that match, and
-/// before charts and the Operator image are routed.
+/// Credentials that exist to provision or push images pull nothing. They are refused before
+/// charts and the Operator image are routed, which `Authz::can_pull_image` does not see.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(oci_error(
@@ -1274,19 +1313,23 @@ fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
     Ok(())
 }
 
-/// Validate that a deployment token can access the requested repo.
+/// Validate that the caller may pull `repo_name`.
 ///
-/// Uses the pull validation cache to avoid repeated DB lookups. Workspace-
-/// scoped subjects bypass repo validation (they can pull anything in the
-/// workspace).
+/// Every pull is authorized by [`crate::auth::Authz::can_pull_image`] on the repository's
+/// project. A deployment token is further held to its own project's repositories and those its
+/// release names; that list is cached per deployment to avoid repeated DB lookups.
 async fn validate_pull_access(
     state: &AppState,
     subject: &Subject,
     repo_name: &str,
 ) -> Result<(), Response> {
     refuse_capability_pull(subject)?;
-    let (deployment_id, own_project) = match &subject.scope {
-        Scope::Workspace | Scope::Project { .. } => return Ok(()),
+    let deployment = match &subject.scope {
+        Scope::Workspace | Scope::Project { .. } => None,
+        Scope::Deployment {
+            project_id,
+            deployment_id,
+        } => Some((deployment_id.as_str(), project_id.as_str())),
         Scope::DeploymentGroup { .. } => {
             return Err(oci_error(
                 StatusCode::FORBIDDEN,
@@ -1315,24 +1358,28 @@ async fn validate_pull_access(
                 "Telemetry credentials cannot access the registry proxy",
             ))
         }
-        Scope::Deployment {
-            project_id,
-            deployment_id,
-        } => {
-            // A deployment token may always pull from its own project's
-            // artifact repository. Source-built resources (Worker/Container/
-            // Daemon) publish their images there under `{prefix}-{project_id}`,
-            // and those repos are not discoverable from the stack's `image`
-            // fields — so the per-release allow-list below would otherwise
-            // reject them (e.g. a source-built Daemon).
-            if state.registry_routing_table.project_id_for_repo(repo_name)
-                == Some(project_id.as_str())
-            {
-                return Ok(());
-            }
-            (deployment_id.as_str(), project_id.as_str())
-        }
     };
+
+    let project = repository_project(state, subject, repo_name).await?;
+    if !state.authz.can_pull_image(subject, &project, repo_name) {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Caller cannot pull images from this repository.",
+        ));
+    }
+    let Some((deployment_id, own_project)) = deployment else {
+        return Ok(());
+    };
+    // A deployment token may always pull from its own project's artifact
+    // repository. Source-built resources (Worker/Container/Daemon) publish
+    // their images there under `{prefix}-{project_id}`, and those repos are
+    // not discoverable from the stack's `image` fields — so the per-release
+    // allow-list below would otherwise reject them (e.g. a source-built
+    // Daemon).
+    if state.registry_routing_table.project_id_for_repo(repo_name) == Some(own_project) {
+        return Ok(());
+    }
 
     // Check cache first.
     let repo_names = if let Some((_release_id, cached_repos)) =
@@ -1401,7 +1448,7 @@ async fn validate_pull_access(
         let proxy_host = state.config.base_url();
         let proxy_host = alien_core::image_rewrite::strip_url_scheme(&proxy_host);
         let routes = &state.registry_routing_table;
-        let own_repo = |repo: &str| sandbox_repo_in_own_project(routes, repo, own_project);
+        let own_repo = |repo: &str| image_repo_in_own_project(routes, repo, own_project);
         let repos = release
             .stacks
             .values()
@@ -1430,35 +1477,24 @@ async fn validate_pull_access(
     Ok(())
 }
 
-/// Whether a Sandbox's image repo may enter the release's list: only one in the deployment's own
-/// project, so a Sandbox naming another project's repo cannot open it to this deployment's token.
+/// Whether an image repo may enter the release's list: only one in the deployment's own
+/// project, so naming another project's repo cannot open it to this deployment's token.
 /// An unattributable repo counts as "default", as a push to it does.
-fn sandbox_repo_in_own_project(
-    routes: &RegistryRoutingTable,
-    repo: &str,
-    own_project: &str,
-) -> bool {
+fn image_repo_in_own_project(routes: &RegistryRoutingTable, repo: &str, own_project: &str) -> bool {
     routes.project_id_for_repo(repo).unwrap_or("default") == own_project
 }
 
 /// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
-/// registry host, the only one a sandbox image is pulled through, and `sandbox_repo_allowed`
-/// filters the repos a sandbox image may add.
+/// registry host, the only one a sandbox image is pulled through, and `repo_allowed`
+/// filters the repos any image resource may add.
 fn extract_repo_names(
     stack: &alien_core::Stack,
     proxy_host: &str,
-    sandbox_repo_allowed: &dyn Fn(&str) -> bool,
+    repo_allowed: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
-    use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{
-        classify_azure_sandbox_image, AzureSandboxImage, Container, ContainerCode, Daemon,
-        DaemonCode, Sandbox, SandboxCode, Worker, WorkerCode,
-    };
-
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
-        let mut from_sandbox = false;
         let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
                 WorkerCode::Image { image } => Some(image.as_str()),
@@ -1484,7 +1520,6 @@ fn extract_repo_names(
                             .split_once('/')
                             .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host)) =>
                     {
-                        from_sandbox = true;
                         Some(reference)
                     }
                     _ => None,
@@ -1499,7 +1534,7 @@ fn extract_repo_names(
             if let Some(stripped) = strip_registry_host(image_uri) {
                 let repo = stripped.split(':').next().unwrap_or(&stripped);
                 let repo = repo.split('@').next().unwrap_or(repo);
-                if from_sandbox && !sandbox_repo_allowed(repo) {
+                if !repo_allowed(repo) {
                     continue;
                 }
                 if !repo.is_empty() && !repos.contains(&repo.to_string()) {
@@ -2274,18 +2309,18 @@ mod tests {
             RegistryRoutingTable::new(vec![registry_route("artifacts", Platform::Aws, "aws")])
                 .unwrap();
 
-        assert!(sandbox_repo_in_own_project(
+        assert!(image_repo_in_own_project(
             &routes,
             "artifacts/prj_a",
             "prj_a"
         ));
-        assert!(!sandbox_repo_in_own_project(
+        assert!(!image_repo_in_own_project(
             &routes,
             "artifacts/prj_b",
             "prj_a"
         ));
-        assert!(!sandbox_repo_in_own_project(&routes, "elsewhere", "prj_a"));
-        assert!(sandbox_repo_in_own_project(&routes, "elsewhere", "default"));
+        assert!(!image_repo_in_own_project(&routes, "elsewhere", "prj_a"));
+        assert!(image_repo_in_own_project(&routes, "elsewhere", "default"));
     }
 
     #[test]

@@ -2,6 +2,7 @@ pub mod auth_validator;
 pub mod bundle_sources;
 pub mod credential_resolver;
 pub mod deployment_store;
+pub mod project_store;
 pub mod release_channel_store;
 pub mod release_store;
 pub mod server_bindings;
@@ -33,6 +34,7 @@ pub use deployment_store::{
     ReconcileInputBuilder, ReconcileOutcome, SuppliedStacks, UnacquiredDeployment,
     UpdateImportedDeploymentParams,
 };
+pub use project_store::{ProjectRecord, ProjectStore};
 pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };

@@ -20,6 +20,7 @@ pub struct AlienManagerBuilder {
     telemetry_backend: Option<Arc<dyn TelemetryBackend>>,
     auth_validator: Option<Arc<dyn AuthValidator>>,
     authz: Option<Arc<dyn Authz>>,
+    project_store: Option<Arc<dyn ProjectStore>>,
     server_bindings: Option<ServerBindings>,
     extra_routes: Option<axum::Router<crate::routes::AppState>>,
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
@@ -73,6 +74,7 @@ impl AlienManagerBuilder {
             telemetry_backend: None,
             auth_validator: None,
             authz: None,
+            project_store: None,
             server_bindings: None,
             extra_routes: None,
             platform_routes: None,
@@ -172,6 +174,13 @@ impl AlienManagerBuilder {
     /// [`crate::providers::OssAuthz`].
     pub fn authz(mut self, authz: Arc<dyn Authz>) -> Self {
         self.authz = Some(authz);
+        self
+    }
+
+    /// Inject the project lookup the registry proxy authorizes image access
+    /// with. Default: [`crate::providers::SingleWorkspaceProjects`].
+    pub fn project_store(mut self, store: Arc<dyn ProjectStore>) -> Self {
+        self.project_store = Some(store);
         self
     }
 
@@ -723,6 +732,9 @@ impl AlienManagerBuilder {
         let authz: Arc<dyn Authz> = self
             .authz
             .unwrap_or_else(|| Arc::new(crate::providers::OssAuthz));
+        let project_store: Arc<dyn ProjectStore> = self
+            .project_store
+            .unwrap_or_else(|| Arc::new(crate::providers::SingleWorkspaceProjects));
         let server_bindings = Arc::new(require_provider!(self.server_bindings, "server_bindings"));
         let log_buffer = self
             .log_buffer
@@ -734,6 +746,7 @@ impl AlienManagerBuilder {
             config,
             deployment_store,
             release_store,
+            project_store,
             token_store,
             auth_validator,
             authz,
@@ -835,6 +848,7 @@ async fn finalize(
     config: Arc<ManagerConfig>,
     deployment_store: Arc<dyn DeploymentStore>,
     release_store: Arc<dyn ReleaseStore>,
+    project_store: Arc<dyn ProjectStore>,
     token_store: Arc<dyn TokenStore>,
     auth_validator: Arc<dyn AuthValidator>,
     authz: Arc<dyn Authz>,
@@ -869,6 +883,7 @@ async fn finalize(
     let app_state = crate::routes::AppState {
         deployment_store: deployment_store.clone(),
         release_store: release_store.clone(),
+        project_store,
         token_store: token_store.clone(),
         auth_validator: auth_validator.clone(),
         authz: authz.clone(),

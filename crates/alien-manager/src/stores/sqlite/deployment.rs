@@ -1684,6 +1684,32 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
+    /// Acquire clears `retry_requested` on the row it locks, so put it back in
+    /// the same statement that releases the lock: the lease is never released
+    /// without the retry request, or the other way around.
+    async fn release_unused_acquisition(
+        &self,
+        _caller: &crate::auth::Subject,
+        acquired: &crate::traits::deployment_store::AcquiredDeployment,
+        session: &str,
+    ) -> Result<(), AlienError> {
+        let sql = {
+            let mut query = Query::update();
+            query
+                .table(Deployments::Table)
+                .value(Deployments::LockedBy, Option::<String>::None)
+                .value(Deployments::LockedAt, Option::<String>::None);
+            if acquired.deployment.retry_requested {
+                query.value(Deployments::RetryRequested, 1i64);
+            }
+            query
+                .and_where(Expr::col(Deployments::Id).eq(acquired.deployment.id.as_str()))
+                .and_where(Expr::col(Deployments::LockedBy).eq(session))
+                .to_string(SqliteQueryBuilder)
+        };
+        self.db.execute(&sql).await
+    }
+
     async fn renew_lease(
         &self,
         _caller: &crate::auth::Subject,

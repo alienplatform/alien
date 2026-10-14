@@ -36,6 +36,7 @@ use alien_deployment::manager_api_transport::{
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
+use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::types::DeploymentUpdateOperationStatus;
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt as _;
@@ -571,7 +572,7 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
 
-    let http_client = reqwest::Client::builder()
+    let http_client = crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -1274,7 +1275,7 @@ fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
 
-    reqwest::Client::builder()
+    crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -1983,25 +1984,37 @@ async fn deploy_task_with_environment(
         ExistingDeploymentPlan::InitialSetup | ExistingDeploymentPlan::SetupUpdate { .. }
     );
 
-    // A local retry flag does not make a failed platform operation claimable.
+    // A local retry flag does not make a failed deployment claimable.
     // Validate the resume configuration first, then requeue with the same
     // authority that will acquire execution. The API rejects a live contender.
-    if ctx.is_platform()
-        && matches!(
-            current.status,
-            DeploymentStatus::PreflightsFailed
-                | DeploymentStatus::InitialSetupFailed
-                | DeploymentStatus::ProvisioningFailed
-                | DeploymentStatus::UpdateFailed
-                | DeploymentStatus::RefreshFailed
-        )
-    {
-        request_deployment_retry(
-            &base_url,
-            setup_token.as_deref().unwrap_or(deployment_token),
-            &tracked_deployment.deployment_id,
-        )
-        .await?;
+    if matches!(
+        current.status,
+        DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+    ) {
+        if ctx.is_platform() {
+            request_deployment_retry(
+                &base_url,
+                setup_token.as_deref().unwrap_or(deployment_token),
+                &tracked_deployment.deployment_id,
+            )
+            .await?;
+        } else {
+            lock_client
+                .retry_deployment()
+                .id(&tracked_deployment.deployment_id)
+                .send()
+                .await
+                .into_sdk_error()
+                .await
+                .context(ErrorData::ApiRequestFailed {
+                    message: "retrying deployment before resuming setup".to_string(),
+                    url: None,
+                })?;
+        }
     }
     steps.activate(2, Some("Waiting for execution ownership".to_string()));
 
@@ -3164,6 +3177,142 @@ mod tests {
             "desiredReleaseId": null,
             "updateState": {"active": null, "next": null, "latest": null},
         })
+    }
+
+    #[tokio::test]
+    async fn standalone_failed_resume_retries_before_acquiring_and_rejects_invalid_settings() {
+        for invalid_settings in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured = requests.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0u8; 4096];
+                    loop {
+                        let size = stream.read(&mut buffer).await.unwrap();
+                        assert!(size > 0);
+                        bytes.extend_from_slice(&buffer[..size]);
+                        if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let header = String::from_utf8_lossy(&bytes[..end]);
+                            let length = header
+                                .lines()
+                                .find_map(|line| {
+                                    let (key, value) = line.split_once(':')?;
+                                    key.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().unwrap())
+                                })
+                                .unwrap_or(0);
+                            if bytes.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let request = String::from_utf8(bytes).unwrap();
+                    let path = request
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap();
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer test-retry-token"));
+                    captured.lock().unwrap().push(path.to_string());
+                    let (status, body) = if path.ends_with("/retry") {
+                        ("200 OK", serde_json::json!({"success": true}).to_string())
+                    } else if path == "/v1/sync/acquire" {
+                        assert!(
+                            captured
+                                .lock()
+                                .unwrap()
+                                .iter()
+                                .any(|path| path.ends_with("/retry")),
+                            "retry must precede acquire"
+                        );
+                        (
+                            "409 Conflict",
+                            serde_json::to_string(&acquisition_miss("statusMismatch")).unwrap(),
+                        )
+                    } else if path == "/v1/releases/rel_retry" {
+                        ("200 OK", serde_json::json!({"stack": {"local": {"id": "retry", "resources": {}}}}).to_string())
+                    } else {
+                        assert_eq!(path, "/v1/deployments/dep_retry");
+                        let mut deployment = completed_deployment_response();
+                        deployment["id"] = serde_json::json!("dep_retry");
+                        deployment["platform"] = serde_json::json!("local");
+                        deployment["status"] = serde_json::json!("preflights-failed");
+                        deployment["currentReleaseId"] = serde_json::Value::Null;
+                        deployment["desiredReleaseId"] = serde_json::json!("rel_retry");
+                        deployment["stackSettings"] =
+                            serde_json::json!({"deploymentModel": "push"});
+                        ("200 OK", deployment.to_string())
+                    };
+                    let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            let name = format!("retry-regression-{}", Uuid::new_v4());
+            let mut tracker = DeploymentTracker::new().unwrap();
+            tracker
+                .track(
+                    name.clone(),
+                    "test-retry-token".to_string(),
+                    ValidatedDeploymentInfo {
+                        deployment_id: "dep_retry".to_string(),
+                        workspace_id: "default".to_string(),
+                        project_id: "default".to_string(),
+                    },
+                )
+                .unwrap();
+            let mut args = vec!["deploy", "--name", name.as_str(), "--platform", "local"];
+            if invalid_settings {
+                args.extend(["--public-subdomain", "changed"]);
+            }
+            let result = timeout(
+                Duration::from_secs(10),
+                deploy_task_with_environment(
+                    DeployArgs::try_parse_from(args).unwrap(),
+                    ExecutionMode::Standalone {
+                        server_url: base_url,
+                        api_key: "test-retry-token".to_string(),
+                    },
+                    &HashMap::new(),
+                ),
+            )
+            .await;
+            tracker.remove_deployment(&name).unwrap();
+            server.abort();
+            let error = result
+                .expect("resume should finish")
+                .expect_err("injected refusal or invalid settings");
+            let requests = requests.lock().unwrap();
+            if invalid_settings {
+                assert_eq!(error.code, "VALIDATION_ERROR");
+                assert!(
+                    requests.is_empty(),
+                    "invalid resume settings must not send retry or acquire"
+                );
+            } else {
+                assert_eq!(
+                    error.code, "CONFIGURATION_ERROR",
+                    "{error:?}; requests={requests:?}"
+                );
+                assert!(error.message.contains("setup deployment lock"), "{error:?}");
+                assert_eq!(
+                    requests.as_slice(),
+                    [
+                        "/v1/deployments/dep_retry",
+                        "/v1/releases/rel_retry",
+                        "/v1/deployments/dep_retry/retry",
+                        "/v1/sync/acquire"
+                    ]
+                );
+            }
+        }
     }
 
     #[tokio::test]

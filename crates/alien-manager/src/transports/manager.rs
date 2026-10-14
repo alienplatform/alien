@@ -68,7 +68,7 @@ impl DeploymentLoopTransport for ManagerTransport {
         &self,
         deployment_id: &str,
         state: &DeploymentState,
-        _config: &alien_core::DeploymentConfig,
+        config: &alien_core::DeploymentConfig,
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
@@ -78,14 +78,15 @@ impl DeploymentLoopTransport for ManagerTransport {
         //    This must happen before persisting so the `registry_access_granted`
         //    flag is included in the persisted state.
         let mut granted_state = state.clone();
-        crate::registry_access::reconcile_registry_access(
-            &self.bindings_provider,
-            &self.target_bindings_providers,
-            deployment_id,
-            &self.project_id,
-            &mut granted_state,
-        )
-        .await;
+        crate::registry_access::reconcile_registry_access_with_proxy()
+            .bindings_provider(&self.bindings_provider)
+            .target_bindings_providers(&self.target_bindings_providers)
+            .deployment_id(deployment_id)
+            .project_id(&self.project_id)
+            .state(&mut granted_state)
+            .maybe_proxy_url(config.manager_url.as_deref())
+            .call()
+            .await;
 
         // 2. Revoke a deleted AWS deployment's access before persisting the state that hands it
         //    to setup teardown. A denied revoke comes back as a failed delete to persist instead.

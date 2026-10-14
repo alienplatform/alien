@@ -1699,13 +1699,15 @@ fn add_container_resource_parameters(
         .resources
         .values()
         .filter_map(|entry| entry.config.downcast_ref::<Container>())
-        .filter(|container| container.resource_choices.is_some())
+        .filter(|container| {
+            container.resource_choices.is_some() || container.persistent_storage.is_some()
+        })
         .collect();
     containers.sort_by(|a, b| a.id.cmp(&b.id));
     for container in containers {
-        let choices = container.resource_choices.as_ref().expect("filtered above");
+        let choices = container.resource_choices.clone().unwrap_or_default();
         let prefix = format!("Container{}", pascal_identifier(&container.id));
-        for suffix in ["Cpu", "Memory"] {
+        for suffix in ["Cpu", "Memory", "VolumeSizeGib"] {
             if template
                 .parameters
                 .contains_key(&format!("{prefix}{suffix}"))
@@ -1715,6 +1717,26 @@ fn add_container_resource_parameters(
                     reason: format!("Container '{}' produces a duplicate CloudFormation parameter name; use distinct alphanumeric container names", container.id),
                 }));
             }
+        }
+        if let Some(storage) = &container.persistent_storage {
+            let size = alien_core::container_resources::parse_volume_size_gib(&storage.size)
+                .map_err(|message| {
+                    AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
+                        reason: message,
+                        dimension: "volumeSizeGib".into(),
+                        resource_id: container.id.clone(),
+                    })
+                })?;
+            let mut parameter = number_parameter(
+                "Persistent volume capacity per replica, in GiB. Existing volumes can only grow.",
+                size,
+                None,
+            );
+            parameter.min_value = Some(CfExpression::from(1u32));
+            parameter.max_value = Some(CfExpression::from(65536u32));
+            template
+                .parameters
+                .insert(format!("{prefix}VolumeSizeGib"), parameter);
         }
         if let Some(range) = choices.cpu.as_ref() {
             let mut parameter =
@@ -2229,11 +2251,15 @@ fn compute_settings_expression(
         else {
             continue;
         };
-        let Some(choices) = &container.resource_choices else {
-            continue;
-        };
+        let choices = container.resource_choices.clone().unwrap_or_default();
         let prefix = format!("Container{}", pascal_identifier(id));
         let mut allocation = Vec::new();
+        if container.persistent_storage.is_some() {
+            allocation.push((
+                "volumeSizeGib",
+                CfExpression::ref_(format!("{prefix}VolumeSizeGib")),
+            ));
+        }
         if choices.cpu.is_some() {
             allocation.push(("cpu", CfExpression::ref_(format!("{prefix}Cpu"))));
         }

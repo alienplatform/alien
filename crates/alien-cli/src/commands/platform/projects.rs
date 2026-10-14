@@ -1671,7 +1671,7 @@ mod tests {
         };
         capabilities_task(
             &ExecutionMode::Dev { port: 0 },
-            &crate::auth::AuthHttp::new_unauthenticated(base_url),
+            &crate::auth::AuthHttp::new_unauthenticated(base_url).expect("client"),
             None,
             PROJECT_ID,
             command,

@@ -1179,7 +1179,7 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
         .as_ref()
         .and_then(|metadata| metadata.prepared_stack.as_ref())
         .unwrap()
-        .setup_owned_digest();
+        .setup_update_digest();
     state
         .runtime_metadata
         .as_mut()
@@ -1469,7 +1469,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         .as_ref()
         .and_then(|metadata| metadata.prepared_stack.as_ref())
         .expect("running deployment should retain its prepared stack")
-        .setup_owned_digest();
+        .setup_update_digest();
     state
         .runtime_metadata
         .as_mut()

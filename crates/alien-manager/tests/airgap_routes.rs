@@ -198,6 +198,7 @@ async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
     let state = AppState {
         deployment_store,
         release_store,
+        project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
         token_store: token_store.clone(),
         auth_validator: Arc::new(
             alien_manager::providers::token_db_validator::TokenDbValidator::new(token_store),

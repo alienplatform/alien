@@ -205,6 +205,33 @@ pub struct ContainerResourceSelection {
     /// Memory allocation, using binary units such as Mi or Gi.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
+    /// Persistent volume capacity per replica, in whole GiB. Omitted values
+    /// use the release default. Existing volumes can only grow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_selected_volume_size")]
+    pub volume_size_gib: Option<u32>,
+}
+
+fn deserialize_selected_volume_size<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u32>, D::Error> {
+    // CloudFormation Number references arrive as strings in setup import JSON.
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|number| u32::try_from(number).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                serde::de::Error::custom("volumeSizeGib must be a whole positive capacity")
+            }),
+        Some(serde_json::Value::String(number)) => {
+            number.parse().map(Some).map_err(serde::de::Error::custom)
+        }
+        Some(_) => Err(serde::de::Error::custom(
+            "volumeSizeGib must be a whole positive capacity",
+        )),
+    }
 }
 
 fn deserialize_selected_cpu<'de, D: serde::Deserializer<'de>>(
