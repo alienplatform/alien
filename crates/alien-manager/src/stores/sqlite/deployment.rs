@@ -1196,15 +1196,37 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<(), AlienError> {
         // Set desired_release_id on all deployments that are in a state that can receive updates
         let eligible_statuses = ["running", "update-failed", "refresh-failed"];
+        // A new local session must retry the release it just built, not the failed
+        // first release. Keep the failed phase so the explicit retry resumes safely.
+        let local_startup_failures = [
+            "preflights-failed",
+            "initial-setup-failed",
+            "provisioning-failed",
+        ];
 
         let sql = {
             let mut query = Query::update();
             query
                 .table(Deployments::Table)
                 .value(Deployments::DesiredReleaseId, release_id)
-                .value(Deployments::Status, "update-pending")
+                .value(
+                    Deployments::Status,
+                    Expr::case(
+                        Expr::col(Deployments::Status).is_in(local_startup_failures),
+                        Expr::col(Deployments::Status),
+                    )
+                    .finally("update-pending"),
+                )
                 .value(Deployments::NextStepAfter, Option::<String>::None)
-                .and_where(Expr::col(Deployments::Status).is_in(eligible_statuses));
+                .cond_where(
+                    sea_query::Cond::any()
+                        .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
+                        .add(
+                            sea_query::Cond::all()
+                                .add(Expr::col(Deployments::Platform).eq(Platform::Local.as_str()))
+                                .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
+                        ),
+                );
 
             if let Some(p) = platform {
                 query.and_where(Expr::col(Deployments::Platform).eq(p.as_str()));

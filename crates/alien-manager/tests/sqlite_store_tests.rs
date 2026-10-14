@@ -566,52 +566,100 @@ async fn update_status() {
 }
 
 #[tokio::test]
-async fn set_desired_release() {
+async fn new_release_reaches_failed_local_startup_without_changing_its_retry_phase() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
-    let release_store = SqliteReleaseStore::new(db);
+    let releases = SqliteReleaseStore::new(db.clone());
     let group_id = create_test_group(&store).await;
-
-    // Create a deployment in "running" status (eligible for desired release)
-    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
-
-    // Must be in an eligible status: "running", "update-failed", or "refresh-failed"
-    // Use reconcile to set running, or we can just verify the SQL behavior
-    // For simplicity, set_redeploy to "update-pending" first, but set_desired_release
-    // only affects eligible statuses. Let's test set_deployment_desired_release instead.
-
-    // set_deployment_desired_release works on any deployment
-    let release = release_store
-        .create_release(
-            &test_subject(),
-            CreateReleaseParams {
-                project_id: "default".to_string(),
-                stacks: HashMap::from([(
-                    Platform::Local,
-                    alien_core::Stack::new("test-stack".to_string()).build(),
-                )]),
-                git_commit_sha: None,
-                git_commit_ref: None,
-                git_commit_message: None,
-            },
-        )
+    let mut ids = vec![];
+    for name in ["old", "new"] {
+        ids.push(
+            releases
+                .create_release(
+                    &test_subject(),
+                    CreateReleaseParams {
+                        project_id: "default".to_string(),
+                        stacks: HashMap::from([
+                            (Platform::Local, Stack::new(name.to_string()).build()),
+                            (Platform::Aws, Stack::new(name.to_string()).build()),
+                        ]),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    for (index, (platform, status, receives, expected)) in [
+        (
+            Platform::Local,
+            "provisioning-failed",
+            true,
+            "provisioning-failed",
+        ),
+        (
+            Platform::Local,
+            "preflights-failed",
+            true,
+            "preflights-failed",
+        ),
+        (
+            Platform::Local,
+            "initial-setup-failed",
+            true,
+            "initial-setup-failed",
+        ),
+        (Platform::Local, "running", true, "update-pending"),
+        (Platform::Local, "update-failed", true, "update-pending"),
+        (Platform::Local, "refresh-failed", true, "update-pending"),
+        (
+            Platform::Aws,
+            "provisioning-failed",
+            false,
+            "provisioning-failed",
+        ),
+        (Platform::Aws, "running", true, "update-pending"),
+        (Platform::Local, "pending", false, "pending"),
+        (Platform::Local, "delete-failed", false, "delete-failed"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let deployment =
+            create_test_deployment(&store, &group_id, &format!("case-{index}"), platform).await;
+        store
+            .set_deployment_desired_release(&test_subject(), &deployment.id, &ids[0])
+            .await
+            .unwrap();
+        db.execute(&format!(
+            "UPDATE deployments SET status = '{status}' WHERE id = '{}'",
+            deployment.id
+        ))
         .await
         .unwrap();
-
-    store
-        .set_deployment_desired_release(&test_subject(), &dep.id, &release.id)
-        .await
-        .unwrap();
-
-    let fetched = store
-        .get_deployment(&test_subject(), &dep.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        fetched.desired_release_id.as_deref(),
-        Some(release.id.as_str())
-    );
+        store
+            .set_desired_release(&test_subject(), &ids[1], None)
+            .await
+            .unwrap();
+        let found = store
+            .get_deployment(&test_subject(), &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.status, expected, "{platform:?} {status}");
+        assert_eq!(
+            found.desired_release_id.as_deref(),
+            Some(ids[usize::from(receives)].as_str()),
+            "{platform:?} {status}"
+        );
+        assert!(
+            !found.retry_requested,
+            "release selection must not replace the explicit session retry"
+        );
+    }
 }
 
 #[tokio::test]
