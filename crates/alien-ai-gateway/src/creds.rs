@@ -413,7 +413,7 @@ enum BearerSource {
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Attaches an ambient bearer token — fetched and cached from the cloud metadata endpoint,
-/// or supplied directly (static / minted).
+/// or supplied directly.
 pub struct BearerTokenCred {
     source: BearerSource,
     client: reqwest::Client,
