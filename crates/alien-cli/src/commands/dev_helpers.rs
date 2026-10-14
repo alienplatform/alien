@@ -1525,6 +1525,73 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn restarted_failed_session_requests_retry_only_for_its_named_deployment() {
+        type StateData = Arc<Mutex<(String, bool, Vec<String>)>>;
+        async fn groups() -> Json<serde_json::Value> {
+            Json(
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+                "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
+            )
+        }
+        async fn list(State(state): State<StateData>) -> Json<serde_json::Value> {
+            let state = state.lock().unwrap();
+            let deployment = |id: &str, name: &str| {
+                serde_json::json!({
+                    "id":id, "name":name, "platform":"local", "status":state.0, "retryRequested":state.1,
+                    "deploymentGroupId":"dg_local", "deploymentProtocolVersion":1, "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
+                })
+            };
+            Json(
+                serde_json::json!({"items":[deployment("dep_other", "other"), deployment("dep_selected", "api")]}),
+            )
+        }
+        async fn retry(
+            State(state): State<StateData>,
+            AxumPath(id): AxumPath<String>,
+        ) -> Json<serde_json::Value> {
+            state.lock().unwrap().2.push(id);
+            Json(serde_json::json!({"success":true}))
+        }
+        let state: StateData = Arc::new(Mutex::new(("pending".to_string(), false, vec![])));
+        let app = Router::new()
+            .route("/v1/deployment-groups", get(groups))
+            .route("/v1/deployments", get(list))
+            .route("/v1/deployments/{id}/retry", post(retry))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (status, requested, expected) in [
+            ("provisioning-failed", false, 1),
+            ("initial-setup-failed", false, 1),
+            ("preflights-failed", false, 1),
+            ("update-failed", false, 1),
+            ("refresh-failed", false, 1),
+            ("provisioning-failed", true, 0),
+            ("running", false, 0),
+            ("pending", false, 0),
+            ("delete-failed", false, 0),
+        ] {
+            *state.lock().unwrap() = (status.to_string(), requested, vec![]);
+            assert_eq!(
+                prepare_dev_session_deployment("api", port, None)
+                    .await
+                    .unwrap(),
+                "dep_selected"
+            );
+            let state = state.lock().unwrap();
+            assert_eq!(
+                state.2.len(),
+                expected,
+                "status {status}, queued={requested}"
+            );
+            assert!(state.2.iter().all(|id| id == "dep_selected"));
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
     /// `alien dev deploy --input` reaches the dev manager with the create request; a rerun
     /// reuses the existing deployment, whose inputs were fixed at creation.
     #[tokio::test]
