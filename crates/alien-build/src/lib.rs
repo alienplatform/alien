@@ -2065,7 +2065,7 @@ async fn push_gcp_sandbox_image(
     };
     let image = gcp_sandbox_image::build_gcp_sandbox_image(
         resource_name,
-        &base,
+        base,
         base_uri,
         agent_image,
         protocol,

@@ -40,11 +40,11 @@ pub struct GcpSandboxImage {
 
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
-/// same image, read for its `/etc/passwd` and `/etc/group`. `resource_name` is the sandbox the
+/// same image, read for its `/etc/passwd` and `/etc/group` and dropped before the agent pull. `resource_name` is the sandbox the
 /// image is for, named in a build failure. `cache` holds the pulled blobs and the agent layer.
 pub async fn build_gcp_sandbox_image(
     resource_name: &str,
-    base: &Image,
+    base: Image,
     base_image: &str,
     agent_image: &str,
     protocol: ClientProtocol,
@@ -56,8 +56,10 @@ pub async fn build_gcp_sandbox_image(
         reason,
         build_output: None,
     };
-    let passwd = read_identity_file(base, "/etc/passwd", resource_name).await?;
-    let group = read_identity_file(base, "/etc/group", resource_name).await?;
+    let passwd = read_identity_file(&base, "/etc/passwd", resource_name).await?;
+    let group = read_identity_file(&base, "/etc/group", resource_name).await?;
+    // A pulled base holds a full archive on disk; only its identity files were needed.
+    drop(base);
 
     // The agent image is public, so no registry credential is sent to its registry.
     let pulling_agent = format!("Pulling the agent image {agent_image}");
@@ -365,7 +367,7 @@ mod tests {
         let protocol = ClientProtocol::HttpsExcept(vec![host.to_string()]);
         let layered = build_gcp_sandbox_image(
             "box",
-            &base,
+            base,
             &base_image,
             &agent_image,
             protocol.clone(),
@@ -615,7 +617,7 @@ mod tests {
     async fn layering_error(agent_image: &str, base_image: &str) -> AlienError<ErrorData> {
         build_gcp_sandbox_image(
             "box",
-            &local_base().await,
+            local_base().await,
             base_image,
             agent_image,
             ClientProtocol::Http,
@@ -817,5 +819,53 @@ mod tests {
         assert!(!is_missing_manifest(&pull_failed(
             OciDistributionError::ImageManifestNotFoundError("no linux/amd64 variant".to_string())
         )));
+    }
+
+    /// A pulled base is a full archive on disk, so it is dropped once its identity files are read
+    /// rather than held through the agent pull and the assembly.
+    #[tokio::test]
+    async fn the_base_archive_is_gone_before_the_agent_is_pulled() {
+        use std::io::Write;
+
+        let base = local_base().await;
+        let archive = base.path().to_path_buf();
+        assert!(archive.exists(), "the local base is an archive on disk");
+
+        // A registry that records whether the archive exists when the agent pull first connects,
+        // then answers every request with a missing manifest.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let (first_connect, archive_at_pull) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let body = r#"{"errors":[{"code":"MANIFEST_UNKNOWN","message":"","detail":null}]}"#;
+            for stream in listener.incoming() {
+                let _ = first_connect.send(archive.exists());
+                let Ok(mut stream) = stream else { continue };
+                let _ = stream.read(&mut [0u8; 8192]);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+
+        build_gcp_sandbox_image(
+            "box",
+            base,
+            "registry.example.com/proj/sandbox:base",
+            &format!("{address}/alien/agent:test"),
+            ClientProtocol::Http,
+            RegistryAuth::Anonymous,
+            default_cache(),
+        )
+        .await
+        .expect_err("the agent tag is missing");
+        assert_eq!(
+            archive_at_pull.try_recv(),
+            Ok(false),
+            "the base archive was deleted before the agent pull"
+        );
     }
 }
