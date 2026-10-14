@@ -18,7 +18,7 @@ utoipa = { workspace = true, optional = true }
 [features]
 default = []
 runtime-checks = []
-openapi = ["utoipa"]
+openapi = ["utoipa", "alien-core/openapi"]
 
 [dev-dependencies]
 tokio-test = "0.4"

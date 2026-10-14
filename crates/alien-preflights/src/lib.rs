@@ -4,6 +4,7 @@ pub mod compile_time;
 pub mod deployment_prerequisites;
 pub mod error;
 pub mod mutations;
+pub mod quotas;
 mod remote_storage;
 pub mod runner;
 pub mod runtime;
@@ -38,6 +39,9 @@ pub struct CheckResult {
     pub errors: Vec<String>,
     /// Warning messages (if any)
     pub warnings: Vec<String>,
+    /// Provider identities and observations for cloud quota checks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quota_results: Vec<quotas::QuotaResult>,
 }
 
 /// Machine-readable preflight status.
@@ -62,6 +66,7 @@ impl CheckResult {
             errors: Vec::new(),
             warnings: Vec::new(),
             check_description: None,
+            quota_results: Vec::new(),
         }
     }
 
@@ -74,6 +79,7 @@ impl CheckResult {
             errors: Vec::new(),
             warnings,
             check_description: None,
+            quota_results: Vec::new(),
         }
     }
 
@@ -86,6 +92,7 @@ impl CheckResult {
             errors,
             warnings: Vec::new(),
             check_description: None,
+            quota_results: Vec::new(),
         }
     }
 
@@ -98,6 +105,7 @@ impl CheckResult {
             errors,
             warnings,
             check_description: None,
+            quota_results: Vec::new(),
         }
     }
 
@@ -118,6 +126,7 @@ impl CheckResult {
 
     /// Merge another check result into this one
     pub fn merge(&mut self, other: CheckResult) {
+        self.quota_results.extend(other.quota_results);
         self.errors.extend(other.errors);
         self.warnings.extend(other.warnings);
         if !other.success {
