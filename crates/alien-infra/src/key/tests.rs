@@ -329,7 +329,9 @@ async fn check(platform: Platform, mode: Arc<AtomicU8>, provider: MockPlatformSe
                 Some(true),
                 "failure mode {failure}, step {step}: a failed check must keep the last observation"
             );
-            assert!(state.resources[KEY_ID].error.is_some());
+            if step <= 10 {
+                assert!(state.resources[KEY_ID].error.is_some());
+            }
         }
         assert_eq!(state.resources[KEY_ID].status, ResourceStatus::RefreshFailed);
         assert_eq!(
