@@ -1286,7 +1286,11 @@ async fn forward_to_app(
     app_port: u16,
     event: LambdaRequest,
 ) -> std::result::Result<reqwest::Response, reqwest::Error> {
-    let client = reqwest::Client::new();
+    // The caller owns redirect handling; following here changes the response
+    // and can forward application credentials to a different destination.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     let path_and_query = event
         .uri()
         .path_and_query()
@@ -1294,17 +1298,9 @@ async fn forward_to_app(
         .unwrap_or("/");
     let url = format!("http://127.0.0.1:{}{}", app_port, path_and_query);
 
-    let mut req = client.request(
-        reqwest::Method::from_bytes(event.method().as_str().as_bytes()).unwrap(),
-        &url,
-    );
-
-    // Copy headers
-    for (name, value) in event.headers() {
-        if let Ok(v) = value.to_str() {
-            req = req.header(name.as_str(), v);
-        }
-    }
+    let mut req = client
+        .request(event.method().clone(), &url)
+        .headers(event.headers().clone());
 
     // Copy body
     req = req.body(event_body_bytes(&event));
@@ -1565,6 +1561,34 @@ mod tests {
                 ("space".into(), "a b".into())
             ]
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn application_redirect_is_returned_without_following_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new()
+            .route(
+                "/redirect",
+                axum::routing::get(|| async {
+                    (
+                        axum::http::StatusCode::TEMPORARY_REDIRECT,
+                        [(axum::http::header::LOCATION, "/target")],
+                        "redirect body",
+                    )
+                }),
+            )
+            .route("/target", axum::routing::get(|| async { "unexpected" }));
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let request = LambdaRequest::builder()
+            .uri("/redirect")
+            .body(LambdaBody::Empty)
+            .unwrap();
+        let response = forward_to_app(port, request).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(response.headers()["location"], "/target");
+        assert_eq!(response.text().await.unwrap(), "redirect body");
         server.abort();
     }
 
