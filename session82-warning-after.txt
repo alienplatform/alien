@@ -1,0 +1,15 @@
+$ ALIEN_LOG=off alien build --config warning-alien.json --platforms aws
+
+Loading configuration
+Running preflights for q5-warning81 (aws)
+Warning (aws): Resources enabled by a stack input must be gated on a deployer-supplied boolean: Resource 'api' links 'store', which is enabled by input 'storeEnabled'. A deployer who says no drops the link too, so 'api' starts without ALIEN_STORE_BINDING. Make sure it runs without it. A deployment that already accepted the gate keeps the access that link granted 'api': on GCP that is a project-scoped role reaching every resource of its kind in the project, and declining does not revoke it. Gate both on 'storeEnabled' if the access must leave with the resource
+Building session-81-private for aws
+Output ./line-build
+> Success! Build complete.
+Stack q5-warning81
+Artifacts 0
+Duration 0.0s
+Resources
+  - store (kv)
+  - api (worker)
+Next run alien release to push images and create a release.

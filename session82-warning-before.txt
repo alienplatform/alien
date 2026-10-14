@@ -1,0 +1,14 @@
+$ ALIEN_LOG=off alien build --config warning-alien.json --platforms aws
+
+Loading configuration
+Running preflights for q5-warning81 (aws)
+Building session-81-private for aws
+Output ./before-build
+> Success! Build complete.
+Stack q5-warning81
+Artifacts 0
+Duration 0.0s
+Resources
+  - store (kv)
+  - api (worker)
+Next run alien release to push images and create a release.
