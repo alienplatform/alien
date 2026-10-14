@@ -109,12 +109,14 @@ pub struct KeptVolumeSize {
 }
 
 /// Raise volume sizes from a setup source (a CloudFormation parameter, a Terraform variable or a
-/// CLI config file) that are below the installed capacity, or below the size the deployment
-/// currently selects, to the larger of the two.
+/// CLI config file) that are below an installed volume's capacity, or below the size the
+/// deployment currently selects for it, to the larger of the two.
 ///
 /// Volumes only grow, and a compute update can grow one without the setup source learning about
-/// it, so a lower value from a setup source is stale, not a request to shrink. Returns the raised
-/// selections so callers can tell the user which values their setup source should be updated to.
+/// it, so a lower value from a setup source is stale, not a request to shrink. A container with
+/// no installed volume is left alone: before anything is installed a smaller value is a real
+/// correction. Returns the raised selections so callers can tell the user which values their
+/// setup source should be updated to.
 pub fn keep_volume_sizes_over_setup_source(
     requested: &mut ComputeSettings,
     installed: Option<&StackState>,
@@ -128,15 +130,15 @@ pub fn keep_volume_sizes_over_setup_source(
         let Some(requested_gib) = selection.volume_size_gib else {
             continue;
         };
-        let floor = installed
-            .and_then(|state| installed_volume_size_gib(state, &id))
-            .max(current.and_then(|current| {
-                current
-                    .containers
-                    .get(&id)
-                    .and_then(|selection| selection.volume_size_gib)
-            }));
-        if let Some(kept_gib) = floor.filter(|floor| requested_gib < *floor) {
+        let Some(installed_gib) = installed.and_then(|state| installed_volume_size_gib(state, &id))
+        else {
+            continue;
+        };
+        let chosen_gib = current
+            .and_then(|current| current.containers.get(&id))
+            .and_then(|selection| selection.volume_size_gib);
+        let kept_gib = chosen_gib.map_or(installed_gib, |chosen| chosen.max(installed_gib));
+        if requested_gib < kept_gib {
             selection.volume_size_gib = Some(kept_gib);
             kept.push(KeptVolumeSize {
                 container_id: id,

@@ -1623,6 +1623,24 @@ mod tests {
         );
         assert_eq!(kept[0].kept_gib, 40);
         assert_eq!(stale.containers["api"].volume_size_gib, Some(40));
+
+        // Before anything is installed (a first install whose preflights failed), a smaller
+        // value is a correction of the saved choice and is kept as asked.
+        let mut correction: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 20}}
+        }))
+        .unwrap();
+        for nothing_installed in [None, Some(&StackState::new(Platform::Aws))] {
+            assert!(
+                crate::container_resources::keep_volume_sizes_over_setup_source(
+                    &mut correction,
+                    nothing_installed,
+                    Some(&chosen),
+                )
+                .is_empty()
+            );
+            assert_eq!(correction.containers["api"].volume_size_gib, Some(20));
+        }
     }
 
     #[test]
