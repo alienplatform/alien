@@ -1958,6 +1958,55 @@ mod tests {
                 .await
                 .unwrap();
 
+            // Leaving it alone does not hold back other work: a deployment that
+            // arrives later is acquired on the next tick.
+            let newcomer = store
+                .create_deployment(
+                    &caller,
+                    CreateDeploymentParams {
+                        name: "newcomer".to_string(),
+                        deployment_group_id: "dg_test".to_string(),
+                        platform: Platform::Aws,
+                        deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings {
+                            deployment_model: alien_core::DeploymentModel::Push,
+                            ..Default::default()
+                        },
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            db.execute(&format!(
+                "UPDATE deployments SET desired_release_id = '{}' WHERE id = '{}'",
+                release.id, newcomer.id
+            ))
+            .await
+            .unwrap();
+            let parked_writes = row_writes().await;
+            runner.tick().await;
+            assert_eq!(
+                credentials.visits.lock().unwrap()[1..],
+                [newcomer.id.clone()],
+                "{status}: the newcomer is acquired and the waiting deployment is not"
+            );
+            let parked_row = store
+                .get_deployment(&caller, &deployment.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(parked_row.status, status);
+            assert!(
+                row_writes().await > parked_writes,
+                "{status}: the newcomer was leased"
+            );
+
             // The wait ends when its status changes (to another status these
             // credentials cannot provision either)...
             let other_status = if status == "pending" {
@@ -1972,9 +2021,10 @@ mod tests {
             .await
             .unwrap();
             runner.tick().await;
-            assert_eq!(visits(), 2, "{status}: a status change ends the wait");
+            assert_eq!(visits(), 3, "{status}: a status change ends the wait");
+            assert_eq!(credentials.visits.lock().unwrap()[2], deployment.id);
             runner.tick().await;
-            assert_eq!(visits(), 2, "{status}: the new status waits again");
+            assert_eq!(visits(), 3, "{status}: the new status waits again");
 
             // ...or when the recheck time passes.
             for entry in runner
@@ -1986,7 +2036,7 @@ mod tests {
                 entry.recheck_after = chrono::Utc::now() - chrono::Duration::seconds(1);
             }
             runner.tick().await;
-            assert_eq!(visits(), 3, "{status}: an expired wait is rechecked");
+            assert_eq!(visits(), 5, "{status}: expired waits are rechecked");
         }
     }
 
