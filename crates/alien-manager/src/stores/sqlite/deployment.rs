@@ -1136,7 +1136,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_where(Expr::col(Deployments::Id).eq(id))
             .and_where(Expr::col(Deployments::Platform).eq(deployment.platform.as_str()))
             .and_where(Expr::col(Deployments::LockedBy).is_null())
-            .and_where(Expr::col(Deployments::Status).is_in(["running", "preflights-failed"]))
+            .and_where(Expr::col(Deployments::Status).is_in([
+                "running",
+                "preflights-failed",
+                "update-failed",
+            ]))
             .to_string(SqliteQueryBuilder);
         Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
     }
@@ -2069,7 +2073,8 @@ mod gcp_project_consumer_tests {
             ("update-pending", false, false),
             ("provisioning", false, false),
             ("updating", false, false),
-            ("update-failed", false, false),
+            ("update-failed", false, true),
+            ("update-failed", true, false),
             ("deleting", false, false),
             ("deleted", false, false),
         ]

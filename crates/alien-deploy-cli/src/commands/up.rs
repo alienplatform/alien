@@ -1700,32 +1700,37 @@ mod tests {
 
     #[tokio::test]
     async fn standalone_override_command_saves_clears_and_stops_on_refusal() {
-        for (clear, response_status, change_compute, failed, same) in [
-            (false, 204, false, false, false),
-            (true, 204, false, false, false),
-            (false, 409, false, false, false),
-            (false, 403, false, false, false),
-            (false, 404, false, false, false),
-            (false, 204, true, false, false),
-            (false, 204, false, true, false),
-            (false, 409, false, true, false),
-            (false, 204, false, false, true),
-            (false, 204, false, true, true),
-            (false, 204, true, false, true),
+        for (clear, response_status, change_compute, status, same) in [
+            (false, 204, false, "running", false),
+            (true, 204, false, "running", false),
+            (false, 409, false, "running", false),
+            (false, 403, false, "running", false),
+            (false, 404, false, "running", false),
+            (false, 204, true, "running", false),
+            (false, 204, false, "preflights-failed", false),
+            (false, 409, false, "preflights-failed", false),
+            (false, 204, false, "running", true),
+            (false, 204, false, "preflights-failed", true),
+            (false, 204, true, "running", true),
+            (false, 204, false, "update-failed", false),
+            (true, 204, false, "update-failed", false),
+            (false, 409, false, "update-failed", false),
+            (false, 204, false, "update-failed", true),
         ] {
+            let failed = status != "running";
             let server = httpmock::MockServer::start_async().await;
             let name = format!("standalone-override-{}", uuid::Uuid::new_v4());
             let id = "dep_demo";
             let mut body = installed_deployment("running", None);
             body["id"] = serde_json::json!(id);
             body["platform"] = serde_json::json!("aws");
-            body["status"] = serde_json::json!(if failed {
-                "preflights-failed"
-            } else {
-                "running"
-            });
+            body["status"] = serde_json::json!(status);
             if failed {
-                body["currentReleaseId"] = serde_json::Value::Null;
+                body["currentReleaseId"] = if status == "update-failed" {
+                    serde_json::json!("rel_demo")
+                } else {
+                    serde_json::Value::Null
+                };
                 body["desiredReleaseId"] = serde_json::json!("rel_demo");
             }
             body["stackSettings"] = serde_json::json!({"compute": {
@@ -3392,7 +3397,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     }
     if !hosted_platform
         && requested_overrides.is_some()
-        && current_deployment.status == "preflights-failed"
+        && matches!(
+            current_deployment.status.as_str(),
+            "preflights-failed" | "update-failed"
+        )
     {
         // Saving does not schedule execution. An explicit deploy must
         // request the retry only after the setting was accepted.
