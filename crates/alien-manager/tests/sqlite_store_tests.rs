@@ -566,6 +566,77 @@ async fn update_status() {
 }
 
 #[tokio::test]
+async fn running_reconcile_cannot_erase_a_new_release_request() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let releases = SqliteReleaseStore::new(db);
+    let group = create_test_group(&store).await;
+    let mut ids = Vec::new();
+    for name in ["old", "new"] {
+        ids.push(
+            releases
+                .create_release(
+                    &test_subject(),
+                    CreateReleaseParams {
+                        project_id: "default".to_string(),
+                        stacks: HashMap::from([(
+                            Platform::Local,
+                            Stack::new(name.to_string()).build(),
+                        )]),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    let deployment = create_test_deployment(&store, &group, "release-race", Platform::Local).await;
+    let mut old = test_reconcile_data(&deployment.id, "heartbeat", DeploymentStatus::Running, None);
+    old.state.platform = Platform::Local;
+    old.state.current_release = Some(alien_core::ReleaseInfo {
+        release_id: Some(ids[0].clone()),
+        version: None,
+        description: None,
+        stack: Stack::new("old".to_string()).build(),
+    });
+    store.reconcile(&test_subject(), old.clone()).await.unwrap();
+    // A heartbeat already holds the old Running state when a release arrives.
+    store
+        .set_desired_release(&test_subject(), &ids[1], None)
+        .await
+        .unwrap();
+    store.reconcile(&test_subject(), old.clone()).await.unwrap();
+    let pending = store
+        .get_deployment(&test_subject(), &deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.status, "update-pending");
+    assert_eq!(pending.desired_release_id.as_deref(), Some(ids[1].as_str()));
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "update",
+            &DeploymentFilter {
+                deployment_ids: Some(vec![deployment.id.clone()]),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1, "the update must still be scheduled");
+    // The real update can complete; preserving the request must not trap Running.
+    old.state.current_release.as_mut().unwrap().release_id = Some(ids[1].clone());
+    let ready = store.reconcile(&test_subject(), old).await.unwrap().record;
+    assert_eq!(ready.status, "running");
+    assert!(ready.desired_release_id.is_none());
+}
+
+#[tokio::test]
 async fn new_release_reaches_failed_local_startup_without_changing_its_retry_phase() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());

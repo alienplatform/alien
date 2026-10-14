@@ -1444,7 +1444,9 @@ async fn run_dev_session(
                 eprint!("Building... ");
             }
         }
-        build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref()).await?;
+        let release_id =
+            build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
+                .await?;
         if !skip_build {
             steps.complete(0, None::<String>);
             if !is_tty {
@@ -1463,6 +1465,7 @@ async fn run_dev_session(
         let watch = watch_dev_deployments_until_ctrl_c(
             port,
             &deployment_name,
+            &release_id,
             status_file.as_ref(),
             &screen,
             &steps,
@@ -1614,6 +1617,7 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
 async fn watch_dev_deployments_until_ctrl_c(
     port: u16,
     primary_deployment_name: &str,
+    initial_release_id: &str,
     status_file: Option<&PathBuf>,
     screen: &DevCardScreen,
     steps: &FixedSteps,
@@ -1647,7 +1651,13 @@ async fn watch_dev_deployments_until_ctrl_c(
                     continue;
                 };
 
-                if primary_state.retry_requested {
+                // A resumed manager may still report the previously installed release.
+                // Startup is ready only after this session's release actually converges.
+                if primary_state.retry_requested
+                    || (!deploy_step_completed
+                        && primary_state.status == alien_core::DeploymentStatus::Running
+                        && primary_state.current_release_id.as_deref() != Some(initial_release_id))
+                {
                     if let Some(status_file) = status_file {
                         write_dev_status(status_file, &build_dev_status(port,
                             alien_core::DevStatusState::Initializing, None, None))?;

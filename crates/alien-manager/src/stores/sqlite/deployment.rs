@@ -1568,12 +1568,25 @@ impl DeploymentStore for SqliteDeploymentStore {
         let status_update: sea_query::SimpleExpr = if Self::is_delete_progress(state.status) {
             status_str.clone().into()
         } else {
-            Expr::case(
+            let mut status = Expr::case(
                 Expr::col(Deployments::Status).is_in(Self::RUNTIME_DELETE_STATUSES),
                 Expr::col(Deployments::Status),
-            )
-            .finally(status_str.clone())
-            .into()
+            );
+            if state.status == alien_core::DeploymentStatus::Running {
+                let newer_release = match current_release_id.as_deref() {
+                    Some(current) => Expr::col(Deployments::DesiredReleaseId).ne(current),
+                    None => Expr::col(Deployments::DesiredReleaseId).is_not_null(),
+                };
+                // A heartbeat can finish after a new release queues its update.
+                // Persist its resource observations without consuming that request.
+                status = status.case(
+                    Cond::all()
+                        .add(Expr::col(Deployments::Status).eq("update-pending"))
+                        .add(newer_release),
+                    "update-pending",
+                );
+            }
+            status.finally(status_str.clone()).into()
         };
         let deployment_completed = deployment
             .as_ref()
