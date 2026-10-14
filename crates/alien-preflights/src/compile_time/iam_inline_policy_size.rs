@@ -49,12 +49,19 @@ impl CompileTimeCheck for IamInlinePolicySizeCheck {
             if profile_name == "management" {
                 continue;
             }
-            let Some(references) = profile.0.get("*") else {
-                continue;
-            };
             let mut statements = Vec::new();
             let mut unresolved = Vec::new();
-            for reference in references {
+            // Resource controllers render and deduplicate these documents. A
+            // profile with only concrete grants still needs an incomplete-size
+            // warning; absence of a global document does not prove headroom.
+            if profile
+                .0
+                .iter()
+                .any(|(resource, grants)| resource != "*" && !grants.is_empty())
+            {
+                unresolved.push("resource-scoped grants".to_string());
+            }
+            for reference in profile.0.get("*").into_iter().flatten() {
                 let Some(set) =
                     reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 else {
@@ -238,6 +245,39 @@ mod tests {
             assert_eq!(result.errors.len(), usize::from(!success));
             assert_eq!(result.warnings.len(), 1);
             assert!(result.warnings[0].contains("dynamic"));
+        }
+    }
+
+    #[tokio::test]
+    async fn concrete_profile_grants_warn_with_or_without_global_grants() {
+        for global_count in [None, Some(10), Some(400)] {
+            let mut profile = PermissionProfile::new();
+            profile
+                .0
+                .insert("objects".into(), vec![grant("concrete", 400, false)]);
+            if let Some(count) = global_count {
+                profile
+                    .0
+                    .insert("*".into(), vec![grant("global", count, false)]);
+            }
+            let mut stack = Stack::new("q5-policy".into()).build();
+            stack.permissions.profiles.insert("reader".into(), profile);
+            let summary = crate::runner::PreflightRunner::new()
+                .run_compile_time_checks(&stack, Platform::Aws)
+                .await
+                .unwrap();
+            let result = summary
+                .results
+                .iter()
+                .find(|result| result.code.as_deref() == Some("IAM_INLINE_POLICY_SIZE"))
+                .unwrap();
+            let overflow = global_count == Some(400);
+            assert_eq!(result.success, !overflow);
+            assert_eq!(result.errors.len(), usize::from(overflow));
+            assert_eq!(result.warnings.len(), 1);
+            assert!(result.warnings[0].contains("reader"));
+            assert!(result.warnings[0].contains("resource-scoped grants"));
+            assert!(result.warnings[0].contains("passing does not establish total role headroom"));
         }
     }
 
