@@ -57,6 +57,9 @@ impl AwsServiceAccountController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        // Validate the complete stack policy, including injected grants, before
+        // creating a role that could otherwise be left behind by a size failure.
+        self.generate_stack_policy_document(config, ctx)?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
@@ -253,15 +256,20 @@ impl AwsServiceAccountController {
                 resource_id: Some(config.id.clone()),
             }));
         }
+        self.generate_stack_policy_document(config, ctx)?;
         let policy = Self::generate_assume_role_policy_for_service_account(config, ctx)?;
-        let client = ctx.service_provider.get_aws_iam_client(ctx.get_aws_config()?).await?;
+        let client = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
         let role_name = self.role_name.as_ref().unwrap();
-        client.update_assume_role_policy(role_name, &policy).await.context(
-            ErrorData::CloudPlatformError {
+        client
+            .update_assume_role_policy(role_name, &policy)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to update trust policy for IAM role '{role_name}'"),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
         self.assume_role_policy = Some(policy);
         Ok(HandlerAction::Continue {
             state: UpdatingStackPermissions,
@@ -607,6 +615,7 @@ impl AwsServiceAccountController {
                 resource_id: Some(config.id.clone()),
             }));
         }
+        let policy_document = self.generate_stack_policy_document(config, ctx)?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -616,9 +625,6 @@ impl AwsServiceAccountController {
             stack_permission_sets_count = config.stack_permission_sets.len(),
             "Applying stack-level permission sets to IAM role"
         );
-
-        // Generate combined policy document for all stack-level permission sets
-        let policy_document = self.generate_stack_policy_document(config, ctx)?;
 
         if !policy_document.is_empty() {
             client
@@ -1023,7 +1029,7 @@ impl AwsServiceAccountController {
             statement: all_statements,
         };
 
-        let policy_document = serde_json::to_string_pretty(&final_policy)
+        let policy_document = serde_json::to_string(&final_policy)
             .into_alien_error()
             .context(ErrorData::InfrastructureError {
                 message: "Failed to serialize IAM policy document".to_string(),
@@ -1031,12 +1037,21 @@ impl AwsServiceAccountController {
                 resource_id: Some(service_account.id.clone()),
             })?;
 
-        if policy_document.len() > 10_240 {
-            warn!(
-                sa_id = %service_account.id,
-                policy_size_bytes = policy_document.len(),
-                "IAM inline policy exceeds 10,240 byte limit — PutRolePolicy will fail"
-            );
+        // Compact JSON excludes formatting whitespace. IAM's limit is in
+        // characters, not UTF-8 bytes. This document alone can prove overflow;
+        // other inline policies on an existing role may consume more headroom.
+        let size = policy_document
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .count();
+        if size > 10_240 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "IAM role '{}' needs at least {size} inline policy characters; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html",
+                    get_aws_role_name(ctx.resource_prefix, &service_account.id)
+                ),
+                resource_id: Some(service_account.id.clone()),
+            }));
         }
 
         Ok(policy_document)
@@ -1187,6 +1202,84 @@ mod tests {
     };
     use alien_core::permissions::PermissionProfile;
     use std::sync::Arc;
+
+    fn policy_account(count: usize) -> ServiceAccount {
+        let resources: Vec<_> = (0..count)
+            .map(|index| format!("arn:aws:s3:::q5-policy-control/objects/object-{index:04}"))
+            .collect();
+        let set = serde_json::from_value(serde_json::json!({
+            "id": "q5-policy-read", "description": "Read explicit test objects",
+            "platforms": {"aws": [{"grant": {"actions": ["s3:GetObject"]}, "binding": {"stack": {"resources": resources}}}]}
+        })).unwrap();
+        ServiceAccount::new("execution-sa".into())
+            .stack_permission_set(set)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn oversized_inline_policy_rejects_create_and_update_before_iam() {
+        for state in [
+            AwsServiceAccountState::CreatingRole,
+            AwsServiceAccountState::UpdateStart,
+            AwsServiceAccountState::ApplyingStackPermissions,
+            AwsServiceAccountState::UpdatingStackPermissions,
+        ] {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(policy_account(400))
+                .previous_resource(policy_account(10))
+                .controller(AwsServiceAccountController {
+                    state,
+                    role_name: Some("q5-policy-execution-sa".into()),
+                    role_arn: Some("arn:aws:iam::123456789012:role/q5-policy-execution-sa".into()),
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            let error = executor.step().await.unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+            assert!(error.to_string().contains("10240"), "{error}");
+            assert!(error.to_string().contains("execution-sa"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn small_inline_policy_reaches_iam_with_the_rendered_document() {
+        let mut iam = alien_aws_clients::iam::MockIamApi::new();
+        iam.expect_put_role_policy()
+            .times(1)
+            .withf(|role, name, document| {
+                let policy: serde_json::Value = serde_json::from_str(document).unwrap();
+                role == "q5-policy-execution-sa"
+                    && name == MANAGED_POLICY_NAME
+                    && policy["Statement"][0]["Resource"].as_array().unwrap().len() == 10
+                    && document.chars().count() < 10240
+            })
+            .returning(|_, _, _| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .times(1)
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(policy_account(10))
+            .controller(AwsServiceAccountController {
+                state: AwsServiceAccountState::ApplyingStackPermissions,
+                role_name: Some("q5-policy-execution-sa".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+    }
 
     /// Creates the workload role through the real controller. The companion
     /// cloud runner verifies role chaining from legacy, isolated and unrelated
