@@ -532,10 +532,28 @@ mod tests {
         );
         let state = StackState::with_resource_prefix(Platform::Gcp, "q5-roles".into());
         let names = desired_custom_role_names(&stack, &state, &config()).unwrap();
-        assert_eq!(names.len(), 3); // Provisioning + one quota role shared by heartbeat/management.
+        // Storage signing, provisioning, project inventory, and one quota role
+        // shared by heartbeat/management.
+        assert_eq!(names.len(), 4);
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.ends_with("_service_account_quota_inventory"))
+                .count(),
+            1,
+            "project-inventory role missing from {names:?}"
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.ends_with("_service_account_quota_metadata"))
+                .count(),
+            1,
+            "shared quota-metadata role missing from {names:?}"
+        );
         assert!(names
             .iter()
-            .any(|name| name.ends_with("service_account_provision")));
+            .any(|name| name.contains("_service_account_provision_")));
         assert!(super::super::cloud_quotas::CloudQuotasCheck.should_run(&stack, Platform::Gcp));
         assert!(!super::super::cloud_quotas::CloudQuotasCheck.should_run(&stack, Platform::Local));
     }
