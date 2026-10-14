@@ -319,7 +319,7 @@ impl DeploymentLoop {
 
     /// One iteration of the deployment loop.
     async fn tick(&self) {
-        let filter = DeploymentFilter {
+        let mut filter = DeploymentFilter {
             statuses: Some(manager_candidate_statuses()),
             platforms: if self.config.targets.is_empty() {
                 None
@@ -335,6 +335,7 @@ impl DeploymentLoop {
         // no caller passthrough is available.
         let caller = Subject::system();
 
+        let skipped_ids = Mutex::new(Vec::new());
         for batch_index in 0..MAX_ACQUIRE_BATCHES_PER_TICK {
             let session = uuid::Uuid::new_v4().to_string();
 
@@ -361,15 +362,53 @@ impl DeploymentLoop {
                     );
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
-                            self.process_deployment(
-                                item.deployment,
-                                item.execution_claim,
-                                &session,
-                                ProcessOptions::deployment_tick(),
-                            )
-                            .await;
+                            let deployment_id = item.deployment.id.clone();
+                            let skipped = self
+                                .process_deployment(
+                                    item.deployment,
+                                    item.execution_claim,
+                                    &session,
+                                    ProcessOptions::deployment_tick(),
+                                )
+                                .await;
+                            if skipped {
+                                skipped_ids
+                                    .lock()
+                                    .expect("skipped IDs poisoned")
+                                    .push(deployment_id);
+                            }
                         })
                         .await;
+                    let skipped = skipped_ids.lock().expect("skipped IDs poisoned").clone();
+                    if !skipped.is_empty() {
+                        // Snapshot remaining candidates only after the first skipped retry.
+                        // ID filtering prevents re-acquisition without holding a CLI's lease
+                        // across unrelated work. New arrivals can wait for the next tick.
+                        if filter.deployment_ids.is_none() {
+                            match self
+                                .deployment_store
+                                .list_deployments(&caller, &filter)
+                                .await
+                            {
+                                Ok(candidates) => {
+                                    filter.deployment_ids =
+                                        Some(candidates.into_iter().map(|item| item.id).collect());
+                                }
+                                Err(error) => {
+                                    error!(%error, "Failed to list remaining deployment candidates");
+                                    break;
+                                }
+                            }
+                        }
+                        let ids = filter
+                            .deployment_ids
+                            .as_mut()
+                            .expect("candidate IDs set above");
+                        ids.retain(|id| !skipped.contains(id));
+                        if ids.is_empty() {
+                            break;
+                        }
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to acquire deployments");
@@ -406,7 +445,7 @@ impl DeploymentLoop {
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
-    ) {
+    ) -> bool {
         let deployment_id = deployment.id.clone();
 
         // Always release the lock when we are done, even on error.
@@ -435,6 +474,7 @@ impl DeploymentLoop {
                 "Failed to release deployment lock"
             );
         }
+        matches!(result, Ok(true))
     }
 
     async fn process_deployment_inner(
@@ -443,7 +483,7 @@ impl DeploymentLoop {
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
-    ) -> Result<(), AlienError> {
+    ) -> Result<bool, AlienError> {
         let deployment_id = deployment.id.clone();
         let stack_settings = deployment
             .stack_settings
@@ -457,7 +497,7 @@ impl DeploymentLoop {
                 deployment_id = %deployment_id,
                 "Skipping pull-mode deployment — handled by alien-operator"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let status = parse_status(&deployment.status);
@@ -467,7 +507,7 @@ impl DeploymentLoop {
                 deployment_id = %deployment_id,
                 "Skipping heartbeat because heartbeats are disabled for this deployment"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // 1. Get the release for this deployment.
@@ -536,7 +576,7 @@ impl DeploymentLoop {
             )
             .await
             .map_err(|error| error.into_generic())?;
-            return Ok(());
+            return Ok(false);
         }
 
         // 2. Resolve credentials for the target platform and lifecycle phase.
@@ -588,7 +628,7 @@ impl DeploymentLoop {
                     )
                     .await?;
                 }
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -599,7 +639,22 @@ impl DeploymentLoop {
                 platform = ?deployment.platform,
                 "Skipping bootstrap phase because resolved credentials cannot provision"
             );
-            return Ok(());
+            // Acquisition consumes the persisted retry. If we cannot run setup,
+            // return it while we still own the lease so a setup-capable driver
+            // can acquire the same failed deployment after we release it.
+            if deployment.retry_requested {
+                self.checkpoint_without_step(
+                    &deployment_id,
+                    session,
+                    DeploymentState {
+                        error: deployment_record_error(&deployment.error),
+                        ..recorded_state
+                    },
+                    execution_claim,
+                )
+                .await?;
+            }
+            return Ok(deployment.retry_requested);
         }
         let client_config = resolved_credentials.client_config;
 
@@ -833,7 +888,7 @@ impl DeploymentLoop {
         }
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
-        runner_result.map(|_| ()).map_err(|e| e.into_generic())
+        runner_result.map(|_| false).map_err(|e| e.into_generic())
     }
 
     async fn checkpoint_without_step(
@@ -1269,7 +1324,7 @@ mod tests {
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
         should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
-        RunnerConfigSources, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        DeploymentLoop, ProcessOptions, RunnerConfigSources, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1284,12 +1339,23 @@ mod tests {
     use alien_error::AlienError;
     use chrono::Utc;
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tempfile::TempDir;
 
+    use crate::auth::Subject;
     use crate::error::ErrorData;
-    use crate::traits::deployment_store::{DeploymentRecord, SuppliedStacks};
+    #[cfg(feature = "sqlite")]
+    use crate::stores::sqlite::{SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore};
+    use crate::traits::deployment_store::{
+        CreateDeploymentParams, DeploymentFilter, DeploymentRecord, SuppliedStacks,
+    };
+    use crate::traits::{
+        CredentialResolver, DeploymentStore, ReleaseStore, ResolvedCredentials, ServerBindings,
+    };
+    use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+    use alien_commands::{dispatchers::NullCommandDispatcher, InMemoryCommandRegistry};
+    use async_trait::async_trait;
 
     fn deployment_record(
         status: DeploymentStatus,
@@ -1330,6 +1396,305 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    #[derive(Default)]
+    struct RuntimeOnlyCredentials {
+        visits: Mutex<Vec<String>>,
+        fifth_visit_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    }
+
+    #[async_trait]
+    impl CredentialResolver for RuntimeOnlyCredentials {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Local {
+                state_directory: "unused".to_string(),
+            })
+        }
+
+        async fn resolve_with_capability(
+            &self,
+            deployment: &DeploymentRecord,
+        ) -> Result<ResolvedCredentials, AlienError> {
+            let visit_count = {
+                let mut visits = self.visits.lock().unwrap();
+                visits.push(deployment.id.clone());
+                visits.len()
+            };
+            if visit_count == 5 {
+                if let Some((entered, resume)) = &self.fifth_visit_gate {
+                    entered.notify_one();
+                    resume.notified().await;
+                }
+            }
+            Ok(ResolvedCredentials {
+                client_config: self.resolve(deployment).await?,
+                has_provision_capability: false,
+            })
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn skipped_bootstrap_preserves_retry_for_cli_acquisition() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let caller = Subject::system();
+        let deployment = store
+            .create_deployment(
+                &caller,
+                CreateDeploymentParams {
+                    name: "retry-race".to_string(),
+                    deployment_group_id: "dg_test".to_string(),
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings {
+                        deployment_model: alien_core::DeploymentModel::Push,
+                        ..Default::default()
+                    },
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        db.execute(&format!(
+            "UPDATE deployments SET status = 'preflights-failed' WHERE id = '{}'",
+            deployment.id
+        ))
+        .await
+        .unwrap();
+        store
+            .set_retry_requested(&caller, &deployment.id)
+            .await
+            .unwrap();
+        let filter = DeploymentFilter {
+            deployment_ids: Some(vec![deployment.id.clone()]),
+            statuses: Some(vec!["preflights-failed".to_string()]),
+            deployment_model: Some(alien_core::DeploymentModel::Push),
+            ..Default::default()
+        };
+        let mut acquired = store
+            .acquire(&caller, "manager-session", &filter, 1)
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), 1);
+        let mut item = acquired.remove(0);
+        assert!(item.deployment.retry_requested);
+        let saved_error =
+            serde_json::to_value(alien_error::AlienError::new(alien_error::GenericError {
+                message: "Saved quota failure".to_string(),
+            }))
+            .unwrap();
+        item.deployment.error = Some(saved_error.clone());
+        item.deployment.desired_release_id = Some("rel_test".to_string());
+        item.deployment.supplied_stacks = Some(SuppliedStacks {
+            desired: Some(
+                serde_json::from_value(serde_json::json!({"id": "retry", "resources": {}}))
+                    .unwrap(),
+            ),
+            current: None,
+        });
+        let bindings = Arc::new(ServerBindings {
+            kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+            command_storage: Arc::new(
+                LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                    .unwrap(),
+            ),
+            command_dispatcher: Arc::new(NullCommandDispatcher),
+            command_registry: Arc::new(InMemoryCommandRegistry::default()),
+            artifact_registry: None,
+            bindings_provider: None,
+            target_bindings_providers: Default::default(),
+            registry_routing_table: Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+            ),
+        });
+        let runner = DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            Arc::new(SqliteReleaseStore::new(db.clone())),
+            Arc::new(RuntimeOnlyCredentials::default()),
+            bindings.clone(),
+            None,
+        );
+        runner
+            .process_deployment(
+                item.deployment,
+                item.execution_claim,
+                "manager-session",
+                ProcessOptions::deployment_tick(),
+            )
+            .await;
+        let stored = store
+            .get_deployment(&caller, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, "preflights-failed");
+        assert_eq!(stored.error, Some(saved_error));
+        assert!(
+            stored.retry_requested,
+            "skipping setup must not consume the CLI's retry"
+        );
+        assert!(stored.locked_by.is_none());
+        assert!(stored.stack_state.is_none());
+        let cli = store
+            .acquire(&caller, "cli-session", &filter, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            cli.len(),
+            1,
+            "CLI must acquire after the incapable manager releases"
+        );
+        assert!(cli[0].deployment.retry_requested);
+        store
+            .release(
+                &caller,
+                &deployment.id,
+                "cli-session",
+                cli[0].execution_claim.clone(),
+            )
+            .await
+            .unwrap();
+        let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let release = releases
+            .create_release(
+                &caller,
+                crate::traits::release_store::CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([(
+                        Platform::Aws,
+                        serde_json::from_value(serde_json::json!({"id":"retry", "resources":{}}))
+                            .unwrap(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut ids = vec![deployment.id.clone()];
+        for index in 0..4 {
+            let other = store
+                .create_deployment(
+                    &caller,
+                    CreateDeploymentParams {
+                        name: format!("retry-race-{index}"),
+                        deployment_group_id: "dg_test".to_string(),
+                        platform: Platform::Aws,
+                        deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings {
+                            deployment_model: alien_core::DeploymentModel::Push,
+                            ..Default::default()
+                        },
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            ids.push(other.id);
+        }
+        for id in &ids {
+            db.execute(&format!("UPDATE deployments SET status = 'preflights-failed', desired_release_id = '{}' WHERE id = '{}'", release.id, id)).await.unwrap();
+            store.set_retry_requested(&caller, id).await.unwrap();
+        }
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let credentials = Arc::new(RuntimeOnlyCredentials {
+            fifth_visit_gate: Some((entered.clone(), resume.clone())),
+            ..Default::default()
+        });
+        let runner = DeploymentLoop::new(
+            Arc::new(crate::config::ManagerConfig::default()),
+            store.clone(),
+            releases,
+            credentials.clone(),
+            bindings,
+            None,
+        );
+        let tick = tokio::spawn(async move { runner.tick().await });
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .expect("fifth deployment must be reached");
+        // The fifth credential lookup stands in for unrelated slow cloud work.
+        // Earlier skipped retries must already be available to the CLI.
+        let earlier_ids = credentials.visits.lock().unwrap()[..4].to_vec();
+        let earlier_filter = DeploymentFilter {
+            deployment_ids: Some(earlier_ids),
+            statuses: Some(vec!["preflights-failed".to_string()]),
+            ..Default::default()
+        };
+        let earlier = store
+            .acquire(&caller, "cli-during-tick", &earlier_filter, 4)
+            .await
+            .unwrap();
+        let earlier_count = earlier.len();
+        for item in earlier {
+            assert!(item.deployment.retry_requested);
+            store
+                .set_retry_requested(&caller, &item.deployment.id)
+                .await
+                .unwrap();
+            store
+                .release(
+                    &caller,
+                    &item.deployment.id,
+                    "cli-during-tick",
+                    item.execution_claim,
+                )
+                .await
+                .unwrap();
+        }
+        resume.notify_one();
+        tick.await.unwrap();
+        assert_eq!(
+            earlier_count, 4,
+            "skipped retries must be acquirable while unrelated work is still blocked"
+        );
+        let mut visits = credentials.visits.lock().unwrap().clone();
+        visits.sort();
+        ids.sort();
+        assert_eq!(
+            visits, ids,
+            "each queued retry must be visited once without starving the fifth deployment"
+        );
+        let filter = DeploymentFilter {
+            deployment_ids: Some(ids.clone()),
+            statuses: Some(vec!["preflights-failed".to_string()]),
+            ..Default::default()
+        };
+        let cli = store
+            .acquire(&caller, "cli-after-tick", &filter, 5)
+            .await
+            .unwrap();
+        assert_eq!(
+            cli.len(),
+            5,
+            "all skipped leases must be returned before tick exits"
+        );
+        assert!(cli.iter().all(|item| item.deployment.retry_requested));
     }
 
     /// A deployment that turned telemetry off gets no log endpoint from this manager, as the
