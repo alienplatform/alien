@@ -239,32 +239,34 @@ fn compute_cluster_execute_can_observe_runtime_cleanup() {
     }
 }
 
-#[test]
-fn compute_cluster_controllers_can_describe_launch_templates_for_retry_adoption() {
+#[rstest]
+#[case::stack_binding(BindingTarget::Stack)]
+#[case::resource_binding(BindingTarget::Resource)]
+fn compute_cluster_controllers_can_inspect_retry_and_ingress_metadata(
+    #[case] binding_target: BindingTarget,
+) {
     let generator = AwsRuntimePermissionsGenerator::new();
     let context = create_test_context();
 
     for permission_set_id in ["compute-cluster/management", "compute-cluster/provision"] {
         let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
         let result = generator
-            .generate_policy(permission_set, BindingTarget::Stack, &context)
+            .generate_policy(permission_set, binding_target, &context)
             .expect("compute cluster policy should generate");
 
-        let statement = result
-            .statement
-            .iter()
-            .find(|statement| {
-                statement
-                    .action
-                    .contains(&"ec2:DescribeLaunchTemplates".to_string())
-            })
-            .expect("compute cluster controller should be able to inspect an existing template");
+        for action in ["ec2:DescribeLaunchTemplates", "ec2:DescribeSecurityGroups"] {
+            let statement = result
+                .statement
+                .iter()
+                .find(|statement| statement.action.iter().any(|existing| existing == action))
+                .unwrap_or_else(|| panic!("{permission_set_id} must grant {action}"));
 
-        assert_eq!(statement.resource, ["*".to_string()]);
-        assert!(
-            statement.condition.is_none(),
-            "EC2 Describe actions do not support IAM conditions"
-        );
+            assert_eq!(statement.resource, ["*".to_string()]);
+            assert!(
+                statement.condition.is_none(),
+                "EC2 discovery reads must work before a resource is found"
+            );
+        }
     }
 }
 

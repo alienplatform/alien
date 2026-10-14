@@ -3,12 +3,11 @@
   "description": "Allows creating and managing ComputeCluster compute infrastructure. Derived from AwsComputeClusterController, GcpComputeClusterController, AzureComputeClusterController API calls.",
   "platforms": {
     "aws": [
-      // EC2 Describe actions do not support resource-level permissions or
-      // conditions. Provisioning needs this metadata read to adopt a launch
-      // template created by an interrupted attempt.
+      // These EC2 discovery reads require Resource "*". Provisioning adopts
+      // launch templates and security groups created by interrupted attempts.
       {
         "grant": {
-          "actions": ["ec2:DescribeLaunchTemplates"]
+          "actions": ["ec2:DescribeLaunchTemplates", "ec2:DescribeSecurityGroups"]
         },
         "binding": {
           "stack": {
