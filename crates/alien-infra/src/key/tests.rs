@@ -24,7 +24,7 @@ use alien_core::{
     ClientConfig, DeploymentConfig, Key, KeyOutputs, Platform, ResourceLifecycle, ResourceRef,
     ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, ContextError};
 use alien_gcp_clients::{
     cloud_kms::{CryptoKey, CryptoKeyVersion, MockCloudKmsApi},
     GcpClientConfig, GcpClientConfigExt,
