@@ -265,6 +265,7 @@ export type { HeartbeatCollectionIssue } from "./zod/heartbeat-collection-issue-
 export type { HeartbeatIssueSeverity } from "./zod/heartbeat-issue-severity-schema.js";
 export type { HeartbeatsMode } from "./zod/heartbeats-mode-schema.js";
 export type { HorizonContainerHeartbeatData } from "./zod/horizon-container-heartbeat-data-schema.js";
+export type { HorizonReaderCapabilities } from "./zod/horizon-reader-capabilities-schema.js";
 export type { HorizonWorkloadSchedulingMode } from "./zod/horizon-workload-scheduling-mode-schema.js";
 export type { HttpMethod } from "./zod/http-method-schema.js";
 export type { ImportSourceKind } from "./zod/import-source-kind-schema.js";
@@ -774,6 +775,7 @@ export { HeartbeatCollectionIssueSchema } from "./zod/heartbeat-collection-issue
 export { HeartbeatIssueSeveritySchema } from "./zod/heartbeat-issue-severity-schema.js";
 export { HeartbeatsModeSchema } from "./zod/heartbeats-mode-schema.js";
 export { HorizonContainerHeartbeatDataSchema } from "./zod/horizon-container-heartbeat-data-schema.js";
+export { HorizonReaderCapabilitiesSchema } from "./zod/horizon-reader-capabilities-schema.js";
 export { HorizonWorkloadSchedulingModeSchema } from "./zod/horizon-workload-scheduling-mode-schema.js";
 export { HttpMethodSchema } from "./zod/http-method-schema.js";
 export { ImportSourceKindSchema } from "./zod/import-source-kind-schema.js";
