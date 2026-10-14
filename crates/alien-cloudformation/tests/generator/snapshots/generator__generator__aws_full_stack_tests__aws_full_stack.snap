@@ -728,6 +728,12 @@ Resources:
         Version: 2012-10-17
         Statement:
         - Action:
+          - lambda:GetAccountSettings
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ReadLambdaAccountQuota
+        - Action:
           - lambda:CreateFunction
           Condition:
             StringEquals:
@@ -749,6 +755,7 @@ Resources:
           - lambda:DeleteFunctionUrlConfig
           - lambda:GetCodeSigningConfig
           - lambda:GetFunction
+          - lambda:GetFunctionConcurrency
           - lambda:GetFunctionConfiguration
           - lambda:GetFunctionEventInvokeConfig
           - lambda:GetFunctionUrlConfig
