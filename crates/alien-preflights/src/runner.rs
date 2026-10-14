@@ -409,6 +409,12 @@ impl PreflightRunner {
                 })
             });
 
+        all_results.push(crate::compile_time::iam_workload_aggregate::check(
+            &mutated_stack,
+            platform,
+            setup_authority,
+        )?);
+
         let prerequisite_summary = self
             .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)
             .await?;
