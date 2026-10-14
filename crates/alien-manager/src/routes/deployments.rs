@@ -44,6 +44,16 @@ pub struct CreateDeploymentRequest {
     pub input_values: std::collections::HashMap<String, serde_json::Value>,
 }
 
+/// Accepted retry and optional instructions from the deployment store.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RetryDeploymentResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -948,7 +958,7 @@ async fn delete_deployment(
         ("id" = String, Path, description = "Deployment ID"),
     ),
     responses(
-        (status = 200, description = "Retry requested"),
+        (status = 200, description = "Retry requested", body = RetryDeploymentResponse),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Not found"),
@@ -981,15 +991,20 @@ async fn retry_deployment(
         .into_response();
     }
 
-    if let Err(e) = state
+    let message = match state
         .deployment_store
-        .set_retry_requested(&subject, &id)
+        .set_retry_requested_with_message(&subject, &id)
         .await
     {
-        return e.into_response();
-    }
+        Ok(message) => message,
+        Err(e) => return e.into_response(),
+    };
 
-    Json(serde_json::json!({ "success": true })).into_response()
+    Json(RetryDeploymentResponse {
+        success: true,
+        message,
+    })
+    .into_response()
 }
 
 /// Whether a retry may reach the deployment store.
@@ -1466,10 +1481,10 @@ mod tests {
             .times(1)
             .return_once(move |_, _| Ok(Some(deployment)));
         deployment_store
-            .expect_set_retry_requested()
+            .expect_set_retry_requested_with_message()
             .withf(|caller, id| caller.bearer_token == "test-token" && id == "deployment-1")
             .times(usize::from(store_receives_retry))
-            .return_once(move |_, _| store_result);
+            .return_once(move |_, _| store_result.map(|()| None));
 
         let request = Request::builder()
             .method("POST")
@@ -1478,6 +1493,35 @@ mod tests {
             .body(Body::empty())
             .expect("request should build");
         send_with_transport(deployment_store, request, true).await
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_accepted_store_guidance() {
+        let mut store = MockDeploymentStore::new();
+        store.expect_get_deployment().times(1).returning(|_, _| {
+            Ok(Some(DeploymentRecord {
+                status: "update-pending".to_string(),
+                ..deployment_record()
+            }))
+        });
+        let message = "Recovery accepted. Rerun deployment setup and select compute.";
+        store
+            .expect_set_retry_requested_with_message()
+            .withf(|caller, id| caller.bearer_token == "test-token" && id == "deployment-1")
+            .times(1)
+            .returning(move |_, _| Ok(Some(message.to_string())));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/retry")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .body(Body::empty())
+            .unwrap();
+        let (status, json) = send_with_transport(store, request, true).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json,
+            serde_json::json!({"success": true, "message": message})
+        );
     }
 
     #[tokio::test]

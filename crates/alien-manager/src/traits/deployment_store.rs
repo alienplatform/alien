@@ -623,6 +623,17 @@ pub trait DeploymentStore: Send + Sync {
         id: &str,
     ) -> Result<(), AlienError>;
 
+    /// Request a retry and return any accepted recovery guidance.
+    /// Existing stores retain their retry behavior without supplying a message.
+    async fn set_retry_requested_with_message(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+    ) -> Result<Option<String>, AlienError> {
+        self.set_retry_requested(caller, id).await?;
+        Ok(None)
+    }
+
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)
         -> Result<(), AlienError>;
 

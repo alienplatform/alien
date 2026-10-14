@@ -37,6 +37,8 @@ struct DeploymentMutationOutput<'a> {
     deployment_id: &'a str,
     action: &'static str,
     accepted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1761,7 +1763,7 @@ async fn retry_deployment_task(
         println!("{} {}", dim_label("Status"), deployment.status);
     }
 
-    client
+    let response = client
         .retry_deployment()
         .id(&deployment.id)
         .send()
@@ -1773,15 +1775,21 @@ async fn retry_deployment_task(
             url: None,
         })?;
 
+    let message = response
+        .message
+        .as_deref()
+        .filter(|message| !message.trim().is_empty());
+
     if json {
         return print_json(&DeploymentMutationOutput {
             deployment_id: &deployment.id,
             action: "retry",
             accepted: true,
+            message,
         });
     }
 
-    println!("{}", success_line("Retry requested."));
+    println!("{}", success_line(message.unwrap_or("Retry requested.")));
     println!(
         "{} {}",
         dim_label("Next"),
@@ -1827,6 +1835,7 @@ async fn redeploy_deployment_task(
             deployment_id: &deployment.id,
             action: "redeploy",
             accepted: true,
+            message: None,
         });
     }
 
