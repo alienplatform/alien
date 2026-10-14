@@ -1220,6 +1220,7 @@ dependencies = [
  "alien-aws-clients",
  "alien-core",
  "alien-error",
+ "alien-gcp-clients",
  "alien-permissions",
  "async-trait",
  "httpmock",

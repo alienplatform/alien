@@ -14,15 +14,17 @@ tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
 tracing = { workspace = true }
 indexmap = { workspace = true }
 alien-aws-clients = { workspace = true, optional = true }
+alien-gcp-clients = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 utoipa = { workspace = true, optional = true }
 
 [features]
 default = []
-runtime-checks = ["dep:alien-aws-clients", "dep:reqwest"]
+runtime-checks = ["dep:alien-aws-clients", "dep:alien-gcp-clients", "dep:reqwest"]
 openapi = ["utoipa", "alien-core/openapi"]
 
 [dev-dependencies]
 httpmock = { workspace = true }
+alien-gcp-clients = { workspace = true, features = ["test-utils"] }
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
 tokio-test = "0.4"

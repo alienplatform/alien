@@ -89,6 +89,12 @@ impl GcpServiceAccountController {
         let created_sa = client
             .create_service_account(service_account_id.clone(), request)
             .await
+            .map_err(|error| {
+                ResourcePermissionsHelper::gcp_service_account_creation_error(
+                    error,
+                    &gcp_config.project_id,
+                )
+            })
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create GCP service account '{}'",

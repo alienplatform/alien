@@ -10,6 +10,12 @@ pub mod aws_nat;
 #[cfg(feature = "runtime-checks")]
 pub mod cloud_quotas;
 #[cfg(feature = "runtime-checks")]
+pub mod gcp_compute;
+#[cfg(feature = "runtime-checks")]
+pub mod gcp_iam;
+#[cfg(feature = "runtime-checks")]
+pub mod gcp_service_accounts;
+#[cfg(feature = "runtime-checks")]
 pub use cloud_quotas::CloudQuotasCheck;
 
 // TODO: Implement runtime checks

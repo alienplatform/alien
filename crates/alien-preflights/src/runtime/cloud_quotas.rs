@@ -28,14 +28,18 @@ impl RuntimeCheck for CloudQuotasCheck {
     }
 
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
-        if !matches!(platform, Platform::Aws) {
+        if !matches!(platform, Platform::Aws | Platform::Gcp) {
             return false;
         }
+        if platform == Platform::Gcp && super::gcp_service_accounts::has_service_accounts(stack) {
+            return true;
+        }
         stack.resources.values().any(|entry| {
-            entry
-                .config
-                .downcast_ref::<Worker>()
-                .is_some_and(|worker| worker.concurrency_limit.is_some())
+            (platform == Platform::Gcp && entry.has_remote_bindings())
+                || entry
+                    .config
+                    .downcast_ref::<Worker>()
+                    .is_some_and(|worker| worker.concurrency_limit.is_some())
                 || entry.config.downcast_ref::<ComputeCluster>().is_some()
                 || entry
                     .config
@@ -55,6 +59,42 @@ impl RuntimeCheck for CloudQuotasCheck {
     ) -> Result<CheckResult> {
         let mut result = CheckResult::success();
         warn_unresolved_compute_replacements(stack, stack_state, &mut result);
+        if stack_state.platform == Platform::Gcp {
+            let Some(config) = client_config.gcp_config() else {
+                result.add_warning("GCP quota checks could not find target credentials".into());
+                result.status = Some(CheckStatus::Unknown);
+                return Ok(result);
+            };
+            let Some(http) = quota_http_client(&mut result) else {
+                return Ok(result);
+            };
+            let compute = alien_gcp_clients::ComputeClient::new(http.clone(), config.clone());
+            let cloud_quotas =
+                alien_gcp_clients::CloudQuotasClient::new(http.clone(), config.clone());
+            super::gcp_compute::check(
+                stack,
+                stack_state,
+                &config.project_id,
+                &config.region,
+                &compute,
+                &cloud_quotas,
+                &mut result,
+            )
+            .await;
+            let iam = alien_gcp_clients::IamClient::new(http.clone(), config.clone());
+            let quotas = alien_gcp_clients::ServiceUsageQuotasClient::new(http, config.clone());
+            super::gcp_iam::check(stack, stack_state, config, &iam, &quotas, &mut result).await;
+            super::gcp_service_accounts::check(
+                stack,
+                stack_state,
+                &config.project_id,
+                &iam,
+                &quotas,
+                &mut result,
+            )
+            .await;
+            return Ok(result);
+        }
         let Some(config) = client_config.aws_config() else {
             result.add_warning("AWS quota checks could not find target credentials".into());
             result.status = Some(CheckStatus::Unknown);
@@ -181,7 +221,7 @@ fn warn_unresolved_compute_replacements(
     state: &StackState,
     result: &mut CheckResult,
 ) {
-    if !matches!(state.platform, Platform::Aws) {
+    if !matches!(state.platform, Platform::Aws | Platform::Gcp) {
         return;
     }
     for (id, entry) in &stack.resources {
@@ -526,7 +566,7 @@ mod tests {
                 state.resources.insert("compute".into(), current.clone());
                 let mut result = CheckResult::success();
                 warn_unresolved_compute_replacements(&desired, &state, &mut result);
-                let warns = matches!(platform, Platform::Aws)
+                let warns = matches!(platform, Platform::Aws | Platform::Gcp)
                     && matches!(
                         status,
                         ResourceStatus::Running | ResourceStatus::UpdateFailed
