@@ -10,7 +10,7 @@ use alien_core::{Platform, ResourceStatus, Stack, StackState, Worker, WorkerOutp
 pub fn quota_identity(region: &str) -> QuotaIdentity {
     QuotaIdentity {
         platform: Platform::Aws, service: "lambda".into(), provider_id: "L-B99A9384".into(),
-        name: "Concurrent executions (100 must remain unreserved)".into(), scope: region.into(),
+        name: "Concurrent executions".into(), scope: region.into(),
         increase_url: format!("https://{region}.console.aws.amazon.com/servicequotas/home?region={region}#!/services/lambda/quotas/L-B99A9384"),
     }
 }
@@ -35,6 +35,13 @@ fn reservation_outcome(needed: f64, observed: Option<QuotaObservation>) -> Quota
             reason: "Lambda account allocation limits are unavailable".into(),
         };
     };
+    // Small-account minimums differ from the documented standard floor of 100.
+    // GetAccountSettings does not expose that floor; do not invent one.
+    if limit < 100.0 && needed <= limit - used {
+        return QuotaOutcome::Unknown {
+            reason: "Lambda does not expose the minimum unreserved concurrency for this low-limit account; AWS validates positive reservations during deployment".into(),
+        };
+    }
     if needed + 100.0 > limit - used {
         QuotaOutcome::Fail {
             used,
@@ -58,7 +65,6 @@ pub async fn check(
     result: &mut CheckResult,
 ) {
     let mut additional = 0.0;
-    let mut new_zero_reservation = false;
     for (id, entry) in &stack.resources {
         let Some(worker) = entry.config.downcast_ref::<Worker>() else {
             continue;
@@ -67,15 +73,7 @@ pub async fn check(
             continue;
         };
         if desired == 0 {
-            new_zero_reservation |= state.resources.get(id).is_none_or(|current| {
-                current.status == ResourceStatus::Deleted
-                    || current
-                        .config
-                        .downcast_ref::<Worker>()
-                        .is_some_and(|previous| previous.concurrency_limit.is_none())
-                    || (current.status == ResourceStatus::Pending
-                        && current.internal_state.is_none())
-            });
+            // PutFunctionConcurrency(0) disables invocation without consuming capacity.
             continue;
         }
         let held = match state.resources.get(id) {
@@ -115,7 +113,7 @@ pub async fn check(
         // Do not credit reductions in other functions: their update order is not guaranteed.
         additional += f64::from(desired.saturating_sub(held));
     }
-    if additional == 0.0 && !new_zero_reservation {
+    if additional == 0.0 {
         return;
     }
     let observed = lambda
@@ -138,7 +136,7 @@ mod tests {
     use alien_aws_clients::lambda::{FunctionConcurrency, MockLambdaApi};
     use alien_core::{ResourceLifecycle, ResourceOutputs, StackResourceState, WorkerCode};
     #[test]
-    fn applied_low_account_limit_cannot_reserve_and_missing_fields_are_unknown() {
+    fn low_account_floor_is_unknown_and_missing_fields_are_unknown() {
         let observed = observation(serde_json::from_str(r#"{"AccountLimit":{"ConcurrentExecutions":10,"UnreservedConcurrentExecutions":10}}"#).unwrap()).unwrap();
         assert_eq!(
             observed,
@@ -147,7 +145,11 @@ mod tests {
                 limit: 10.0
             }
         );
-        assert!(reservation_outcome(1.0, Some(observed)).blocks());
+        assert!(matches!(
+            reservation_outcome(1.0, Some(observed.clone())),
+            QuotaOutcome::Unknown { .. }
+        ));
+        assert!(reservation_outcome(11.0, Some(observed)).blocks());
         assert!(observation(
             serde_json::from_str(r#"{"AccountLimit":{"ConcurrentExecutions":1000}}"#).unwrap()
         )
@@ -218,7 +220,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn zero_reservation_still_requires_floor_but_unreserved_worker_makes_no_read() {
+    async fn zero_and_unreserved_workers_consume_no_capacity_and_make_no_read() {
         for reservation in [Some(0), None] {
             let mut worker = Worker::new("worker".into())
                 .permissions("test".into())
@@ -231,7 +233,9 @@ mod tests {
                 .add(worker, ResourceLifecycle::Live)
                 .build();
             let mut lambda = MockLambdaApi::new();
-            lambda.expect_get_account_settings().times(usize::from(reservation.is_some())).returning(|| Ok(serde_json::from_str(r#"{"AccountLimit":{"ConcurrentExecutions":10,"UnreservedConcurrentExecutions":10}}"#).unwrap()));
+            // Real AWS accepts reservation zero even with applied/unreserved limits 10/10.
+            lambda.expect_get_account_settings().times(0);
+            lambda.expect_get_function_concurrency().times(0);
             let mut result = CheckResult::success();
             check(
                 &stack,
@@ -241,11 +245,8 @@ mod tests {
                 &mut result,
             )
             .await;
-            assert_eq!(result.success, reservation.is_none());
-            assert_eq!(
-                result.quota_results.len(),
-                usize::from(reservation.is_some())
-            );
+            assert!(result.success);
+            assert!(result.quota_results.is_empty());
         }
     }
 }
