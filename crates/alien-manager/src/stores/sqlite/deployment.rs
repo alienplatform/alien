@@ -1588,15 +1588,6 @@ impl DeploymentStore for SqliteDeploymentStore {
             }
             status.finally(status_str.clone()).into()
         };
-        let deployment_completed = deployment
-            .as_ref()
-            .and_then(|d| d.desired_release_id.as_ref())
-            .and_then(|desired| {
-                current_release_id
-                    .as_ref()
-                    .map(|current| current == desired)
-            })
-            .unwrap_or(false);
         let preserve_retry_requested = deployment
             .as_ref()
             .is_some_and(|d| Self::should_preserve_retry_requested(d, state));
@@ -1657,17 +1648,18 @@ impl DeploymentStore for SqliteDeploymentStore {
                 None => query.value(Deployments::Error, Option::<String>::None),
             };
 
-            // Clear desired_release_id when deployment completed (current matches desired)
-            if deployment_completed {
-                query.value(Deployments::DesiredReleaseId, Option::<String>::None);
-            } else if let Some(desired) = deployment
-                .as_ref()
-                .and_then(|d| d.desired_release_id.as_ref())
-            {
-                query.value(Deployments::DesiredReleaseId, desired as &str);
-            } else {
-                query.value(Deployments::DesiredReleaseId, Option::<String>::None);
-            }
+            // Compare against the row being updated, not the earlier read: a new
+            // release may arrive while reconciliation serializes its observations.
+            let desired_release: sea_query::SimpleExpr = match current_release_id.as_deref() {
+                Some(current) => Expr::case(
+                    Expr::col(Deployments::DesiredReleaseId).eq(current),
+                    Expr::val(Option::<String>::None),
+                )
+                .finally(Expr::col(Deployments::DesiredReleaseId))
+                .into(),
+                None => Expr::col(Deployments::DesiredReleaseId).into(),
+            };
+            query.value(Deployments::DesiredReleaseId, desired_release);
 
             // Match by `Id` only. Authz at the route layer (`can_sync_deployment`)
             // gates who may call `reconcile`; race protection between competing
