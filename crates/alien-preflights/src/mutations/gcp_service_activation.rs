@@ -119,7 +119,12 @@ impl GcpServiceActivationMutation {
     /// Get the mapping of service activation ID to API name based on resources in the stack.
     /// Ordered, because `mutate` inserts in this order and setup renders the stack in it.
     fn get_required_services(&self, stack: &Stack) -> BTreeMap<String, String> {
-        let mut services = BTreeMap::new();
+        // Quota reads are needed during setup and subsequent updates, regardless
+        // of which resource types happen to be present in this deployment.
+        let mut services = BTreeMap::from([(
+            "enable-cloud-quotas".to_string(),
+            "cloudquotas.googleapis.com".to_string(),
+        )]);
 
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
@@ -262,6 +267,55 @@ impl GcpServiceActivationMutation {
 mod tests {
     use super::*;
     use alien_core::{Ai, ResourceLifecycle, Stack};
+
+    #[tokio::test]
+    async fn quota_activation_is_added_once_for_native_and_imported_gcp_setup() {
+        let mutation = GcpServiceActivationMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".into(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        for platform in [Platform::Gcp, Platform::Kubernetes] {
+            let mut config = config.clone();
+            if platform == Platform::Kubernetes {
+                config.base_platform = Some(Platform::Gcp);
+            }
+            let state = StackState::new(platform);
+            let stack = Stack::new("quota-activation".into()).build();
+            assert!(mutation.should_run(&stack, &state, &config));
+            let stack = mutation.mutate(stack, &state, &config).await.unwrap();
+            assert_eq!(stack.resources.len(), 1);
+            let entry = &stack.resources["enable-cloud-quotas"];
+            let activation = entry.config.downcast_ref::<ServiceActivation>().unwrap();
+            assert_eq!(activation.service_name, "cloudquotas.googleapis.com");
+            assert_eq!(entry.lifecycle, ResourceLifecycle::Frozen);
+            assert!(!mutation.should_run(&stack, &state, &config));
+            let repeated = mutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(repeated).unwrap(),
+                serde_json::to_value(stack).unwrap()
+            );
+        }
+        for platform in [
+            Platform::Aws,
+            Platform::Azure,
+            Platform::Local,
+            Platform::Kubernetes,
+        ] {
+            let state = StackState::new(platform);
+            let stack = Stack::new("no-gcp".into()).build();
+            assert!(!mutation.should_run(&stack, &state, &config));
+        }
+    }
 
     #[test]
     fn ai_resource_requires_vertex_aiplatform() {
