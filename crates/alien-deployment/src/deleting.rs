@@ -205,7 +205,8 @@ pub async fn handle_deleting(
 
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
 /// It has none while the management identity has no outputs and no Live resource, synced secrets
-/// vault or Frozen runtime-cleanup type came up. Fails closed on a missing lifecycle.
+/// vault or Frozen runtime-cleanup type came up. An empty first deployment with no setup
+/// metadata can be deleted directly. Fails closed on a missing inventory or lifecycle.
 pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
     let destroying = match current.status {
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
@@ -220,11 +221,24 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
     {
         return None;
     }
+    let stack_state = current.stack_state.as_ref()?;
+    // Preflights can reject the first deployment before setup records either resources
+    // or metadata. The default authority is ImportedHandoff, but there is no installed
+    // identity to resolve in this case. Keep prepared imports and previous installs on
+    // the normal cleanup path, even if their inventory happens to be empty.
+    if current.current_release.is_none()
+        && stack_state.resources.is_empty()
+        && current
+            .runtime_metadata
+            .as_ref()
+            .is_none_or(|metadata| metadata == &alien_core::RuntimeMetadata::default())
+    {
+        return Some(DeploymentStatus::Deleted);
+    }
     let metadata = current.runtime_metadata.as_ref()?;
     if metadata.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
         return None;
     }
-    let stack_state = current.stack_state.as_ref()?;
     for (resource_id, resource) in &stack_state.resources {
         let lifecycle = resource.lifecycle?;
         let resource_type = resource.config.resource_type();
@@ -1064,6 +1078,113 @@ mod tests {
                 Some(DeploymentStatus::TeardownRequired),
                 "{status:?}"
             );
+        }
+    }
+
+    /// A rejected first deploy has an empty inventory and no successful setup metadata.
+    /// Destroy must not ask for credentials belonging to an identity it never created.
+    #[test]
+    fn destroy_of_an_empty_first_deployment_needs_no_runtime_credentials() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            // Both the legacy empty object and the explicit default authority occur in
+            // stored records from before setup has run.
+            for metadata in [
+                None,
+                Some(serde_json::from_str::<alien_core::RuntimeMetadata>("{}").unwrap()),
+                Some(
+                    serde_json::from_str::<alien_core::RuntimeMetadata>(
+                        r#"{"initialSetupAuthority":"importedHandoff"}"#,
+                    )
+                    .unwrap(),
+                ),
+            ] {
+                let state = DeploymentState {
+                    status: DeploymentStatus::DeletePending,
+                    platform,
+                    current_release: None,
+                    target_release: None,
+                    stack_state: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "platform": platform, "resourcePrefix": "test", "resources": {}
+                        }))
+                        .unwrap(),
+                    ),
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: metadata,
+                    retry_requested: false,
+                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                };
+                for (status, retry_requested) in [
+                    (DeploymentStatus::DeletePending, false),
+                    (DeploymentStatus::Deleting, false),
+                    (DeploymentStatus::DeleteFailed, true),
+                ] {
+                    let state = DeploymentState {
+                        status,
+                        retry_requested,
+                        ..state.clone()
+                    };
+                    assert_eq!(
+                        super::destroy_without_runtime(&state),
+                        Some(DeploymentStatus::Deleted)
+                    );
+                }
+                for (status, retry_requested) in [
+                    (DeploymentStatus::PreflightsFailed, false),
+                    (DeploymentStatus::DeleteFailed, false),
+                ] {
+                    assert_eq!(
+                        super::destroy_without_runtime(&DeploymentState {
+                            status,
+                            retry_requested,
+                            ..state.clone()
+                        }),
+                        None
+                    );
+                }
+                // A missing inventory is not evidence of an empty inventory.
+                assert_eq!(
+                    super::destroy_without_runtime(&DeploymentState {
+                        stack_state: None,
+                        ..state.clone()
+                    }),
+                    None
+                );
+                // A previous successful install must retain normal cleanup even if empty.
+                assert_eq!(
+                    super::destroy_without_runtime(&DeploymentState {
+                        current_release: Some(alien_core::ReleaseInfo {
+                            release_id: Some("previous".into()),
+                            version: None,
+                            description: None,
+                            stack: alien_core::Stack::new("test".into()).build(),
+                        }),
+                        ..state.clone()
+                    }),
+                    None
+                );
+                // Setup or access bookkeeping must not be discarded with an empty inventory.
+                for metadata in [
+                    alien_core::RuntimeMetadata {
+                        prepared_stack: Some(alien_core::Stack::new("test".into()).build()),
+                        ..Default::default()
+                    },
+                    scaffolding_record(alien_core::InitialSetupAuthority::ImportedHandoff),
+                    alien_core::RuntimeMetadata {
+                        registry_access_granted: true,
+                        ..Default::default()
+                    },
+                ] {
+                    assert_eq!(
+                        super::destroy_without_runtime(&DeploymentState {
+                            runtime_metadata: Some(metadata),
+                            ..state.clone()
+                        }),
+                        None
+                    );
+                }
+            }
         }
     }
 
