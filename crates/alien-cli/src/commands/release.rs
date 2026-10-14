@@ -644,7 +644,8 @@ async fn release_task_core(
                     let per_platform = ctx
                         .resolve_manager(&project_link.project_id, platform_str)
                         .await?;
-                    build_proxy_push_settings(&per_platform, &platform).await?
+                    build_proxy_push_settings(&per_platform, &platform, &project_link.project_id)
+                        .await?
                 };
 
             let mut pushed =
@@ -1365,6 +1366,7 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 async fn build_proxy_push_settings(
     manager: &ManagerContext,
     platform: &Platform,
+    project_id: &str,
 ) -> Result<(PushSettings, Option<String>)> {
     let manager_url = &manager.manager_url;
 
@@ -1431,6 +1433,44 @@ async fn build_proxy_push_settings(
                 })
             })?;
         (repo_name, registry_host)
+    };
+
+    let repo_name = if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        let mut request = manager
+            .http_client
+            .post(format!("{manager_url}/v1/image-repositories"))
+            .json(&serde_json::json!({ "projectId": project_id, "platform": platform }));
+        if let Some(token) = &manager.auth_token {
+            request = request.bearer_auth(token);
+        }
+        let response =
+            request
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to provision the project's image repository".to_string(),
+                })?;
+        let response = response.error_for_status().into_alien_error().context(
+            ErrorData::ConfigurationError {
+                message: "Manager could not provision the project's image repository".to_string(),
+            },
+        )?;
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RepositoryResponse {
+            repository: String,
+        }
+        response
+            .json::<RepositoryResponse>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse the image repository response".to_string(),
+            })?
+            .repository
+    } else {
+        repo_name
     };
 
     let settings = manager_proxy_push_settings(manager_url, &repo_name, manager)?;
@@ -2283,6 +2323,50 @@ fn collect_push_cache_entries(
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+
+    #[tokio::test]
+    async fn proxy_push_provisions_the_requested_gcp_project() {
+        for project in ["default", "prj_a"] {
+            let server = httpmock::MockServer::start_async().await;
+            let repository = format!("cloud/artifacts-{}/{}", project.replace('_', "-"), project);
+            let config = server
+                .mock_async(|when, then| {
+                    when.method("GET")
+                        .path("/v1/build-config")
+                        .query_param("platform", "gcp");
+                    then.status(200).json_body(serde_json::json!({
+                        "repositoryName": "cloud/artifacts", "registryHost": "public.example.com"
+                    }));
+                })
+                .await;
+            let provision = server
+                .mock_async(|when, then| {
+                    when.method("POST")
+                        .path("/v1/image-repositories")
+                        .header("authorization", "Bearer test-token")
+                        .json_body(serde_json::json!({"projectId": project, "platform": "gcp"}));
+                    then.status(200)
+                        .json_body(serde_json::json!({"repository": repository}));
+                })
+                .await;
+            let ctx = ExecutionMode::Standalone {
+                server_url: server.base_url(),
+                api_key: "test-token".to_string(),
+            };
+            let manager = ctx.resolve_manager(project, "gcp").await.unwrap();
+            let (settings, public_host) =
+                build_proxy_push_settings(&manager, &Platform::Gcp, project)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                settings.repository,
+                format!("{}/{repository}", server.address())
+            );
+            assert_eq!(public_host.as_deref(), Some("public.example.com"));
+            config.assert_async().await;
+            provision.assert_async().await;
+        }
+    }
 
     #[test]
     fn no_promote_accepts_the_default_channel_but_rejects_an_explicit_channel() {

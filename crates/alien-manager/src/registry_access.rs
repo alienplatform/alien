@@ -569,7 +569,7 @@ pub async fn cleanup_deleted_registry_access(
             let mut collect = |stack: &Stack| {
                 for (_, entry) in stack.resources() {
                     if let Some(image) = resource_image_reference(entry, SandboxImageSource::None) {
-                        if let Some(repository) = ecr_repository_from_image(image, &prefix) {
+                        if let Some(repository) = repository_path_under_prefix(image, &prefix) {
                             repo_ids.push(repository);
                         }
                     }
@@ -590,14 +590,7 @@ pub async fn cleanup_deleted_registry_access(
             }
         }
     }
-    // GAR binds IAM on the registry itself and ignores the repository, so a GCP grant is always
-    // named by the prefix even when nothing else names it.
-    if repo_ids.is_empty() && recorded_grant && matches!(platform, Platform::Gcp) {
-        let prefix = artifact_registry.upstream_repository_prefix();
-        if !prefix.is_empty() {
-            repo_ids.push(prefix);
-        }
-    }
+
     repo_ids.sort();
     repo_ids.dedup();
     if repo_ids.is_empty() {
@@ -748,7 +741,7 @@ fn repository_access_with_proxy(
         .map(EnvironmentInfo::platform);
     let sandbox_source = platform.map_or(SandboxImageSource::None, sandbox_image_source);
 
-    if matches!(platform, Some(Platform::Aws)) {
+    if matches!(platform, Some(Platform::Aws | Platform::Gcp)) {
         let mut repo_ids = HashSet::new();
         let refused = collect_image_repositories(
             state,
@@ -764,78 +757,7 @@ fn repository_access_with_proxy(
         return (repo_ids, refused);
     }
 
-    if matches!(platform, Some(Platform::Gcp)) {
-        return gcp_repository_access(state, &prefix, project_id, sandbox_source);
-    }
     (Vec::new(), false)
-}
-
-fn gcp_repository_access(
-    state: &DeploymentState,
-    prefix: &str,
-    project_id: &str,
-    sandbox_source: SandboxImageSource,
-) -> (Vec<String>, bool) {
-    let Some((cloud_project, repository_prefix)) = prefix.split_once('/') else {
-        return (Vec::new(), false);
-    };
-    let mut repositories = HashSet::new();
-    let mut refused = false;
-    let mut collect = |stack: &Stack| {
-        for (resource_id, entry) in stack.resources() {
-            let Some(image) = resource_image_reference(entry, sandbox_source) else {
-                continue;
-            };
-            let Some(repository_path) = image_repository_path(image) else {
-                continue;
-            };
-            let Some(path) = repository_path.strip_prefix(&format!("{cloud_project}/")) else {
-                continue;
-            };
-            let repository = path.split('/').next().unwrap_or_default();
-            if repository == format!("{repository_prefix}-shared")
-                || (project_id == "default" && repository == repository_prefix)
-            {
-                repositories.insert(format!("{cloud_project}/{repository}"));
-            } else if let Some(owner) =
-                alien_core::gar_repository::project_id_for_path(path, repository_prefix)
-            {
-                if owner == project_id {
-                    repositories.insert(format!("{cloud_project}/{repository}"));
-                } else {
-                    refused = true;
-                    warn!(
-                        project_id,
-                        resource_id, "Refusing an image repository belonging to another project"
-                    );
-                }
-            } else if repository == repository_prefix
-                || repository.starts_with(&format!("{repository_prefix}-prj-"))
-            {
-                refused = true;
-                warn!(
-                    project_id,
-                    resource_id, "Image repository requires migration before direct pull access"
-                );
-            }
-        }
-    };
-    if let Some(release) = &state.current_release {
-        collect(&release.stack);
-    }
-    if let Some(release) = &state.target_release {
-        collect(&release.stack);
-    }
-    if let Some(stack) = state
-        .runtime_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.prepared_stack.as_ref())
-    {
-        collect(stack);
-    }
-    let mut repositories: Vec<_> = repositories.into_iter().collect();
-    repositories.sort();
-    (repositories, refused)
 }
 
 /// The principals a GCP grant names: Cloud Run always, and the sandbox agent when a release
@@ -959,6 +881,15 @@ fn ecr_registry_identity(host: &str) -> Option<(&str, &str)> {
 /// the `{region}` token, which stands for whichever region the deployment renders; any other
 /// region names a different repository than the one being opened.
 fn served_by_registry(image: &str, registry_endpoint: &str) -> bool {
+    let host = alien_core::image_rewrite::strip_url_scheme(image)
+        .split('/')
+        .next();
+    let registry_host = alien_core::image_rewrite::strip_url_scheme(registry_endpoint)
+        .split('/')
+        .next();
+    if registry_host.is_some_and(|host| host.ends_with("-docker.pkg.dev")) {
+        return host == registry_host;
+    }
     let (Some((account, region)), Some((registry_account, registry_region))) = (
         ecr_registry_identity(image),
         ecr_registry_identity(registry_endpoint),
@@ -986,13 +917,33 @@ fn collect_image_repositories(
             let Some(image) = resource_image_reference(entry, sandbox_source) else {
                 continue;
             };
-            let Some(repo_id) = ecr_repository_from_image(image, prefix) else {
+            let Some(image_path) = repository_path_under_prefix(image, prefix) else {
                 continue;
+            };
+            let (repo_id, own_repository) = if let Some((cloud_project, gar_prefix)) = prefix
+                .split_once('/')
+                .filter(|_| matches!(state.environment_info, Some(EnvironmentInfo::Gcp(_))))
+            {
+                let path = image_path
+                    .strip_prefix(&format!("{cloud_project}/"))
+                    .unwrap_or_default();
+                let owner = alien_core::gar_repository::project_id_for_path(path, gar_prefix);
+                let repository = path.split('/').next().unwrap_or_default();
+                (
+                    format!("{cloud_project}/{repository}"),
+                    owner == Some(project_id),
+                )
+            } else {
+                let own = image_path == own_repository
+                    || (entry.config.downcast_ref::<Worker>().is_some()
+                        && project_id == "default"
+                        && image_path == prefix);
+                (image_path, own)
             };
             // The host too: the grant is written on this registry, so a same-path repository in
             // another account would be granted here and pulled from there.
             let is_worker = entry.config.downcast_ref::<Worker>().is_some();
-            let proxy_image = is_worker
+            let proxy_image = (is_worker || sandbox_source == SandboxImageSource::Code)
                 && proxy_url.is_some_and(|proxy| {
                     let host = alien_core::image_rewrite::strip_url_scheme(image)
                         .split_once('/')
@@ -1000,10 +951,6 @@ fn collect_image_repositories(
                     host == Some(alien_core::image_rewrite::strip_url_scheme(proxy))
                 });
             let own_registry = served_by_registry(image, registry_endpoint) || proxy_image;
-            // Standalone releases publish workers into the bare prefix; the proxy routes that
-            // repository to the canonical default project. Other projects always use a suffix.
-            let own_repository = repo_id == own_repository
-                || (is_worker && project_id == "default" && repo_id == prefix);
             if !own_repository || !own_registry {
                 warn!(
                     resource_id = %id,
@@ -1061,10 +1008,13 @@ fn stack_has_registry_backed_image(stack: &Stack, sandbox_source: SandboxImageSo
         .any(|(_id, entry)| resource_image_reference(entry, sandbox_source).is_some())
 }
 
-fn ecr_repository_from_image(image: &str, prefix: &str) -> Option<String> {
+fn repository_path_under_prefix(image: &str, prefix: &str) -> Option<String> {
     let repository = image_repository_path(image)?;
 
-    if repository == prefix || repository.starts_with(&format!("{prefix}-")) {
+    if repository == prefix
+        || repository.starts_with(&format!("{prefix}-"))
+        || (prefix.contains('/') && repository.starts_with(&format!("{prefix}/")))
+    {
         Some(repository)
     } else {
         None
@@ -1279,9 +1229,11 @@ mod tests {
     #[async_trait]
     impl ArtifactRegistry for TestArtifactRegistry {
         fn registry_endpoint(&self) -> String {
-            // The ECR shape, since the sandbox check compares the account a reference names
-            // against the account its grant would be written in.
-            "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+            if self.prefix.contains('/') {
+                "https://region-docker.pkg.dev".to_string()
+            } else {
+                "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+            }
         }
 
         fn upstream_repository_prefix(&self) -> String {
@@ -2013,104 +1965,79 @@ mod tests {
     }
 
     #[test]
-    fn gcp_worker_and_sandbox_grants_name_only_own_and_published_resources() {
+    fn gcp_worker_and_sandbox_grants_name_only_their_project_repository() {
         let registry = TestArtifactRegistry {
             prefix: "vendor/artifacts".to_string(),
             fail_remove: false,
             removed_repository_is_gone: false,
         };
         let own = alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap();
-        let mut state = gcp_state_with_stack(worker_stack(&format!(
-            "manager.example.com/vendor/{own}/{PROJECT}/worker:v1"
-        )));
-        state.target_release = Some(ReleaseInfo {
-            release_id: Some("rel_sandbox".to_string()),
-            version: None,
-            description: None,
-            stack: sandbox_stack_with_code(
-                "manager.example.com/vendor/artifacts-shared/agents:v1",
-                None,
-            ),
-        });
-        let mut expected = vec![
-            format!("vendor/{own}"),
-            "vendor/artifacts-shared".to_string(),
-        ];
-        expected.sort();
-        assert_eq!(
-            repository_access(&registry, &state, PROJECT),
-            (expected, false)
-        );
-        let Some(CrossAccountAccess::Gcp(access)) = build_cross_account_access(
-            state.environment_info.as_ref().unwrap(),
-            None,
-            declares_sandbox(&state),
-        ) else {
-            panic!("GCP access");
-        };
-        assert_eq!(
-            access.allowed_service_types,
-            vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
-        );
-        assert_eq!(access.project_numbers, vec!["123456789012"]);
+        for host in [
+            "region-docker.pkg.dev",
+            "manager.example.com",
+            "other.example.com",
+        ] {
+            let mut state = gcp_state_with_stack(worker_stack(&format!(
+                "{host}/vendor/{own}/{PROJECT}/worker:v1"
+            )));
+            state.target_release = Some(ReleaseInfo {
+                release_id: Some("rel_sandbox".to_string()),
+                version: None,
+                description: None,
+                stack: sandbox_stack_with_code(
+                    &format!("{host}/vendor/{own}/{PROJECT}/sandbox:v1"),
+                    None,
+                ),
+            });
+            assert_eq!(
+                repository_access_with_proxy(
+                    &registry,
+                    &state,
+                    PROJECT,
+                    Some("https://manager.example.com")
+                ),
+                if host == "other.example.com" {
+                    (vec![], true)
+                } else {
+                    (vec![format!("vendor/{own}")], false)
+                }
+            );
+        }
     }
 
     #[test]
-    fn standalone_gcp_releases_use_the_configured_repository() {
+    fn standalone_gcp_releases_use_the_default_project_repository() {
         let registry = TestArtifactRegistry {
             prefix: "vendor/artifacts".to_string(),
             fail_remove: false,
             removed_repository_is_gone: false,
         };
-        for path in ["worker", "default/worker"] {
+        let state = gcp_state_with_stack(worker_stack(
+            "region-docker.pkg.dev/vendor/artifacts-default/default/worker:v1",
+        ));
+        assert_eq!(
+            repository_access(&registry, &state, "default"),
+            (vec!["vendor/artifacts-default".to_string()], false)
+        );
+        assert_eq!(
+            repository_access(&registry, &state, PROJECT),
+            (vec![], true)
+        );
+        for path in [
+            "artifacts/worker",
+            "artifacts/default/worker",
+            "artifacts-shared/agents",
+            "artifacts-prj-test/prj_other/worker",
+            "artifacts-default/prj_test/worker",
+        ] {
             let state = gcp_state_with_stack(worker_stack(&format!(
-                "manager.example.com/vendor/artifacts/{path}:v1"
+                "region-docker.pkg.dev/vendor/{path}:v1"
             )));
             assert_eq!(
                 repository_access(&registry, &state, "default"),
-                (vec!["vendor/artifacts".to_string()], false)
-            );
-            assert_eq!(
-                repository_access(&registry, &state, PROJECT),
                 (vec![], true)
             );
         }
-    }
-
-    #[test]
-    fn pre_cutover_gcp_releases_never_open_the_mixed_repository() {
-        let registry = TestArtifactRegistry {
-            prefix: "vendor/artifacts".to_string(),
-            fail_remove: false,
-            removed_repository_is_gone: false,
-        };
-        for path in [format!("{PROJECT}/worker"), "agents".to_string()] {
-            let state = gcp_state_with_stack(worker_stack(&format!(
-                "manager.example.com/vendor/artifacts/{path}:v1"
-            )));
-            assert_eq!(
-                repository_access(&registry, &state, PROJECT),
-                (vec![], true)
-            );
-        }
-    }
-
-    #[test]
-    fn gcp_registry_access_requires_worker_image_under_prefix() {
-        let registry = TestArtifactRegistry {
-            prefix: "test-project/alien-artifacts".to_string(),
-            fail_remove: false,
-            removed_repository_is_gone: false,
-        };
-        let own =
-            alien_core::gar_repository::project_repository("alien-artifacts", PROJECT).unwrap();
-        let state = gcp_state_with_stack(worker_stack(&format!(
-            "manager.example.com/test-project/{own}/{PROJECT}/worker:abc123"
-        )));
-        assert_eq!(
-            repository_ids_for_access(&registry, &state, PROJECT),
-            vec![format!("test-project/{own}")]
-        );
     }
 
     /// What a GCP revoke asked the registry to remove, one entry per call.
@@ -2827,13 +2754,13 @@ mod tests {
             removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(sandbox_stack_with_code(
-            "manager.example.com/test-project/alien-artifacts-shared/agents:abc123",
+            "region-docker.pkg.dev/test-project/alien-artifacts-prj-test/prj_test/sandbox:abc123",
             None,
         ));
 
         assert_eq!(
             repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts-shared".to_string()],
+            vec!["test-project/alien-artifacts-prj-test".to_string()],
             "a GCP sandbox pulls its container from Alien's registry, so it earns the grant"
         );
     }
@@ -2965,7 +2892,7 @@ mod tests {
             "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:latest";
         const GCP_PREFIX: &str = "vendor-project/alien-artifacts";
         const GCP_IMAGE: &str =
-            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts/test-worker:abc123";
+            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts-prj-test/prj_test/test-worker:abc123";
 
         #[derive(Debug, Clone, Copy, PartialEq)]
         enum Answer {

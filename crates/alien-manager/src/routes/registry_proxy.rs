@@ -104,26 +104,16 @@ impl RegistryRoutingTable {
         })
     }
 
-    /// Extract the project_id from an OCI repo path using this table's
-    /// boot-time-static `prefix → platform` map. The provider that owns the
-    /// matching route composes its full repo name as `{prefix}{sep}{name}` —
-    /// `-` for ECR, `/` for GAR/ACR/Local — so we strip the prefix, strip the
-    /// single separator byte, and take everything up to the next `/` as the
-    /// project_id.
-    ///
-    /// Returns `None` when no route matches, when the suffix doesn't start
-    /// with `-` or `/` (defense — a path that didn't go through a provider's
-    /// `make_full_repo_name`), or when the extracted id is empty. Callers
-    /// fall back to `"default"`; the [`crate::auth::Authz`] impl then
-    /// decides whether to allow the push.
+    /// Extract the project ID using the route's provider naming rules.
+    /// GAR requires both the repository name and the original project ID in the image path
+    /// to agree. Other providers use the first segment after the configured prefix.
+    /// Returns `None` for a path that does not identify a project.
     pub fn project_id_for_repo<'a>(&self, repo_name: &'a str) -> Option<&'a str> {
         let route = self.resolve(repo_name)?;
         if route.platform == Platform::Gcp {
             let (project, prefix) = route.prefix.split_once('/')?;
             let path = repo_name.strip_prefix(&format!("{project}/"))?;
-            if path.starts_with(&format!("{prefix}-prj-")) {
-                return alien_core::gar_repository::project_id_for_path(path, prefix);
-            }
+            return alien_core::gar_repository::project_id_for_path(path, prefix);
         }
         project_id_after_prefix(repo_name, route.prefix.as_str())
     }
@@ -1259,10 +1249,20 @@ async fn repository_project(
     subject: &Subject,
     repo_name: &str,
 ) -> Result<ProjectRecord, Response> {
-    let project_id = state
-        .registry_routing_table
-        .project_id_for_repo(repo_name)
-        .unwrap_or("default");
+    let routes = &state.registry_routing_table;
+    let project_id = routes.project_id_for_repo(repo_name);
+    if project_id.is_none()
+        && routes
+            .resolve(repo_name)
+            .is_some_and(|route| route.platform == Platform::Gcp)
+    {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Invalid project repository path.",
+        ));
+    }
+    let project_id = project_id.unwrap_or("default");
     match state.project_store.get_project(subject, project_id).await {
         Ok(Some(project)) => Ok(project),
         Ok(None) => Err(oci_error(
@@ -1486,9 +1486,18 @@ async fn validate_pull_access(
 
 /// Whether an image repo may enter the release's list: only one in the deployment's own
 /// project, so naming another project's repo cannot open it to this deployment's token.
-/// An unattributable repo counts as "default", as a push to it does.
+/// Unattributable GAR paths are refused; other providers retain their default routing.
 fn image_repo_in_own_project(routes: &RegistryRoutingTable, repo: &str, own_project: &str) -> bool {
-    routes.project_id_for_repo(repo).unwrap_or("default") == own_project
+    match routes.project_id_for_repo(repo) {
+        Some(project) => project == own_project,
+        None if routes
+            .resolve(repo)
+            .is_some_and(|route| route.platform == Platform::Gcp) =>
+        {
+            false
+        }
+        None => own_project == "default",
+    }
 }
 
 /// Extract the set of repo names from a release's stack. `proxy_host` is this manager's own
@@ -2530,12 +2539,46 @@ mod tests {
         );
         assert_eq!(
             table.project_id_for_repo("vendor/artifacts/prj_b/worker"),
-            Some("prj_b")
+            None
         );
         assert_eq!(
             table.project_id_for_repo("vendor/artifacts-shared/agents"),
-            Some("shared")
+            None
         );
+    }
+
+    #[test]
+    fn gar_default_project_requires_a_canonical_path() {
+        let table = RegistryRoutingTable::new(vec![registry_route(
+            "vendor/artifacts",
+            Platform::Gcp,
+            "gcp",
+        )])
+        .unwrap();
+        assert_eq!(
+            table.project_id_for_repo("vendor/artifacts-default/default/worker"),
+            Some("default")
+        );
+        assert!(image_repo_in_own_project(
+            &table,
+            "vendor/artifacts-default/default/worker",
+            "default"
+        ));
+        for path in [
+            "vendor/artifacts/default/worker",
+            "vendor/artifacts-shared/agents",
+            "vendor/artifacts-default/prj_b/worker",
+            "vendor/artifacts-prj-b/prj_a/worker",
+        ] {
+            assert_eq!(table.project_id_for_repo(path), None);
+            assert!(!image_repo_in_own_project(&table, path, "default"));
+            assert!(!image_repo_in_own_project(&table, path, "prj_b"));
+        }
+        assert!(!image_repo_in_own_project(
+            &table,
+            "vendor/artifacts-prj-b/prj_b/worker",
+            "prj_a"
+        ));
     }
 
     #[test]
