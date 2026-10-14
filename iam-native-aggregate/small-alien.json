@@ -1,0 +1,98 @@
+{
+  "id": "q5-serial72s",
+  "resources": {
+    "objects-a": {
+      "config": {
+        "type": "storage",
+        "id": "objects-a"
+      },
+      "lifecycle": "frozen",
+      "dependencies": []
+    },
+    "objects-b": {
+      "config": {
+        "type": "storage",
+        "id": "objects-b"
+      },
+      "lifecycle": "frozen",
+      "dependencies": [
+        {
+          "type": "storage",
+          "id": "objects-a"
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "profiles": {
+      "reader": {
+        "objects-a": [
+          {
+            "id": "read",
+            "description": "Read synthetic objects",
+            "platforms": {
+              "aws": [
+                {
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject"
+                    ]
+                  },
+                  "binding": {
+                    "resource": {
+                      "resources": [
+                        "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0009"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "objects-b": [
+          {
+            "id": "read",
+            "description": "Read synthetic objects",
+            "platforms": {
+              "aws": [
+                {
+                  "grant": {
+                    "actions": [
+                      "s3:GetObject"
+                    ]
+                  },
+                  "binding": {
+                    "resource": {
+                      "resources": [
+                        "arn:aws:s3:::q5-policy-control/objects/object-0000",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0001",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0002",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0003",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0004",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0005",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0006",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0007",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0008",
+                        "arn:aws:s3:::q5-policy-control/objects/object-0009"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

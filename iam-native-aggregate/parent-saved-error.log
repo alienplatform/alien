@@ -1,0 +1,9 @@
+Actual manager resource error captured after original parent setup
+Partial inventory: two S3 buckets and one IAM role
+First inline policy accepted: 5409 characters
+Second inline policy rejected: 5409 characters
+Cloud platform operation failed: Failed to apply permission 'read' to role 'q5-b72p-reader-sa'
+Quota exceeded: Maximum policy size of 10240 bytes exceeded for role q5-b72p-reader-sa
+AWS PutRolePolicy: HTTP409 / LimitExceeded
+Saved retryable: true
+CLI remained waiting; interrupted after capture.

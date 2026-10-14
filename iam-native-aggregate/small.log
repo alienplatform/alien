@@ -1,0 +1,8 @@
+$ alien deploy --name q5-serial72s --platform aws --token-file deployment-token
+Deploying q5-serial72s to aws
+Setup complete. Waiting for the manager to provision the deployment...
+> Success! Deployment is running.
+Deployment q5-serial72s ([DEPLOYMENT])
+Next alien deployments get [DEPLOYMENT]
+
+Exit: 0

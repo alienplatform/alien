@@ -1,0 +1,34 @@
+{
+  "featureRevision": "b668e1bdb",
+  "parentRevision": "aa42e2f38",
+  "orderedFixture": "objects-b depends on objects-a",
+  "negativeNeeded": 10818,
+  "negativeLimit": 10240,
+  "negativeExit": 1,
+  "negativeResourceStateCount": 0,
+  "negativeExactProviderSetsUnchanged": true,
+  "parentPartialBuckets": 2,
+  "parentPartialRoles": 1,
+  "parentAcceptedInlinePolicies": 1,
+  "parentNativeError": "HTTP409 LimitExceeded",
+  "parentRetryable": true,
+  "parentCLIExit": -2,
+  "positiveExit": 0,
+  "positiveInlineSizes": [
+    639,
+    639
+  ],
+  "parentCleanupManagerRestartRequired": true,
+  "normalDestroyExitCodes": [
+    0,
+    0,
+    0
+  ],
+  "cleanupExactProviderSetsRestored": true,
+  "activeOwnedResources": 0,
+  "limitations": [
+    "Default concurrent original-parent control accepted both5409-character policies; ordered parent and sequential native calls rejected the second. Timing explains the differential but concurrency mechanism was not traced.",
+    "Counts desired resolved setup documents only; retained policies and unsupported contexts remain incomplete warnings.",
+    "No new evidence for Remote Bindings or management role aggregation in this session."
+  ]
+}

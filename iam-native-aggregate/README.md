@@ -1,0 +1,13 @@
+# Real AWS IAM role aggregate setup proof
+
+Feature b668e1bdb; original parent aa42e2f38. Two frozen Storage resources target one reader role with separate resource-scoped inline policies. The second resource depends on the first, so the provider writes happen in order. Each policy is 5,409 compact characters; together they require 10,818 against the per-role 10,240 limit. No workload objects are read: the synthetic grants reference nonexistent test objects.
+
+Original parent: `alien deploy --name q5-serial72p --platform aws --token-file deployment-token` created two buckets and one reader role. The first policy succeeded; the second returned AWS PutRolePolicy HTTP409 / LimitExceeded. The saved resource error was retryable and the CLI kept waiting. The observer interrupted it after capturing the error and provider inventory. `parent.log` is the actual terminal output; `parent-saved-error.log` presents the actual saved manager error and observed inventory, explicitly labeled as such.
+
+Feature: the same ordered fixture returned exit1, naming reader/10,818/10,240 before provisioning. Manager status was preflights-failed with zero resource states. Complete AWS IAM RoleId and S3 bucket-name sets matched the baseline exactly after the rejection. Reducing each grant to ten object ARNs passed (CLI0/running); both inline policies were read back at 639 characters each.
+
+All scenario resources were removed. The original-parent retry loop stalled deletion until the standalone manager was restarted; resumed normal destroy then exited0. Subsequent native deletion attempts returned NoSuchEntity because the role and policy were already removed, so they made no changes. Small and negative normal destroy both exited0. Final RoleId and bucket-name sets match the initial baseline exactly.
+
+A concurrent original-parent control without the dependency unexpectedly accepted both 5,409-character policies. Sequential native PutRolePolicy controls consistently accepted the first and rejected the second, including disjoint grants (5,609 or 8,359 each). Individually oversized 10,709/11,109-character documents were rejected too. These controls demonstrate that the default concurrent run is not a reliable negative quota fixture; the provider's concurrency mechanism was not traced. The native sizing role was deleted and get-role returned NoSuchEntity.
+
+This proves resource-policy aggregation for a fresh workload role through the normal CLI setup flow. It does not establish headroom for retained policies, management roles, Remote Bindings, or unsupported writer contexts. Incomplete coverage warnings remain. Current-head CI remains pending; this is not a feature-completion claim.

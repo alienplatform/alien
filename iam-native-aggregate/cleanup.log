@@ -1,0 +1,7 @@
+Parent: deletion stalled; standalone manager restarted; resumed normal destroy exit0.
+Native deletion attempts found role already absent (NoSuchEntity); no native deletion needed.
+Feature negative: normal destroy exit0.
+Small control: normal destroy exit0.
+Exact AWS IAM RoleId and S3 bucket-name sets equal the initial baseline.
+Active owned resources: 0.
+Native IAM sizing role: delete0 / get-role NoSuchEntity.

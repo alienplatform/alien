@@ -1,0 +1,10 @@
+$ alien deploy --name q5-serial72o --platform aws --token-file deployment-token
+Deploying q5-serial72o to aws
+deployment step loop failed
+Cause:
+  - Preflight checks failed
+  - Validation failed with 1 errors and 2 warnings
+Failed checks:
+  - IAM role for permission profile 'reader' needs at least 10818 inline policy characters across setup resources; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+
+Exit: 1

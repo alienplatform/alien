@@ -1,0 +1,5 @@
+$ alien deploy --name q5-serial72p --platform aws --token-file deployment-token
+Deploying q5-serial72p to aws
+
+Exit: -2
+Observer interrupted original CLI after saved retryable provider quota failure.
