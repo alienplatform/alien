@@ -831,17 +831,62 @@ impl GcpArtifactRegistryController {
         let location_owned = location.clone();
         let repository_id_owned = repository_name.clone();
         let config_id_owned = config.id.clone();
-        let iam_policy = IamPolicy {
-            version: Some(3),
-            bindings,
-            etag: None,
-            kind: None,
-            resource_id: None,
-        };
 
         let client = ctx
             .service_provider
             .get_gcp_artifact_registry_client(gcp_config)?;
+        // An adopted repository may already grant others; add to its policy behind its etag
+        // rather than replace it.
+        let mut iam_policy = client
+            .get_repository_iam_policy(
+                project_id.clone(),
+                location.clone(),
+                repository_name.clone(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read the IAM policy of Artifact Registry repository '{}'",
+                    repository_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
+        let mut changed = false;
+        for binding in bindings {
+            match iam_policy.bindings.iter_mut().find(|existing| {
+                existing.role == binding.role
+                    && existing
+                        .condition
+                        .as_ref()
+                        .map(|condition| &condition.expression)
+                        == binding
+                            .condition
+                            .as_ref()
+                            .map(|condition| &condition.expression)
+            }) {
+                Some(existing) => {
+                    for member in binding.members {
+                        if !existing.members.contains(&member) {
+                            existing.members.push(member);
+                            changed = true;
+                        }
+                    }
+                }
+                None => {
+                    iam_policy.bindings.push(binding);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            info!(
+                repository_id = %repository_name,
+                "Artifact Registry repository IAM policy already holds its grants"
+            );
+            return Ok(());
+        }
+        iam_policy.version = Some(3);
+
         client
             .set_repository_iam_policy(
                 project_id_owned,
@@ -1033,6 +1078,22 @@ mod tests {
     ) -> Arc<MockArtifactRegistryApi> {
         let mut mock_ar = MockArtifactRegistryApi::new();
 
+        // An adopted repository already grants someone else, behind an etag.
+        mock_ar
+            .expect_get_repository_iam_policy()
+            .returning(|_, _, _| {
+                Ok(IamPolicy {
+                    version: Some(1),
+                    bindings: vec![alien_gcp_clients::iam::Binding {
+                        role: "roles/artifactregistry.reader".to_string(),
+                        members: vec!["user:keep@example.com".to_string()],
+                        condition: None,
+                    }],
+                    etag: Some("original".to_string()),
+                    kind: None,
+                    resource_id: None,
+                })
+            });
         mock_ar
             .expect_set_repository_iam_policy()
             .returning(move |_, _, _, policy| {
@@ -1116,9 +1177,11 @@ mod tests {
         assert!(registry_outputs.pull_role.is_some());
         assert!(registry_outputs.push_role.is_some());
 
-        // The binding's pull and push accounts reach the repository that holds every name.
+        // The binding's pull and push accounts reach the repository that holds every name,
+        // added to the existing policy behind its etag.
         let policies = written.lock().unwrap().clone();
         assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].etag.as_deref(), Some("original"));
         let grants: Vec<(String, Vec<String>)> = policies[0]
             .bindings
             .iter()
@@ -1129,10 +1192,13 @@ mod tests {
             vec![
                 (
                     "roles/artifactregistry.reader".to_string(),
-                    vec![format!(
-                        "serviceAccount:{}",
-                        registry_outputs.pull_role.clone().unwrap()
-                    )]
+                    vec![
+                        "user:keep@example.com".to_string(),
+                        format!(
+                            "serviceAccount:{}",
+                            registry_outputs.pull_role.clone().unwrap()
+                        )
+                    ]
                 ),
                 (
                     "roles/artifactregistry.writer".to_string(),
