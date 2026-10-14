@@ -1,0 +1,14 @@
+[
+  {
+    "scenario": "oversized",
+    "exit": 1,
+    "files": []
+  },
+  {
+    "scenario": "small",
+    "exit": 0,
+    "files": [
+      "feature-small/build/aws/stack.json"
+    ]
+  }
+]

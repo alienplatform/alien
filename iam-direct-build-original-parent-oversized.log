@@ -1,0 +1,16 @@
+$ alien build --config oversized-alien.json --platforms aws --output-dir original-parent-oversized
+Building session56-iam-build for aws
+Output original-parent-oversized
+> Success! Build complete.
+Stack q5-direct-build
+Artifacts 0
+Duration 0.0s
+Resources
+  - reader (service-account)
+  - writer (service-account)
+Next run alien release to push images and create a release.
+Loading configuration
+Running preflights for q5-direct-build (aws)
+
+Exit: 0
+Build output files: 1
