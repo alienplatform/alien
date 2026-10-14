@@ -1435,7 +1435,10 @@ async fn build_proxy_push_settings(
         (repo_name, registry_host)
     };
 
-    let repo_name = if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+    // A resolved repository has already been provisioned by manager resolution.
+    let repo_name = if manager.repository_name.is_none()
+        && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+    {
         let mut request = manager
             .http_client
             .post(format!("{manager_url}/v1/image-repositories"))
@@ -2366,6 +2369,31 @@ mod tests {
             config.assert_async().await;
             provision.assert_async().await;
         }
+    }
+
+    #[tokio::test]
+    async fn proxy_push_reuses_the_resolved_repository() {
+        let server = httpmock::MockServer::start_async().await;
+        let unexpected = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(403);
+            })
+            .await;
+        let ctx = ExecutionMode::Standalone {
+            server_url: server.base_url(),
+            api_key: "test-token".to_string(),
+        };
+        let mut manager = ctx.resolve_manager("prj_a", "gcp").await.unwrap();
+        manager.repository_name = Some("cloud/artifacts-prj-a/prj_a".to_string());
+        let (settings, _) = build_proxy_push_settings(&manager, &Platform::Gcp, "prj_a")
+            .await
+            .unwrap();
+        assert_eq!(
+            settings.repository,
+            format!("{}/cloud/artifacts-prj-a/prj_a", server.address())
+        );
+        assert_eq!(unexpected.hits_async().await, 0);
     }
 
     #[test]
