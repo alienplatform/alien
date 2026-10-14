@@ -7,8 +7,53 @@ use crate::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, ErrorData, PermissionContext, Result,
 };
-use alien_core::{PermissionSet, PermissionSetReference};
+use alien_core::{PermissionSet, PermissionSetReference, ServiceAccount, Stack, Worker};
 use alien_error::{Context, IntoAlienError};
+
+/// Extra stack-policy statements required for managed Lambda image pulls.
+/// Match the ServiceAccount writer, including its empty-stack-set early return.
+pub fn aws_service_account_injected_statements(
+    account: &ServiceAccount,
+    stack: &Stack,
+    context: &PermissionContext,
+) -> Vec<AwsIamStatement> {
+    if account.stack_permission_sets.is_empty() {
+        return Vec::new();
+    }
+    let Some(managing_account) = context.managing_account_id.as_deref() else {
+        return Vec::new();
+    };
+    let profile = account.id.strip_suffix("-sa").unwrap_or(&account.id);
+    if !stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Worker>()
+            .is_some_and(|worker| worker.get_permissions() == profile)
+    }) {
+        return Vec::new();
+    }
+    vec![
+        AwsIamStatement {
+            sid: "EcrCrossAccountAuth".into(),
+            effect: "Allow".into(),
+            action: vec!["ecr:GetAuthorizationToken".into()],
+            resource: vec!["*".into()],
+            not_resource: Vec::new(),
+            condition: None,
+        },
+        AwsIamStatement {
+            sid: "EcrCrossAccountPull".into(),
+            effect: "Allow".into(),
+            action: vec![
+                "ecr:BatchGetImage".into(),
+                "ecr:GetDownloadUrlForLayer".into(),
+            ],
+            resource: vec![format!("arn:aws:ecr:*:{managing_account}:repository/*")],
+            not_resource: Vec::new(),
+            condition: None,
+        },
+    ]
+}
 
 /// Inputs used to omit implicit grants already covered by the stack document.
 /// Explicit resource references are retained even when a stack grant covers them.

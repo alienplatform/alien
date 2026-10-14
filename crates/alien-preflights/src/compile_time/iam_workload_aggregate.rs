@@ -11,7 +11,8 @@ use alien_core::{InitialSetupAuthority, Platform, ResourceLifecycle, ServiceAcco
 use alien_error::{Context, IntoAlienError};
 use alien_permissions::{
     aws_resource_policies::{
-        aws_resource_policy_name, render_aws_resource_policy, AwsResourcePolicyContext,
+        aws_resource_policy_name, aws_service_account_injected_statements,
+        render_aws_resource_policy, AwsResourcePolicyContext,
     },
     generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
@@ -59,6 +60,9 @@ pub(crate) fn check(
                 Err(_) => incomplete = true,
             }
         }
+        statements.extend(aws_service_account_injected_statements(
+            account, stack, context,
+        ));
         if !statements.is_empty() {
             let document = serde_json::to_string(&AwsIamPolicy {
                 version: "2012-10-17".into(),
@@ -216,6 +220,84 @@ mod tests {
             .mutate(stack, &StackState::new(Platform::Aws), &config)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn injected_lambda_grants_can_overflow_an_otherwise_fitting_role() {
+        let set = serde_json::from_value(serde_json::json!({
+            "id": "q5-global", "description": "Synthetic size boundary",
+            "platforms": {"aws": [{"grant": {"actions": ["s3:GetObject"]},
+                "binding": {"stack": {"resources": [format!("arn:aws:s3:::{}", "x".repeat(9950))]}}}]}
+        })).unwrap();
+        let mut account = ServiceAccount::new("reader-sa".into()).build();
+        account.stack_permission_sets.push(set);
+        let mut stack = Stack::new("q5-injected".into())
+            .add(account.clone(), ResourceLifecycle::Frozen)
+            .add(
+                alien_core::Worker::new("handler".into())
+                    .permissions("reader".into())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "q5-image:latest".into(),
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        stack
+            .permissions
+            .profiles
+            .insert("reader".into(), PermissionProfile::new());
+        let context = PermissionContext::new().with_managing_account_id("123456789012");
+        let base = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                &account.stack_permission_sets[0],
+                BindingTarget::Stack,
+                &context,
+            )
+            .unwrap();
+        let base_size = serde_json::to_string(&base).unwrap().len();
+        assert!(base_size <= 10240);
+        let injected = aws_service_account_injected_statements(&account, &stack, &context);
+        assert_eq!(injected.len(), 2);
+        assert_eq!(
+            injected[1].resource,
+            ["arn:aws:ecr:*:123456789012:repository/*"]
+        );
+        let mut final_policy = base;
+        final_policy.statement.extend(injected);
+        let size = serde_json::to_string(&final_policy).unwrap().len();
+        assert!(size > 10240);
+        let result = super::check(
+            &stack,
+            Platform::Aws,
+            Some(InitialSetupAuthority::DirectSetup),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains(&size.to_string()));
+        assert!(
+            check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup)
+            )
+            .unwrap()
+            .success
+        );
+        stack.resources.shift_remove("handler");
+        assert!(
+            super::check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context
+            )
+            .unwrap()
+            .success
+        );
+        account.stack_permission_sets.clear();
+        assert!(aws_service_account_injected_statements(&account, &stack, &context).is_empty());
     }
 
     #[tokio::test]

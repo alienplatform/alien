@@ -419,6 +419,18 @@ impl PreflightRunner {
                 .with_stack_prefix(stack_state.resource_prefix.clone());
         }
 
+        if let Some(alien_core::ManagementConfig::Aws(management)) = &config.management_config {
+            permission_context =
+                permission_context.with_managing_role_arn(management.managing_role_arn.clone());
+            if let Some(account) =
+                alien_permissions::PermissionContext::extract_account_id_from_role_arn(
+                    &management.managing_role_arn,
+                )
+            {
+                permission_context = permission_context.with_managing_account_id(account);
+            }
+        }
+
         all_results.push(crate::compile_time::iam_workload_aggregate::check(
             &mutated_stack,
             platform,
