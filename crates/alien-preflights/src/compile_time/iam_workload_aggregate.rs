@@ -23,6 +23,7 @@ pub(crate) fn check(
     stack: &Stack,
     platform: Platform,
     authority: Option<InitialSetupAuthority>,
+    context: &PermissionContext,
 ) -> Result<CheckResult> {
     let mut result = CheckResult::success().with_check_metadata(
         Some("IAM_WORKLOAD_INLINE_AGGREGATE"),
@@ -32,7 +33,6 @@ pub(crate) fn check(
         return Ok(result);
     }
     let generator = AwsRuntimePermissionsGenerator::new();
-    let context = PermissionContext::new();
     for (profile_name, profile) in stack.permission_profiles() {
         if profile_name == "management" {
             continue;
@@ -54,7 +54,7 @@ pub(crate) fn check(
         let mut statements = Vec::new();
         let mut incomplete = false;
         for set in &account.stack_permission_sets {
-            match generator.generate_policy(set, BindingTarget::Stack, &context) {
+            match generator.generate_policy(set, BindingTarget::Stack, context) {
                 Ok(policy) => statements.extend(policy.statement),
                 Err(_) => incomplete = true,
             }
@@ -108,7 +108,7 @@ pub(crate) fn check(
                 named_by_resource: explicit,
                 stack_sets: &account.stack_permission_sets,
                 generator: &generator,
-                permission_context: &context,
+                permission_context: context,
             };
             for reference in refs {
                 let Some(set) =
@@ -120,7 +120,7 @@ pub(crate) fn check(
                 let name = aws_resource_policy_name(id, &set.id);
                 let document = match selection.is_redundant(reference) {
                     Ok(true) => continue,
-                    Ok(false) => render_aws_resource_policy(id, &set, &generator, &context)
+                    Ok(false) => render_aws_resource_policy(id, &set, &generator, context)
                         .ok()
                         .map(|policy| policy.document),
                     Err(_) => None,
@@ -156,6 +156,14 @@ mod tests {
     use alien_core::{
         DeploymentConfig, PermissionProfile, PermissionSetReference, StackState, Storage,
     };
+
+    fn check(
+        stack: &Stack,
+        platform: Platform,
+        authority: Option<InitialSetupAuthority>,
+    ) -> Result<CheckResult> {
+        super::check(stack, platform, authority, &PermissionContext::new())
+    }
 
     fn grant(id: &str, count: usize, dynamic: bool) -> PermissionSetReference {
         let resources: Vec<_> = (0..count)
@@ -340,6 +348,122 @@ mod tests {
                 assert!(result.errors[0].contains("10832"), "{:?}", result.errors);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn runner_resolves_deployment_values_without_inventing_resource_names() {
+        let mut stack = prepared(10, vec![]).await;
+        let resources: Vec<_> = (0..100)
+            .map(|index| format!(
+                "arn:aws:lambda:${{awsRegion}}:${{awsAccountId}}:function:${{stackPrefix}}-object-{index:04}"
+            ))
+            .collect();
+        let set = serde_json::from_value(serde_json::json!({
+            "id": "read", "description": "Synthetic deployment-context grants",
+            "platforms": {"aws": [{"grant": {"actions": ["lambda:GetFunction"]},
+            "binding": {"resource": {"resources": resources}}}]}
+        }))
+        .unwrap();
+        let reference = PermissionSetReference::from_inline(set);
+        let profile = stack.permissions.profiles.get_mut("reader").unwrap();
+        profile
+            .0
+            .insert("objects-a".into(), vec![reference.clone()]);
+        profile.0.insert("objects-b".into(), vec![reference]);
+        // Without deployment values these documents are unresolved and cannot block.
+        assert!(
+            check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup)
+            )
+            .unwrap()
+            .success
+        );
+        let state = StackState::with_resource_prefix(Platform::Aws, "q5-context".into());
+        let client = alien_core::ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "us-east-1".into(),
+            credentials: alien_core::AwsCredentials::Imds { endpoint: None },
+            service_overrides: None,
+        }));
+        let mut registry = crate::PreflightRegistry::new();
+        registry.add_mutation(Box::new(ServiceAccountMutation));
+        let runner = crate::runner::PreflightRunner::with_registry(registry);
+        let error = runner
+            .run_deployment_time_preflights(
+                stack.clone(),
+                &state,
+                &config(),
+                &client,
+                None,
+                None,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "VALIDATION_FAILED");
+        assert!(!error.retryable);
+        let Some(ErrorData::ValidationFailed { results, .. }) = error.error else {
+            panic!("structured results expected");
+        };
+        let aggregate = results
+            .iter()
+            .find(|result| result.code.as_deref() == Some("IAM_WORKLOAD_INLINE_AGGREGATE"))
+            .unwrap();
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_stack_prefix("q5-context");
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let profile = stack.permissions.profiles.get("reader").unwrap();
+        let set = profile.0["objects-a"][0].resolve(|_| None).unwrap();
+        let document = render_aws_resource_policy("objects-a", &set, &generator, &context)
+            .unwrap()
+            .document;
+        assert!(document
+            .contains("arn:aws:lambda:us-east-1:123456789012:function:q5-context-object-0000"));
+        let size = 2 * document
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .count();
+        assert!(size > 10_240);
+        assert_eq!(aggregate.errors.len(), 1);
+        assert!(
+            aggregate.errors[0].contains(&size.to_string()),
+            "{:?}",
+            aggregate.errors
+        );
+        assert_eq!(aggregate.warnings.len(), 1);
+        // Missing physical names still do not become guessed deployment-prefix names.
+        let unresolved = prepared(100, vec![grant("read", 200, true)]).await;
+        assert!(
+            super::check(
+                &unresolved,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context
+            )
+            .unwrap()
+            .success
+        );
+        stack.resources.shift_remove("objects-b");
+        assert!(
+            runner
+                .run_deployment_time_preflights(
+                    stack,
+                    &state,
+                    &config(),
+                    &client,
+                    None,
+                    None,
+                    Some(InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .unwrap()
+                .1
+                .success
+        );
     }
 
     fn config() -> DeploymentConfig {

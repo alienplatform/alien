@@ -409,10 +409,21 @@ impl PreflightRunner {
                 })
             });
 
+        // Match the deployment values used by the IAM policy writers. Physical
+        // resource names remain unresolved until their controller inputs are known.
+        let mut permission_context = alien_permissions::PermissionContext::new();
+        if let Some(aws) = client_config.aws_config() {
+            permission_context = permission_context
+                .with_aws_account_id(aws.account_id.clone())
+                .with_aws_region(aws.region.clone())
+                .with_stack_prefix(stack_state.resource_prefix.clone());
+        }
+
         all_results.push(crate::compile_time::iam_workload_aggregate::check(
             &mutated_stack,
             platform,
             setup_authority,
+            &permission_context,
         )?);
 
         let prerequisite_summary = self
