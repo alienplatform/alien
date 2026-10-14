@@ -145,6 +145,14 @@ export type UpdateDeploymentComputeRequestComputeUnion =
 
 export type UpdateDeploymentComputeRequest = {
   compute?: UpdateDeploymentComputeRequestCompute | string | null | undefined;
+  /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -472,6 +480,7 @@ export type UpdateDeploymentComputeRequest$Outbound = {
     | string
     | null
     | undefined;
+  quotaWarningOverrides?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -485,6 +494,7 @@ export const UpdateDeploymentComputeRequest$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
 });
 
 export function updateDeploymentComputeRequestToJSON(

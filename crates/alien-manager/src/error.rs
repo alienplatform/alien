@@ -46,6 +46,16 @@ pub enum ErrorData {
         status: String,
     },
 
+    /// Override settings cannot change while a deployment is active or locked.
+    #[error(
+        code = "QUOTA_OVERRIDES_NOT_SAVED",
+        message = "Quota warning overrides for deployment '{deployment_id}' were not saved; wait until it is idle and unlocked, then try again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    QuotaOverridesNotSaved { deployment_id: String },
+
     /// Deployment group not found
     #[error(
         code = "DEPLOYMENT_GROUP_NOT_FOUND",

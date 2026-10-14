@@ -149,6 +149,17 @@ pub async fn status_command(
             None => fetch_remote_deployment_info(&token, &manager_url, &deployment_id).await?,
         };
 
+    let settings: alien_core::StackSettings = deployment
+        .stack_settings
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize deployment stack settings".into(),
+        })?
+        .unwrap_or_default();
+
     if args.json {
         let resources = deployment_info
             .resources
@@ -170,6 +181,7 @@ pub async fn status_command(
             "platform": deployment.platform,
             "managerUrl": manager_url,
             "status": deployment.status,
+            "quotaWarningOverrides": settings.quota_warning_overrides,
             "currentReleaseId": deployment.current_release_id,
             "desiredReleaseId": deployment.desired_release_id,
             "error": deployment.error,
@@ -190,6 +202,12 @@ pub async fn status_command(
     output::status("Platform:", &deployment.platform.to_string());
     output::status("Manager:", &manager_url);
     output::status("Status:", &deployment.status);
+    if !settings.quota_warning_overrides.is_empty() {
+        output::status(
+            "Quota warning overrides:",
+            &settings.quota_warning_overrides.join(", "),
+        );
+    }
 
     if let Some(ref release_id) = deployment.current_release_id {
         output::status("Current Release:", release_id);
@@ -400,6 +418,26 @@ fn collect_error_chain(error: &JsonValue, lines: &mut Vec<String>) {
         lines.push(summary);
     }
 
+    // Validation summaries contain counts; the saved results contain the
+    // actionable failures and warnings, including quota identities and limits.
+    if json_string_field(object, "code") == Some("VALIDATION_FAILED") {
+        if let Some(results) = object
+            .get("context")
+            .and_then(|context| context.get("results"))
+            .and_then(JsonValue::as_array)
+        {
+            for result in results {
+                for (field, label) in [("errors", "Error"), ("warnings", "Warning")] {
+                    if let Some(messages) = result.get(field).and_then(JsonValue::as_array) {
+                        for message in messages.iter().filter_map(JsonValue::as_str) {
+                            lines.push(format!("{label}: {message}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for key in ["source", "cause"] {
         if let Some(source) = object.get(key) {
             collect_error_chain(source, lines);
@@ -488,6 +526,33 @@ mod tests {
                 "PREFLIGHT_CHECKS_FAILED: Compute pool general requires at least 4 vCPU"
             ]
         );
+    }
+
+    #[test]
+    fn shows_all_saved_validation_failures_and_warnings() {
+        let error = serde_json::json!({
+            "code": "PREFLIGHT_CHECKS_FAILED",
+            "message": "Preflight checks failed",
+            "source": {
+                "code": "VALIDATION_FAILED",
+                "message": "Validation failed with 2 errors and 1 warnings",
+                "context": { "results": [
+                    { "errors": [], "warnings": [] },
+                    { "errors": [
+                        "Running On-Demand vCPUs (L-1216C47A, eu-west-1): used 0, applied limit 16, additional needed 18. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A",
+                        "VPC quota is exhausted"
+                    ], "warnings": ["GPU usage is unknown; missing permission"] }
+                ] }
+            }
+        });
+
+        assert_eq!(format_error_chain(&error), vec![
+            "PREFLIGHT_CHECKS_FAILED: Preflight checks failed",
+            "VALIDATION_FAILED: Validation failed with 2 errors and 1 warnings",
+            "Error: Running On-Demand vCPUs (L-1216C47A, eu-west-1): used 0, applied limit 16, additional needed 18. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A",
+            "Error: VPC quota is exhausted",
+            "Warning: GPU usage is unknown; missing permission",
+        ]);
     }
 
     #[test]

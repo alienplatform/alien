@@ -20,6 +20,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 * [getDeploymentInfo](#getdeploymentinfo)
 * [getDeploymentLogs](#getdeploymentlogs)
 * [setDeploymentPin](#setdeploymentpin)
+* [setQuotaWarningOverrides](#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 * [redeploy](#redeploy)
 * [retryDeployment](#retrydeployment)
 * [getDeploymentRouting](#getdeploymentrouting)
@@ -752,6 +753,88 @@ run();
 ### Response
 
 **Promise\<[models.DeploymentRoutingResponse](../../models/deploymentroutingresponse.md)\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## setQuotaWarningOverrides
+
+Save settings only; retrying a failed deployment remains an explicit operation.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="set_quota_warning_overrides" method="patch" path="/v1/deployments/{id}/quota-warning-overrides" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  await alienManager.deployments.setQuotaWarningOverrides("<id>", {
+    quotaWarningOverrides: [
+      "<value 1>",
+      "<value 2>",
+    ],
+  });
+
+
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { deploymentsSetQuotaWarningOverrides } from "@alienplatform/manager-api/funcs/deploymentsSetQuotaWarningOverrides.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsSetQuotaWarningOverrides(alienManager, "<id>", {
+    quotaWarningOverrides: [
+      "<value 1>",
+      "<value 2>",
+    ],
+  });
+  if (res.ok) {
+    const { value: result } = res;
+
+  } else {
+    console.log("deploymentsSetQuotaWarningOverrides failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                                                           | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Deployment ID                                                                                                                                                                  |
+| `setQuotaWarningOverridesRequest`                                                                                                                                              | [models.SetQuotaWarningOverridesRequest](../../models/setquotawarningoverridesrequest.md)                                                                                      | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<void\>**
 
 ### Errors
 
