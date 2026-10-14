@@ -1,0 +1,22 @@
+ℹ Resolving deployment install context via platform API...
+
+Alien Deploy
+
+  Platform       AWS
+  Manager        https://manager.example.invalid
+  Name           q5-policy137warning-visible
+  Compute        provider defaults (no compute pools selected)
+
+✔ Connected to manager
+2026-10-14T14:33:03.585049Z  WARN   Warning: Running On-Demand vCPUs (L-1216C47A, eu-west-1): Cluster cannot scale to its configured maximum: used 0, limit 16, needs 18 additional capacity (shortfall 2). Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A check=Cloud quotas have room for additional deployment demand
+Deployment status: initializing
+  cluster (compute-cluster): pending
+  default-network (network): running
+  management (remote-stack-management): provisioning
+  management (remote-stack-management): running
+  cluster (compute-cluster): provisioning
+Deployment status: provisioning
+  cluster (compute-cluster): running
+✔ Setup complete. Your deployment is being provisioned and will be ready shortly.
+
+✔ Deployment 'q5-policy137warning-visible' is active.

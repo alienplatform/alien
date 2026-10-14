@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-14",
+  "region": "eu-west-1",
+  "ownedResourceCounts": {
+    "Roles": 0,
+    "InstanceProfiles": 0,
+    "AutoScalingGroups": 0,
+    "LaunchTemplates": 0,
+    "SecurityGroups": 0,
+    "Instances": 0
+  },
+  "vmLaunched": false,
+  "quotaOverridesChanged": false,
+  "gracefulDestroyExitCodes": [
+    0,
+    0,
+    0
+  ],
+  "redaction": "Unrelated provider resource identifiers omitted."
+}

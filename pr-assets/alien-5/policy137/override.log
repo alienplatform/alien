@@ -1,0 +1,17 @@
+ℹ Resolving deployment install context via platform API...
+
+Alien Deploy
+
+  Platform       AWS
+  Manager        https://manager.example.invalid
+  Name           q5-policy137override-corrected
+  Compute        provider defaults (no compute pools selected)
+
+✔ Connected to manager
+2026-10-14T14:46:06.832135Z  WARN   Warning: Deployment quota override: Running On-Demand vCPUs (L-1216C47A, eu-west-1): used 0, applied limit 16, additional needed 32. Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/ec2/quotas/L-1216C47A check=Cloud quotas have room for additional deployment demand
+Deployment status: initializing
+  cluster (compute-cluster): pending
+  default-network (network): running
+  management (remote-stack-management): provisioning
+  management (remote-stack-management): running
+  cluster (compute-cluster): provisioning
