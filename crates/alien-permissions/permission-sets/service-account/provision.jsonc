@@ -26,6 +26,16 @@
       }
     ],
     "gcp": [
+      // Listing usage requires the project even for a resource-scoped grant.
+      {
+        "label": "service-account-quota-inventory",
+        "description": "Read project service-account inventory for quota preflights",
+        "grant": { "permissions": ["iam.serviceAccounts.list"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
       {
         "grant": {
           "permissions": [
