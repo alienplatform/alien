@@ -50,6 +50,27 @@ use alien_macros::controller;
 use chrono::Utc;
 use uuid::Uuid;
 
+/// A reservation race has the same quota identity as the early account check.
+fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &str) -> AlienError {
+    if let Some(CloudClientErrorData::InvalidInput { message, .. }) = &error.error {
+        if message.contains("UnreservedConcurrentExecution") {
+            let quota = alien_preflights::runtime::aws_lambda::quota_identity(region);
+            let message = format!(
+                "{} ({}, {}): {}. Request an increase: {}",
+                quota.name,
+                quota.provider_id,
+                quota.scope,
+                message.trim_end_matches('.'),
+                quota.increase_url
+            );
+            return error
+                .context(ErrorData::CloudQuotaExceeded { quota, message })
+                .into_generic();
+        }
+    }
+    error.into_generic()
+}
+
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
 
 /// Days a worker's CloudWatch log group keeps events. Matches the log group
@@ -2504,6 +2525,7 @@ impl AwsWorkerController {
             client
                 .put_function_concurrency(&aws_worker_name, limit)
                 .await
+                .map_err(|error| lambda_concurrency_error(error, &aws_cfg.region))
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to set worker reserved concurrency".to_string(),
                     resource_id: Some(config.id.clone()),
@@ -4084,6 +4106,7 @@ impl AwsWorkerController {
                     client
                         .put_function_concurrency(&aws_worker_name, limit)
                         .await
+                        .map_err(|error| lambda_concurrency_error(error, &aws_cfg.region))
                         .context(ErrorData::CloudPlatformError {
                             message: "Failed to update worker reserved concurrency".to_string(),
                             resource_id: Some(config.id.clone()),

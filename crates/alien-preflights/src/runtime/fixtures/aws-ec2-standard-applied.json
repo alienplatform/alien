@@ -1,0 +1,18 @@
+{
+  "Quota": {
+    "QuotaCode": "L-1216C47A",
+    "ServiceCode": "ec2",
+    "Value": 16.0,
+    "UsageMetric": {
+      "MetricNamespace": "AWS/Usage",
+      "MetricName": "ResourceCount",
+      "MetricDimensions": {
+        "Class": "Standard/OnDemand",
+        "Resource": "vCPU",
+        "Service": "EC2",
+        "Type": "Resource"
+      },
+      "MetricStatisticRecommendation": "Maximum"
+    }
+  }
+}

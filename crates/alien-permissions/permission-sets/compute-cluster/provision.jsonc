@@ -3,6 +3,14 @@
   "description": "Allows creating and managing ComputeCluster compute infrastructure. Derived from AwsComputeClusterController, GcpComputeClusterController, AzureComputeClusterController API calls.",
   "platforms": {
     "aws": [
+      // Applied EC2 quota values and public instance-type hardware metadata.
+      {
+        "grant": { "actions": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"] },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
       // These EC2 discovery reads require Resource "*". Provisioning adopts
       // launch templates and security groups created by interrupted attempts.
       {
