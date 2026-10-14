@@ -44,7 +44,8 @@ impl AwsKeyController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        self.available = Some(false);
+        // A failed check keeps the last observation unless AWS answered about the
+        // key itself; a throttle or 5xx must not pause every dependent resource.
         let config = ctx.desired_resource_config::<Key>()?;
         let key_arn = self.key_arn.as_deref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceStateSerializationFailed {
@@ -59,6 +60,11 @@ impl AwsKeyController {
         let metadata = client
             .describe_key(key_arn)
             .await
+            .inspect_err(|error| {
+                if super::aws_key_revoked(error) {
+                    self.available = Some(false);
+                }
+            })
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to read AWS KMS key metadata".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -79,6 +85,11 @@ impl AwsKeyController {
             // public probe text exercises the gateway without permitting data reads.
             usable = alien_aws_clients::kms::probe_external_key(client.as_ref(), key_arn)
                 .await
+                .inspect_err(|error| {
+                    if super::aws_key_revoked(error) {
+                        self.available = Some(false);
+                    }
+                })
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to check customer key availability".to_string(),
                     resource_id: Some(config.id.clone()),
@@ -138,7 +149,9 @@ impl AwsKeyController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         let key_arn = self.key_arn.clone()?;
         Some(ResourceOutputs::new(KeyOutputs {
-            available: Some(self.available.unwrap_or(false)),
+            // A key whose checks kept failing until RefreshFailed is no longer
+            // observed, so its last value would never change again.
+            available: Some(self.state == AwsKeyState::Ready && self.available == Some(true)),
             fingerprint: KeyFingerprint::Aws {
                 key_arn: key_arn.clone(),
             },
