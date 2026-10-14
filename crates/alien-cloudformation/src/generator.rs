@@ -1,6 +1,8 @@
 use crate::{
     emitters::{aws::helpers::list_parameter_value, enabled},
-    inline_policy::{consolidate_role_inline_policies, expression_references},
+    inline_policy::{
+        consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
+    },
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -568,6 +570,7 @@ pub fn generate_cloudformation_template(
         )?;
     }
 
+    validate_role_policy_limits(&template)?;
     Ok(template)
 }
 

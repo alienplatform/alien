@@ -47,6 +47,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -79,7 +80,7 @@ const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
 
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
+    aws_prefixed_resource_name(prefix, name)
 }
 
 fn readiness_probe_dns_override(

@@ -21,8 +21,16 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
     Binding, CreateRoleRequest, IamApi, IamPolicy, Role, RoleLaunchStage,
 };
-use alien_permissions::{generators::*, BindingTarget, PermissionContext};
+use alien_permissions::{
+    aws_resource_policies::{
+        aws_management_resource_policy_name, aws_resource_policy_name, render_aws_resource_policy,
+        AwsResourcePolicyContext,
+    },
+    generators::*,
+    BindingTarget, PermissionContext,
+};
 
+use indexmap::IndexMap;
 use tracing::{debug, info, warn};
 
 fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
@@ -1523,33 +1531,24 @@ impl ResourcePermissionsHelper {
             .map(|service_account| service_account.stack_permission_sets.as_slice())
             .unwrap_or_default();
 
+        let selection = AwsResourcePolicyContext {
+            named_by_resource: named_by_resource.map(Vec::as_slice).unwrap_or_default(),
+            stack_sets,
+            generator,
+            permission_context,
+        };
         let mut kept = Vec::new();
         for reference in refs {
-            // Resolved first: a reference may name its set by an alias, and the stack-level
-            // policy holds resolved sets.
-            let stack_set = reference
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .and_then(|resolved| stack_sets.iter().find(|set| **set == resolved));
-            let granted = match stack_set {
-                Some(set) if !named_by_resource.is_some_and(|named| named.contains(&reference)) => {
-                    let generate = |target| {
-                        generator
-                            .generate_policy(set, target, permission_context)
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to generate policy for permission set '{}'",
-                                    set.id
-                                ),
-                                resource_id: Some(resource_id.to_string()),
-                            })
-                    };
-                    aws_policy_grants(
-                        &generate(BindingTarget::Stack)?,
-                        &generate(BindingTarget::Resource)?,
-                    )
-                }
-                _ => false,
-            };
+            let granted =
+                selection
+                    .is_redundant(&reference)
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to select resource policy for permission set '{}'",
+                            reference.id()
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    })?;
             if granted {
                 debug!(
                     resource_id = %resource_id,
@@ -1823,6 +1822,46 @@ impl ResourcePermissionsHelper {
 
         let service_account_role_name = Self::get_aws_service_account_role_name(ctx, profile_name)?;
 
+        let policies = Self::prepare_aws_profile_policies(
+            resource_id,
+            profile_name,
+            permission_set_refs,
+            generator,
+            permission_context,
+        )?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+        for (policy_name, document) in policies {
+            iam_client
+                .put_role_policy(&service_account_role_name, &policy_name, &document)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to apply policy '{policy_name}' to role '{service_account_role_name}'"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+
+            info!(
+                role_name = %service_account_role_name,
+                policy_name = %policy_name,
+                resource_id = %resource_id,
+                "Applied AWS resource-scoped permission"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Render the final workload policy batch and reject certain aggregate overflow
+    /// before any IAM writes. Selection has already resolved setup ownership.
+    fn prepare_aws_profile_policies(
+        resource_id: &str,
+        profile_name: &str,
+        permission_set_refs: &[PermissionSetReference],
+        generator: &AwsRuntimePermissionsGenerator,
+        permission_context: &PermissionContext,
+    ) -> Result<IndexMap<String, String>> {
+        let mut policies = IndexMap::new();
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -1833,46 +1872,44 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            let policy = generator
-                .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to generate policy for permission set '{}'",
-                        permission_set.id
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            let policy = render_aws_resource_policy(
+                resource_id,
+                &permission_set,
+                generator,
+                permission_context,
+            )
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to generate policy for permission set '{}'",
+                    permission_set.id
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
 
-            let policy_json = serde_json::to_string_pretty(&policy)
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to serialize IAM policy document".to_string(),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-            let policy_name = aws_resource_policy_name(resource_id, &permission_set.id);
-
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-            iam_client
-                .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to apply permission '{}' to role '{}'",
-                        permission_set.id, service_account_role_name
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-            info!(
-                role_name = %service_account_role_name,
-                permission_set = %permission_set.id,
-                resource_id = %resource_id,
-                "Applied AWS resource-scoped permission"
-            );
+            // PutRolePolicy replaces a document with the same name. Render
+            // the final batch first so duplicates do not consume extra quota.
+            policies.insert(policy.name, policy.document);
         }
-
-        Ok(())
+        let size: usize = policies
+            .values()
+            .map(|document| {
+                document
+                    .chars()
+                    .filter(|c| !c.is_ascii_whitespace())
+                    .count()
+            })
+            .sum();
+        if size > 10_240 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "IAM role for permission profile '{profile_name}' needs at least {size} inline policy characters from resource '{resource_id}'; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        // Other resources, the stack document and retained policies may use
+        // additional headroom. This batch is only a definite lower bound.
+        Ok(policies)
     }
 
     /// Apply management SA resource-scoped permissions for AWS resources.
@@ -2258,88 +2295,8 @@ impl ResourcePermissionsHelper {
     }
 }
 
-/// The inline policy on the shared Remote Bindings role that carries one resource's remote grant.
-/// Inline policy a resource attaches to a profile's service-account role.
-/// Whether `broad` allows every request `narrow` allows.
-///
-/// Answers yes only when it can prove it: every statement of `narrow` must be an `Allow` with
-/// plain `Resource`s that one `Allow` statement of `broad` matches, with no condition `narrow`
-/// lacks. A `Deny`, a `NotResource` or a differing condition answers no, which keeps the
-/// narrow policy.
-fn aws_policy_grants(broad: &AwsIamPolicy, narrow: &AwsIamPolicy) -> bool {
-    let plain_allow = |statement: &AwsIamStatement| {
-        statement.effect == "Allow" && statement.not_resource.is_empty()
-    };
-    narrow.statement.iter().all(|wanted| {
-        plain_allow(wanted)
-            && broad.statement.iter().any(|granted| {
-                plain_allow(granted)
-                    && (granted.condition.is_none() || granted.condition == wanted.condition)
-                    && wanted.action.iter().all(|action| {
-                        granted.action.iter().any(|pattern| {
-                            iam_pattern_contains(
-                                &pattern.to_ascii_lowercase(),
-                                &action.to_ascii_lowercase(),
-                            )
-                        })
-                    })
-                    && wanted.resource.iter().all(|resource| {
-                        granted
-                            .resource
-                            .iter()
-                            .any(|pattern| iam_pattern_contains(pattern, resource))
-                    })
-            })
-    })
-}
-
-/// Whether every string IAM matches with `narrow` is also matched by `pattern`, both using IAM's
-/// `*` (any run of characters) and `?` (one character).
-///
-/// A wildcard in `narrow` is only accepted against a wildcard in `pattern` at least as wide, so
-/// a `true` is always a real containment; some true containments answer `false`.
-fn iam_pattern_contains(pattern: &str, narrow: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
-    let narrow: Vec<char> = narrow.chars().collect();
-    // covered[j] after processing pattern[..i]: pattern[..i] covers narrow[..j].
-    let mut covered = vec![false; narrow.len() + 1];
-    covered[0] = true;
-    for &p in &pattern {
-        let mut next = vec![false; narrow.len() + 1];
-        for j in 0..=narrow.len() {
-            next[j] = match p {
-                // `*` covers whatever an earlier prefix covered, extended by any character.
-                '*' => covered[j] || (j > 0 && next[j - 1]),
-                // `?` covers one character, or a `?` in `narrow`, never a `*`.
-                '?' => j > 0 && covered[j - 1] && narrow[j - 1] != '*',
-                // A literal never covers a wildcard in `narrow`, which matches more than it.
-                literal => j > 0 && covered[j - 1] && narrow[j - 1] == literal,
-            };
-        }
-        covered = next;
-    }
-    covered[narrow.len()]
-}
-
-fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
-    format!(
-        "alien-{}-{}",
-        resource_id,
-        permission_set_id.replace('/', "-")
-    )
-}
-
-/// Inline policy a resource attaches to the management role.
-fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
-    format!(
-        "alien-mgmt-{}-{}",
-        resource_id,
-        permission_set_id.replace('/', "-")
-    )
-}
-
 pub(crate) fn aws_remote_access_policy_name(resource_id: &str) -> String {
-    format!("alien-{resource_id}-remote-access")
+    alien_permissions::aws_resource_policies::aws_remote_access_policy_name(resource_id)
 }
 
 pub(crate) fn aws_remote_access_policy(
@@ -2348,26 +2305,18 @@ pub(crate) fn aws_remote_access_policy(
     permission_context: &PermissionContext,
     resource_id: &str,
 ) -> Result<AwsIamPolicy> {
-    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
-        .cloned()
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Remote Bindings permission set '{}' is not registered",
-                    definition.permission_set
-                ),
-                resource_id: Some(resource_id.to_string()),
-            })
-        })?;
-    generator
-        .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to generate Remote Bindings policy '{}'",
-                definition.permission_set
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })
+    alien_permissions::aws_resource_policies::aws_remote_access_policy(
+        generator,
+        definition,
+        permission_context,
+    )
+    .context(ErrorData::CloudPlatformError {
+        message: format!(
+            "Failed to generate Remote Bindings policy '{}'",
+            definition.permission_set
+        ),
+        resource_id: Some(resource_id.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -2376,8 +2325,124 @@ mod tests {
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{Stack, Storage};
     use alien_gcp_clients::iam::MockIamApi;
-    use indexmap::IndexMap;
     use mockall::Sequence;
+
+    fn literal_aws_resource_grant(id: &str, count: usize) -> PermissionSetReference {
+        let resources: Vec<_> = (0..count)
+            .map(|index| format!("arn:aws:s3:::q5-policy-control/objects/object-{index:04}"))
+            .collect();
+        PermissionSetReference::from_inline(
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "description": "Read synthetic objects",
+                "platforms": {"aws": [{"grant": {"actions": ["s3:GetObject"]},
+                    "binding": {"resource": {"resources": resources}}}]}
+            }))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn aws_workload_batch_rejects_combined_documents_before_cloud_writes() {
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let context = PermissionContext::new();
+        let grants = [
+            literal_aws_resource_grant("first", 100),
+            literal_aws_resource_grant("second", 100),
+        ];
+        let mut combined_size = 0;
+        for grant in &grants {
+            let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
+                "objects",
+                "reader",
+                std::slice::from_ref(grant),
+                &generator,
+                &context,
+            )
+            .unwrap();
+            assert_eq!(control.len(), 1);
+            let size = control
+                .values()
+                .next()
+                .unwrap()
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .count();
+            assert!(size <= 10_240);
+            combined_size += size;
+        }
+        assert!(combined_size > 10_240);
+        let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects", "reader", &grants, &generator, &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(!error.retryable);
+        let message = error.to_string();
+        assert!(message.contains("reader"), "{message}");
+        assert!(message.contains("objects"), "{message}");
+        assert!(message.contains("10240"), "{message}");
+        assert!(message.contains(&combined_size.to_string()), "{message}");
+        let small = [
+            literal_aws_resource_grant("first", 10),
+            literal_aws_resource_grant("second", 10),
+        ];
+        let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects", "reader", &small, &generator, &context,
+        )
+        .unwrap();
+        assert_eq!(control.len(), 2);
+        for reference in &small {
+            let expected = render_aws_resource_policy(
+                "objects",
+                &reference.resolve(|_| None).unwrap(),
+                &generator,
+                &context,
+            )
+            .unwrap();
+            assert_eq!(control[&expected.name], expected.document);
+        }
+    }
+
+    #[test]
+    fn aws_workload_batch_counts_final_same_name_replacement() {
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let context = PermissionContext::new();
+        // Each fits, but summing both references would falsely reject the role.
+        // The second PutRolePolicy would replace the first document.
+        let grants = [
+            literal_aws_resource_grant("same", 100),
+            literal_aws_resource_grant("same", 99),
+        ];
+        let policies = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects", "reader", &grants, &generator, &context,
+        )
+        .unwrap();
+        assert_eq!(policies.len(), 1);
+        let set = grants[1].resolve(|_| None).unwrap();
+        let expected = render_aws_resource_policy("objects", &set, &generator, &context).unwrap();
+        assert_eq!(policies["alien-objects-same"], expected.document);
+    }
+
+    #[test]
+    fn aws_workload_batch_requires_real_context_for_every_document() {
+        let grants = [
+            literal_aws_resource_grant("first", 10),
+            PermissionSetReference::from_name("storage/data-read".to_string()),
+        ];
+        let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects",
+            "reader",
+            &grants,
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(!error.retryable);
+        assert!(error.to_string().contains("storage/data-read"));
+        assert!(error.to_string().contains("resourceName"));
+    }
 
     #[test]
     fn gcp_resource_custom_roles_are_selected_for_resource_bindings() {
@@ -2442,117 +2507,6 @@ mod tests {
             &frozen_stack,
             "missing"
         ));
-    }
-
-    fn aws_policies(set_id: &str, resource_name: &str) -> (AwsIamPolicy, AwsIamPolicy) {
-        let set = alien_permissions::get_permission_set(set_id)
-            .unwrap_or_else(|| panic!("permission set '{set_id}' is registered"));
-        let context = PermissionContext::new()
-            .with_aws_account_id("123456789012".to_string())
-            .with_aws_region("us-east-1".to_string())
-            .with_stack_prefix("p26eed71".to_string())
-            .with_resource_id("res".to_string())
-            .with_resource_name(resource_name.to_string());
-        let generator = AwsRuntimePermissionsGenerator::new();
-        (
-            generator
-                .generate_policy(set, BindingTarget::Stack, &context)
-                .unwrap(),
-            generator
-                .generate_policy(set, BindingTarget::Resource, &context)
-                .unwrap(),
-        )
-    }
-
-    /// Every `"*"` set of a typical worker stack, for resources named under the stack prefix:
-    /// the stack-level policy already grants each one, so none needs a policy per resource.
-    #[test]
-    fn stack_level_policy_grants_wildcard_sets_for_resources_under_the_stack_prefix() {
-        for (set_id, resource_name) in [
-            ("storage/data-read", "p26eed71-test-alien-storage"),
-            ("storage/data-write", "p26eed71-test-alien-storage"),
-            ("build/execute", "p26eed71-test-alien-build"),
-            (
-                "artifact-registry/pull",
-                "p26eed71-test-alien-artifact-registry",
-            ),
-            (
-                "artifact-registry/push",
-                "p26eed71-test-alien-artifact-registry",
-            ),
-            (
-                "artifact-registry/provision",
-                "p26eed71-test-alien-artifact-registry",
-            ),
-            ("vault/data-read", "p26eed71-test-vault"),
-            ("vault/data-write", "p26eed71-secrets"),
-            ("kv/data-read", "p26eed71-test-alien-kv"),
-            ("kv/data-write", "p26eed71-test-alien-kv"),
-            ("queue/data-read", "p26eed71-test-alien-queue"),
-            ("queue/data-write", "p26eed71-test-alien-queue"),
-        ] {
-            let (stack, resource) = aws_policies(set_id, resource_name);
-            assert!(
-                aws_policy_grants(&stack, &resource),
-                "{set_id} on {resource_name}: stack {stack:#?} resource {resource:#?}"
-            );
-        }
-    }
-
-    /// A bring-your-own bucket is named outside the stack prefix, so only its own policy
-    /// reaches it.
-    #[test]
-    fn stack_level_policy_does_not_grant_a_resource_outside_the_stack_prefix() {
-        for set_id in ["storage/data-read", "storage/data-write"] {
-            let (stack, resource) = aws_policies(set_id, "customer-data");
-            assert!(!aws_policy_grants(&stack, &resource), "{set_id}");
-        }
-    }
-
-    #[test]
-    fn iam_pattern_containment_never_claims_a_wider_pattern() {
-        // (pattern, narrow, pattern matches everything narrow matches)
-        for (pattern, narrow, contains) in [
-            ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket", true),
-            ("arn:aws:s3:::p-*", "arn:aws:s3:::p-bucket/*", true),
-            (
-                "arn:aws:ecr:*:1:repository/p-*",
-                "arn:aws:ecr:us-east-1:1:repository/p-r-*",
-                true,
-            ),
-            ("role/p-*-pull", "role/p-registry-pull", true),
-            ("*", "*", true),
-            ("a*", "a?", true),
-            ("a?c", "a?c", true),
-            ("arn:aws:s3:::p-*", "arn:aws:s3:::customer", false),
-            ("arn:aws:s3:::p-bucket", "arn:aws:s3:::p-*", false),
-            ("a?c", "a*c", false),
-            ("abc", "a?c", false),
-            ("role/p-*-pull", "role/p-registry-push", false),
-        ] {
-            assert_eq!(
-                iam_pattern_contains(pattern, narrow),
-                contains,
-                "{pattern} vs {narrow}"
-            );
-        }
-    }
-
-    /// A broad statement with a condition grants less than an unconditional one.
-    #[test]
-    fn conditioned_stack_statement_does_not_grant_an_unconditioned_one() {
-        let (mut stack, resource) = aws_policies("kv/data-read", "p26eed71-test-alien-kv");
-        assert!(aws_policy_grants(&stack, &resource));
-        for statement in &mut stack.statement {
-            statement.condition = Some(
-                [(
-                    "StringEquals".to_string(),
-                    [("aws:ResourceTag/owner".to_string(), "x".to_string())].into(),
-                )]
-                .into(),
-            );
-        }
-        assert!(!aws_policy_grants(&stack, &resource));
     }
 
     /// Writes, for each stack in `ALIEN_AWS_POLICY_EQUIVALENCE_INPUT`, every inline policy direct

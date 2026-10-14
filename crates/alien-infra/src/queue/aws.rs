@@ -1,3 +1,4 @@
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use std::time::Duration;
 use tracing::{debug, info};
 
@@ -12,11 +13,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
-
-/// Generates the full, prefixed AWS queue name.
-fn get_aws_queue_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
-}
 
 #[controller]
 pub struct AwsQueueController {
@@ -40,7 +36,7 @@ impl AwsQueueController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_sqs_client(aws_cfg).await?;
 
-        let queue_name = get_aws_queue_name(ctx.resource_prefix, &config.id);
+        let queue_name = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
         info!(id=%config.id, name=%queue_name, "Creating SQS queue");
 
         let resp = client

@@ -17,11 +17,12 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use chrono::Utc;
 
 /// Generates the full, prefixed AWS CodeBuild project name.
 fn get_aws_project_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
+    aws_prefixed_resource_name(prefix, name)
 }
 
 /// Maps compute type from Alien to AWS CodeBuild values
