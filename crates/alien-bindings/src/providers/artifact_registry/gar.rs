@@ -637,11 +637,18 @@ impl ArtifactRegistry for GarArtifactRegistry {
                     Some(name.clone()),
                 )
             })?;
+        // The image path the caller named, e.g. `prj_a` in `vendor/artifacts-prj-a/prj_a`.
+        let image_path = repo_id
+            .strip_prefix(&format!("{}/", self.project_id))
+            .unwrap_or(repo_id)
+            .split_once('/')
+            .map(|(_, path)| format!("/{path}"))
+            .unwrap_or_default();
         Ok(RepositoryResponse {
             name: repo_id.to_string(),
             uri: Some(format!(
-                "{}-docker.pkg.dev/{}/{}",
-                self.location, self.project_id, name
+                "{}-docker.pkg.dev/{}/{name}{image_path}",
+                self.location, self.project_id
             )),
             created_at: repository.create_time,
         })
@@ -1595,7 +1602,16 @@ mod tests {
                 .code,
             "REMOTE_RESOURCE_CONFLICT"
         );
-        assert!(registry.get_repository(&other.name).await.is_ok());
+        // The URI keeps the image path inside the project repository, where pushes land.
+        assert_eq!(
+            registry
+                .get_repository(&other.name)
+                .await
+                .unwrap()
+                .uri
+                .as_deref(),
+            Some("region-docker.pkg.dev/vendor/artifacts-prj-a/prj_a")
+        );
         {
             let mut state = state.lock().unwrap();
             state.policies.insert("artifacts-prj-a".to_string(), json!({"etag":"legacy", "bindings":[
