@@ -1,0 +1,4 @@
+$ alien (original parent aa42e2f38) render --format cloudformation --stack small-alien.json --stack-settings settings.yaml --output parent-small-cloudformation
+
+Exit: 0
+Generated artifact files: 1

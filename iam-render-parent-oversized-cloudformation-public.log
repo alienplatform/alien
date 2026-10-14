@@ -1,0 +1,4 @@
+$ alien (original parent aa42e2f38) render --format cloudformation --stack oversized-alien.json --stack-settings settings.yaml --output parent-oversized-cloudformation
+
+Exit: 0
+Generated artifact files: 1

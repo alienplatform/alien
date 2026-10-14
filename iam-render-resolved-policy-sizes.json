@@ -1,0 +1,12 @@
+[
+  {
+    "scenario": "small",
+    "terraformResolvedInlineCharacters": 647,
+    "limit": 10240
+  },
+  {
+    "scenario": "oversized",
+    "terraformResolvedInlineCharacters": 21317,
+    "limit": 10240
+  }
+]

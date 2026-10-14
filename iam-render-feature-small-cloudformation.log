@@ -1,0 +1,4 @@
+$ alien render --format cloudformation --stack small-alien.json --stack-settings settings.yaml --output feature-small-cloudformation
+
+Exit: 0
+Generated artifact files: 1

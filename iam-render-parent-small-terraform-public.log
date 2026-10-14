@@ -1,0 +1,4 @@
+$ alien (original parent aa42e2f38) render --format terraform --stack small-alien.json --stack-settings settings.yaml --output parent-small-terraform --target aws
+
+Exit: 0
+Generated artifact files: 11

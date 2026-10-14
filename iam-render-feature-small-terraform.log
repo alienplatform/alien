@@ -1,0 +1,4 @@
+$ alien render --format terraform --stack small-alien.json --stack-settings settings.yaml --output feature-small-terraform --target aws
+
+Exit: 0
+Generated artifact files: 11

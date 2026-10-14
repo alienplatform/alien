@@ -1,0 +1,40 @@
+[
+  {
+    "scenario": "small",
+    "format": "cloudformation",
+    "exit": 0,
+    "files": [
+      "feature-small-cloudformation/template.yaml"
+    ]
+  },
+  {
+    "scenario": "small",
+    "format": "terraform",
+    "exit": 0,
+    "files": [
+      "feature-small-terraform/README.md",
+      "feature-small-terraform/default_network.tf",
+      "feature-small-terraform/execution_sa.tf",
+      "feature-small-terraform/locals.tf",
+      "feature-small-terraform/management.tf",
+      "feature-small-terraform/outputs.tf",
+      "feature-small-terraform/providers.tf",
+      "feature-small-terraform/registration.tf",
+      "feature-small-terraform/resource_prefix.tf",
+      "feature-small-terraform/variables.tf",
+      "feature-small-terraform/versions.tf"
+    ]
+  },
+  {
+    "scenario": "oversized",
+    "format": "cloudformation",
+    "exit": 1,
+    "files": []
+  },
+  {
+    "scenario": "oversized",
+    "format": "terraform",
+    "exit": 1,
+    "files": []
+  }
+]

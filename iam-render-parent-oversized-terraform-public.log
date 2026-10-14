@@ -1,0 +1,4 @@
+$ alien (original parent aa42e2f38) render --format terraform --stack oversized-alien.json --stack-settings settings.yaml --output parent-oversized-terraform --target aws
+
+Exit: 0
+Generated artifact files: 11

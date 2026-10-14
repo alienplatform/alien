@@ -1,0 +1,4 @@
+network:
+  type: use-default
+telemetry: off
+heartbeats: off

@@ -1,0 +1,5 @@
+$ alien render --format cloudformation --stack oversized-alien.json --stack-settings settings.yaml --output feature-oversized-cloudformation
+Configuration error: OPERATION_NOT_SUPPORTED: Operation 'generate_cloudformation_template' not supported: IAM role 'ExecutionSaRole' requires at least 18900 non-whitespace inline-policy characters; AWS allows 10240 across all inline policies on one role. Reduce permissions or move grants to managed policies.
+
+Exit: 1
+Generated artifact files: 0
