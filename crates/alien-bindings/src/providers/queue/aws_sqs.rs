@@ -376,6 +376,128 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn sqs_dns_uses_wire_answers_and_caches_both_address_families() {
+        let threads = Arc::new(AtomicUsize::new(0));
+        let started = threads.clone();
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .on_thread_start(move || {
+                started.fetch_add(1, Ordering::SeqCst);
+            })
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = socket.local_addr().unwrap();
+            let queries = Arc::new(AtomicUsize::new(0));
+            let seen = queries.clone();
+            let server = tokio::spawn(async move {
+                let mut buffer = [0; 2048];
+                loop {
+                    let (length, peer) = socket.recv_from(&mut buffer).await.unwrap();
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    let mut end = 12;
+                    while buffer[end] != 0 {
+                        end += usize::from(buffer[end]) + 1;
+                    }
+                    let end = end + 5;
+                    assert!(end <= length);
+                    let kind = u16::from_be_bytes([buffer[end - 4], buffer[end - 3]]);
+                    let missing = &buffer[13..20] == b"missing";
+                    let mut response = buffer[..12].to_vec();
+                    response[2..12].copy_from_slice(&[
+                        0x81,
+                        if missing { 0x83 } else { 0x80 },
+                        0,
+                        1,
+                        0,
+                        u8::from(!missing),
+                        0,
+                        0,
+                        0,
+                        0,
+                    ]);
+                    response.extend_from_slice(&buffer[12..end]);
+                    if !missing {
+                        let address = match kind {
+                            1 => vec![127, 0, 0, 1],
+                            28 => std::net::Ipv6Addr::LOCALHOST.octets().to_vec(),
+                            _ => panic!("unexpected record type {kind}"),
+                        };
+                        response.extend_from_slice(&[0xc0, 0x0c]);
+                        response.extend_from_slice(&kind.to_be_bytes());
+                        response.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, address.len() as u8]);
+                        response.extend(address);
+                    }
+                    socket.send_to(&response, peer).await.unwrap();
+                }
+            });
+            let mut nameserver = hickory_resolver::config::NameServerConfig::udp(endpoint.ip());
+            nameserver.connections[0].port = endpoint.port();
+            let config =
+                hickory_resolver::config::ResolverConfig::from_name_servers(vec![nameserver]);
+            let mut builder = TokioResolver::builder_with_config(
+                config,
+                hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+            );
+            builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+            let resolver = SqsDnsResolver(builder.build().unwrap());
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let addresses: HashSet<_> = resolver
+                    .resolve("queue.fixture.test.".parse().unwrap())
+                    .await
+                    .unwrap()
+                    .collect();
+                assert_eq!(
+                    addresses,
+                    HashSet::from(["127.0.0.1:0".parse().unwrap(), "[::1]:0".parse().unwrap()])
+                );
+                assert_eq!(queries.load(Ordering::SeqCst), 2);
+                assert!(resolver
+                    .resolve("missing.fixture.test.".parse().unwrap())
+                    .await
+                    .is_err());
+                let requests = queries.load(Ordering::SeqCst);
+                for _ in 0..64 {
+                    let cached: HashSet<_> = resolver
+                        .resolve("queue.fixture.test.".parse().unwrap())
+                        .await
+                        .unwrap()
+                        .collect();
+                    assert_eq!(cached, addresses);
+                }
+                assert_eq!(
+                    queries.load(Ordering::SeqCst),
+                    requests,
+                    "cached lookups must not send more DNS queries"
+                );
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+                let refreshed: HashSet<_> = resolver
+                    .resolve("queue.fixture.test.".parse().unwrap())
+                    .await
+                    .unwrap()
+                    .collect();
+                assert_eq!(refreshed, addresses);
+                assert_eq!(
+                    queries.load(Ordering::SeqCst),
+                    requests + 2,
+                    "expired answers must be resolved again"
+                );
+            })
+            .await
+            .expect("wire DNS must finish without blocking");
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            assert!(
+                threads.load(Ordering::SeqCst) <= 2,
+                "DNS must not create blocking workers"
+            );
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn sqs_reuses_ack_burst_connections_without_dns_blocking_threads() {
         const BURST: usize = 64;
         let threads = Arc::new(AtomicUsize::new(0));
