@@ -232,7 +232,8 @@ where
 }
 
 /// The registry answered that the tag or repository does not exist. A platform missing from an
-/// index is `ImageManifestNotFoundError`, which is not this.
+/// index is `ImageManifestNotFoundError`, which is not this. Narrower than the manifest lookup in
+/// `registry.rs`: this error comes from a whole pull, where `BLOB_UNKNOWN` can be a missing layer.
 fn is_missing_manifest(error: &dockdash::Error) -> bool {
     let mut cause: Option<&(dyn StdError + 'static)> = Some(error);
     while let Some(current) = cause {
@@ -778,5 +779,43 @@ mod tests {
         )
         .await;
         assert_eq!(error.code, "IMAGE_BUILD_FAILED", "{error}");
+    }
+
+    #[test]
+    fn only_a_missing_tag_counts_as_a_missing_manifest() {
+        use oci_client::errors::{OciEnvelope, OciError};
+        let pull_failed = |source: OciDistributionError| dockdash::Error::ImagePull {
+            image_ref: "ghcr.io/acme/sandbox-agent:v1".to_string(),
+            message: "Failed to pull".to_string(),
+            source: Some(Box::new(source)),
+        };
+        let registry = |code| {
+            pull_failed(OciDistributionError::RegistryError {
+                envelope: OciEnvelope {
+                    errors: vec![OciError {
+                        code,
+                        message: String::new(),
+                        detail: serde_json::Value::Null,
+                    }],
+                },
+                url: "https://ghcr.io/v2/".to_string(),
+            })
+        };
+        assert!(is_missing_manifest(&registry(
+            OciErrorCode::ManifestUnknown
+        )));
+        assert!(is_missing_manifest(&registry(OciErrorCode::NameUnknown)));
+        assert!(is_missing_manifest(&pull_failed(
+            OciDistributionError::ServerError {
+                code: 404,
+                url: "https://ghcr.io/v2/".to_string(),
+                message: String::new(),
+            }
+        )));
+        assert!(!is_missing_manifest(&registry(OciErrorCode::Denied)));
+        assert!(!is_missing_manifest(&registry(OciErrorCode::BlobUnknown)));
+        assert!(!is_missing_manifest(&pull_failed(
+            OciDistributionError::ImageManifestNotFoundError("no linux/amd64 variant".to_string())
+        )));
     }
 }

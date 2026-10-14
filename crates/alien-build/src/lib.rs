@@ -3620,11 +3620,14 @@ async fn push_image_with_retry(
 
 fn image_push_error(image_uri: &str, error: &dockdash::Error) -> AlienError<ErrorData> {
     if is_retryable_dockdash_transport_error(error) {
+        let cause = if is_rate_limited(error) {
+            "Registry was rate limiting requests"
+        } else {
+            "Registry connection was interrupted"
+        };
         AlienError::new(ErrorData::ImagePushFailed {
             image: image_uri.to_string(),
-            reason: format!(
-                "Registry connection was interrupted after {IMAGE_PUSH_MAX_ATTEMPTS} attempts"
-            ),
+            reason: format!("{cause} after {IMAGE_PUSH_MAX_ATTEMPTS} attempts"),
         })
     } else {
         // Registry errors can contain presigned upload URLs. Do not
@@ -3635,6 +3638,29 @@ fn image_push_error(image_uri: &str, error: &dockdash::Error) -> AlienError<Erro
             reason: nonretryable_push_reason(error),
         })
     }
+}
+
+/// The registry answered 429, as a status or as a `TOOMANYREQUESTS` error envelope.
+fn is_rate_limited(error: &dockdash::Error) -> bool {
+    let mut current = Some(error as &(dyn StdError + 'static));
+    while let Some(error) = current {
+        if let Some(oci_error) = error.downcast_ref::<oci_client::errors::OciDistributionError>() {
+            return match oci_error {
+                oci_client::errors::OciDistributionError::RegistryError { envelope, .. } => {
+                    envelope.errors.iter().any(|entry| {
+                        entry.code == oci_client::errors::OciErrorCode::Toomanyrequests
+                    })
+                }
+                oci_client::errors::OciDistributionError::ServerError { code, .. } => *code == 429,
+                oci_client::errors::OciDistributionError::RequestError(request) => request
+                    .status()
+                    .is_some_and(|status| status.as_u16() == 429),
+                _ => false,
+            };
+        }
+        current = error.source();
+    }
+    false
 }
 
 fn nonretryable_push_reason(error: &dockdash::Error) -> String {
@@ -4481,6 +4507,43 @@ mod tests {
             ))),
         };
         assert!(!is_retryable_dockdash_transport_error(&local_archive_error));
+    }
+
+    #[test]
+    fn a_push_that_ran_out_of_retries_names_its_cause() {
+        let generic = |source: oci_client::errors::OciDistributionError| dockdash::Error::Generic {
+            message: "push failed".to_string(),
+            source: Some(Box::new(source)),
+        };
+        let throttled = generic(oci_client::errors::OciDistributionError::RegistryError {
+            envelope: oci_client::errors::OciEnvelope {
+                errors: vec![oci_client::errors::OciError {
+                    code: oci_client::errors::OciErrorCode::Toomanyrequests,
+                    message: String::new(),
+                    detail: serde_json::Value::Null,
+                }],
+            },
+            url: "https://registry.example.com/v2/".to_string(),
+        });
+        let unavailable = generic(oci_client::errors::OciDistributionError::ServerError {
+            code: 503,
+            url: "https://registry.example.com/v2/".to_string(),
+            message: String::new(),
+        });
+
+        let reason = |error| match image_push_error("registry.example.com/repo:image", error).error
+        {
+            Some(ErrorData::ImagePushFailed { reason, .. }) => reason,
+            other => panic!("a retried push failure, got {other:?}"),
+        };
+        assert_eq!(
+            reason(&throttled),
+            format!("Registry was rate limiting requests after {IMAGE_PUSH_MAX_ATTEMPTS} attempts")
+        );
+        assert_eq!(
+            reason(&unavailable),
+            format!("Registry connection was interrupted after {IMAGE_PUSH_MAX_ATTEMPTS} attempts")
+        );
     }
 
     #[test]
