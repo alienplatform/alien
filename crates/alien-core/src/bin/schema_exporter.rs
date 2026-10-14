@@ -15,6 +15,7 @@ use utoipa::OpenApi;
     WorkerCode,
     WorkerOutputs,
     ComputeCluster,
+    HorizonReaderCapabilities,
     CapacityGroup,
     MachineProfile,
     Daemon,

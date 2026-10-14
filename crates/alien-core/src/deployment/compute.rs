@@ -89,11 +89,26 @@ pub struct HorizonAzureMachineImages {
     pub images: HashMap<HorizonMachineArchitecture, HorizonAzureMachineImage>,
 }
 
+/// Reader support reported by the executable when an immutable image is built.
+/// This metadata does not establish the capabilities of an already running host.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonReaderCapabilities {
+    /// Highest machine-plan schema version the executable can read.
+    pub machine_plan_schema_version: u32,
+    /// Whether the executable can retain multiple ingress target registrations.
+    pub multiple_ingress_targets_supported: bool,
+}
+
 /// Download artifact for one horizond release platform.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizondArtifact {
+    /// Build-time reader support; absent for older, unqualified catalogs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_capabilities: Option<HorizonReaderCapabilities>,
     /// Runtime isolation capability generation of the immutable artifact, not live readiness.
     #[serde(default)]
     pub runtime_isolation_generation: u32,
@@ -110,6 +125,9 @@ pub struct HorizondArtifact {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonMachineImage {
+    /// Build-time reader support; absent for older, unqualified catalogs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_capabilities: Option<HorizonReaderCapabilities>,
     /// Runtime isolation capability generation of the immutable artifact, not live readiness.
     #[serde(default)]
     pub runtime_isolation_generation: u32,
@@ -179,7 +197,7 @@ pub enum ComputeBackend {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::{HorizonMachineImage, HorizondArtifact};
 
@@ -199,6 +217,54 @@ mod tests {
             "gcp": { "images": { "arm64": { "sourceImage": "example-image" } } },
             "azure": { "images": { "arm64": { "imageVersionId": "example-version" } } }
         })
+    }
+
+    #[test]
+    fn reader_capabilities_preserve_unknown_and_roundtrip_explicit_support() {
+        let mut value = legacy_catalog();
+        let legacy: HorizonMachineImage = serde_json::from_value(value.clone()).unwrap();
+        assert!(legacy.reader_capabilities.is_none());
+        assert!(
+            legacy
+                .horizond_artifacts
+                .values()
+                .all(|artifact| artifact.reader_capabilities.is_none())
+        );
+        let capabilities =
+            json!({"machinePlanSchemaVersion": 2, "multipleIngressTargetsSupported": true});
+        value["readerCapabilities"] = capabilities.clone();
+        for artifact in value["horizondArtifacts"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            artifact["readerCapabilities"] = capabilities.clone();
+        }
+        let catalog: HorizonMachineImage = serde_json::from_value(value).unwrap();
+        let support = catalog.reader_capabilities.unwrap();
+        assert_eq!(support.machine_plan_schema_version, 2);
+        assert!(support.multiple_ingress_targets_supported);
+        assert!(
+            catalog
+                .horizond_artifacts
+                .values()
+                .all(|artifact| artifact.reader_capabilities == Some(support))
+        );
+        assert_eq!(
+            serde_json::from_value::<HorizonMachineImage>(serde_json::to_value(&catalog).unwrap())
+                .unwrap(),
+            catalog
+        );
+        for invalid in [
+            json!({}),
+            json!({"machinePlanSchemaVersion": 2}),
+            json!({"machinePlanSchemaVersion": -1, "multipleIngressTargetsSupported": true}),
+            json!({"machinePlanSchemaVersion": 2, "multipleIngressTargetsSupported": "true"}),
+        ] {
+            let mut value = legacy_catalog();
+            value["readerCapabilities"] = invalid;
+            assert!(serde_json::from_value::<HorizonMachineImage>(value).is_err());
+        }
     }
 
     #[test]
@@ -261,10 +327,12 @@ mod tests {
             for arch in ["linux-arm64", "linux-amd64"] {
                 let mut catalog = legacy_catalog();
                 catalog["horizondArtifacts"][arch]["runtimeIsolationGeneration"] = invalid.clone();
-                assert!(serde_json::from_value::<HorizondArtifact>(
-                    catalog["horizondArtifacts"][arch].clone()
-                )
-                .is_err());
+                assert!(
+                    serde_json::from_value::<HorizondArtifact>(
+                        catalog["horizondArtifacts"][arch].clone()
+                    )
+                    .is_err()
+                );
                 assert!(serde_json::from_value::<HorizonMachineImage>(catalog).is_err());
             }
         }
