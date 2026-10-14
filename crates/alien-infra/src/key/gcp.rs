@@ -93,7 +93,8 @@ impl GcpKeyController {
                     status: KeyHeartbeatStatus {
                         health,
                         lifecycle,
-                        message: (self.available != Some(true)).then(|| "customer key unavailable".to_string()),
+                        message: (self.available != Some(true))
+                            .then(|| "customer key unavailable".to_string()),
                     },
                     crypto_key_name: key.name,
                     purpose: key.purpose,

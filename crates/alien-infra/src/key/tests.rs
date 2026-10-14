@@ -117,7 +117,11 @@ fn throttled() -> alien_client_core::Error {
     )
 }
 
-fn aws_provider(mode: Arc<AtomicU8>, transient: alien_client_core::Error, revoked: alien_client_core::Error) -> MockPlatformServiceProvider {
+fn aws_provider(
+    mode: Arc<AtomicU8>,
+    transient: alien_client_core::Error,
+    revoked: alien_client_core::Error,
+) -> MockPlatformServiceProvider {
     let mut kms = MockKmsApi::new();
     kms.expect_describe_key().returning(move |_| {
         let (enabled, key_state) = match mode.load(Ordering::SeqCst) {
@@ -148,7 +152,11 @@ fn aws_provider(mode: Arc<AtomicU8>, transient: alien_client_core::Error, revoke
     provider
 }
 
-fn gcp_provider(mode: Arc<AtomicU8>, transient: alien_client_core::Error, revoked: alien_client_core::Error) -> MockPlatformServiceProvider {
+fn gcp_provider(
+    mode: Arc<AtomicU8>,
+    transient: alien_client_core::Error,
+    revoked: alien_client_core::Error,
+) -> MockPlatformServiceProvider {
     let mut kms = MockCloudKmsApi::new();
     kms.expect_get_crypto_key().returning(move |_| {
         let state = match mode.load(Ordering::SeqCst) {
@@ -176,7 +184,11 @@ fn gcp_provider(mode: Arc<AtomicU8>, transient: alien_client_core::Error, revoke
     provider
 }
 
-fn azure_provider(mode: Arc<AtomicU8>, transient: alien_client_core::Error, revoked: alien_client_core::Error) -> MockPlatformServiceProvider {
+fn azure_provider(
+    mode: Arc<AtomicU8>,
+    transient: alien_client_core::Error,
+    revoked: alien_client_core::Error,
+) -> MockPlatformServiceProvider {
     let mut keys = MockKeyVaultKeysApi::new();
     keys.expect_get_key().returning(move |_| {
         let enabled = match mode.load(Ordering::SeqCst) {
@@ -233,7 +245,9 @@ fn import_key(platform: Platform, stack: &Stack) -> StackResourceState {
         ),
         Platform::Azure => AzureKeyImporter.import(
             AzureKeyImportData {
-                vault_resource_id: "/subscriptions/s/resourceGroups/g/providers/Microsoft.KeyVault/vaults/vault".to_string(),
+                vault_resource_id:
+                    "/subscriptions/s/resourceGroups/g/providers/Microsoft.KeyVault/vaults/vault"
+                        .to_string(),
                 key_name: "key".to_string(),
                 lineage_version_id: "v1".to_string(),
                 key_id: format!("{AZURE_KEY}/v1"),
@@ -333,7 +347,10 @@ async fn check(platform: Platform, mode: Arc<AtomicU8>, provider: MockPlatformSe
                 assert!(state.resources[KEY_ID].error.is_some());
             }
         }
-        assert_eq!(state.resources[KEY_ID].status, ResourceStatus::RefreshFailed);
+        assert_eq!(
+            state.resources[KEY_ID].status,
+            ResourceStatus::RefreshFailed
+        );
         assert_eq!(
             storage_ready_checks(&state),
             storage_ready_checks(&running) + 12,

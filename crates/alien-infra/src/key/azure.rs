@@ -100,7 +100,8 @@ impl AzureKeyController {
                     status: KeyHeartbeatStatus {
                         health,
                         lifecycle,
-                        message: (self.available != Some(true)).then(|| "customer key unavailable".to_string()),
+                        message: (self.available != Some(true))
+                            .then(|| "customer key unavailable".to_string()),
                     },
                     key_id: key.key.kid,
                     enabled: key.attributes.enabled,
