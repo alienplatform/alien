@@ -132,7 +132,7 @@ async fn source_reaches_aws_but_not_kubernetes_through_the_runner() {
 
     assert!(
         !summary.success,
-        "source has no builder off AWS: {summary:?}"
+        "source has no builder on Kubernetes: {summary:?}"
     );
     let rendered = format!("{summary:?}");
     assert!(

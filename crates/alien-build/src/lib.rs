@@ -692,8 +692,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     // A sandbox base image is the root filesystem a session runs in. It is built and pushed like
-    // any other compute image; the bundle layers the sandbox agent on afterwards, and AWS builds
-    // the MicroVM from that bundle inside the customer's account.
+    // any other compute image. On AWS the bundle layers the sandbox agent on afterwards and AWS
+    // builds the MicroVM from that bundle inside the customer's account.
     if !sandboxes_to_build.is_empty() {
         // The base boots on the cloud's sandbox runtime (an arm64 MicroVM on AWS, an amd64 disk
         // image on Azure), not on the compute the stack's other targets were chosen for.

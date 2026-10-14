@@ -471,9 +471,8 @@ mod tests {
         }
     }
 
-    /// Only AWS has a runtime controller that builds a sandbox image, so only AWS may declare one
-    /// Live. Elsewhere the resource would pass the ownership policy, emit no image, and wait on a
-    /// controller that does not exist — a deployment that hangs rather than one that fails.
+    /// On Azure or GCP a remote grant names a parent that must exist when the package applies,
+    /// which only the package that creates the sandbox can do, so only AWS may declare one Live.
     #[tokio::test]
     async fn a_live_sandbox_is_refused_on_every_platform_but_aws() {
         for platform in [
