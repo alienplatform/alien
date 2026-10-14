@@ -386,7 +386,9 @@ impl ManagerTomlConfig {
 #
 # [artifact-registry.gcp]
 # service = "gar"
-# repositoryName = "projects/my-project/locations/us-central1/repositories/alien"
+# # Prefix: each Alien project gets its own repository, alien-artifacts-prj-<id>. The manager
+# # needs artifactregistry.repositories.create/delete/get/list/getIamPolicy/setIamPolicy.
+# repositoryName = "alien-artifacts"
 # pullServiceAccountEmail = "pull@project.iam.gserviceaccount.com"
 # pushServiceAccountEmail = "push@project.iam.gserviceaccount.com"
 

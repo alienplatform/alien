@@ -2042,7 +2042,7 @@ mod gcp_project_consumer_tests {
 
         assert!(
             !store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, "default", &deleting)
+                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, Some("default".to_string()), &deleting)
                 .await
                 .expect("consumer check"),
             "neither the deployment itself, one in another project, nor a deleted one shares the grant"
@@ -2052,7 +2052,7 @@ mod gcp_project_consumer_tests {
             .has_other_gcp_project_deployment(
                 &Subject::system(),
                 SHARED_PROJECT,
-                "prj_other",
+                Some("prj_other".to_string()),
                 &deleting
             )
             .await
@@ -2065,7 +2065,7 @@ mod gcp_project_consumer_tests {
                 .has_other_gcp_project_deployment(
                     &Subject::system(),
                     SHARED_PROJECT,
-                    "default",
+                    Some("default".to_string()),
                     &deleting
                 )
                 .await
@@ -2077,7 +2077,7 @@ mod gcp_project_consumer_tests {
             .has_other_gcp_project_deployment(
                 &Subject::system(),
                 SHARED_PROJECT,
-                "prj_other",
+                Some("prj_other".to_string()),
                 &deleting
             )
             .await
@@ -2092,7 +2092,7 @@ mod gcp_project_consumer_tests {
                 .has_other_gcp_project_deployment(
                     &Subject::system(),
                     SHARED_PROJECT,
-                    "default",
+                    Some("default".to_string()),
                     &deleting
                 )
                 .await

@@ -567,7 +567,8 @@ pub trait DeploymentStore: Send + Sync {
     ) -> Result<Vec<DeploymentRecord>, AlienError>;
 
     /// Whether a deployment other than `excluding_deployment_id`, not deleted, runs in the GCP
-    /// project numbered `project_number` using the same Alien `project_id`.
+    /// project numbered `project_number` using the same Alien `project_id`, or any Alien project
+    /// when `project_id` is `None` (a repository every project shared).
     ///
     /// Cloud Run pulls as a project-scoped service agent, so every deployment in one project
     /// shares a registry grant for each repository. A revoke asks this before removing that grant, and the
@@ -581,7 +582,7 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         project_number: &str,
-        project_id: &str,
+        project_id: Option<String>,
         excluding_deployment_id: &str,
     ) -> Result<bool, AlienError> {
         let deployments = self
@@ -595,7 +596,9 @@ pub trait DeploymentStore: Send + Sync {
             .await?;
         Ok(deployments.iter().any(|deployment| {
             deployment.id != excluding_deployment_id
-                && deployment.project_id == project_id
+                && project_id
+                    .as_deref()
+                    .is_none_or(|project_id| deployment.project_id == project_id)
                 && !matches!(deployment.status.as_str(), "deleted" | "teardown-required")
                 && matches!(
                     &deployment.environment_info,
