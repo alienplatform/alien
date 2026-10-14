@@ -630,16 +630,18 @@ async fn new_release_reaches_failed_local_startup_without_changing_its_retry_pha
     {
         let deployment =
             create_test_deployment(&store, &group_id, &format!("case-{index}"), platform).await;
+        let mut update = test_reconcile_data(
+            &deployment.id,
+            "agent-sync",
+            serde_json::from_value(serde_json::json!(status)).unwrap(),
+            None,
+        );
+        update.state.platform = platform;
+        store.reconcile(&test_subject(), update).await.unwrap();
         store
             .set_deployment_desired_release(&test_subject(), &deployment.id, &ids[0])
             .await
             .unwrap();
-        db.execute(&format!(
-            "UPDATE deployments SET status = '{status}' WHERE id = '{}'",
-            deployment.id
-        ))
-        .await
-        .unwrap();
         store
             .set_desired_release(&test_subject(), &ids[1], None)
             .await
