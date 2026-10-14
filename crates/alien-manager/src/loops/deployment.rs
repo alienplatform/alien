@@ -14,9 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{stream, FutureExt, StreamExt};
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+use alien_bindings::BindingsProviderApi;
 use alien_core::{
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, Stack,
@@ -523,24 +525,10 @@ impl DeploymentLoop {
             })?;
 
         let system = crate::auth::Subject::system();
-        // A control plane that supplies stacks may have added resources to
-        // the release's stack for this deployment; deploy what it supplied.
-        let (supplied_target, supplied_current) = supplied_release_stacks(&deployment);
-        let deployment_stack = match supplied_target {
-            Some(stack) => Some(stack),
-            None => {
-                let release = self
-                    .release_store
-                    .get_release(&system, target_release_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AlienError::new(GenericError {
-                            message: format!("Release {} not found", target_release_id),
-                        })
-                    })?;
-                release.stacks.get(&deployment.platform).cloned()
-            }
-        };
+        let (_, supplied_current) = supplied_release_stacks(&deployment);
+        let deployment_stack =
+            target_release_stack(self.release_store.as_ref(), &deployment, target_release_id)
+                .await?;
 
         let recorded_state = state_from_record(
             &deployment,
@@ -738,112 +726,21 @@ impl DeploymentLoop {
             protocol_version: deployment.deployment_protocol_version,
         };
 
-        // 4. Build environment variables.
-        let environment_variables = self
-            .build_environment_variables(&deployment_id, &deployment, &deployment_stack)
-            .await?;
-        let provided_config = deployment.deployment_config.as_ref();
-        let monitoring = provided_config
-            .and_then(|config| config.monitoring.clone())
-            .or_else(|| build_monitoring_config(&self.config, &deployment));
-
-        // 5. Build deployment config.
-        // Management config resolution:
-        //   1. From platform API (per-deployment, on DeploymentRecord — e.g. private managers)
-        //   2. From credential resolver (per-platform, derived from target provider's management binding)
-        let management_config = if let Some(mc) = deployment.management_config.clone() {
-            Some(mc)
-        } else {
-            match self
-                .credential_resolver
-                .resolve_management_config(deployment.platform)
-                .await
-            {
-                Ok(mc) => mc,
-                Err(e) => {
-                    warn!(
-                        deployment_id = %deployment_id,
-                        error = %e,
-                        "Failed to resolve management config from bindings"
-                    );
-                    None
-                }
-            }
-        };
-
-        let native_image_host = crate::registry_access::derive_native_image_host(
-            &self.server_bindings.bindings_provider,
-            &self.server_bindings.target_bindings_providers,
-            &deployment.platform,
-        )
-        .await;
-
-        let mut config = if let Some(config) = deployment.deployment_config.clone() {
-            let mut config = with_environment_snapshot(config, environment_variables);
-            if config.deployment_name.is_none() {
-                config.deployment_name = Some(deployment.name.clone());
-            }
-            if config.management_config.is_none() {
-                config.management_config = management_config;
-            }
-            if config.deployment_token.is_none() {
-                config.deployment_token = deployment.deployment_token.clone();
-            }
-            if config.base_platform.is_none() {
-                config.base_platform = deployment.base_platform;
-            }
-            if config.monitoring.is_none() {
-                config.monitoring = monitoring;
-            }
-            // A control plane that predates gate answers omits inputValues
-            // entirely; resolving gates from declared defaults instead of the
-            // stored answers would deprovision an enabled resource. Whenever
-            // gates exist their answers are materialized at install, so a
-            // legitimately supplied map is never empty.
-            if config.input_values.is_empty() {
-                config.input_values = deployment.input_values.clone();
-            }
-            config.manager_url = Some(self.config.base_url());
-            config.native_image_host = native_image_host;
-            config
-        } else {
-            let stack_settings = deployment
-                .stack_settings
-                .clone()
-                .expect("stored deployment carries stack_settings");
-
-            DeploymentConfig {
-                stored_secret_input_ids: None,
-                input_values: deployment.input_values.clone(),
-                deployment_name: Some(deployment.name.clone()),
-                stack_settings: stack_settings.clone(),
-                management_config,
-                environment_variables,
-                allow_frozen_changes: false,
-                compute_backend: None,
-                external_bindings: deployment
-                    .stack_settings
-                    .as_ref()
-                    .expect("stored deployment carries stack_settings")
-                    .external_bindings
-                    .clone()
-                    .unwrap_or_default(),
-                base_platform: deployment.base_platform,
-                label_domain: None,
-                observe_label_selector: None,
-                observe_all_namespaces: false,
-                public_endpoints: None,
-                domain_metadata: None,
-                monitoring,
-                manager_url: Some(self.config.base_url()),
-                deployment_token: deployment.deployment_token.clone(),
-                native_image_host,
-                volume_restores: Vec::new(),
-            }
-        };
+        // 4. Build the deployment config. External runners that acquire this
+        //    deployment get the same config from the acquire route.
+        let mut config = RunnerConfigSources {
+            config: &self.config,
+            credential_resolver: self.credential_resolver.as_ref(),
+            bindings_provider: &self.server_bindings.bindings_provider,
+            target_bindings_providers: &self.server_bindings.target_bindings_providers,
+        }
+        .deployment_config(&deployment, Some(&deployment_stack))
+        .await?;
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
-        // when an external control plane did not supply one.
+        // when an external control plane did not supply one. It stays out of
+        // the shared config: its management token is this manager's own
+        // secret, not something to hand to every runner that acquires.
         if config.compute_backend.is_none() {
             if let (Ok(url), Ok(cluster_id), Ok(token)) = (
                 std::env::var("ALIEN_BYO_HORIZON_URL"),
@@ -1026,46 +923,182 @@ impl DeploymentLoop {
             .await?;
         Ok(())
     }
+}
 
-    /// Derive the native image host for Lambda/Cloud Run deployments.
+/// The stack a runner deploys for the deployment's target release: the one a
+/// control plane supplied, else the release's stack for the deployment's
+/// platform. `None` when the release has no stack for that platform.
+pub(crate) async fn target_release_stack(
+    release_store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+    target_release_id: &str,
+) -> Result<Option<Stack>, AlienError> {
+    // A control plane that supplies stacks may have added resources to the
+    // release's stack for this deployment; deploy what it supplied.
+    if let (Some(stack), _) = supplied_release_stacks(deployment) {
+        return Ok(Some(stack));
+    }
+    let release = release_store
+        .get_release(&Subject::system(), target_release_id)
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!("Release {} not found", target_release_id),
+            })
+        })?;
+    Ok(release.stacks.get(&deployment.platform).cloned())
+}
+
+/// What the deployment config is built from, besides the deployment itself.
+pub(crate) struct RunnerConfigSources<'a> {
+    pub config: &'a ManagerConfig,
+    pub credential_resolver: &'a dyn CredentialResolver,
+    pub bindings_provider: &'a Option<Arc<dyn BindingsProviderApi>>,
+    pub target_bindings_providers: &'a HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+}
+
+impl RunnerConfigSources<'_> {
+    /// The deployment config a runner applies to this deployment.
     ///
-    /// Lambda requires ECR URIs and Cloud Run requires GAR URIs — they can't pull
-    /// Build the environment variables snapshot injected into containers/workers.
+    /// The manager's loop runs with it, and the acquire route returns it to
+    /// any other runner (such as `alien deploy`). Both must apply the same
+    /// config: when they differ, the second runner to apply rolls every
+    /// workload again with a different spec.
     ///
-    /// Includes:
-    /// - `ALIEN_DEPLOYMENT_ID`
-    /// - `ALIEN_DEPLOYMENT_NAME`
-    /// - Command delivery configuration
-    async fn build_environment_variables(
+    /// `deployment_stack` is the target release's stack; `None` when the
+    /// deployment has none yet, so no resource receives command variables.
+    pub(crate) async fn deployment_config(
         &self,
-        deployment_id: &str,
         deployment: &DeploymentRecord,
-        deployment_stack: &alien_core::Stack,
-    ) -> Result<EnvironmentVariablesSnapshot, AlienError> {
-        let mut vars: Vec<EnvironmentVariable> = Vec::new();
+        deployment_stack: Option<&Stack>,
+    ) -> Result<DeploymentConfig, AlienError> {
+        let environment_variables =
+            deployment_environment_variables(self.config, deployment, deployment_stack)?;
+        let monitoring = deployment
+            .deployment_config
+            .as_ref()
+            .and_then(|config| config.monitoring.clone())
+            .or_else(|| build_monitoring_config(self.config, deployment));
 
-        // 1. ALIEN_DEPLOYMENT_ID — always included.
-        vars.push(EnvironmentVariable {
+        // Management config resolution:
+        //   1. From platform API (per-deployment, on DeploymentRecord — e.g. private managers)
+        //   2. From credential resolver (per-platform, derived from target provider's management binding)
+        let management_config = if let Some(mc) = deployment.management_config.clone() {
+            Some(mc)
+        } else {
+            match self
+                .credential_resolver
+                .resolve_management_config(deployment.platform)
+                .await
+            {
+                Ok(mc) => mc,
+                Err(e) => {
+                    warn!(
+                        deployment_id = %deployment.id,
+                        error = %e,
+                        "Failed to resolve management config from bindings"
+                    );
+                    None
+                }
+            }
+        };
+
+        let native_image_host = crate::registry_access::derive_native_image_host(
+            self.bindings_provider,
+            self.target_bindings_providers,
+            &deployment.platform,
+        )
+        .await;
+
+        let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            config.environment_variables = environment_variables;
+            if config.deployment_name.is_none() {
+                config.deployment_name = Some(deployment.name.clone());
+            }
+            if config.management_config.is_none() {
+                config.management_config = management_config;
+            }
+            if config.deployment_token.is_none() {
+                config.deployment_token = deployment.deployment_token.clone();
+            }
+            if config.base_platform.is_none() {
+                config.base_platform = deployment.base_platform;
+            }
+            if config.monitoring.is_none() {
+                config.monitoring = monitoring;
+            }
+            // A control plane that predates gate answers omits inputValues
+            // entirely; resolving gates from declared defaults instead of the
+            // stored answers would deprovision an enabled resource. Whenever
+            // gates exist their answers are materialized at install, so a
+            // legitimately supplied map is never empty.
+            if config.input_values.is_empty() {
+                config.input_values = deployment.input_values.clone();
+            }
+            config.manager_url = Some(self.config.base_url());
+            config.native_image_host = native_image_host;
+            config
+        } else {
+            let stack_settings = deployment.stack_settings.clone().ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!("Deployment {} has no stack settings", deployment.id),
+                })
+            })?;
+
+            DeploymentConfig {
+                stored_secret_input_ids: None,
+                input_values: deployment.input_values.clone(),
+                deployment_name: Some(deployment.name.clone()),
+                external_bindings: stack_settings.external_bindings.clone().unwrap_or_default(),
+                stack_settings,
+                management_config,
+                environment_variables,
+                allow_frozen_changes: false,
+                compute_backend: None,
+                base_platform: deployment.base_platform,
+                label_domain: None,
+                observe_label_selector: None,
+                observe_all_namespaces: false,
+                public_endpoints: None,
+                domain_metadata: None,
+                monitoring,
+                manager_url: Some(self.config.base_url()),
+                deployment_token: deployment.deployment_token.clone(),
+                native_image_host,
+                volume_restores: Vec::new(),
+            }
+        };
+        Ok(config)
+    }
+}
+
+/// The environment variables snapshot injected into the deployment's
+/// workloads: `ALIEN_DEPLOYMENT_ID`, `ALIEN_DEPLOYMENT_NAME`, command delivery
+/// configuration, and the deployment's own variables.
+fn deployment_environment_variables(
+    config: &ManagerConfig,
+    deployment: &DeploymentRecord,
+    deployment_stack: Option<&Stack>,
+) -> Result<EnvironmentVariablesSnapshot, AlienError> {
+    let mut vars: Vec<EnvironmentVariable> = vec![
+        EnvironmentVariable {
             name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
-            value: deployment_id.to_string(),
+            value: deployment.id.clone(),
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
-        });
-        vars.push(EnvironmentVariable {
+        },
+        EnvironmentVariable {
             name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
             value: deployment.name.clone(),
             var_type: EnvironmentVariableType::Plain,
             target_resources: None,
-        });
+        },
+    ];
 
-        // 3a. Local/Kubernetes Worker push authentication. Cloud-native Worker
+    if let Some(deployment_stack) = deployment_stack {
+        // Local/Kubernetes Worker push authentication. Cloud-native Worker
         // transports authenticate through their platform instead.
-        let needs_http_push_auth = matches!(
-            deployment.platform,
-            alien_core::Platform::Kubernetes | alien_core::Platform::Local
-        );
-
-        if needs_http_push_auth {
+        if matches!(deployment.platform, Platform::Kubernetes | Platform::Local) {
             vars.extend(
                 worker_commands_push_env_vars(
                     deployment.deployment_token.as_deref(),
@@ -1075,7 +1108,7 @@ impl DeploymentLoop {
             );
         }
 
-        // 3b. Container/Daemon command receiver env — injected on EVERY platform.
+        // Container/Daemon command receiver env — injected on EVERY platform.
         // Unlike workers, Containers and Daemons always deliver commands via
         // Pull, regardless of platform, so the receiver contract must reach
         // them everywhere, not just K8s/Local.
@@ -1085,39 +1118,36 @@ impl DeploymentLoop {
         // on any platform through the platform-independent per-resource dispatch in
         // `alien-deployment::inject_into_environment` (Container/Daemon downcast).
         // Empty when the stack declares no command-enabled Container/Daemon targets.
-        let commands_base = self.config.commands_base_url();
         vars.extend(
             commands_receiver_env_vars(
-                commands_base,
+                config.commands_base_url(),
                 deployment.deployment_token.as_deref(),
                 deployment_stack,
             )
             .map_err(|e| e.into_generic())?,
         );
-
-        // 4. User-provided environment variables from the deployment record.
-        if let Some(ref user_vars) = deployment.user_environment_variables {
-            vars.extend(user_vars.iter().cloned());
-        }
-
-        // Build deterministic hash from variable contents so the infra executor
-        // only sees a change when the actual values change.
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        for v in &vars {
-            hasher.update(v.name.as_bytes());
-            hasher.update(b"=");
-            hasher.update(v.value.as_bytes());
-            hasher.update(b"\n");
-        }
-        let hash = format!("env-{:x}", hasher.finalize());
-
-        Ok(EnvironmentVariablesSnapshot {
-            variables: vars,
-            hash,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        })
     }
+
+    if let Some(ref user_vars) = deployment.user_environment_variables {
+        vars.extend(user_vars.iter().cloned());
+    }
+
+    // Build deterministic hash from variable contents so the infra executor
+    // only sees a change when the actual values change.
+    let mut hasher = Sha256::new();
+    for v in &vars {
+        hasher.update(v.name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(v.value.as_bytes());
+        hasher.update(b"\n");
+    }
+    let hash = format!("env-{:x}", hasher.finalize());
+
+    Ok(EnvironmentVariablesSnapshot {
+        variables: vars,
+        hash,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
 }
 
 /// Where a deployment without a monitoring config sends its logs: back to this manager, unless
@@ -1167,14 +1197,6 @@ fn commands_receiver_env_vars(
     deployment_stack: &alien_core::Stack,
 ) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
     deployment_stack.receiver_command_env_vars(&commands_base_url, deployment_token)
-}
-
-fn with_environment_snapshot(
-    mut config: DeploymentConfig,
-    environment_variables: EnvironmentVariablesSnapshot,
-) -> DeploymentConfig {
-    config.environment_variables = environment_variables;
-    config
 }
 
 fn should_wait_for_credential_handoff(
@@ -1306,9 +1328,8 @@ mod tests {
         gcp_credential_handoff_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff, supplied_release_stacks, with_environment_snapshot,
-        worker_commands_push_env_vars, DeploymentLoop, ProcessOptions,
-        GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
+        DeploymentLoop, ProcessOptions, RunnerConfigSources, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -2379,8 +2400,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn platform_config_replaces_empty_environment_snapshot_for_command_daemon() {
+    /// A control plane's config carries its own copy of the deployment's
+    /// variables. The runner config replaces it with the manager's snapshot:
+    /// the identity and command variables plus the deployment's own.
+    #[tokio::test]
+    async fn runner_config_replaces_control_plane_snapshot_with_manager_variables() {
         let daemon = Daemon::new("debug-daemon".to_string())
             .code(DaemonCode::Image {
                 image: "daemon:latest".to_string(),
@@ -2391,107 +2415,104 @@ mod tests {
         let stack = Stack::new("manager-platform-config-stack".to_string())
             .add(daemon, ResourceLifecycle::Live)
             .build();
-        let empty_snapshot = EnvironmentVariablesSnapshot {
-            variables: Vec::new(),
-            hash: "stale-empty-snapshot".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
+        let user_variable = EnvironmentVariable {
+            name: "LOG_LEVEL".to_string(),
+            value: "debug".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: None,
         };
         let provided_config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
-            .environment_variables(empty_snapshot)
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![user_variable.clone()],
+                hash: "control-plane-snapshot".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+            })
             .allow_frozen_changes(false)
             .external_bindings(Default::default())
             .build();
-        let mut deployment = deployment_record(DeploymentStatus::Provisioning, None);
+        let mut deployment = deployment_record(DeploymentStatus::UpdatePending, None);
         deployment.deployment_token = Some("ax_dep_test".to_string());
+        deployment.user_environment_variables = Some(vec![user_variable.clone()]);
         deployment.deployment_config = Some(provided_config);
 
-        let mut fresh_variables = vec![
-            EnvironmentVariable {
-                name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
-                value: deployment.id.clone(),
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            },
-            EnvironmentVariable {
-                name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
-                value: deployment.name.clone(),
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            },
-        ];
-        fresh_variables.extend(
-            commands_receiver_env_vars(
-                "https://manager.example.test/v1".to_string(),
-                deployment.deployment_token.as_deref(),
-                &stack,
-            )
-            .expect("command-enabled daemon should produce receiver variables"),
-        );
-        let fresh_snapshot = EnvironmentVariablesSnapshot {
-            variables: fresh_variables,
-            hash: "fresh-snapshot".to_string(),
-            created_at: "2026-01-02T00:00:00Z".to_string(),
+        let state_dir = TempDir::new().expect("temp dir");
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
         };
-
-        let effective_config = with_environment_snapshot(
-            deployment
-                .deployment_config
-                .expect("platform deployment should supply a config snapshot"),
-            fresh_snapshot.clone(),
+        let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
+            state_dir.path().to_path_buf(),
         );
-
-        assert_eq!(effective_config.environment_variables, fresh_snapshot);
-        let variables = &effective_config.environment_variables.variables;
-        assert_eq!(variables.len(), 6);
-        for (name, value, var_type, target_resources) in [
-            (
-                ENV_ALIEN_DEPLOYMENT_ID,
-                "dep_test",
-                EnvironmentVariableType::Plain,
-                None,
-            ),
-            (
-                ENV_ALIEN_DEPLOYMENT_NAME,
-                "test",
-                EnvironmentVariableType::Plain,
-                None,
-            ),
-            (
-                ENV_ALIEN_COMMANDS_URL,
-                "https://manager.example.test/v1",
-                EnvironmentVariableType::Plain,
-                Some(vec!["debug-daemon".to_string()]),
-            ),
-            (
-                ENV_ALIEN_COMMANDS_TOKEN,
-                "ax_dep_test",
-                EnvironmentVariableType::Secret,
-                Some(vec!["debug-daemon".to_string()]),
-            ),
-            (
-                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
-                "debug-daemon",
-                EnvironmentVariableType::Plain,
-                Some(vec!["debug-daemon".to_string()]),
-            ),
-            (
-                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
-                "daemon",
-                EnvironmentVariableType::Plain,
-                Some(vec!["debug-daemon".to_string()]),
-            ),
-        ] {
-            assert!(
-                variables.iter().any(|variable| {
-                    variable.name == name
-                        && variable.value == value
-                        && variable.var_type == var_type
-                        && variable.target_resources == target_resources
-                }),
-                "missing or incorrect environment variable {name}"
-            );
+        let config = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &credential_resolver,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
         }
+        .deployment_config(&deployment, Some(&stack))
+        .await
+        .expect("runner config");
+
+        let scoped = Some(vec!["debug-daemon".to_string()]);
+        let variable =
+            |name: &str, value: &str, var_type, target_resources: &Option<Vec<String>>| {
+                EnvironmentVariable {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                    var_type,
+                    target_resources: target_resources.clone(),
+                }
+            };
+        assert_eq!(
+            config.environment_variables.variables,
+            vec![
+                variable(
+                    ENV_ALIEN_DEPLOYMENT_ID,
+                    "dep_test",
+                    EnvironmentVariableType::Plain,
+                    &None
+                ),
+                variable(
+                    ENV_ALIEN_DEPLOYMENT_NAME,
+                    "test",
+                    EnvironmentVariableType::Plain,
+                    &None
+                ),
+                variable(
+                    ENV_ALIEN_COMMANDS_URL,
+                    "https://manager.example.test/v1",
+                    EnvironmentVariableType::Plain,
+                    &scoped,
+                ),
+                variable(
+                    ENV_ALIEN_COMMANDS_TOKEN,
+                    "ax_dep_test",
+                    EnvironmentVariableType::Secret,
+                    &scoped,
+                ),
+                variable(
+                    ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+                    "daemon",
+                    EnvironmentVariableType::Plain,
+                    &scoped,
+                ),
+                variable(
+                    ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+                    "debug-daemon",
+                    EnvironmentVariableType::Plain,
+                    &scoped,
+                ),
+                user_variable,
+            ]
+        );
+        assert_ne!(config.environment_variables.hash, "control-plane-snapshot");
+        assert_eq!(config.deployment_name.as_deref(), Some("test"));
+        assert_eq!(config.deployment_token.as_deref(), Some("ax_dep_test"));
+        assert_eq!(
+            config.manager_url.as_deref(),
+            Some("https://manager.example.test")
+        );
     }
 
     #[test]

@@ -727,6 +727,29 @@ pub trait DeploymentStore: Send + Sync {
         execution_claim: Option<ExecutionClaim>,
     ) -> Result<(), AlienError>;
 
+    /// Undo an acquisition whose deployment never reached the runner.
+    ///
+    /// Releases the lease and puts back anything the acquire consumed, so the
+    /// next runner acquires the deployment as this one would have. The default
+    /// only releases: it suits stores whose acquire derives the runner's view
+    /// (such as the retry request) from the claimed operation instead of
+    /// consuming stored state. A store whose acquire clears stored state
+    /// restores it here.
+    async fn release_unused_acquisition(
+        &self,
+        caller: &crate::auth::Subject,
+        acquired: &AcquiredDeployment,
+        session: &str,
+    ) -> Result<(), AlienError> {
+        self.release(
+            caller,
+            &acquired.deployment.id,
+            session,
+            acquired.execution_claim.clone(),
+        )
+        .await
+    }
+
     // --- Deployment groups ---
 
     async fn create_deployment_group(
