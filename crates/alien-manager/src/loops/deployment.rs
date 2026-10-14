@@ -612,9 +612,21 @@ impl DeploymentLoop {
         }
 
         // 1. Get the release for this deployment.
-        let target_release_id = deployment
-            .desired_release_id
-            .as_ref()
+        let prepared_startup_release = if deployment.platform == alien_core::Platform::Local
+            && matches!(
+                status,
+                DeploymentStatus::InitialSetup | DeploymentStatus::Provisioning
+            ) {
+            deployment
+                .runtime_metadata
+                .as_ref()
+                .filter(|metadata| metadata.pending_prepared_stack.is_none())
+                .and_then(|metadata| metadata.pending_prepared_release_id.as_ref())
+        } else {
+            None
+        };
+        let target_release_id = prepared_startup_release
+            .or(deployment.desired_release_id.as_ref())
             .or(deployment.current_release_id.as_ref())
             .ok_or_else(|| {
                 AlienError::new(GenericError {
@@ -2639,6 +2651,186 @@ mod tests {
                 "{platform}: deleted record must be removed"
             );
         }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn new_release_waits_for_the_prepared_local_startup_to_converge() {
+        let directory = TempDir::new().unwrap();
+        let manager = crate::server::AlienManager::builder(crate::config::ManagerConfig {
+            db_path: Some(directory.path().join("manager.db")),
+            state_dir: Some(directory.path().to_path_buf()),
+            ..Default::default()
+        })
+        .credential_resolver(Arc::new(
+            crate::providers::local_credentials::LocalCredentialResolver::new(
+                directory.path().to_path_buf(),
+            ),
+        ))
+        .with_standalone_defaults(&crate::standalone_config::ManagerTomlConfig::default())
+        .await
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+        let subject = crate::auth::Subject::system();
+        let group = manager
+            .deployment_store
+            .create_deployment_group(
+                &subject,
+                crate::traits::CreateDeploymentGroupParams {
+                    name: "local".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut releases = Vec::new();
+        for added in [false, true] {
+            let builder = Stack::new("startup".to_string()).add(
+                alien_core::Storage::new("retained".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+            let stack = if added {
+                builder
+                    .add(
+                        alien_core::Storage::new("added".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .build()
+            } else {
+                builder.build()
+            };
+            releases.push(
+                manager
+                    .release_store
+                    .create_release(
+                        &subject,
+                        crate::traits::CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: HashMap::from([(Platform::Local, stack)]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let deployment = manager
+            .deployment_store
+            .create_deployment(
+                &subject,
+                crate::traits::CreateDeploymentParams {
+                    name: "startup".to_string(),
+                    deployment_group_id: group.id,
+                    platform: Platform::Local,
+                    deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: StackSettings::default(),
+                    stack_state: None,
+                    environment_variables: None,
+                    public_subdomain: None,
+                    input_values: Default::default(),
+                    setup_item: None,
+                    deployment_token: None,
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .deployment_store
+            .set_deployment_desired_release(&subject, &deployment.id, &releases[0])
+            .await
+            .unwrap();
+        let runner = DeploymentLoop::new(
+            manager.config.clone(),
+            manager.deployment_store.clone(),
+            manager.release_store.clone(),
+            manager.credential_resolver.clone(),
+            manager.server_bindings.clone(),
+            None,
+        );
+        let record = manager
+            .deployment_store
+            .get_deployment(&subject, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        runner
+            .process_deployment_inner(
+                record,
+                None,
+                "startup",
+                ProcessOptions {
+                    max_steps: 1,
+                    require_heartbeats_enabled: false,
+                },
+            )
+            .await
+            .unwrap();
+        let prepared = manager
+            .deployment_store
+            .get_deployment(&subject, &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.status, "initial-setup");
+        // A publication races the retry's commit: desired changes after preparation.
+        manager
+            .deployment_store
+            .set_deployment_desired_release(&subject, &deployment.id, &releases[1])
+            .await
+            .unwrap();
+        let data = directory.path().join(&deployment.id).join("storage");
+        let mut saw_old_release = false;
+        for _ in 0..40 {
+            let record = manager
+                .deployment_store
+                .get_deployment(&subject, &deployment.id)
+                .await
+                .unwrap()
+                .unwrap();
+            if record.current_release_id.as_deref() == Some(releases[0].as_str())
+                && !saw_old_release
+            {
+                assert!(
+                    !data.join("added").exists(),
+                    "the old operation must not claim the new stack"
+                );
+                assert_eq!(record.status, "update-pending");
+                std::fs::write(data.join("retained/value"), "keep me").unwrap();
+                saw_old_release = true;
+            }
+            if record.status == "running"
+                && record.current_release_id.as_deref() == Some(releases[1].as_str())
+            {
+                assert!(saw_old_release);
+                assert!(data.join("added").is_dir());
+                assert_eq!(
+                    std::fs::read_to_string(data.join("retained/value")).unwrap(),
+                    "keep me"
+                );
+                runner.shutdown_local_runtimes().await.unwrap();
+                return;
+            }
+            runner
+                .process_deployment_inner(
+                    record,
+                    None,
+                    "startup",
+                    ProcessOptions {
+                        max_steps: 1,
+                        require_heartbeats_enabled: false,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        panic!("the prepared release and its queued successor must converge");
     }
 
     #[tokio::test]

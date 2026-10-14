@@ -1444,7 +1444,28 @@ async fn run_dev_session(
                 eprint!("Building... ");
             }
         }
-        commands::wait_for_resumed_dev_deployment(port, &deployment_name).await?;
+        let resume = commands::wait_for_resumed_dev_deployment(port, &deployment_name);
+        #[cfg(unix)]
+        tokio::select! {
+            result = resume => result?,
+            _ = terminate.recv() => return Ok(()),
+            result = tokio::signal::ctrl_c() => {
+                result.into_alien_error().context(ErrorData::ServerStartFailed {
+                    reason: "Failed to wait for Ctrl+C".to_string(),
+                })?;
+                return Ok(());
+            }
+        }
+        #[cfg(not(unix))]
+        tokio::select! {
+            result = resume => result?,
+            result = tokio::signal::ctrl_c() => {
+                result.into_alien_error().context(ErrorData::ServerStartFailed {
+                    reason: "Failed to wait for Ctrl+C".to_string(),
+                })?;
+                return Ok(());
+            }
+        }
         let release_id =
             build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
                 .await?;

@@ -1572,19 +1572,19 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Expr::col(Deployments::Status).is_in(Self::RUNTIME_DELETE_STATUSES),
                 Expr::col(Deployments::Status),
             );
-            if state.status == alien_core::DeploymentStatus::Running {
+            if matches!(
+                state.status,
+                alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::RefreshFailed
+            ) {
                 let newer_release = match current_release_id.as_deref() {
                     Some(current) => Expr::col(Deployments::DesiredReleaseId).ne(current),
-                    None => Expr::col(Deployments::DesiredReleaseId).is_not_null(),
+                    None => Expr::col(Deployments::Status)
+                        .eq("update-pending")
+                        .and(Expr::col(Deployments::DesiredReleaseId).is_not_null()),
                 };
                 // A heartbeat can finish after a new release queues its update.
                 // Persist its resource observations without consuming that request.
-                status = status.case(
-                    Cond::all()
-                        .add(Expr::col(Deployments::Status).eq("update-pending"))
-                        .add(newer_release),
-                    "update-pending",
-                );
+                status = status.case(newer_release, "update-pending");
             }
             status.finally(status_str.clone()).into()
         };

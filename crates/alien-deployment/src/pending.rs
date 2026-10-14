@@ -139,6 +139,12 @@ pub async fn handle_pending(
         ..alien_core::RuntimeMetadata::default()
     };
     runtime_metadata.prepared_stack = Some(mutated_stack.clone());
+    if current.platform == alien_core::Platform::Local {
+        runtime_metadata.pending_prepared_release_id = current
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+    }
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Inject environment variables into the prepared stack for validation

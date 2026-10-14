@@ -231,6 +231,11 @@ pub async fn handle_provisioning(
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
+        if next.platform == alien_core::Platform::Local
+            && runtime_metadata.pending_prepared_stack.is_none()
+        {
+            runtime_metadata.pending_prepared_release_id = None;
+        }
         next.runtime_metadata = Some(runtime_metadata);
 
         // Promote target to current: deployment successful
@@ -372,6 +377,14 @@ pub async fn handle_provisioning_failed(
         );
     }
 
+    if current.platform == alien_core::Platform::Local {
+        if let Some(metadata) = next.runtime_metadata.as_mut() {
+            metadata.pending_prepared_release_id = next
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone());
+        }
+    }
     // Every failure whose config is unchanged resumes where it stopped. A changed runtime
     // resource is left to the planner, which updates or replaces it. A changed setup-owned one
     // needs setup, which this runtime executor never does for it, so the retry is refused.

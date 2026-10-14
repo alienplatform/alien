@@ -576,6 +576,14 @@ pub async fn handle_initial_setup_failed(
             .await?,
         );
     }
+    if current.platform == alien_core::Platform::Local {
+        if let Some(metadata) = next.runtime_metadata.as_mut() {
+            metadata.pending_prepared_release_id = next
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone());
+        }
+    }
     let runtime_metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Runtime metadata with prepared stack required for setup retry".to_string(),
