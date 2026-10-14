@@ -6378,8 +6378,8 @@ mod sandbox_push_tests {
 
     /// A built GCP sandbox is released as the base with the agent layered on, because Agent
     /// Platform runs the image as pushed; Azure takes the base as built. The agent is a stand-in
-    /// on the same plain-HTTP registry, which the agent pull reaches only through that registry's
-    /// HTTPS exception.
+    /// on the base's plain-HTTP registry: the agent pull uses HTTP for that registry's host only,
+    /// and HTTPS for any other.
     #[tokio::test]
     async fn a_gcp_sandbox_is_released_with_the_agent_layered_on() {
         let (_registry, host) = dockdash::test_utils::setup_local_registry()
@@ -6447,6 +6447,19 @@ mod sandbox_push_tests {
                 assert!(user.is_null(), "{platform}: {user}");
             }
         }
+
+        // The same registry under another name is outside the exception, so the agent pull
+        // goes over HTTPS and the plain-HTTP registry cannot answer it.
+        let elsewhere = agent_image.replacen("localhost", "127.0.0.1", 1);
+        push_target(
+            &targets[0],
+            &Platform::Gcp,
+            &repository,
+            &options,
+            &elsewhere,
+        )
+        .await
+        .expect_err("an agent outside the base's registry is pulled over HTTPS");
     }
 
     /// An unbuilt source sandbox has no directory to push, so a release says so rather than
