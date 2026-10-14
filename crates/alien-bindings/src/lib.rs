@@ -24,7 +24,6 @@ pub mod traits;
 pub mod presigned {
     pub use alien_core::presigned::*;
 }
-mod credential_source;
 pub mod http_client;
 pub mod provider;
 mod refreshing;

@@ -90,12 +90,9 @@ pub async fn start_gateway_on(
     bindings: Vec<GatewayBinding>,
     addr: SocketAddr,
 ) -> Result<GatewayHandle> {
-    // Built once and shared across routes: on the runtime-less mint path it is the single
-    // refresh clock and mint cache every request re-resolves through.
-    let managed = config::managed_provider()?;
     let mut routes = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        routes.push(config::resolve_route(binding, managed.as_ref()).await?);
+        routes.push(config::resolve_route(binding, None).await?);
     }
     // Routes appended here sit outside the body cap `build_router` layers on, which is
     // only safe while they read no body. A body-reading route belongs inside it.
