@@ -8,6 +8,7 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
+use alien_error::{Context, IntoAlienError};
 #[cfg(any(feature = "gcp", feature = "azure"))]
 use alien_worker_protocol::control::{
     CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent as ProtoStorageEvent,
@@ -33,6 +34,8 @@ use prost_types::Timestamp;
 use tokio::{net::TcpListener, sync::broadcast, sync::Semaphore, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
+
+use crate::error::{ErrorData, Result};
 
 fn http_server_join_result(
     joined: std::result::Result<std::io::Result<()>, tokio::task::JoinError>,
@@ -276,14 +279,20 @@ async fn process_command_with_budget(
 /// with no proxy, generous timeouts (the app may make slow cloud API calls),
 /// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
 /// close idle connections with the default settings).
-pub fn create_forward_client() -> reqwest::Client {
+pub fn create_forward_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
+        // The caller owns redirect handling; never replay its request elsewhere.
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(5))
         .read_timeout(std::time::Duration::from_secs(300))
         .no_proxy()
         .tcp_keepalive(None)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .into_alien_error()
+        .context(ErrorData::HandlerStartupFailed {
+            message: "Failed to configure application HTTP forwarding".to_string(),
+            handler_type: Some("http-forwarder".to_string()),
+        })
 }
 
 /// Forward an HTTP request to the application.
@@ -827,6 +836,56 @@ mod tests {
     use chrono::Duration as ChronoDuration;
 
     use super::*;
+
+    #[tokio::test]
+    async fn forwarding_preserves_redirect_without_contacting_destination() {
+        let destination_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&destination_calls);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let location = format!("http://127.0.0.1:{port}/destination");
+        let redirect_location = location.clone();
+        let app = Router::new()
+            .route(
+                "/redirect",
+                get(move || async move {
+                    Response::builder()
+                        .status(StatusCode::TEMPORARY_REDIRECT)
+                        .header("location", redirect_location)
+                        .header("set-cookie", "first=one")
+                        .header("set-cookie", "second=two")
+                        .body(Body::from("redirect body"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/destination",
+                get(move || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    "unexpected follow"
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = forward_http_request(
+            &create_forward_client().unwrap(),
+            Request::builder()
+                .uri("/redirect")
+                .body(Body::empty())
+                .unwrap(),
+            port,
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(response.headers()["location"], location);
+        assert_eq!(response.headers().get_all("set-cookie").iter().count(), 2);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "redirect body"
+        );
+        assert_eq!(destination_calls.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
 
     #[test]
     fn command_timeout_supports_full_worker_window() {
