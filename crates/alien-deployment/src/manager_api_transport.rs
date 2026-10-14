@@ -494,8 +494,15 @@ fn setup_run_acquire_statuses() -> Vec<String> {
 ///
 /// Unlike the normal manager acquire path, this can acquire `teardown-required`
 /// so setup-authority callers can resume frozen-resource teardown.
+///
+/// `deletion_lookup` confirms that a refused acquire means the record is gone.
+/// Removing the record also removes the deployment's own credential, so a
+/// manager that authenticates through the platform refuses `client` with 401
+/// rather than 404. Callers that requested the deletion with other credentials
+/// pass a client holding them; others pass `client`.
 pub async fn acquire_setup_delete_deployment(
     client: &ManagerClient,
+    deletion_lookup: &ManagerClient,
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
@@ -527,8 +534,9 @@ pub async fn acquire_setup_delete_deployment(
             Err(error) => {
                 // A runtime with setup authority can finish and remove the record
                 // between the delete request and this acquire request.
-                if is_missing_deployment_response(&error) {
-                    let lookup = client
+                let missing = is_missing_deployment_response(&error);
+                if missing || is_unauthenticated_response(&error) {
+                    let lookup = deletion_lookup
                         .get_deployment()
                         .id(deployment_id)
                         .send()
@@ -539,9 +547,14 @@ pub async fn acquire_setup_delete_deployment(
                         if is_missing_deployment_response(&lookup_error) {
                             return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
                         }
-                        return Err(lookup_error.context(alien_error::GenericError {
-                            message: "Failed to confirm completed deployment deletion".to_string(),
-                        }));
+                        // A refused credential with a failed lookup proves nothing
+                        // about the record, so report the refusal itself.
+                        if missing {
+                            return Err(lookup_error.context(alien_error::GenericError {
+                                message: "Failed to confirm completed deployment deletion"
+                                    .to_string(),
+                            }));
+                        }
                     }
                 }
                 return Err(error.context(alien_error::GenericError {
@@ -865,8 +878,10 @@ mod tests {
                 then.status(404).body("removed deployment");
             })
             .await;
+        let client = ManagerClient::new(&server.base_url());
         let result = acquire_setup_delete_deployment(
-            &ManagerClient::new(&server.base_url()),
+            &client,
+            &client,
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
@@ -893,8 +908,10 @@ mod tests {
                 then.status(500).body("backend unavailable");
             })
             .await;
+        let client = ManagerClient::new(&server.base_url());
         let error = acquire_setup_delete_deployment(
-            &ManagerClient::new(&server.base_url()),
+            &client,
+            &client,
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
@@ -905,6 +922,143 @@ mod tests {
         assert_eq!(error.http_status_code, Some(500));
         acquire.assert_async().await;
         lookup.assert_async().await;
+    }
+
+    /// Mocks the manager as seen with the deployment's own token after the deletion
+    /// removed that token: every request is refused as unauthenticated.
+    async fn manager_refusing_the_removed_deployment_token(
+        server: &MockServer,
+    ) -> (httpmock::Mock<'_>, httpmock::Mock<'_>) {
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(401).json_body(removed_credential_rejection());
+            })
+            .await;
+        let lookup = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(401).json_body(removed_credential_rejection());
+            })
+            .await;
+        (acquire, lookup)
+    }
+
+    /// A hosted manager authenticates the deployment token through the platform, and
+    /// the deletion the CLI requested removes that token with the record. The acquire
+    /// is refused with 401, not 404; the operator's credentials confirm the deletion.
+    #[tokio::test]
+    async fn setup_delete_acquire_confirms_a_deletion_that_removed_the_deployment_token() {
+        let deployment_view = MockServer::start_async().await;
+        let (acquire, deployment_lookup) =
+            manager_refusing_the_removed_deployment_token(&deployment_view).await;
+        let operator_view = MockServer::start_async().await;
+        let operator_lookup = operator_view
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(404).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_NOT_FOUND",
+                    "message": "Deployment 'deployment-1' not found",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 404
+                }));
+            })
+            .await;
+
+        let result = acquire_setup_delete_deployment(
+            &ManagerClient::new(&deployment_view.base_url()),
+            &ManagerClient::new(&operator_view.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .expect("a removed record confirmed by the operator is a completed deletion");
+
+        assert!(matches!(result, SetupDeleteAcquireOutcome::AlreadyDeleted));
+        acquire.assert_hits_async(1).await;
+        deployment_lookup.assert_hits_async(0).await;
+        operator_lookup.assert_hits_async(1).await;
+    }
+
+    /// A refused token is only a deletion when the record is confirmed gone. When the
+    /// operator lookup cannot say, the refusal is reported, not hidden as success.
+    #[tokio::test]
+    async fn setup_delete_acquire_reports_a_refused_token_the_operator_cannot_explain() {
+        let deployment_view = MockServer::start_async().await;
+        let (acquire, deployment_lookup) =
+            manager_refusing_the_removed_deployment_token(&deployment_view).await;
+        let operator_view = MockServer::start_async().await;
+        let operator_lookup = operator_view
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(403).json_body(serde_json::json!({
+                    "code": "FORBIDDEN",
+                    "message": "Not allowed to read deployment 'deployment-1'",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 403
+                }));
+            })
+            .await;
+
+        let error = acquire_setup_delete_deployment(
+            &ManagerClient::new(&deployment_view.base_url()),
+            &ManagerClient::new(&operator_view.base_url()),
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .err()
+        .expect("an unconfirmed refusal must not report deleted");
+
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(
+            chain.contains("Failed to acquire setup teardown sync lock"),
+            "{chain}"
+        );
+        assert!(
+            chain.contains("Platform API authentication failed"),
+            "{chain}"
+        );
+        assert!(!chain.contains("Not allowed to read"), "{chain}");
+        acquire.assert_hits_async(1).await;
+        deployment_lookup.assert_hits_async(0).await;
+        operator_lookup.assert_hits_async(1).await;
+    }
+
+    /// A caller holding only the deployment token cannot confirm anything once that
+    /// token is refused, so it keeps reporting the refusal.
+    #[tokio::test]
+    async fn setup_delete_acquire_with_only_the_refused_token_reports_the_refusal() {
+        let server = MockServer::start_async().await;
+        let (acquire, lookup) = manager_refusing_the_removed_deployment_token(&server).await;
+        let client = ManagerClient::new(&server.base_url());
+
+        let error = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .err()
+        .expect("a refused token alone must not report deleted");
+
+        let chain = serde_json::to_string(&error).unwrap();
+        assert!(
+            chain.contains("Failed to acquire setup teardown sync lock"),
+            "{chain}"
+        );
+        assert!(
+            chain.contains("Platform API authentication failed"),
+            "{chain}"
+        );
+        acquire.assert_hits_async(1).await;
+        lookup.assert_hits_async(1).await;
     }
 
     #[test]
@@ -2352,4 +2506,8 @@ async fn send_release(
 
 fn is_missing_deployment_response(error: &AlienError) -> bool {
     error.http_status_code == Some(404)
+}
+
+fn is_unauthenticated_response(error: &AlienError) -> bool {
+    error.http_status_code == Some(401)
 }
