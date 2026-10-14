@@ -287,6 +287,12 @@ impl GcpArtifactRegistryController {
         let response = iam_client
             .create_service_account(pull_account_id.clone(), request)
             .await
+            .map_err(|error| {
+                ResourcePermissionsHelper::gcp_service_account_creation_error(
+                    error,
+                    &gcp_cfg.project_id,
+                )
+            })
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create pull service account '{}'",
@@ -348,6 +354,12 @@ impl GcpArtifactRegistryController {
         let response = iam_client
             .create_service_account(push_account_id.clone(), request)
             .await
+            .map_err(|error| {
+                ResourcePermissionsHelper::gcp_service_account_creation_error(
+                    error,
+                    &gcp_cfg.project_id,
+                )
+            })
             .context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to create push service account '{}'",

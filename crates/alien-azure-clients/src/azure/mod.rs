@@ -15,6 +15,7 @@ pub mod blob_containers;
 pub mod cognitive_services;
 pub mod common;
 pub mod compute;
+pub mod compute_usages;
 pub mod container_apps;
 pub mod containerregistry;
 pub mod data_protection;

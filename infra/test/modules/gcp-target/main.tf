@@ -22,6 +22,7 @@ resource "google_project_service" "target_apis" {
   provider = google.target
   for_each = toset([
     "serviceusage.googleapis.com",
+    "cloudquotas.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "storage.googleapis.com",
     "artifactregistry.googleapis.com",

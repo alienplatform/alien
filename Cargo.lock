@@ -437,6 +437,7 @@ dependencies = [
  "alien-bindings",
  "alien-build",
  "alien-cli-common",
+ "alien-client-config",
  "alien-cloudformation",
  "alien-commands",
  "alien-commands-client",
@@ -687,6 +688,7 @@ dependencies = [
  "alien-local",
  "alien-manager-api",
  "alien-operator",
+ "alien-preflights",
  "async-trait",
  "aws-config",
  "aws-sdk-cloudformation",
@@ -1215,11 +1217,16 @@ dependencies = [
 name = "alien-preflights"
 version = "3.3.32"
 dependencies = [
+ "alien-aws-clients",
+ "alien-azure-clients",
  "alien-core",
  "alien-error",
+ "alien-gcp-clients",
  "alien-permissions",
  "async-trait",
+ "httpmock",
  "indexmap 2.14.1",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",

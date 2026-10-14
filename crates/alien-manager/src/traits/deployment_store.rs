@@ -553,6 +553,25 @@ pub trait DeploymentStore: Send + Sync {
         id: &str,
     ) -> Result<Option<DeploymentRecord>, AlienError>;
 
+    /// Save quota warning overrides without replacing other stack settings or
+    /// scheduling execution. Callers must authorize deployment updates first.
+    ///
+    /// Implementations must validate identities for the deployment's cloud and
+    /// atomically refuse missing, locked, or non-idle deployments. `false` means
+    /// no write occurred; unsupported stores return an error. A failed preflight
+    /// remains failed until the caller explicitly requests a retry.
+    async fn set_quota_warning_overrides(
+        &self,
+        _caller: &crate::auth::Subject,
+        _id: &str,
+        _overrides: &[String],
+    ) -> Result<bool, AlienError> {
+        Err(crate::error::ErrorData::bad_request(
+            "This manager cannot update saved quota warning overrides",
+        )
+        .into_generic())
+    }
+
     async fn get_deployment_by_name(
         &self,
         caller: &crate::auth::Subject,

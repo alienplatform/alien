@@ -191,16 +191,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     message: "Failed to run build-time preflights".to_string(),
                 })?;
             if summary.warning_count > 0 {
-                handle
+                if let Err(error) = handle
                     .update(AlienEvent::RunningPreflights {
                         stack: stack.id().to_string(),
                         platform: settings.platform.runtime_platform().as_str().to_string(),
                         warnings: summary.get_warnings(),
                     })
                     .await
-                    .context(ErrorData::StackProcessorFailed {
-                        message: "Failed to report build-time preflight warnings".to_string(),
-                    })?;
+                {
+                    warn!(?error, "Failed to report build-time preflight warnings");
+                }
             }
             Ok::<_, alien_error::AlienError<ErrorData>>(summary)
         }
@@ -4060,6 +4060,70 @@ mod tests {
             .and_then(|(_, entry)| entry.config.downcast_ref::<Daemon>())
             .expect("daemon should remain");
         assert_eq!(daemon.cluster, None);
+    }
+
+    #[tokio::test]
+    async fn warning_handler_failure_does_not_reject_a_valid_build() {
+        struct RejectWarnings(std::sync::atomic::AtomicUsize);
+
+        #[async_trait::async_trait]
+        impl alien_core::events::EventHandler for RejectWarnings {
+            async fn on_event_change(
+                &self,
+                change: alien_core::events::EventChange,
+            ) -> alien_core::Result<()> {
+                if let alien_core::events::EventChange::Updated {
+                    event: AlienEvent::RunningPreflights { warnings, .. },
+                    ..
+                } = change
+                {
+                    assert!(warnings
+                        .iter()
+                        .any(|warning| warning.contains("memory_mb 200")));
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(AlienError::new(alien_core::ErrorData::GenericError {
+                        message: "warning display unavailable".to_string(),
+                    }));
+                }
+                Ok(())
+            }
+        }
+
+        let output = tempdir().unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("execution".to_string())
+            .memory_mb(200)
+            .code(WorkerCode::Image {
+                image: "registry.example.com/job:latest".to_string(),
+            })
+            .build();
+        let mut stack = Stack::new("warning-delivery".to_string())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            alien_core::permissions::PermissionProfile::new(),
+        );
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Azure {},
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let handler = Arc::new(RejectWarnings(std::sync::atomic::AtomicUsize::new(0)));
+        let bus = alien_core::EventBus::with_handlers(vec![handler.clone()]);
+        let built = bus.run(|| build_stack(stack, &settings)).await;
+        assert_eq!(
+            handler.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{built:?}"
+        );
+        let built = built.expect("a warning display failure must not stop the build");
+        assert!(built.resources.contains_key("job"));
     }
 
     #[tokio::test]

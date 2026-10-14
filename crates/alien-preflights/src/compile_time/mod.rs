@@ -6,6 +6,9 @@ pub mod capacity_group_profile;
 pub mod container_lifecycle;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
+pub mod iam_inline_policy_size;
+#[cfg(feature = "runtime-checks")]
+pub(crate) mod iam_workload_aggregate;
 pub mod kubernetes_workload_settings;
 pub mod live_provision_permissions;
 pub mod machines_resources;
@@ -29,8 +32,8 @@ pub mod storage_lifecycle_rules;
 pub mod trigger_edge_ownership;
 pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
-pub mod volume_backups;
 pub mod valid_resource_dependencies;
+pub mod volume_backups;
 pub mod worker_memory;
 
 pub use allowed_user_resources::AllowedUserResourcesCheck;
@@ -38,6 +41,7 @@ pub use capacity_group_profile::CapacityGroupProfileCheck;
 pub use container_lifecycle::ContainerLifecycleCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
+pub use iam_inline_policy_size::IamInlinePolicySizeCheck;
 pub use kubernetes_workload_settings::KubernetesWorkloadSettingsCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use machines_resources::MachinesResourcesCheck;
@@ -61,10 +65,10 @@ pub use unique_endpoint_host_labels::{
     endpoint_host_label_conflicts, UniqueEndpointHostLabelsCheck,
 };
 pub use unique_resources::UniqueResourcesCheck;
-pub use volume_backups::VolumeBackupsCheck;
 pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };
+pub use volume_backups::VolumeBackupsCheck;
 pub use worker_memory::WorkerMemoryCheck;
 
 pub mod kubernetes_compute;

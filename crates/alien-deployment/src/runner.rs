@@ -646,6 +646,7 @@ mod tests {
     struct FailFirstCheckpointTransport {
         attempts: AtomicUsize,
         checkpointed_statuses: Mutex<Vec<DeploymentStatus>>,
+        checkpointed_states: Mutex<Vec<serde_json::Value>>,
     }
 
     #[derive(Debug, Default)]
@@ -710,6 +711,11 @@ mod tests {
                 .lock()
                 .expect("statuses lock poisoned")
                 .push(state.status);
+
+            self.checkpointed_states
+                .lock()
+                .expect("states lock poisoned")
+                .push(serde_json::to_value(state).expect("state should serialize"));
 
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
@@ -1099,6 +1105,104 @@ mod tests {
             ],
             "failed pending state must be retried as the same durable checkpoint"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invalid_quota_override_is_checkpointed_and_visible_on_create_and_update() {
+        for (platform, initial, failed) in [
+            (
+                Platform::Test,
+                DeploymentStatus::Pending,
+                DeploymentStatus::PreflightsFailed,
+            ),
+            (
+                Platform::Test,
+                DeploymentStatus::UpdatePending,
+                DeploymentStatus::UpdateFailed,
+            ),
+            (
+                Platform::Aws,
+                DeploymentStatus::UpdatePending,
+                DeploymentStatus::UpdateFailed,
+            ),
+            (
+                Platform::Gcp,
+                DeploymentStatus::UpdatePending,
+                DeploymentStatus::UpdateFailed,
+            ),
+            (
+                Platform::Azure,
+                DeploymentStatus::UpdatePending,
+                DeploymentStatus::UpdateFailed,
+            ),
+        ] {
+            let transport = FailFirstCheckpointTransport::default();
+            let mut state = test_state();
+            state.status = initial;
+            state.platform = platform;
+            // An empty stack must reject an invalid setting too. Test credentials
+            // keep this regression independent of cloud services and permissions.
+            state.target_release.as_mut().unwrap().stack =
+                Stack::new("quota-validation".to_string()).build();
+            if initial == DeploymentStatus::UpdatePending {
+                state.current_release = state.target_release.clone();
+                state.stack_state = Some(StackState::new(platform));
+            }
+            let original_stack_state = serde_json::to_value(&state.stack_state).unwrap();
+            let mut config = test_config();
+            config.stack_settings.quota_warning_overrides = vec!["unknown-quota".to_string()];
+            let policy = RunnerPolicy {
+                max_steps: 2,
+                ..RunnerPolicy::default()
+            };
+
+            let result = run_step_loop(
+                &mut state,
+                &mut config,
+                &ClientConfig::Test,
+                "dep_invalid_override",
+                &policy,
+                &transport,
+                None,
+                None,
+            )
+            .await
+            .expect("invalid settings should be checkpointed as a semantic failure");
+
+            assert_eq!(result.steps_executed, 1);
+            assert!(result.state_persisted);
+            assert_eq!(result.loop_result.stop_reason, LoopStopReason::Failed);
+            assert_eq!(result.loop_result.outcome, LoopOutcome::Failure);
+            assert_eq!(result.loop_result.final_status, failed);
+            assert_eq!(state.status, failed);
+            assert_eq!(
+                serde_json::to_value(&state.stack_state).unwrap(),
+                original_stack_state
+            );
+            assert!(
+                state.runtime_metadata.is_none(),
+                "no prepared provisioning state"
+            );
+
+            let checkpoints = transport.checkpointed_states.lock().unwrap();
+            assert_eq!(checkpoints.len(), 2, "retry the failed checkpoint once");
+            assert_eq!(checkpoints[0], checkpoints[1]);
+            let restored: DeploymentState = serde_json::from_value(checkpoints[1].clone()).unwrap();
+            let error = preserve_semantic_failure(Ok(result), &restored)
+                .expect_err("finalization must retain the saved preflight failure")
+                .into_external();
+            assert!(!error.retryable);
+            assert!(!error.internal);
+            let report = error.human_report();
+            let cause = report
+                .causes
+                .iter()
+                .find(|cause| cause.code == "INVALID_QUOTA_OVERRIDE")
+                .unwrap_or_else(|| panic!("{platform:?} {initial:?}: {report:?}"));
+            assert!(cause.message.contains("unknown-quota"));
+            let wire = serde_json::to_value(error).unwrap();
+            assert!(wire.to_string().contains("INVALID_QUOTA_OVERRIDE"));
+        }
     }
 
     #[tokio::test]

@@ -246,6 +246,7 @@ faulty_ec2_api! {
     describe_images(request: DescribeImagesRequest) -> DescribeImagesResponse;
     terminate_instances(instance_ids: Vec<String>) -> TerminateInstancesResponse;
     describe_instances(request: DescribeInstancesRequest) -> DescribeInstancesResponse;
+    describe_instance_types(instance_types: &[String]) -> DescribeInstanceTypesResponse;
     create_volume(request: CreateVolumeRequest) -> CreateVolumeResponse;
     modify_volume(request: ModifyVolumeRequest) -> ModifyVolumeResponse;
     describe_volumes_modifications(request: DescribeVolumesModificationsRequest) -> DescribeVolumesModificationsResponse;

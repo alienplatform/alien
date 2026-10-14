@@ -853,3 +853,41 @@ fn storage_signing_refuses_missing_or_unresolved_executing_identity() {
         }
     }
 }
+
+#[rstest]
+#[case::provision("service-account/provision")]
+#[case::management("service-account/management")]
+#[case::heartbeat("service-account/heartbeat")]
+fn service_account_quota_inventory_is_project_scoped(
+    #[case] permission_set_id: &str,
+    #[values(BindingTarget::Stack, BindingTarget::Resource)] binding_target: BindingTarget,
+) {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+    let context = create_test_context();
+    let plan = generator
+        .generate_grant_plan(permission_set, binding_target, &context)
+        .expect("service-account grant plan should generate");
+    let bindings = plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let roles = plan.custom_roles_for_bindings(&bindings);
+    let inventory_roles: Vec<_> = roles
+        .into_iter()
+        .filter(|role| {
+            role.included_permissions
+                .iter()
+                .any(|p| p == "iam.serviceAccounts.list")
+        })
+        .collect();
+    assert_eq!(inventory_roles.len(), 1);
+    let inventory_binding = bindings
+        .iter()
+        .find(|binding| binding.role == inventory_roles[0].name)
+        .expect("inventory role must be bound at project scope");
+    assert!(inventory_binding.condition.is_none());
+    assert!(
+        !inventory_roles[0]
+            .included_permissions
+            .iter()
+            .any(|p| p.contains("getAccessToken") || p.contains("keys"))
+    );
+}

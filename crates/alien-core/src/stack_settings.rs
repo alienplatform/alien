@@ -801,6 +801,12 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackSettings {
+    /// Provider quota identities whose preflight failures become visible warnings
+    /// for this deployment. Checks still run; deploy-time provider limits still apply.
+    /// Unknown identities are rejected. An empty list restores normal blocking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quota_warning_overrides: Vec<String>,
+
     /// Who can reach public endpoints. Private access requires AWS managed containers.
     /// This choice cannot change after setup; create a new deployment to change it.
     #[serde(default)]

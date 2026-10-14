@@ -1206,6 +1206,14 @@ export type ImportSourceStackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: ImportSourceTelemetry | undefined;
@@ -3718,6 +3726,7 @@ export type ImportSourceStackSettings$Outbound = {
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  quotaWarningOverrides?: Array<string> | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3755,6 +3764,7 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   telemetry: ImportSourceTelemetry$outboundSchema.optional(),
   updates: ImportSourceUpdates$outboundSchema.optional(),
 });
