@@ -1,0 +1,30 @@
+{
+  "ownedCounts": {
+    "Vpcs": 0,
+    "InternetGateways": 0,
+    "Subnets": 0,
+    "RouteTables": 0,
+    "Addresses": 0,
+    "NatGateways": 0,
+    "SecurityGroups": 0,
+    "Roles": 0,
+    "Policies": 0,
+    "Buckets": 0
+  },
+  "unrelatedInventoryDifferences": {
+    "Roles": {
+      "added": 0,
+      "removed": 2
+    }
+  },
+  "networkBaselineNote": "First snapshot was in flight: exclude only owned VPC and dependent default routing/security IDs.",
+  "normalDestroyExitCodes": {
+    "network": 0,
+    "storage": 0
+  },
+  "storageHeadBucket": 404,
+  "deploymentRecords": {
+    "network": "Deleted",
+    "storage": 404
+  }
+}

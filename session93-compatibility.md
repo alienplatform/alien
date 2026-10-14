@@ -1,0 +1,16 @@
+# Real AWS compatibility proof
+
+On 2026-10-14, the original parent (`aa42e2f38`) created two deployments through its actual CLI and standalone manager. The current standalone manager (sources committed as `1e7888c0c`) then opened the same encrypted databases with their parent-written controller state. No database or stored resource JSON was edited.
+
+- **Real resource update:** parent-created Storage started with versioning disabled. After replacing the manager binary, the parent CLI deployed a release enabling versioning. The CLI exited 0; the deployment returned to Running; `currentReleaseId` changed; the stored previous config equals the parent's config; bucket outputs stayed identical. AWS `GetBucketVersioning` changed from an unset result to `{"Status":"Enabled"}`.
+- **Retained infrastructure:** the current manager read the parent-created Network controller JSON exactly unchanged. The parent CLI completed a new-release update with that network retained, exit 0 / Running.
+- **Mixed versions:** the feature CLI built in session 74 read JSON status and completed a no-op deploy against the parent manager, both exit 0. The parent CLI performed both updates against the current manager. The feature CLI was reused rather than rebuilt; this does not certify every latest CLI change or every possible version pair.
+- **Expected setup boundary:** adding Storage to the network-only installation requires new management permissions. Its update was rejected with the existing setup-repair instruction; an unchanged-resource release subsequently succeeded. No permission-check bypass was used.
+
+The accompanying terminal image contains the actual CLI output (deployment identifiers redacted). `alien` in the transcript denotes the parent or feature binary stated above each command. All commands used the E2E target credentials in eu-west-1; tokens were read from private files or passed only by the private cleanup harness. No quota override or increase was requested.
+
+The first network inventory was taken after the parent manager had already created the owned VPC. It is an in-flight snapshot, not a pre-create baseline. Cleanup compares all unrelated recorded IDs after excluding only the owned VPC and its dependent default route table/security group. The raw snapshots and encrypted database copy remain private.
+
+Limits: this proves existing durable state can be read and an actual resource can update across the manager change. It does not prove missing quota-read permissions during a capacity-increasing update, old GCP live updates, or Lambda workload/race completion. Those gates remain open. No product code, schema, permissions or generated artifacts changed in this proof.
+
+Cleanup: both normal destroys exited 0, all ten provider inventory classes show owned0, and the owned bucket returns 404. All unrelated network, local managed-policy and bucket IDs match the first snapshot after the stated owned-ID exclusions. Two unrelated IAM role IDs disappeared externally during the run; they were not recreated or modified. The Storage deployment API returns 404; the network-only record remains in terminal Deleted state after cleanup with the reused feature CLI. No live cloud resources remain.

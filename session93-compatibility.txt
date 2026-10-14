@@ -1,0 +1,40 @@
+Real AWS backwards compatibility | 2026-10-14
+Parent manager/CLI: aa42e2f38
+Current manager: sources committed as 1e7888c0c
+Feature CLI control: session74 binary (not rebuilt this session)
+
+Parent CLI + parent manager: Storage create
+$ alien deploy --name q5-compat93b --platform aws --token-file deployment-token
+Deploying q5-compat93b to aws
+Setup complete. Waiting for the manager to provision the deployment...
+> Success! Deployment is running.
+Deployment q5-compat93b ([DEPLOYMENT])
+Next alien deployments get [DEPLOYMENT]
+Exit: 0
+
+Feature CLI + parent manager: network no-op deploy
+$ alien deploy --name q5-compat93 --platform aws --token-file deployment-token
+Deploying q5-compat93 to aws
+> Success! Deployment is running with no pending update. Nothing to do.
+Next alien deployments redeploy [DEPLOYMENT]
+Exit: 0
+
+Parent CLI + current manager: new release, retained network
+$ alien deploy --name q5-compat93 --platform aws --token-file deployment-token
+Deploying q5-compat93 to aws
+> Success! Deployment is running.
+Deployment q5-compat93 ([DEPLOYMENT])
+Next alien deployments get [DEPLOYMENT]
+Exit: 0
+
+Parent CLI + current manager: versioning false -> true
+$ alien deploy --name q5-compat93b --platform aws --token-file deployment-token
+Deploying q5-compat93b to aws
+> Success! Deployment is running.
+Deployment q5-compat93b ([DEPLOYMENT])
+Next alien deployments get [DEPLOYMENT]
+Exit: 0
+
+AWS GetBucketVersioning: initially unset; after update {"Status":"Enabled"}.
+Same bucket outputs before/after. Changed currentReleaseId; Running.
+Current manager read parent Network controller JSON without changing it.
