@@ -456,8 +456,10 @@ async fn acquire(
                 // The caller never learns it holds these leases, so give them
                 // back instead of blocking every runner until they expire.
                 for acquired in &acquire_result.deployments {
-                    if let Err(give_back_error) =
-                        give_back_lease(&state, &subject, &req.session, acquired).await
+                    if let Err(give_back_error) = state
+                        .deployment_store
+                        .release_unused_acquisition(&subject, acquired, &req.session)
+                        .await
                     {
                         tracing::warn!(
                             deployment_id = %acquired.deployment.id,
@@ -476,34 +478,6 @@ async fn acquire(
         not_acquired: acquire_result.not_acquired,
     })
     .into_response()
-}
-
-/// Undo an acquisition that never reached its caller. Taking the lease
-/// consumed the deployment's retry request (the acquired record still shows
-/// it), so ask for the retry again before releasing, or the deployment would
-/// wait for someone to request another one.
-async fn give_back_lease(
-    state: &AppState,
-    subject: &crate::auth::Subject,
-    session: &str,
-    acquired: &crate::traits::deployment_store::AcquiredDeployment,
-) -> Result<(), AlienError> {
-    let deployment_id = &acquired.deployment.id;
-    if acquired.deployment.retry_requested {
-        state
-            .deployment_store
-            .set_retry_requested(subject, deployment_id)
-            .await?;
-    }
-    state
-        .deployment_store
-        .release(
-            subject,
-            deployment_id,
-            session,
-            acquired.execution_claim.clone(),
-        )
-        .await
 }
 
 /// An acquired deployment as the runner that acquired it receives it.
