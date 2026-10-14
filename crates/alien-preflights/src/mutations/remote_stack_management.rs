@@ -1,11 +1,14 @@
 //! RemoteStackManagement mutation that adds cross-account management resources.
 
-use crate::error::Result;
-use crate::StackMutation;
+use crate::{
+    error::{ErrorData, Result},
+    StackMutation,
+};
 use alien_core::{
     DeploymentConfig, DeploymentModel, KubernetesClusterOwnership, Platform, RemoteStackManagement,
     ResourceEntry, ResourceLifecycle, Stack, StackState,
 };
+use alien_error::AlienError;
 use async_trait::async_trait;
 use tracing::{debug, info};
 
@@ -95,6 +98,17 @@ impl StackMutation for RemoteStackManagementMutation {
 
         let remote_mgmt_id = "management";
 
+        if let Some(existing) = stack.resources.get(remote_mgmt_id) {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: format!(
+                    "resource ID '{remote_mgmt_id}' is reserved for stack management, but is already used by resource type '{}'",
+                    existing.config.resource_type()
+                ),
+                resource_id: Some(remote_mgmt_id.to_string()),
+            }));
+        }
+
         // Create the RemoteStackManagement resource
         let remote_stack_management =
             RemoteStackManagement::new(remote_mgmt_id.to_string()).build();
@@ -123,7 +137,7 @@ mod tests {
     use super::*;
     use alien_core::{
         EnvironmentVariablesSnapshot, ExternalBindings, KubernetesClusterSettings,
-        KubernetesSettings, StackSettings, Storage,
+        KubernetesSettings, ServiceAccount, StackSettings, Storage,
     };
 
     fn empty_stack() -> Stack {
@@ -198,6 +212,53 @@ mod tests {
         let config = config(Some(Platform::Aws), DeploymentModel::Push);
 
         assert!(!mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
+    }
+
+    #[tokio::test]
+    async fn reserved_management_id_is_never_overwritten() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                ServiceAccount::new("management".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mutation = RemoteStackManagementMutation;
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Test,
+            Platform::Kubernetes,
+        ] {
+            let mut config = config(Some(Platform::Aws), DeploymentModel::Pull);
+            config.management_config = Some(alien_core::ManagementConfig::Kubernetes);
+            let state = StackState::new(platform);
+            assert!(mutation.should_run(&stack, &state, &config));
+            let error = mutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .expect_err("a user service account must not be replaced");
+            assert_eq!(error.code, "STACK_MUTATION_FAILED");
+            assert!(error.message.contains("resource ID 'management' is reserved for stack management, but is already used by resource type 'service-account'"));
+        }
+    }
+
+    #[test]
+    fn management_name_is_not_reserved_when_mutation_does_not_run() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                ServiceAccount::new("management".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let config = config(None, DeploymentModel::Push);
+        for platform in [Platform::Local, Platform::Kubernetes, Platform::Aws] {
+            assert!(!RemoteStackManagementMutation.should_run(
+                &stack,
+                &StackState::new(platform),
+                &config
+            ));
+        }
     }
 
     #[tokio::test]

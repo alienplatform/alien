@@ -154,10 +154,6 @@ run();
 * [submitResponse](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 * [uploadComplete](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
 
-### [Credentials](docs/sdks/credentials/README.md)
-
-* [mintCredentials](docs/sdks/credentials/README.md#mintcredentials)
-
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups)
@@ -279,7 +275,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsStoreCommandPayload`](docs/sdks/commands/README.md#storecommandpayload) - Store command payload data (params and/or response) directly into KV.
 - [`commandsSubmitResponse`](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 - [`commandsUploadComplete`](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
-- [`credentialsMintCredentials`](docs/sdks/credentials/README.md#mintcredentials)
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
 and then threads `&subject` into the `DeploymentStore` calls — see the
 trait doc on [`DeploymentStore`] for the convention.
@@ -484,8 +479,8 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 53 methods.*
-* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 53 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 52 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 52 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

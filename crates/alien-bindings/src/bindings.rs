@@ -132,10 +132,6 @@ impl Bindings {
 
     /// Loads the object storage binding named `binding_name`.
     ///
-    /// The returned handle checks credential freshness before each operation.
-    /// Native credentials and fresh short-lived credentials remain cached; a
-    /// provider inside its refresh window is refreshed once under its shared
-    /// resolver's single-flight guard.
     pub async fn storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
         let initial = self.provider.load_storage(binding_name).await?;
         Ok(Arc::new(RefreshingStorage::new(
@@ -145,7 +141,7 @@ impl Bindings {
         )))
     }
 
-    /// Loads a provider-backed key binding that refreshes minted credentials before use.
+    /// Loads a provider-backed key binding.
     pub async fn key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
         self.provider.load_key(binding_name).await?;
         Ok(Arc::new(RefreshingKey::new(
@@ -154,8 +150,7 @@ impl Bindings {
         )))
     }
 
-    /// Loads an environment-backed key-value binding that refreshes minted
-    /// credentials before use.
+    /// Loads an environment-backed key-value binding.
     pub async fn kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
         self.provider.load_kv(binding_name).await?;
         Ok(Arc::new(RefreshingKv::new(
@@ -164,7 +159,7 @@ impl Bindings {
         )))
     }
 
-    /// Loads a queue binding that refreshes minted credentials before use.
+    /// Loads a queue binding.
     pub async fn queue(&self, binding_name: &str) -> Result<BoundQueue> {
         self.provider.load_queue(binding_name).await?;
         let queue: Arc<dyn Queue> = Arc::new(RefreshingQueue::new(
@@ -174,8 +169,7 @@ impl Bindings {
         Ok(BoundQueue::new(queue, binding_name))
     }
 
-    /// Loads an environment-backed vault binding that refreshes minted
-    /// credentials before use.
+    /// Loads an environment-backed vault binding.
     pub async fn vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
         self.provider.load_vault(binding_name).await?;
         Ok(Arc::new(RefreshingVault::new(
@@ -229,17 +223,10 @@ impl Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::error::binding_env_var;
-    use crate::traits::{MessagePayload, WorkerInvokeRequest};
-    use alien_core::{
-        Platform, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
-        ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_ALIEN_MANAGER_URL,
-        ENV_ALIEN_RESOURCE_ID,
-    };
-    use axum::{extract::State, routing::post, Json, Router};
+    use crate::traits::MessagePayload;
+    use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_TYPE};
     use object_store::{path::Path as ObjectPath, PutPayload};
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -259,78 +246,6 @@ mod tests {
     ) -> HashMap<String, String> {
         env.insert(binding_env_var(binding_name), json.to_string());
         env
-    }
-
-    #[derive(Clone)]
-    struct MintServerState {
-        calls: Arc<AtomicUsize>,
-        state_directory: String,
-    }
-
-    async fn mint_handler(State(state): State<MintServerState>) -> Json<serde_json::Value> {
-        let call = state.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        let lifetime_seconds = if call == 1 { 120 } else { 3600 };
-        let expires_at =
-            (chrono::Utc::now() + chrono::Duration::seconds(lifetime_seconds)).to_rfc3339();
-        Json(serde_json::json!({
-            "clientConfig": {
-                "platform": "local",
-                "state_directory": state.state_directory,
-            },
-            "expiresAt": expires_at,
-            "principal": "local:refreshing-binding-test",
-        }))
-    }
-
-    async fn spawn_mint_server(state_directory: &str) -> (String, Arc<AtomicUsize>) {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let app = Router::new()
-            .route("/v1/credentials/mint", post(mint_handler))
-            .with_state(MintServerState {
-                calls: calls.clone(),
-                state_directory: state_directory.to_string(),
-            });
-        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .expect("bind fake mint server");
-        let address = listener.local_addr().expect("read fake server address");
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve fake mint endpoint");
-        });
-        (format!("http://{address}"), calls)
-    }
-
-    fn mint_env(manager_url: &str) -> HashMap<String, String> {
-        HashMap::from([
-            (
-                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
-                Platform::Aws.as_str().to_string(),
-            ),
-            ("AWS_EC2_METADATA_DISABLED".to_string(), "true".to_string()),
-            (
-                "AWS_PROFILE".to_string(),
-                "__alien_missing_refresh_test_profile__".to_string(),
-            ),
-            (ENV_ALIEN_MANAGER_URL.to_string(), manager_url.to_string()),
-            (
-                ENV_ALIEN_DEPLOYMENT_TOKEN.to_string(),
-                "refresh-test-token".to_string(),
-            ),
-            (
-                ENV_ALIEN_DEPLOYMENT_ID.to_string(),
-                "refresh-test-deployment".to_string(),
-            ),
-            (
-                ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.to_string(),
-                "refresh-test-service-account".to_string(),
-            ),
-            (
-                ENV_ALIEN_RESOURCE_ID.to_string(),
-                "refresh-test-resource".to_string(),
-            ),
-        ])
     }
 
     #[test]
@@ -393,111 +308,6 @@ mod tests {
             .expect("get should succeed")
             .expect("value should exist");
         assert_eq!(value.value, b"hi");
-    }
-
-    #[tokio::test]
-    async fn long_lived_kv_handle_refreshes_minted_provider_before_expiry() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let (manager_url, calls) = spawn_mint_server(
-            temp_dir
-                .path()
-                .to_str()
-                .expect("tempdir path must be valid UTF-8"),
-        )
-        .await;
-        let json = format!(
-            r#"{{"service":"local-kv","dataDir":"{}"}}"#,
-            temp_dir.path().display()
-        );
-        let env = with_binding(mint_env(&manager_url), "cache", &json);
-        let bindings = Bindings::from_env_map(env).expect("minting env should construct Bindings");
-
-        let kv = bindings
-            .kv("cache")
-            .await
-            .expect("first binding resolution should mint credentials");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        kv.put("greeting", b"hi".to_vec(), None)
-            .await
-            .expect("the long-lived handle should refresh and write");
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            2,
-            "the first mint is still unexpired but inside the refresh window"
-        );
-
-        let value = kv
-            .get("greeting")
-            .await
-            .expect("the same long-lived handle should read")
-            .expect("value should exist");
-        assert_eq!(value.value, b"hi");
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            2,
-            "the refreshed provider should stay cached while fresh"
-        );
-    }
-
-    #[tokio::test]
-    async fn long_lived_worker_handle_refreshes_minted_provider_before_invocation() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let (manager_url, calls) = spawn_mint_server(
-            temp_dir
-                .path()
-                .to_str()
-                .expect("tempdir path must be valid UTF-8"),
-        )
-        .await;
-        let app = Router::new().route("/processor/jobs", post(|| async { "accepted" }));
-        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .expect("bind fake worker server");
-        let address = listener.local_addr().expect("read fake worker address");
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve fake worker endpoint");
-        });
-
-        let worker_url = format!("http://{address}");
-        let json = format!(r#"{{"service":"local","workerUrl":"{worker_url}"}}"#);
-        let env = with_binding(mint_env(&manager_url), "processor", &json);
-        let bindings = Bindings::from_env_map(env).expect("minting env should construct Bindings");
-        let worker = bindings
-            .worker("processor")
-            .await
-            .expect("first binding resolution should mint credentials");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        let response = worker
-            .invoke(WorkerInvokeRequest {
-                target_worker: "processor".to_string(),
-                method: "POST".to_string(),
-                path: "/jobs".to_string(),
-                headers: Default::default(),
-                body: Vec::new(),
-                timeout: None,
-            })
-            .await
-            .expect("the long-lived handle should refresh and invoke");
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, b"accepted");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-
-        assert_eq!(
-            worker
-                .get_worker_url()
-                .await
-                .expect("the same long-lived handle should resolve its URL"),
-            Some(worker_url)
-        );
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            2,
-            "the refreshed provider should stay cached while fresh"
-        );
     }
 
     #[tokio::test]

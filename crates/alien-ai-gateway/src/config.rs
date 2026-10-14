@@ -12,8 +12,7 @@ use std::sync::Arc;
 use alien_bindings::{provider::LazyEnvBindingsProvider, BindingsProvider, RemoteAiLease};
 use alien_core::bindings::AiBinding;
 use alien_core::{
-    AzureCredentials, ClientConfig, GcpCredentials, Platform, ENV_ALIEN_DEPLOYMENT_TOKEN,
-    ENV_ALIEN_DEPLOYMENT_TYPE, ENV_ALIEN_MANAGER_URL,
+    AzureCredentials, ClientConfig, GcpCredentials, Platform, ENV_ALIEN_DEPLOYMENT_TYPE,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -21,39 +20,14 @@ use crate::creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
 use crate::error::{ErrorData, Result};
 use crate::{GatewayBinding, GatewayRoute, GatewayTarget};
 
-/// The shared workload credential resolver used for the mint-gated (runtime-less) path.
+/// The shared workload credential resolver.
 pub type Managed = Arc<LazyEnvBindingsProvider>;
-
-/// Build the shared credential resolver once, only when the runtime-less mint gate is present
-/// (`ALIEN_MANAGER_URL` + `ALIEN_DEPLOYMENT_TOKEN`). The gateway holds it for the process so
-/// every request re-resolves through it and short-lived minted credentials refresh before
-/// they expire. Absent (a projected-identity workload) → `None`, and routes fall back to the
-/// self-refreshing native credential path.
-pub fn managed_provider() -> Result<Option<Managed>> {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let mint_gate =
-        env.contains_key(ENV_ALIEN_MANAGER_URL) && env.contains_key(ENV_ALIEN_DEPLOYMENT_TOKEN);
-    if !mint_gate {
-        return Ok(None);
-    }
-    // Past the gate, `from_env_lazy` only fails on an unusable deployment type or malformed
-    // binding JSON. Swallowing that would sign upstream calls with whatever ambient identity
-    // the host happens to carry, instead of the workload's.
-    let provider = BindingsProvider::from_env_lazy(env).context(ErrorData::Other {
-        message: "the workload credential resolver could not be built".to_string(),
-    })?;
-    Ok(Some(Arc::new(provider)))
-}
 
 /// AAD audience for the Foundry OpenAI-compatible and Anthropic endpoints.
 const AZURE_AI_AUDIENCE: &str = "https://ai.azure.com";
 
-/// The workload's resolved cloud credentials, from the runtime-less credential resolver: the
-/// native/projected identity when present, else Alien-minted short-lived credentials (the
-/// resolver in `alien-bindings` mints against the manager when `ALIEN_MANAGER_URL` +
-/// `ALIEN_DEPLOYMENT_TOKEN` are set). `None` when neither is available (e.g. a projected
-/// instance-role container that carries no explicit config), so the caller falls back to the
-/// SDK default chain / metadata server, which resolve the same projected identity.
+/// Resolve the workload's native, projected, or explicit cloud credentials.
+/// Outside an Alien workload, callers use the SDK default chain or metadata server.
 async fn workload_client_config() -> Result<Option<ClientConfig>> {
     let env: HashMap<String, String> = std::env::vars().collect();
     // No deployment type: the gateway is running outside an Alien workload (local dev, the
@@ -74,7 +48,7 @@ async fn workload_client_config() -> Result<Option<ClientConfig>> {
     Ok(Some(provider.client_config().clone()))
 }
 
-/// The workload's GCP access token when the resolver produced a ready OAuth2 token (the minted /
+/// The workload's GCP access token when the resolver produced a ready OAuth2 token (the
 /// explicit case). `None` for any other variant, so the caller falls back to the metadata server.
 async fn gcp_access_token() -> Result<Option<String>> {
     let Some(config) = workload_client_config().await? else {
@@ -266,11 +240,8 @@ pub async fn resolve_route(
     binding: GatewayBinding,
     managed: Option<&Managed>,
 ) -> Result<GatewayRoute> {
-    // The gateway authorizes upstream calls with the workload's own identity. Both paths
-    // handle either shape the resolver can select: minted short-lived credentials, which each
-    // request re-resolves so they refresh before expiry, or the workload's projected identity,
-    // which the SDK default chain / metadata server resolves and self-refreshes. An explicitly
-    // supplied token is used as-is — it carries no refresh clock.
+    // Use the workload's identity. SDK chains and metadata refresh projected
+    // credentials; explicitly supplied tokens are used as-is.
     let cred = match binding.cloud {
         Platform::Aws => {
             let region = binding.region.clone().ok_or_else(|| {
