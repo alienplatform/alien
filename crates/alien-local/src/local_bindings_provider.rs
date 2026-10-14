@@ -186,11 +186,18 @@ impl LocalBindingsProvider {
     }
 
     /// Triggers graceful shutdown and waits for all background tasks to complete.
-    pub async fn shutdown(self: Arc<Self>) {
+    pub async fn shutdown(self: Arc<Self>) -> Result<()> {
         let worker_manager = { self.worker_manager.read().unwrap().clone() };
         if let Some(worker_manager) = worker_manager {
             worker_manager.shutdown_all().await;
         }
+
+        let container_manager = { self.container_manager.read().unwrap().clone() };
+        let container_result = if let Some(manager) = container_manager {
+            manager.shutdown_all().await
+        } else {
+            Ok(())
+        };
 
         // Trigger shutdown for all background tasks
         let _ = self.shutdown_tx.send(());
@@ -207,6 +214,7 @@ impl LocalBindingsProvider {
                 tracing::warn!("Background task failed during shutdown: {:?}", e);
             }
         }
+        container_result
     }
 
     // ─────────────── Manager Accessors (for PlatformServiceProvider) ───────────────

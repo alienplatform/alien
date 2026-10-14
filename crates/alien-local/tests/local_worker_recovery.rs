@@ -233,7 +233,7 @@ async fn workers_start_once_route_independently_and_restore_after_manager_restar
     })
     .await;
     assert_ne!(before["pid"], after["pid"]);
-    provider.shutdown().await;
+    provider.shutdown().await.unwrap();
     drop(manager);
     let provider = LocalBindingsProvider::new(&state_dir).unwrap();
     let manager = provider.worker_manager();
@@ -254,5 +254,5 @@ async fn workers_start_once_route_independently_and_restore_after_manager_restar
         std::fs::read_to_string(&launches).unwrap().lines().count(),
         4
     );
-    provider.shutdown().await;
+    provider.shutdown().await.unwrap();
 }

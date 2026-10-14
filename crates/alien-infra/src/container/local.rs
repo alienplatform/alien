@@ -425,12 +425,14 @@ impl LocalContainerController {
                 })
             })?;
 
-        if !container_mgr.container_exists(&config.id).await.context(
-            ErrorData::CloudPlatformError {
+        if container_mgr
+            .container_needs_recreation(&config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to inspect container '{}'", config.id),
                 resource_id: Some(config.id.clone()),
-            },
-        )? {
+            })?
+        {
             // A saved readiness checkpoint can outlive the container just as Ready can.
             self.container_info = None;
             self.consecutive_health_failures = 0;
@@ -492,13 +494,15 @@ impl LocalContainerController {
                 })
             })?;
 
-        if !container_mgr.container_exists(&config.id).await.context(
-            ErrorData::CloudPlatformError {
+        if container_mgr
+            .container_needs_recreation(&config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to inspect container '{}'", config.id),
                 resource_id: Some(config.id.clone()),
-            },
-        )? {
-            // Absence is drift of a desired Live workload, not a failed health probe.
+            })?
+        {
+            // Missing or stopped desired workloads re-enter the start flow.
             self.container_info = None;
             self.consecutive_health_failures = 0;
             self.restart_count = None;
@@ -914,7 +918,7 @@ mod tests {
         let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
         let manager = bindings.container_manager().unwrap();
         let services = Arc::new(crate::DefaultPlatformServiceProvider::with_local_bindings(
-            bindings,
+            bindings.clone(),
         ));
         let id = format!("health-recovery-{}", std::process::id());
         let config = Container::new(id.clone())
@@ -923,7 +927,7 @@ mod tests {
             .memory(alien_core::ResourceSpec { min: "64Mi".to_string(), desired: "64Mi".to_string() })
             .code(ContainerCode::Image { image: "alpine:3.22".to_string() })
             .command(vec!["sh".to_string(), "-c".to_string(), "mkdir -p /tmp/web; echo ready > /tmp/web/health; exec busybox httpd -f -p 8080 -h /tmp/web".to_string()])
-            .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 2 })
+            .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 5 })
             .build();
         let client = alien_core::ClientConfig::Local {
             state_directory: directory.path().to_string_lossy().into_owned(),
@@ -934,6 +938,7 @@ mod tests {
             .platform(Platform::Local)
             .client_config(client.clone())
             .service_provider(services.clone())
+            .delay_mode(crate::core::controller_test::DelayMode::Real)
             .build()
             .await
             .unwrap();
@@ -960,7 +965,8 @@ mod tests {
                 .controller(controller)
                 .platform(Platform::Local)
                 .client_config(client)
-                .service_provider(services)
+                .service_provider(services.clone())
+                .delay_mode(crate::core::controller_test::DelayMode::Real)
                 .build()
                 .await
                 .unwrap();
@@ -978,6 +984,18 @@ mod tests {
                     .docker_container_id
             );
             assert!(manager.is_running(&id).await);
+            bindings.clone().shutdown().await.unwrap();
+            assert!(
+                !manager.is_running(&id).await,
+                "session shutdown must stop its containers"
+            );
+            assert!(manager.container_exists(&id).await.unwrap());
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert!(
+                manager.is_running(&id).await,
+                "a new session must recover its stopped workload"
+            );
         })
         .catch_unwind()
         .await;
@@ -1048,20 +1066,12 @@ mod tests {
             assert_ne!(first, second);
             assert!(manager.is_running(&id).await);
 
-            // A present, deliberately stopped container must not be recreated.
+            // Stopped containers (including graceful session shutdown) restart as desired workloads.
             manager.stop_container(&id).await.unwrap();
-            for _ in 0..2 {
-                let error = executor
-                    .step()
-                    .await
-                    .err()
-                    .expect("a present stopped container must fail its health check");
-                assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
-                assert!(error.message.contains("Container health check failed"));
-                assert_eq!(executor.status(), ResourceStatus::Running);
-            }
-            assert!(!manager.is_running(&id).await);
-            assert!(manager.container_exists(&id).await.unwrap());
+            executor.step().await.unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert!(manager.is_running(&id).await);
+            assert_eq!(executor.status(), ResourceStatus::Running);
 
             // The production executor moves to failure after its retry policy is exhausted.
             let mut failed_controller = executor

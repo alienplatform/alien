@@ -637,7 +637,12 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
 
     if let Some(local_bindings) = local_bindings {
         info!("Stopping local runtimes...");
-        local_bindings.shutdown().await;
+        local_bindings
+            .shutdown()
+            .await
+            .context(error::ErrorData::ConfigurationError {
+                message: "Failed to drain local container runtimes".to_string(),
+            })?;
     }
 
     if let Some(loop_name) = exit_result? {

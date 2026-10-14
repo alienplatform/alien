@@ -935,7 +935,34 @@ pub async fn prepare_dev_session_deployment(
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
 ) -> Result<String> {
-    create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
+    let id =
+        create_initial_deployment(deployment_name, port, environment_variables, HashMap::new())
+            .await?;
+    let client = local_dev_client(port);
+    if let Some(existing) = find_named_local_deployment(&client, deployment_name).await? {
+        if matches!(
+            existing.status.as_str(),
+            "preflights-failed"
+                | "initial-setup-failed"
+                | "provisioning-failed"
+                | "update-failed"
+                | "refresh-failed"
+        ) && !existing.retry_requested
+        {
+            client
+                .retry_deployment()
+                .id(&id)
+                .send()
+                .await
+                .into_sdk_error()
+                .await
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("Failed to retry local deployment '{deployment_name}'"),
+                    url: None,
+                })?;
+        }
+    }
+    Ok(id)
 }
 
 /// `alien dev destroy`: delete a local deployment by name and wait until it's gone. Dev
@@ -1084,6 +1111,12 @@ where
                 .iter()
                 .find(|d| d.name == deployment_name)
             {
+                // A retry request is asynchronous; the previous failure remains visible
+                // until the manager consumes it. Do not publish that stale failure.
+                if deployment.retry_requested {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
                 if let Ok(Ok(info_response)) = tokio::time::timeout_at(
                     deadline,
                     client.get_deployment_info().id(&deployment.id).send(),

@@ -304,7 +304,7 @@ impl DeploymentLoop {
         }
     }
 
-    pub(crate) async fn shutdown_local_runtimes(&self) {
+    pub(crate) async fn shutdown_local_runtimes(&self) -> crate::error::Result<()> {
         let providers: Vec<_> = {
             let mut cache = self
                 .local_bindings_cache
@@ -312,9 +312,19 @@ impl DeploymentLoop {
                 .expect("local_bindings_cache poisoned");
             cache.drain().map(|(_, provider)| provider).collect()
         };
-        for provider in providers {
-            provider.shutdown().await;
+        let results = futures::future::join_all(providers.into_iter().map(|provider| async move {
+            provider
+                .shutdown()
+                .await
+                .context(crate::error::ErrorData::InternalError {
+                    message: "Failed to drain local container runtimes".to_string(),
+                })
+        }))
+        .await;
+        for result in results {
+            result?;
         }
+        Ok(())
     }
 
     /// One iteration of the deployment loop.
@@ -2305,7 +2315,7 @@ mod tests {
 
         assert!(std::sync::Arc::ptr_eq(&provider_a, &provider_b));
 
-        provider_a.shutdown().await;
+        provider_a.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -2323,8 +2333,8 @@ mod tests {
             "Different deployment IDs should get different providers"
         );
 
-        provider_a.shutdown().await;
-        provider_b.shutdown().await;
+        provider_a.shutdown().await.unwrap();
+        provider_b.shutdown().await.unwrap();
     }
 
     #[test]

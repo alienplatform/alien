@@ -178,7 +178,7 @@ async fn repeated_archive_tag_runs_new_content_and_loopback_pull_uses_host() {
         "second"
     );
     manager.delete_container(&id).await.unwrap();
-    provider.shutdown().await;
+    provider.shutdown().await.unwrap();
     for image in images {
         docker(&["image", "rm", "--force", image.config_digest()]);
     }
