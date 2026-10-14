@@ -86,12 +86,15 @@ impl RuntimeCheck for CloudQuotasCheck {
             };
             let http = reqwest::Client::new();
             let compute = alien_gcp_clients::ComputeClient::new(http.clone(), config.clone());
+            let cloud_quotas =
+                alien_gcp_clients::CloudQuotasClient::new(http.clone(), config.clone());
             super::gcp_compute::check(
                 stack,
                 stack_state,
                 &config.project_id,
                 &config.region,
                 &compute,
+                &cloud_quotas,
                 &mut result,
             )
             .await;

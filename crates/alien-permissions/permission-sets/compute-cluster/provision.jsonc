@@ -411,6 +411,7 @@
             // Quota values and usage only; project-scoped, no telemetry or instance inventory.
             "compute.regions.get",
             "compute.projects.get",
+            "cloudquotas.quotas.get",
             "compute.zoneOperations.get",
             "compute.instances.getSerialPortOutput"
           ]

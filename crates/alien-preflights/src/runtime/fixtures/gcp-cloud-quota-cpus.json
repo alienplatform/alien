@@ -1,0 +1,24 @@
+{
+  "name": "projects/test-project/locations/global/services/compute.googleapis.com/quotaInfos/CPUS-ALL-REGIONS-per-project",
+  "quotaId": "CPUS-ALL-REGIONS-per-project",
+  "metric": "compute.googleapis.com/cpus_all_regions",
+  "service": "compute.googleapis.com",
+  "isPrecise": true,
+  "containerType": "PROJECT",
+  "metricDisplayName": "CPUs (all regions)",
+  "quotaDisplayName": "CPUs (all regions)",
+  "metricUnit": "1",
+  "quotaIncreaseEligibility": {
+    "isEligible": true
+  },
+  "dimensionsInfos": [
+    {
+      "details": {
+        "value": "360"
+      },
+      "applicableLocations": [
+        "global"
+      ]
+    }
+  ]
+}

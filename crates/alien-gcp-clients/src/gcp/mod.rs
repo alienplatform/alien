@@ -2,6 +2,7 @@ pub mod agent_platform;
 pub mod api_client;
 pub mod artifactregistry;
 pub mod cloud_kms;
+pub mod cloud_quotas;
 pub mod cloud_sql;
 pub mod cloudasset;
 pub mod cloudbuild;

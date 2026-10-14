@@ -1,4 +1,5 @@
 pub mod gcp;
+pub use gcp::cloud_quotas::{CloudQuotasApi, CloudQuotasClient};
 pub use gcp::service_usage_quotas::{ServiceUsageQuotasApi, ServiceUsageQuotasClient};
 pub use gcp::*;
 

@@ -8,7 +8,7 @@ use alien_core::{
     instance_catalog::find_instance_type, ComputeCluster, ComputeClusterOutputs, Platform,
     ResourceStatus, Stack, StackState,
 };
-use alien_gcp_clients::{compute::QuotaCollection, ComputeApi};
+use alien_gcp_clients::{compute::QuotaCollection, CloudQuotasApi, ComputeApi};
 use std::collections::BTreeMap;
 
 /// E2 and N1 share the general CPU pool; other supported families have separate metrics.
@@ -186,6 +186,7 @@ pub async fn check(
     project: &str,
     region: &str,
     compute: &dyn ComputeApi,
+    cloud_quotas: &dyn CloudQuotasApi,
     result: &mut CheckResult,
 ) {
     let demands_by_kind = [demands(stack, state, false), demands(stack, state, true)];
@@ -220,19 +221,35 @@ pub async fn check(
             continue;
         };
         for (metric, demand) in demands {
-            let quotas = if metric.ends_with("_ALL_REGIONS") {
-                global.as_ref()
+            let outcome = if metric.ends_with("_ALL_REGIONS") {
+                let quota_id = format!("{}-per-project", metric.replace('_', "-"));
+                match cloud_quotas.get_quota_info("compute.googleapis.com", &quota_id).await {
+                    Ok(info) if info.quota_id == quota_id
+                        && info.metric == format!("compute.googleapis.com/{}", metric.to_lowercase()) => {
+                        match info.project_limit() {
+                            Some(limit) => match global.as_ref().and_then(|quotas| observation(quotas, &metric)) {
+                                Some(observed) => evaluate(demand, Some(QuotaObservation { used: observed.used, limit })),
+                                None => QuotaOutcome::Unknown { reason: format!("applied all-regions limit is {limit}, but provider-reported project usage is unavailable") },
+                            },
+                            None => QuotaOutcome::Unknown { reason: "Cloud Quotas returned no unambiguous applied project limit".into() },
+                        }
+                    }
+                    Ok(_) => QuotaOutcome::Unknown { reason: "Cloud Quotas returned a different quota identity".into() },
+                    Err(_) => QuotaOutcome::Unknown { reason: "could not read the applied all-regions limit; enable the Cloud Quotas API (cloudquotas.googleapis.com) in the target project and grant cloudquotas.quotas.get".into() },
+                }
             } else {
-                regional.as_ref()
+                evaluate(
+                    demand,
+                    regional
+                        .as_ref()
+                        .and_then(|quotas| observation(quotas, &metric)),
+                )
             };
             record(
                 result,
                 QuotaResult {
                     quota: identity(project, region, &metric),
-                    outcome: evaluate(
-                        demand,
-                        quotas.and_then(|quotas| observation(quotas, &metric)),
-                    ),
+                    outcome,
                 },
             );
         }
@@ -426,6 +443,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn all_regions_applied_limit_missing_usage_and_access_denied() {
+        for case in ["shortfall", "pass", "missing-usage", "denied"] {
+            let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
+            compute.expect_get_region_quotas().times(1).returning(|_| {
+                Ok(
+                    serde_json::from_str(include_str!("fixtures/gcp-regional-quotas.json"))
+                        .unwrap(),
+                )
+            });
+            compute.expect_get_project_quotas().times(1).returning(move || {
+                Ok(serde_json::from_value(if case == "missing-usage" {
+                    serde_json::json!({"quotas": []})
+                } else {
+                    // The Cloud Quotas applied value must replace this stale limit.
+                    serde_json::json!({"quotas": [{"metric":"CPUS_ALL_REGIONS", "usage": if case == "shortfall" {359} else {0}, "limit":9999}]})
+                }).unwrap())
+            });
+            let mut quotas = alien_gcp_clients::cloud_quotas::MockCloudQuotasApi::new();
+            quotas
+                .expect_get_quota_info()
+                .times(1)
+                .withf(|service, id| {
+                    service == "compute.googleapis.com" && id == "CPUS-ALL-REGIONS-per-project"
+                })
+                .returning(move |_, _| {
+                    if case == "denied" {
+                        Err(alien_error::AlienError::new(
+                            alien_gcp_clients::ErrorData::RemoteAccessDenied {
+                                resource_type: "Cloud Quotas".into(),
+                                resource_name: "CPUS-ALL-REGIONS-per-project".into(),
+                            },
+                        ))
+                    } else {
+                        Ok(
+                            serde_json::from_str(include_str!(
+                                "fixtures/gcp-cloud-quota-cpus.json"
+                            ))
+                            .unwrap(),
+                        )
+                    }
+                });
+            let mut result = CheckResult::success();
+            check(
+                &stack(1),
+                &StackState::new(Platform::Gcp),
+                "test",
+                "us-east4",
+                &compute,
+                &quotas,
+                &mut result,
+            )
+            .await;
+            assert_eq!(result.success, case != "shortfall");
+            let outcome = &result
+                .quota_results
+                .iter()
+                .find(|r| r.quota.provider_id == "CPUS_ALL_REGIONS")
+                .unwrap()
+                .outcome;
+            match case {
+                "shortfall" => assert_eq!(
+                    *outcome,
+                    QuotaOutcome::Fail {
+                        used: 359.0,
+                        limit: 360.0,
+                        needed: 2.0
+                    }
+                ),
+                "pass" => assert_eq!(
+                    *outcome,
+                    QuotaOutcome::Pass {
+                        used: 0.0,
+                        limit: 360.0,
+                        needed: 2.0
+                    }
+                ),
+                "missing-usage" => assert!(
+                    matches!(outcome, QuotaOutcome::Unknown { reason } if reason.contains("limit is 360") && reason.contains("usage is unavailable"))
+                ),
+                "denied" => assert!(
+                    matches!(outcome, QuotaOutcome::Unknown { reason } if reason.contains("enable the Cloud Quotas API") && reason.contains("cloudquotas.quotas.get"))
+                ),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn actual_regional_dump_blocks_a100_and_passes_small_control() {
         for (max, success) in [(2, false), (1, true)] {
             let mut compute = alien_gcp_clients::compute::MockComputeApi::new();
@@ -441,6 +546,11 @@ mod tests {
                 )
                 .unwrap())
             });
+            let mut quotas = alien_gcp_clients::cloud_quotas::MockCloudQuotasApi::new();
+            quotas.expect_get_quota_info().times(2).returning(|_, id| Ok(serde_json::from_value(serde_json::json!({
+                "quotaId": id, "metric": format!("compute.googleapis.com/{}", id.trim_end_matches("-per-project").replace('-', "_").to_lowercase()),
+                "dimensionsInfos": [{"details":{"value":"360"}}]
+            })).unwrap()));
             let mut result = CheckResult::success();
             check(
                 &gpu_stack("a2-highgpu-1g", max),
@@ -448,6 +558,7 @@ mod tests {
                 "test",
                 "us-east4",
                 &compute,
+                &quotas,
                 &mut result,
             )
             .await;
