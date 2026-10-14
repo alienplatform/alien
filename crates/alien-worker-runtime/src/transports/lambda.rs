@@ -17,7 +17,7 @@ use std::{
 };
 
 use alien_commands::{runtime::submit_response, types::CommandResponse};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context as _, IntoAlienError};
 use alien_worker_protocol::{
     ControlGrpcServer,
     control::{ArcCommand, CronEvent, QueueMessage, StorageEvent, Task, task::Payload},
@@ -26,7 +26,7 @@ use aws_lambda_events::{
     cloudwatch_events::CloudWatchEvent, event::s3::S3Event, event::sqs::SqsEvent,
 };
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, future::BoxFuture};
 use http_body::Body as HttpBody;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use lambda_http::{
@@ -873,7 +873,7 @@ async fn run_streaming(
         }
     });
 
-    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
+    drive_lambda_runtime(lambda::run(svc).boxed(), request_done_receiver, "Streaming").await
 }
 
 /// Launch Lambda **buffered** runtime.
@@ -886,7 +886,7 @@ async fn run_buffered(
         async move { adapter.call(event_to_request(event)?).await }
     });
 
-    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Buffered").await
+    drive_lambda_runtime(lambda::run(svc).boxed(), request_done_receiver, "Buffered").await
 }
 
 const INVOCATION_DEADLINE_MARGIN: Duration = Duration::from_secs(1);
@@ -1468,7 +1468,16 @@ async fn forward_http_request_buffered(
             let status = resp.status().as_u16() as i64;
             // Clone headers before consuming the body
             let headers = resp.headers().clone();
-            let body_bytes = resp.bytes().await.unwrap_or_default().to_vec();
+            let body_bytes = resp
+                .bytes()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ResponseDeliveryFailed {
+                    request_id: request_id.to_string(),
+                    message: "Application response body was incomplete".to_string(),
+                    destination: Some("Lambda".to_string()),
+                })?
+                .to_vec();
 
             let cookies: Vec<_> = headers
                 .get_all(SET_COOKIE)
@@ -1502,6 +1511,10 @@ async fn forward_http_request_buffered(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_worker_protocol::control::{
+        RegisterHttpServerRequest, control_service_server::ControlService,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn rest_event() -> Value {
         serde_json::json!({
@@ -1581,7 +1594,7 @@ mod tests {
             )
             .route("/target", axum::routing::get(|| async { "unexpected" }));
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let request = LambdaRequest::builder()
+        let request = lambda_http::http::Request::builder()
             .uri("/redirect")
             .body(LambdaBody::Empty)
             .unwrap();
@@ -1590,6 +1603,48 @@ mod tests {
         assert_eq!(response.headers()["location"], "/target");
         assert_eq!(response.text().await.unwrap(), "redirect body");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn truncated_buffered_response_fails_instead_of_returning_empty_success() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\npartial",
+                )
+                .await
+                .unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let state = LambdaState {
+            control_server: Arc::new(ControlGrpcServer::new()),
+        };
+        state
+            .control_server
+            .register_http_server(tonic::Request::new(RegisterHttpServerRequest {
+                port: u32::from(port),
+            }))
+            .await
+            .unwrap();
+        let response = forward_http_request_buffered(
+            &state,
+            "interrupted-response",
+            LambdaRequest::new(LambdaBody::Empty),
+            Duration::from_secs(1),
+        )
+        .await;
+        let error = response.expect_err("partial body must fail the invocation");
+        assert!(
+            error
+                .to_string()
+                .contains("Application response body was incomplete")
+        );
+        server.await.unwrap();
     }
 
     #[test]
