@@ -1448,7 +1448,7 @@ async fn deploy_task_with_environment(
         }));
     }
 
-    let resolved_args = resolve_deploy_args(&args)?;
+    let mut resolved_args = resolve_deploy_args(&args)?;
 
     if args.validate_only {
         println!("Deployment config is valid.");
@@ -1902,6 +1902,41 @@ async fn deploy_task_with_environment(
             .context(ErrorData::ConfigurationError {
                 message: format!("Unknown deployment status: {}", deployment.status),
             })?;
+    let installed_stack_state: Option<alien_core::StackState> = deployment
+        .stack_state
+        .take()
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state".to_string(),
+        })?;
+    // The config file cannot see growth made through a compute update, so a
+    // smaller volume size there keeps the deployment's size instead of asking
+    // for a shrink or a compute change.
+    if let Some(compute) = resolved_args.compute_settings.as_mut() {
+        let current: Option<alien_core::StackSettings> = deployment
+            .stack_settings
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stack_settings".to_string(),
+            })?;
+        for kept in alien_core::container_resources::keep_volume_sizes_over_setup_source(
+            compute,
+            installed_stack_state.as_ref(),
+            current
+                .as_ref()
+                .and_then(|settings| settings.compute.as_ref()),
+        ) {
+            steps.println(&dim_label(&format!(
+                "Keeping {}'s {} GiB volume; the config asks for {} GiB. Set volumeSizeGib = {} to match.",
+                kept.container_id, kept.kept_gib, kept.requested_gib, kept.kept_gib
+            )));
+        }
+    }
 
     let requested_overrides = (args.clear_quota_warning_overrides
         || !args.quota_warning_overrides.is_empty())
@@ -2118,14 +2153,7 @@ async fn deploy_task_with_environment(
         platform,
         current_release: None,
         target_release: None,
-        stack_state: deployment
-            .stack_state
-            .map(serde_json::from_value)
-            .transpose()
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to deserialize stack_state".to_string(),
-            })?,
+        stack_state: installed_stack_state,
         error: None,
         environment_info: deployment
             .environment_info
