@@ -2070,6 +2070,8 @@ async fn push_gcp_sandbox_image(
         agent_image,
         protocol,
         push_options.auth.clone(),
+        // The default cache, which every other dockdash build here uses by not naming one.
+        dockdash::BlobCache::new().map_dockdash_err()?,
     )
     .await?;
     let image_uri = format!("{base_uri}-agent");

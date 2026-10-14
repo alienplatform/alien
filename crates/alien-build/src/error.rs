@@ -135,6 +135,21 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// Pulling an image still failed after its retries, with a cause a later attempt can clear:
+    /// a dropped connection, a timeout, throttling or a registry server error.
+    #[error(
+        code = "IMAGE_PULL_TEMPORARILY_UNAVAILABLE",
+        message = "Container image '{image}' could not be pulled yet: {reason}",
+        retryable = "true",
+        internal = "false"
+    )]
+    ImagePullTemporarilyUnavailable {
+        /// Image reference that was pulled
+        image: String,
+        /// What the pull was for
+        reason: String,
+    },
+
     /// An image manifest cannot be read from its registry, for a reason a retry does not change.
     #[error(
         code = "IMAGE_LOOKUP_REJECTED",

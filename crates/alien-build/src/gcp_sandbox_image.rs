@@ -12,7 +12,9 @@ use alien_core::sandbox_image::{
     SESSION_ROOT_MODE,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use dockdash::{Arch, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy, RegistryAuth};
+use dockdash::{
+    Arch, BlobCache, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy, RegistryAuth,
+};
 use tokio::time::sleep;
 use tracing::warn;
 
@@ -28,7 +30,7 @@ pub fn sandbox_agent_image() -> String {
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
 /// same image, read for its `/etc/passwd` and `/etc/group`. `resource_name` is the sandbox the
-/// image is for, named in any error.
+/// image is for, named in any error. `cache` holds the pulled blobs and the agent layer.
 pub async fn build_gcp_sandbox_image(
     resource_name: &str,
     base: &Image,
@@ -36,6 +38,7 @@ pub async fn build_gcp_sandbox_image(
     agent_image: &str,
     protocol: ClientProtocol,
     base_auth: RegistryAuth,
+    cache: BlobCache,
 ) -> Result<Image> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
         resource_name: resource_name.to_string(),
@@ -53,7 +56,8 @@ pub async fn build_gcp_sandbox_image(
             .platform("linux", &Arch::Amd64)
             .pull_policy(PullPolicy::Always)
             .protocol(protocol.clone())
-            .auth(RegistryAuth::Anonymous))
+            .auth(RegistryAuth::Anonymous)
+            .blob_cache(cache.clone()))
     })
     .await?;
     let agent_binary = agent
@@ -94,6 +98,7 @@ pub async fn build_gcp_sandbox_image(
     build_with_retry(resource_name, base_image, &assembling, || async {
         // A layer is consumed by the image builder, so each attempt builds its own.
         let layer = Layer::builder()
+            .map(|layer| layer.blob_cache(cache.clone()))
             .and_then(|layer| layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0))
             .and_then(|layer| layer.data_with_owner("/etc/group", group.as_bytes(), 0o644, 0, 0))
             .and_then(|layer| layer.data_with_owner(AGENT_PATH, &agent_binary, AGENT_MODE, 0, 0))
@@ -116,6 +121,7 @@ pub async fn build_gcp_sandbox_image(
             .platform("linux", &Arch::Amd64)
             .protocol(protocol.clone())
             .auth(base_auth.clone())
+            .blob_cache(cache.clone())
             .layer(layer)
             .user(&user)
             .expose_port(&contract.exposed_port())
@@ -129,7 +135,8 @@ pub async fn build_gcp_sandbox_image(
 }
 
 /// Builds the image `prepare` describes, retrying a transient pull of `reference`. `step` names
-/// what failed when the build does.
+/// what failed when the build does. A pull still failing transiently after the last retry stays
+/// retryable, so a caller can try again later rather than treat the build as broken.
 async fn build_with_retry<F, Fut>(
     resource_name: &str,
     reference: &str,
@@ -159,13 +166,19 @@ where
                 sleep(delay).await;
             }
             Err(error) => {
-                return Err(error)
-                    .into_alien_error()
-                    .context(ErrorData::ImageBuildFailed {
+                let context = if is_retryable_dockdash_image_pull_error(&error) {
+                    ErrorData::ImagePullTemporarilyUnavailable {
+                        image: reference.to_string(),
+                        reason: step.to_string(),
+                    }
+                } else {
+                    ErrorData::ImageBuildFailed {
                         resource_name: resource_name.to_string(),
                         reason: step.to_string(),
                         build_output: None,
-                    });
+                    }
+                };
+                return Err(error).into_alien_error().context(context);
             }
         }
     }
@@ -280,6 +293,7 @@ mod tests {
             &agent_image,
             protocol.clone(),
             RegistryAuth::Anonymous,
+            BlobCache::new().expect("blob cache"),
         )
         .await
         .expect("the agent layers onto the base");
@@ -485,5 +499,55 @@ mod tests {
             pushed_file(&target, protocol, "/marker").await.as_deref(),
             Some("alien-e2e-source-build\n")
         );
+    }
+
+    /// The local copy of a base whose identity files are read before any pull.
+    async fn local_base() -> Image {
+        let layer = Layer::builder()
+            .and_then(|layer| layer.data_with_owner("/marker", b"base\n", 0o644, 0, 0))
+            .expect("layer");
+        Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .layer(layer.build().await.expect("layer builds"))
+            .build()
+            .await
+            .expect("image builds")
+            .0
+    }
+
+    async fn layering_error(agent_image: &str) -> AlienError<ErrorData> {
+        build_gcp_sandbox_image(
+            "box",
+            &local_base().await,
+            "registry.example.com/proj/sandbox:base",
+            agent_image,
+            ClientProtocol::Http,
+            RegistryAuth::Anonymous,
+            BlobCache::new().expect("blob cache"),
+        )
+        .await
+        .expect_err("the agent cannot be pulled")
+    }
+
+    /// A registry that never answers says nothing about the image, so once the retries run out
+    /// the failure is still one a caller can retry later.
+    #[tokio::test]
+    async fn a_pull_still_failing_transiently_after_its_retries_stays_retryable() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+
+        let error = layering_error(&format!("{address}/alien/agent:test")).await;
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert!(error.retryable, "{error}");
+    }
+
+    /// A tag the registry does not have will not appear on a retry.
+    #[tokio::test]
+    async fn a_pull_the_registry_refuses_is_a_build_failure() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+
+        let error = layering_error(&format!("{host}/alien/agent:missing")).await;
+        assert_eq!(error.code, "IMAGE_BUILD_FAILED", "{error}");
     }
 }
