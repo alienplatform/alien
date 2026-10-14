@@ -29,6 +29,7 @@ use alien_permissions::{
     BindingTarget, PermissionContext,
 };
 
+use indexmap::IndexMap;
 use tracing::{debug, info, warn};
 
 fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
@@ -1766,6 +1767,46 @@ impl ResourcePermissionsHelper {
 
         let service_account_role_name = Self::get_aws_service_account_role_name(ctx, profile_name)?;
 
+        let policies = Self::prepare_aws_profile_policies(
+            resource_id,
+            profile_name,
+            permission_set_refs,
+            generator,
+            permission_context,
+        )?;
+        let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+        for (policy_name, document) in policies {
+            iam_client
+                .put_role_policy(&service_account_role_name, &policy_name, &document)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to apply policy '{policy_name}' to role '{service_account_role_name}'"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+
+            info!(
+                role_name = %service_account_role_name,
+                policy_name = %policy_name,
+                resource_id = %resource_id,
+                "Applied AWS resource-scoped permission"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Render the final workload policy batch and reject certain aggregate overflow
+    /// before any IAM writes. Selection has already resolved setup ownership.
+    fn prepare_aws_profile_policies(
+        resource_id: &str,
+        profile_name: &str,
+        permission_set_refs: &[PermissionSetReference],
+        generator: &AwsRuntimePermissionsGenerator,
+        permission_context: &PermissionContext,
+    ) -> Result<IndexMap<String, String>> {
+        let mut policies = IndexMap::new();
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -1790,27 +1831,30 @@ impl ResourcePermissionsHelper {
                 resource_id: Some(resource_id.to_string()),
             })?;
 
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
-            iam_client
-                .put_role_policy(&service_account_role_name, &policy.name, &policy.document)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to apply permission '{}' to role '{}'",
-                        permission_set.id, service_account_role_name
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-            info!(
-                role_name = %service_account_role_name,
-                permission_set = %permission_set.id,
-                resource_id = %resource_id,
-                "Applied AWS resource-scoped permission"
-            );
+            // PutRolePolicy replaces a document with the same name. Render
+            // the final batch first so duplicates do not consume extra quota.
+            policies.insert(policy.name, policy.document);
         }
-
-        Ok(())
+        let size: usize = policies
+            .values()
+            .map(|document| {
+                document
+                    .chars()
+                    .filter(|c| !c.is_ascii_whitespace())
+                    .count()
+            })
+            .sum();
+        if size > 10_240 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "IAM role for permission profile '{profile_name}' needs at least {size} inline policy characters from resource '{resource_id}'; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        // Other resources, the stack document and retained policies may use
+        // additional headroom. This batch is only a definite lower bound.
+        Ok(policies)
     }
 
     /// Apply management SA resource-scoped permissions for AWS resources.
@@ -2243,8 +2287,124 @@ mod tests {
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{Stack, Storage};
     use alien_gcp_clients::iam::MockIamApi;
-    use indexmap::IndexMap;
     use mockall::Sequence;
+
+    fn literal_aws_resource_grant(id: &str, count: usize) -> PermissionSetReference {
+        let resources: Vec<_> = (0..count)
+            .map(|index| format!("arn:aws:s3:::q5-policy-control/objects/object-{index:04}"))
+            .collect();
+        PermissionSetReference::from_inline(
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "description": "Read synthetic objects",
+                "platforms": {"aws": [{"grant": {"actions": ["s3:GetObject"]},
+                    "binding": {"resource": {"resources": resources}}}]}
+            }))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn aws_workload_batch_rejects_combined_documents_before_cloud_writes() {
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let context = PermissionContext::new();
+        let grants = [
+            literal_aws_resource_grant("first", 100),
+            literal_aws_resource_grant("second", 100),
+        ];
+        let mut combined_size = 0;
+        for grant in &grants {
+            let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
+                "objects",
+                "reader",
+                std::slice::from_ref(grant),
+                &generator,
+                &context,
+            )
+            .unwrap();
+            assert_eq!(control.len(), 1);
+            let size = control
+                .values()
+                .next()
+                .unwrap()
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .count();
+            assert!(size <= 10_240);
+            combined_size += size;
+        }
+        assert!(combined_size > 10_240);
+        let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects", "reader", &grants, &generator, &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(!error.retryable);
+        let message = error.to_string();
+        assert!(message.contains("reader"), "{message}");
+        assert!(message.contains("objects"), "{message}");
+        assert!(message.contains("10240"), "{message}");
+        assert!(message.contains(&combined_size.to_string()), "{message}");
+        let small = [
+            literal_aws_resource_grant("first", 10),
+            literal_aws_resource_grant("second", 10),
+        ];
+        let control = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects", "reader", &small, &generator, &context,
+        )
+        .unwrap();
+        assert_eq!(control.len(), 2);
+        for reference in &small {
+            let expected = render_aws_resource_policy(
+                "objects",
+                &reference.resolve(|_| None).unwrap(),
+                &generator,
+                &context,
+            )
+            .unwrap();
+            assert_eq!(control[&expected.name], expected.document);
+        }
+    }
+
+    #[test]
+    fn aws_workload_batch_counts_final_same_name_replacement() {
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let context = PermissionContext::new();
+        // Each fits, but summing both references would falsely reject the role.
+        // The second PutRolePolicy would replace the first document.
+        let grants = [
+            literal_aws_resource_grant("same", 100),
+            literal_aws_resource_grant("same", 99),
+        ];
+        let policies = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects", "reader", &grants, &generator, &context,
+        )
+        .unwrap();
+        assert_eq!(policies.len(), 1);
+        let set = grants[1].resolve(|_| None).unwrap();
+        let expected = render_aws_resource_policy("objects", &set, &generator, &context).unwrap();
+        assert_eq!(policies["alien-objects-same"], expected.document);
+    }
+
+    #[test]
+    fn aws_workload_batch_requires_real_context_for_every_document() {
+        let grants = [
+            literal_aws_resource_grant("first", 10),
+            PermissionSetReference::from_name("storage/data-read".to_string()),
+        ];
+        let error = ResourcePermissionsHelper::prepare_aws_profile_policies(
+            "objects",
+            "reader",
+            &grants,
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(!error.retryable);
+        assert!(error.to_string().contains("storage/data-read"));
+        assert!(error.to_string().contains("resourceName"));
+    }
 
     #[test]
     fn gcp_resource_custom_roles_are_selected_for_resource_bindings() {
