@@ -26,7 +26,11 @@ pub struct KubernetesClusterImportData {
     pub cluster_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::import::data::deserialize_optional_bool_from_bool_or_string"
+    )]
     pub cloud_metadata_ready: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub azure_application_gateway_for_containers:
