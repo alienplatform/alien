@@ -1346,7 +1346,8 @@ async fn prepare_import_stack(
         volume_restores: Vec::new(),
     };
 
-    runner
+    let quota_activation_declared = source_stack.resources.contains_key("enable-cloud-quotas");
+    let mut prepared = runner
         .apply_mutations(source_stack, &stack_state, &config)
         .await
         .map_err(|err| {
@@ -1356,7 +1357,20 @@ async fn prepare_import_stack(
                     err.message
                 ),
             })
-        })
+        })?;
+    // Older setup artifacts never enabled the optional quota API. Keep it
+    // absent, rather than fabricate imported Running state or ask a management
+    // identity to perform setup. Disabled quota reads remain non-blocking.
+    if req.base_platform.unwrap_or(req.platform) == Platform::Gcp
+        && !quota_activation_declared
+        && !req
+            .resources
+            .iter()
+            .any(|resource| resource.id == "enable-cloud-quotas")
+    {
+        prepared.resources.shift_remove("enable-cloud-quotas");
+    }
+    Ok(prepared)
 }
 
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
@@ -1701,6 +1715,35 @@ mod setup_update_authorization_tests {
             error.message.contains("api") && !error.message.contains("agents"),
             "only the worker is unowned"
         );
+    }
+
+    #[tokio::test]
+    async fn old_gcp_handoff_only_omits_implicit_quota_activation() {
+        let mut req = request();
+        req.platform = Platform::Gcp;
+        let source = Stack::new("legacy".into()).build();
+        let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+            .await
+            .unwrap();
+        assert!(!prepared.resources.contains_key("enable-cloud-quotas"));
+        validate_import_handoff(&req, &prepared).unwrap();
+
+        // An explicitly requested activation remains required, including this
+        // API. Backwards compatibility must not weaken ordinary setup ownership.
+        for service in ["cloudquotas.googleapis.com", "compute.googleapis.com"] {
+            let source = Stack::new("explicit".into())
+                .add(
+                    alien_core::ServiceActivation::new("enable-cloud-quotas".into())
+                        .service_name(service.into())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            // Internal setup resources are not legal source-template resources;
+            // exercise the ownership guard directly with the prepared shape.
+            let error = validate_import_handoff(&req, &source).unwrap_err();
+            assert!(error.message.contains("enable-cloud-quotas"));
+        }
     }
 
     fn record(prepared_stack: Stack) -> DeploymentRecord {

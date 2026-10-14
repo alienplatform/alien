@@ -89,6 +89,33 @@ async fn ensure_gcp_custom_role(
         {
             e
         }
+        // IAM returns HTTP 429 for both request throttling and the persistent
+        // project role-count limit. Only the latter needs quota guidance.
+        Err(e)
+            if matches!(
+                &e.error,
+                Some(CloudClientErrorData::RateLimitExceeded { message })
+                    if message.starts_with("Maximum number of roles reached.")
+            ) =>
+        {
+            let project = custom_role
+                .name
+                .strip_prefix("projects/")
+                .and_then(|name| name.split_once("/roles/"))
+                .map(|(project, _)| project);
+            if let Some(project) = project {
+                let quota = alien_preflights::quotas::gcp_custom_role_quota_identity(project);
+                let message = format!(
+                    "{} ({}, {}): project role capacity is exhausted, including soft-deleted roles. Request an increase: {}",
+                    quota.name, quota.provider_id, quota.scope, quota.increase_url
+                );
+                return Err(e.context(ErrorData::CloudQuotaExceeded { quota, message }));
+            }
+            return Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create custom role '{}'", custom_role.role_id),
+                resource_id: Some(permission_set_id.to_string()),
+            }));
+        }
         Err(e) => {
             return Err(e.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create custom role '{}'", custom_role.role_id),
@@ -183,6 +210,33 @@ async fn converge_gcp_custom_role(
 pub struct ResourcePermissionsHelper;
 
 impl ResourcePermissionsHelper {
+    /// Preserve request throttling, but make confirmed project account-capacity
+    /// failures actionable with the same quota identity as the preflight.
+    pub fn gcp_service_account_creation_error(
+        error: AlienError<CloudClientErrorData>,
+        project: &str,
+    ) -> AlienError<ErrorData> {
+        let capacity = matches!(
+            &error.error,
+            Some(CloudClientErrorData::RateLimitExceeded { message })
+                if message.starts_with("Maximum number of service accounts reached.")
+                    || message.contains("'iam.googleapis.com/quota/service-account-count'")
+                    || message.contains("'ServiceAccountsPerProject'")
+        );
+        if capacity {
+            let quota = alien_preflights::quotas::gcp_service_account_quota_identity(project);
+            let message = format!(
+                "{} ({}, {}): project service-account capacity is exhausted. Request an increase: {}",
+                quota.name, quota.provider_id, quota.scope, quota.increase_url
+            );
+            return error.context(ErrorData::CloudQuotaExceeded { quota, message });
+        }
+        error.context(ErrorData::CloudPlatformError {
+            message: "GCP service-account creation was rejected".to_string(),
+            resource_id: None,
+        })
+    }
+
     pub fn kubernetes_cluster_name_for_permissions(
         resource_prefix: &str,
         cluster: &KubernetesCluster,
@@ -3157,6 +3211,127 @@ mod tests {
         ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
             .await
             .expect("a missing role should be created");
+    }
+
+    #[test]
+    fn gcp_service_account_capacity_mapping_preserves_throttling_and_source() {
+        for (status, message, capacity, retryable) in [
+            (
+                429,
+                "Maximum number of service accounts reached. Maximum is: 100",
+                true,
+                false,
+            ),
+            (
+                429,
+                "Quota exceeded for quota metric 'iam.googleapis.com/quota/service-account-count'",
+                true,
+                false,
+            ),
+            (
+                429,
+                "Quota exceeded for quota limit 'ServiceAccountsPerProject'",
+                true,
+                false,
+            ),
+            (
+                429,
+                "Quota exceeded for quota metric 'Service accounts created per minute per project'",
+                false,
+                true,
+            ),
+            (
+                429,
+                "Quota exceeded for quota metric 'Write requests'",
+                false,
+                true,
+            ),
+            (429, "Resource exhausted", false, true),
+            (403, "Permission denied", false, true),
+            (409, "Service account already exists", false, true),
+        ] {
+            let source = gcp_error(
+                status,
+                &serde_json::json!({"error": {
+                    "code": status, "message": message
+                }})
+                .to_string(),
+            );
+            let source_code = source.code.clone();
+            let error = ResourcePermissionsHelper::gcp_service_account_creation_error(source, "p")
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to create test service account".into(),
+                    resource_id: Some("identity".into()),
+                });
+            assert_eq!(error.retryable, retryable, "{message}");
+            let mapped = error
+                .source
+                .as_ref()
+                .expect("caller context retains mapped error");
+            assert_eq!(
+                mapped
+                    .source
+                    .as_ref()
+                    .expect("provider source retained")
+                    .code,
+                source_code
+            );
+            if capacity {
+                assert_eq!(mapped.code, "CLOUD_QUOTA_EXCEEDED");
+                let json = serde_json::to_value(mapped).expect("error serializes");
+                let rendered = json.to_string();
+                let quota = alien_preflights::quotas::gcp_service_account_quota_identity("p");
+                assert!(rendered.contains(&quota.provider_id));
+                assert!(rendered.contains(&quota.increase_url));
+                assert!(!mapped.internal);
+            } else {
+                assert_eq!(mapped.code, "CLOUD_PLATFORM_ERROR");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_capacity_is_not_retryable_but_request_throttling_is() {
+        for (message, capacity) in [
+            ("Maximum number of roles reached. Maximum is: 300", true),
+            ("Quota exceeded for quota metric 'Write requests'", false),
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role()
+                .times(1)
+                .returning(|_| Err(not_found()));
+            iam.expect_create_role().times(1).returning(move |_, _| {
+                Err(gcp_error(
+                    429,
+                    &serde_json::json!({"error": {
+                        "code": 429, "status": "RESOURCE_EXHAUSTED", "message": message
+                    }})
+                    .to_string(),
+                ))
+            });
+            iam.expect_patch_role().never();
+            iam.expect_undelete_role().never();
+            let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+                .await
+                .expect_err("a rejected creation must remain a failure");
+            assert_eq!(error.retryable, !capacity);
+            if capacity {
+                let Some(ErrorData::CloudQuotaExceeded { quota, message }) = error.error else {
+                    panic!("role capacity must report a typed quota error");
+                };
+                assert_eq!(
+                    quota,
+                    alien_preflights::quotas::gcp_custom_role_quota_identity("p")
+                );
+                assert!(message.contains(&quota.provider_id));
+                assert!(message.contains(&quota.increase_url));
+            } else {
+                assert!(matches!(
+                    error.error,
+                    Some(ErrorData::CloudPlatformError { .. })
+                ));
+            }
+        }
     }
 
     #[tokio::test]

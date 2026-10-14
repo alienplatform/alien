@@ -1,0 +1,569 @@
+{
+  "quotas": [
+    {
+      "limit": 200.0,
+      "metric": "CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 40960.0,
+      "metric": "DISKS_TOTAL_GB",
+      "usage": 0.0
+    },
+    {
+      "limit": 5000.0,
+      "metric": "SNAPSHOTS",
+      "usage": 0.0
+    },
+    {
+      "limit": 21.0,
+      "metric": "STATIC_ADDRESSES",
+      "usage": 0.0
+    },
+    {
+      "limit": 69.0,
+      "metric": "IN_USE_ADDRESSES",
+      "usage": 0.0
+    },
+    {
+      "limit": 20480.0,
+      "metric": "SSD_TOTAL_GB",
+      "usage": 0.0
+    },
+    {
+      "limit": 900.0,
+      "metric": "INSTANCE_TEMPLATES",
+      "usage": 0.0
+    },
+    {
+      "limit": 9.223372036854776e18,
+      "metric": "LOCAL_SSD_TOTAL_GB",
+      "usage": 0.0
+    },
+    {
+      "limit": 300.0,
+      "metric": "INSTANCE_GROUPS",
+      "usage": 0.0
+    },
+    {
+      "limit": 300.0,
+      "metric": "INSTANCE_GROUP_MANAGERS",
+      "usage": 0.0
+    },
+    {
+      "limit": 720.0,
+      "metric": "INSTANCES",
+      "usage": 0.0
+    },
+    {
+      "limit": 150.0,
+      "metric": "AUTOSCALERS",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "REGIONAL_AUTOSCALERS",
+      "usage": 0.0
+    },
+    {
+      "limit": 800.0,
+      "metric": "REGIONAL_INSTANCE_GROUP_MANAGERS",
+      "usage": 0.0
+    },
+    {
+      "limit": 30.0,
+      "metric": "TARGET_TCP_PROXIES",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "PREEMPTIBLE_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 8.0,
+      "metric": "NVIDIA_K80_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_LOCAL_SSD_TOTAL_GB",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITMENTS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1000.0,
+      "metric": "NETWORK_ENDPOINT_GROUPS",
+      "usage": 1.0
+    },
+    {
+      "limit": 5000.0,
+      "metric": "INTERNAL_ADDRESSES",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "NVIDIA_P100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "PREEMPTIBLE_LOCAL_SSD_GB",
+      "usage": 0.0
+    },
+    {
+      "limit": 30.0,
+      "metric": "SSL_POLICIES",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "PREEMPTIBLE_NVIDIA_K80_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "PREEMPTIBLE_NVIDIA_P100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "NVIDIA_P100_VWS_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "NVIDIA_V100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "NVIDIA_P4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "NVIDIA_P4_VWS_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "NODE_GROUPS",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "NODE_TEMPLATES",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "PREEMPTIBLE_NVIDIA_V100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "PREEMPTIBLE_NVIDIA_P4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "PREEMPTIBLE_NVIDIA_P100_VWS_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "PREEMPTIBLE_NVIDIA_P4_VWS_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 16.0,
+      "metric": "INTERCONNECT_ATTACHMENTS_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 80000.0,
+      "metric": "INTERCONNECT_ATTACHMENTS_TOTAL_MBPS",
+      "usage": 0.0
+    },
+    {
+      "limit": 250.0,
+      "metric": "RESOURCE_POLICIES",
+      "usage": 0.0
+    },
+    {
+      "limit": 50.0,
+      "metric": "IN_USE_SNAPSHOT_SCHEDULES",
+      "usage": 0.0
+    },
+    {
+      "limit": 4.0,
+      "metric": "NVIDIA_T4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 2.0,
+      "metric": "NVIDIA_T4_VWS_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 4.0,
+      "metric": "PREEMPTIBLE_NVIDIA_T4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 2.0,
+      "metric": "PREEMPTIBLE_NVIDIA_T4_VWS_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 50.0,
+      "metric": "IN_USE_BACKUP_SCHEDULES",
+      "usage": 0.0
+    },
+    {
+      "limit": 10.0,
+      "metric": "PUBLIC_DELEGATED_PREFIXES",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_K80_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_P100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_P4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_V100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_T4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "C2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 200.0,
+      "metric": "N2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_N2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_C2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "RESERVATIONS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_LICENSES",
+      "usage": 0.0
+    },
+    {
+      "limit": 200.0,
+      "metric": "N2D_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_N2D_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 600.0,
+      "metric": "SERVICE_ATTACHMENTS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1024.0,
+      "metric": "STATIC_BYOIP_ADDRESSES",
+      "usage": 0.0
+    },
+    {
+      "limit": 9.223372036854776e18,
+      "metric": "AFFINITY_GROUPS",
+      "usage": 0.0
+    },
+    {
+      "limit": 1.0,
+      "metric": "NVIDIA_A100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 16.0,
+      "metric": "PREEMPTIBLE_NVIDIA_A100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_A100_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 640.0,
+      "metric": "M1_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "M2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 12.0,
+      "metric": "A2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_A2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_MEMORY_OPTIMIZED_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 30.0,
+      "metric": "NETWORK_FIREWALL_POLICIES",
+      "usage": 0.0
+    },
+    {
+      "limit": 600.0,
+      "metric": "PSC_INTERNAL_LB_FORWARDING_RULES",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "EXTERNAL_NETWORK_LB_FORWARDING_RULES",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "EXTERNAL_PROTOCOL_FORWARDING_RULES",
+      "usage": 0.0
+    },
+    {
+      "limit": 540000.0,
+      "metric": "PD_EXTREME_TOTAL_PROVISIONED_IOPS",
+      "usage": 0.0
+    },
+    {
+      "limit": 72.0,
+      "metric": "E2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_E2_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 25.0,
+      "metric": "EXTERNAL_MANAGED_FORWARDING_RULES",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "C2D_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_C2D_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 24.0,
+      "metric": "N2A_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 10.0,
+      "metric": "SECURITY_POLICIES_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "SECURITY_POLICY_RULES_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 24.0,
+      "metric": "T2D_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 24.0,
+      "metric": "COMMITTED_T2D_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 24.0,
+      "metric": "C3_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_C3_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 96.0,
+      "metric": "T2A_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 248.0,
+      "metric": "M3_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_M3_CPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "NVIDIA_A100_80GB_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "PREEMPTIBLE_NVIDIA_A100_80GB_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "COMMITTED_NVIDIA_A100_80GB_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 600.0,
+      "metric": "NETWORK_ATTACHMENTS",
+      "usage": 0.0
+    },
+    {
+      "limit": 75.0,
+      "metric": "REGIONAL_INTERNAL_MANAGED_BACKEND_SERVICES",
+      "usage": 0.0
+    },
+    {
+      "limit": 75.0,
+      "metric": "REGIONAL_EXTERNAL_MANAGED_BACKEND_SERVICES",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "REGIONAL_EXTERNAL_NETWORK_LB_BACKEND_SERVICES",
+      "usage": 0.0
+    },
+    {
+      "limit": 75.0,
+      "metric": "REGIONAL_INTERNAL_LB_BACKEND_SERVICES",
+      "usage": 0.0
+    },
+    {
+      "limit": 500.0,
+      "metric": "REGIONAL_INTERNAL_TRAFFIC_DIRECTOR_BACKEND_SERVICES",
+      "usage": 0.0
+    },
+    {
+      "limit": 10.0,
+      "metric": "NET_LB_SECURITY_POLICIES_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 100.0,
+      "metric": "NET_LB_SECURITY_POLICY_RULES_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 1000.0,
+      "metric": "NET_LB_SECURITY_POLICY_RULE_ATTRIBUTES_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "TPU_LITE_DEVICE_V5",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "PREEMPTIBLE_TPU_LITE_DEVICE_V5",
+      "usage": 0.0
+    },
+    {
+      "limit": 32.0,
+      "metric": "TPU_LITE_PODSLICE_V5",
+      "usage": 0.0
+    },
+    {
+      "limit": 8.0,
+      "metric": "NVIDIA_L4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 8.0,
+      "metric": "PREEMPTIBLE_NVIDIA_L4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 8.0,
+      "metric": "COMMITTED_NVIDIA_L4_GPUS",
+      "usage": 0.0
+    },
+    {
+      "limit": 5000.0,
+      "metric": "STATIC_EXTERNAL_IPV6_ADDRESS_RANGES",
+      "usage": 0.0
+    },
+    {
+      "limit": 20.0,
+      "metric": "SECURITY_POLICY_ADVANCED_RULES_PER_REGION",
+      "usage": 0.0
+    },
+    {
+      "limit": 1536.0,
+      "metric": "PREEMPTIBLE_TPU_LITE_PODSLICE_V5",
+      "usage": 0.0
+    },
+    {
+      "limit": 0.0,
+      "metric": "VARIABLE_IPV6_PUBLIC_DELEGATED_PREFIXES",
+      "usage": 0.0
+    }
+  ]
+}
