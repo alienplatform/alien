@@ -596,7 +596,7 @@ pub trait DeploymentStore: Send + Sync {
         Ok(deployments.iter().any(|deployment| {
             deployment.id != excluding_deployment_id
                 && deployment.project_id == project_id
-                && deployment.status != "deleted"
+                && !matches!(deployment.status.as_str(), "deleted" | "teardown-required")
                 && matches!(
                     &deployment.environment_info,
                     Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {

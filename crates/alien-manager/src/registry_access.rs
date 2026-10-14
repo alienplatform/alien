@@ -100,7 +100,7 @@ async fn ensure_registry_access(
 
 /// Revokes cross-account registry access for a deployment during cleanup.
 ///
-/// Called during sync/reconcile when the deployment reaches `Deleted` status.
+/// Called during sync/reconcile once runtime teardown is complete.
 async fn revoke_registry_access(
     artifact_registry: &dyn ArtifactRegistry,
     repo_id: &str,
@@ -459,7 +459,7 @@ fn service_type_name(service_type: &ComputeServiceType) -> String {
 }
 
 /// Revokes registry access once runtime teardown is complete.
-/// Deployment-owned identities are revoked at TeardownRequired, before setup deletion.
+/// Revoke at TeardownRequired before imported or native setup deletion.
 ///
 /// Cloud Run's service agent is project-scoped, so multiple deployments in
 /// the same GCP project and Alien project share one GAR reader grant. The final active consumer
@@ -620,25 +620,6 @@ pub async fn cleanup_deleted_registry_access(
         return Ok(());
     }
     for repo_id in repo_ids {
-        if state.status == DeploymentStatus::TeardownRequired && platform == Platform::Gcp {
-            if let Some(email) = extract_rsm_access_configuration(state.stack_state.as_ref()) {
-                remove_registry_access(
-                    artifact_registry.as_ref(),
-                    &repo_id,
-                    environment_info,
-                    CrossAccountAccess::Gcp(GcpCrossAccountAccess {
-                        project_numbers: Vec::new(),
-                        allowed_service_types: Vec::new(),
-                        service_account_emails: vec![email],
-                    }),
-                    "deployment-owned registry access",
-                    deployment_id,
-                )
-                .await?;
-            }
-            // The project service agents remain until the deletion is persisted.
-            continue;
-        }
         revoke_registry_access(
             artifact_registry.as_ref(),
             &repo_id,
@@ -653,7 +634,7 @@ pub async fn cleanup_deleted_registry_access(
     Ok(())
 }
 
-/// Revokes deployment-owned registry access before the state that ends its runtime
+/// Revokes registry access before the state that ends its runtime
 /// cleanup is persisted, and returns the state to persist instead.
 ///
 /// The revoke goes first because a persisted `TeardownRequired` hands the deployment to setup
@@ -662,7 +643,7 @@ pub async fn cleanup_deleted_registry_access(
 /// the manager lacks a permission, and a retry of the delete revokes once it is granted. Any other
 /// failure is returned with nothing persisted, for the caller to retry.
 ///
-/// GCP project service agents are revoked in [`revoke_after_persisting`].
+/// GCP project service agents are checked again in [`revoke_after_persisting`].
 pub async fn revoke_before_persisting(
     deployment_store: &dyn DeploymentStore,
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -711,12 +692,13 @@ pub async fn revoke_before_persisting(
     }
 }
 
-/// Revokes a deleted GCP deployment's registry access once its `Deleted` state is persisted.
+/// Rechecks GCP registry access after runtime teardown or deletion is persisted.
 ///
-/// GCP removes a project's shared grant only when no other deployment in that project is still
-/// saved as active. Each deletion is saved before it asks, so of two deletions finishing together
-/// the one that asks last sees both deleted and removes the grant; asking first, both could see
-/// the other active and both keep it. AWS revokes in [`revoke_before_persisting`].
+/// GCP removes a project's shared grant only when no other deployment in that project still
+/// needs its runtime. Rechecking after persistence lets concurrent teardowns observe each other
+/// as complete and remove the final grant; checking only before persistence could leave
+/// the other active and both keep it. Imported setup may be forgotten after `TeardownRequired`,
+/// so that handoff must also remove the last service-agent grant. AWS revokes before persistence.
 pub async fn revoke_after_persisting(
     deployment_store: &dyn DeploymentStore,
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -725,9 +707,7 @@ pub async fn revoke_after_persisting(
     project_id: &str,
     state: &DeploymentState,
 ) -> Result<()> {
-    if matches!(state.environment_info, Some(EnvironmentInfo::Aws(_)))
-        || state.status == DeploymentStatus::TeardownRequired
-    {
+    if matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
         return Ok(());
     }
     cleanup_deleted_registry_access(
@@ -2239,7 +2219,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_teardown_revokes_management_identity_before_its_outputs_are_removed() {
+    async fn gcp_teardown_revokes_access_before_imported_setup_is_forgotten() {
         let registry = Arc::new(RecordingGcpRegistry::default());
         let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
             binding_name: "artifact-registry",
@@ -2247,14 +2227,14 @@ mod tests {
         });
         let providers = Some(provider);
         let targets = HashMap::new();
-        let store = store_answering(Ok(false));
+        let store = store_answering(Ok(true));
         let email = "management@test-project.iam.gserviceaccount.com";
         let mut state = gcp_state_with_stack(worker_stack(
             "us-central1-docker.pkg.dev/vendor-project/alien-artifacts-default/default:latest",
         ));
         state.status = DeploymentStatus::TeardownRequired;
         state.stack_state = Some(registered_stack_state(email));
-        let mut state = revoke_before_persisting(
+        let state = revoke_before_persisting(
             &store,
             &providers,
             &targets,
@@ -2269,9 +2249,10 @@ mod tests {
             *registry.removals.lock().unwrap(),
             vec![(Vec::<String>::new(), vec![email.to_string()])]
         );
-        // Setup teardown removes the account and its outputs after this handoff.
-        state.stack_state = None;
-        state.status = DeploymentStatus::Deleted;
+        registry.removals.lock().unwrap().clear();
+        // Imported setup may be forgotten after this handoff, without reaching Deleted.
+        // A sibling has also reached the persisted runtime teardown handoff.
+        let store = store_answering(Ok(false));
         revoke_after_persisting(
             &store,
             &providers,

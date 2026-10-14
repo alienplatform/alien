@@ -2031,6 +2031,15 @@ mod gcp_project_consumer_tests {
         // A record a store keeps after deletion (status `deleted`) no longer pulls images.
         create_gcp_deployment(&store, &group.id, "deleted", SHARED_PROJECT, "deleted").await;
 
+        create_gcp_deployment(
+            &store,
+            &group.id,
+            "imported",
+            SHARED_PROJECT,
+            "teardown-required",
+        )
+        .await;
+
         assert!(
             !store
                 .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, "default", &deleting)
