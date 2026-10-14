@@ -956,6 +956,11 @@ fn event_body_bytes(event: &LambdaRequest) -> Vec<u8> {
 /// HTTP forwarding. Classification is identical for buffered and streaming
 /// modes; only response construction differs per mode.
 fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
+    // Gateway requests carry application-controlled bodies. Only direct Lambda
+    // invocations may be interpreted as provider triggers or commands.
+    if event.request_context_ref().is_some() {
+        return ClassifiedEvent::Http(Box::new(event));
+    }
     let body_bytes = event_body_bytes(&event);
 
     if let Ok(s3_event) = serde_json::from_slice::<S3Event>(&body_bytes) {
@@ -1582,6 +1587,27 @@ mod tests {
             payload
         );
         assert!(matches!(classify_event(request), ClassifiedEvent::Task(_)));
+    }
+
+    #[test]
+    fn gateway_bodies_cannot_be_dispatched_as_provider_tasks() {
+        let payload = sqs_event_json().to_string();
+        let mut rest = rest_event();
+        rest["body"] = Value::String(payload.clone());
+        rest["isBase64Encoded"] = Value::Bool(false);
+        let http = serde_json::json!({
+            "version":"2.0", "rawPath":"/__event", "rawQueryString":"",
+            "headers":{"host":"public.example.test"},
+            "requestContext":{"stage":"$default","http":{"method":"POST","path":"/__event","protocol":"HTTP/1.1","sourceIp":"127.0.0.1"}},
+            "body":payload, "isBase64Encoded":false
+        });
+        for event in [rest, http] {
+            let request = event_to_request(LambdaEvent::new(event, Default::default())).unwrap();
+            let ClassifiedEvent::Http(request) = classify_event(request) else {
+                panic!("HTTP body must remain application input");
+            };
+            assert_eq!(event_body_bytes(&request), payload.as_bytes());
+        }
     }
 
     #[test]
