@@ -2073,7 +2073,8 @@ async fn push_gcp_sandbox_image(
         // The default cache, which every other dockdash build here uses by not naming one.
         dockdash::BlobCache::new().map_dockdash_err()?,
     )
-    .await?;
+    .await?
+    .image;
     let image_uri = format!("{base_uri}-agent");
     push_image_with_retry(&image, &image_uri, push_options).await?;
     Ok(image_uri)
@@ -3761,6 +3762,11 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
         oci_client::errors::OciDistributionError::ServerError { code, .. } => {
             *code >= 500 || *code == 429
         }
+        // A 429 whose body is an error envelope arrives as a registry error, not a server error.
+        oci_client::errors::OciDistributionError::RegistryError { envelope, .. } => envelope
+            .errors
+            .iter()
+            .any(|entry| entry.code == oci_client::errors::OciErrorCode::Toomanyrequests),
         oci_client::errors::OciDistributionError::RequestError(error) => {
             error.is_timeout()
                 || error.is_connect()

@@ -13,8 +13,11 @@ use alien_core::sandbox_image::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use dockdash::{
-    Arch, BlobCache, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy, RegistryAuth,
+    Arch, BlobCache, BuildDiagnostics, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy,
+    RegistryAuth,
 };
+use oci_client::errors::{OciDistributionError, OciErrorCode};
+use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
 
@@ -27,10 +30,18 @@ pub fn sandbox_agent_image() -> String {
     )
 }
 
+/// A layered GCP sandbox image and the agent it was layered from.
+#[derive(Debug)]
+pub struct GcpSandboxImage {
+    pub image: Image,
+    /// Manifest digest the agent reference resolved to for linux/amd64.
+    pub agent_digest: String,
+}
+
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
 /// same image, read for its `/etc/passwd` and `/etc/group`. `resource_name` is the sandbox the
-/// image is for, named in any error. `cache` holds the pulled blobs and the agent layer.
+/// image is for, named in a build failure. `cache` holds the pulled blobs and the agent layer.
 pub async fn build_gcp_sandbox_image(
     resource_name: &str,
     base: &Image,
@@ -39,7 +50,7 @@ pub async fn build_gcp_sandbox_image(
     protocol: ClientProtocol,
     base_auth: RegistryAuth,
     cache: BlobCache,
-) -> Result<Image> {
+) -> Result<GcpSandboxImage> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
         resource_name: resource_name.to_string(),
         reason,
@@ -50,15 +61,21 @@ pub async fn build_gcp_sandbox_image(
 
     // The agent image is public, so no registry credential is sent to its registry.
     let pulling_agent = format!("Pulling the agent image {agent_image}");
-    let agent = build_with_retry(resource_name, agent_image, &pulling_agent, || async {
-        Ok(Image::builder()
-            .from(agent_image)
-            .platform("linux", &Arch::Amd64)
-            .pull_policy(PullPolicy::Always)
-            .protocol(protocol.clone())
-            .auth(RegistryAuth::Anonymous)
-            .blob_cache(cache.clone()))
-    })
+    let (agent, agent_build) = build_with_retry(
+        resource_name,
+        agent_image,
+        Pulled::Agent,
+        &pulling_agent,
+        || async {
+            Ok(Image::builder()
+                .from(agent_image)
+                .platform("linux", &Arch::Amd64)
+                .pull_policy(PullPolicy::Always)
+                .protocol(protocol.clone())
+                .auth(RegistryAuth::Anonymous)
+                .blob_cache(cache.clone()))
+        },
+    )
     .await?;
     let agent_binary = agent
         .read_file(AGENT_PATH)
@@ -95,43 +112,68 @@ pub async fn build_gcp_sandbox_image(
     );
 
     let assembling = format!("Assembling the image from {base_image} and the agent layer");
-    build_with_retry(resource_name, base_image, &assembling, || async {
-        // A layer is consumed by the image builder, so each attempt builds its own.
-        let layer = Layer::builder()
-            .map(|layer| layer.blob_cache(cache.clone()))
-            .and_then(|layer| layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0))
-            .and_then(|layer| layer.data_with_owner("/etc/group", group.as_bytes(), 0o644, 0, 0))
-            .and_then(|layer| layer.data_with_owner(AGENT_PATH, &agent_binary, AGENT_MODE, 0, 0))
-            .and_then(|layer| {
-                layer.empty_directory(
-                    contract.session_root,
-                    SESSION_ROOT_MODE,
-                    contract.exec_uid.into(),
-                    contract.exec_gid().into(),
-                )
-            })
-            .into_alien_error()
-            .context(failed("Failed to assemble the agent layer".to_string()))?
-            .build()
-            .await
-            .into_alien_error()
-            .context(failed("Failed to build the agent layer".to_string()))?;
-        let mut builder = Image::builder()
-            .from(base_image)
-            .platform("linux", &Arch::Amd64)
-            .protocol(protocol.clone())
-            .auth(base_auth.clone())
-            .blob_cache(cache.clone())
-            .layer(layer)
-            .user(&user)
-            .expose_port(&contract.exposed_port())
-            .entrypoint(vec![AGENT_PATH.to_string()]);
-        for (name, value) in gcp_agent_platform_env() {
-            builder = builder.env(name, &value);
-        }
-        Ok(builder)
+    let (image, _) = build_with_retry(
+        resource_name,
+        base_image,
+        Pulled::Base,
+        &assembling,
+        || async {
+            // A layer is consumed by the image builder, so each attempt builds its own.
+            let layer = Layer::builder()
+                .map(|layer| layer.blob_cache(cache.clone()))
+                .and_then(|layer| {
+                    layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0)
+                })
+                .and_then(|layer| {
+                    layer.data_with_owner("/etc/group", group.as_bytes(), 0o644, 0, 0)
+                })
+                .and_then(|layer| {
+                    layer.data_with_owner(AGENT_PATH, &agent_binary, AGENT_MODE, 0, 0)
+                })
+                .and_then(|layer| {
+                    layer.empty_directory(
+                        contract.session_root,
+                        SESSION_ROOT_MODE,
+                        contract.exec_uid.into(),
+                        contract.exec_gid().into(),
+                    )
+                })
+                .into_alien_error()
+                .context(failed("Failed to assemble the agent layer".to_string()))?
+                .build()
+                .await
+                .into_alien_error()
+                .context(failed("Failed to build the agent layer".to_string()))?;
+            let mut builder = Image::builder()
+                .from(base_image)
+                .platform("linux", &Arch::Amd64)
+                .protocol(protocol.clone())
+                .auth(base_auth.clone())
+                .blob_cache(cache.clone())
+                .layer(layer)
+                .user(&user)
+                .expose_port(&contract.exposed_port())
+                .entrypoint(vec![AGENT_PATH.to_string()]);
+            for (name, value) in gcp_agent_platform_env() {
+                builder = builder.env(name, &value);
+            }
+            Ok(builder)
+        },
+    )
+    .await?;
+    Ok(GcpSandboxImage {
+        image,
+        agent_digest: agent_build.resolved_manifest_digest,
     })
-    .await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pulled {
+    /// The developer's image: a missing tag is theirs to fix.
+    Base,
+    /// Alien's agent tag, published by a release workflow a deploy can race, so a missing tag is
+    /// reported as temporary like a throttled pull.
+    Agent,
 }
 
 /// Builds the image `prepare` describes, retrying a transient pull of `reference`. `step` names
@@ -140,16 +182,17 @@ pub async fn build_gcp_sandbox_image(
 async fn build_with_retry<F, Fut>(
     resource_name: &str,
     reference: &str,
+    pulled: Pulled,
     step: &str,
     prepare: F,
-) -> Result<Image>
+) -> Result<(Image, BuildDiagnostics)>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<ImageBuilder>>,
 {
     for attempt in 1..=BASE_IMAGE_BUILD_MAX_ATTEMPTS {
         match prepare().await?.build().await {
-            Ok((image, _)) => return Ok(image),
+            Ok(built) => return Ok(built),
             Err(error)
                 if attempt < BASE_IMAGE_BUILD_MAX_ATTEMPTS
                     && is_retryable_dockdash_image_pull_error(&error) =>
@@ -166,7 +209,9 @@ where
                 sleep(delay).await;
             }
             Err(error) => {
-                let context = if is_retryable_dockdash_image_pull_error(&error) {
+                let context = if is_retryable_dockdash_image_pull_error(&error)
+                    || (pulled == Pulled::Agent && is_missing_manifest(&error))
+                {
                     ErrorData::ImagePullTemporarilyUnavailable {
                         image: reference.to_string(),
                         reason: step.to_string(),
@@ -184,6 +229,30 @@ where
     }
 
     unreachable!("image build retry loop always returns")
+}
+
+/// The registry answered that the tag or repository does not exist. A platform missing from an
+/// index is `ImageManifestNotFoundError`, which is not this.
+fn is_missing_manifest(error: &dockdash::Error) -> bool {
+    let mut cause: Option<&(dyn StdError + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if let Some(oci_error) = current.downcast_ref::<OciDistributionError>() {
+            return match oci_error {
+                OciDistributionError::RegistryError { envelope, .. } => {
+                    envelope.errors.iter().any(|entry| {
+                        matches!(
+                            entry.code,
+                            OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown
+                        )
+                    })
+                }
+                OciDistributionError::ServerError { code, .. } => *code == 404,
+                _ => false,
+            };
+        }
+        cause = current.source();
+    }
+    false
 }
 
 /// `None` for a base with no such file, which is how a scratch or distroless base looks. A link
@@ -277,9 +346,16 @@ mod tests {
         image
     }
 
-    /// Layers `base` onto a stand-in agent in a local registry, pushes the result, and returns its
-    /// reference and the protocol that reads it.
-    async fn layer_and_push(host: &str, base_files: &[(&str, &[u8])]) -> (String, ClientProtocol) {
+    /// What [`layer_and_push`] pushed and how to read it back.
+    struct Layered {
+        target: String,
+        protocol: ClientProtocol,
+        agent_image: String,
+        agent_digest: String,
+    }
+
+    /// Layers `base` onto a stand-in agent in a local registry with `cache`, and pushes the result.
+    async fn layer_and_push(host: &str, base_files: &[(&str, &[u8])], cache: BlobCache) -> Layered {
         let agent_image = format!("{host}/alien/agent:test");
         push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
         let base_image = format!("{host}/proj/sandbox:base");
@@ -293,12 +369,13 @@ mod tests {
             &agent_image,
             protocol.clone(),
             RegistryAuth::Anonymous,
-            BlobCache::new().expect("blob cache"),
+            cache,
         )
         .await
         .expect("the agent layers onto the base");
         let target = format!("{base_image}-agent");
         layered
+            .image
             .push(
                 &target,
                 &PushOptions {
@@ -308,7 +385,16 @@ mod tests {
             )
             .await
             .expect("the layered image pushes");
-        (target, protocol)
+        Layered {
+            target,
+            protocol,
+            agent_image,
+            agent_digest: layered.agent_digest,
+        }
+    }
+
+    fn default_cache() -> BlobCache {
+        BlobCache::new().expect("blob cache")
     }
 
     fn client() -> Client {
@@ -393,7 +479,9 @@ mod tests {
     #[tokio::test]
     async fn the_layered_image_carries_the_agent_identity_and_contract() {
         let (_registry, host) = setup_local_registry().await.expect("local registry");
-        let (target, protocol) = layer_and_push(
+        let Layered {
+            target, protocol, ..
+        } = layer_and_push(
             &host,
             &[
                 (
@@ -403,6 +491,7 @@ mod tests {
                 ),
                 ("/etc/group", b"root:x:0:\nnode:x:1000:\nstaff:x:50:\n"),
             ],
+            default_cache(),
         )
         .await;
 
@@ -484,8 +573,14 @@ mod tests {
     #[tokio::test]
     async fn a_base_without_identity_files_still_layers() {
         let (_registry, host) = setup_local_registry().await.expect("local registry");
-        let (target, protocol) =
-            layer_and_push(&host, &[("/marker", b"alien-e2e-source-build\n")]).await;
+        let Layered {
+            target, protocol, ..
+        } = layer_and_push(
+            &host,
+            &[("/marker", b"alien-e2e-source-build\n")],
+            default_cache(),
+        )
+        .await;
 
         assert_eq!(pushed_config(&target).await["config"]["User"], "1000:1000");
         assert_eq!(
@@ -515,18 +610,69 @@ mod tests {
             .0
     }
 
-    async fn layering_error(agent_image: &str) -> AlienError<ErrorData> {
+    /// The layering error for `agent_image` and `base_image`, with nothing else to fail on.
+    async fn layering_error(agent_image: &str, base_image: &str) -> AlienError<ErrorData> {
         build_gcp_sandbox_image(
             "box",
             &local_base().await,
-            "registry.example.com/proj/sandbox:base",
+            base_image,
             agent_image,
             ClientProtocol::Http,
             RegistryAuth::Anonymous,
-            BlobCache::new().expect("blob cache"),
+            default_cache(),
         )
         .await
-        .expect_err("the agent cannot be pulled")
+        .expect_err("the image cannot be built")
+    }
+
+    /// The layer digests `reference`'s manifest lists.
+    async fn layer_digests(reference: &str) -> Vec<String> {
+        let reference: Reference = reference.parse().expect("reference");
+        let (manifest, _) = client()
+            .pull_image_manifest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+            .await
+            .expect("manifest");
+        manifest
+            .layers
+            .into_iter()
+            .map(|layer| layer.digest)
+            .collect()
+    }
+
+    /// Every blob the layering pulls or builds goes to the caller's cache: the agent's layers, the
+    /// base's layers and the agent layer built on top. The pushed image is base layers plus that
+    /// top layer, so its manifest names both.
+    #[tokio::test]
+    async fn every_pulled_and_built_blob_lands_in_the_given_cache() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let cache_dir = tempfile::tempdir().expect("temp dir");
+        let cache = BlobCache::with_path(cache_dir.path().to_path_buf()).expect("cache");
+        let layered = layer_and_push(&host, &[("/marker", b"base\n")], cache.clone()).await;
+
+        let agent_layers = layer_digests(&layered.agent_image).await;
+        let target_layers = layer_digests(&layered.target).await;
+        assert_eq!(target_layers.len(), 2, "base layer plus the agent layer");
+        for digest in agent_layers.iter().chain(&target_layers) {
+            assert!(
+                cache.get_blob(digest).await.expect("cache reads").is_some(),
+                "{digest} is in the given cache"
+            );
+        }
+    }
+
+    /// The digest returned is the agent manifest the layering used, so a caller can record it
+    /// without pulling the agent again.
+    #[tokio::test]
+    async fn the_agent_digest_is_the_pulled_agent_manifest() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let layered = layer_and_push(&host, &[("/marker", b"base\n")], default_cache()).await;
+
+        let reference: Reference = layered.agent_image.parse().expect("reference");
+        let (_, registry_digest) = client()
+            .pull_image_manifest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+            .await
+            .expect("agent manifest");
+        assert_eq!(layered.agent_digest, registry_digest);
     }
 
     /// A registry that never answers says nothing about the image, so once the retries run out
@@ -537,17 +683,100 @@ mod tests {
         let address = listener.local_addr().expect("address");
         drop(listener);
 
-        let error = layering_error(&format!("{address}/alien/agent:test")).await;
+        let error = layering_error(
+            &format!("{address}/alien/agent:test"),
+            "registry.example.com/proj/sandbox:base",
+        )
+        .await;
         assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
         assert!(error.retryable, "{error}");
     }
 
-    /// A tag the registry does not have will not appear on a retry.
+    /// Docker Hub and GHCR answer a rate limit with 429 and a `TOOMANYREQUESTS` error envelope,
+    /// which says nothing about the image: it is retried, and still retryable when the retries
+    /// run out.
     #[tokio::test]
-    async fn a_pull_the_registry_refuses_is_a_build_failure() {
-        let (_registry, host) = setup_local_registry().await.expect("local registry");
+    async fn a_rate_limited_pull_is_retried_and_stays_retryable() {
+        let server = httpmock::MockServer::start_async().await;
+        let manifests = server
+            .mock_async(|when, then| {
+                when.path_contains("/manifests/");
+                then.status(429)
+                    .header("content-type", "application/json")
+                    .body(r#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200);
+            })
+            .await;
 
-        let error = layering_error(&format!("{host}/alien/agent:missing")).await;
+        let error = layering_error(
+            &format!("{}/alien/agent:test", server.address()),
+            "registry.example.com/proj/sandbox:base",
+        )
+        .await;
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert!(error.retryable, "{error}");
+        assert_eq!(
+            manifests.hits_async().await,
+            crate::BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+            "every attempt is made"
+        );
+    }
+
+    /// A registry that answers every manifest request as a real one does for a missing tag.
+    async fn registry_without_the_tag() -> httpmock::MockServer {
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.path_contains("/manifests/");
+                then.status(404)
+                    .header("content-type", "application/json")
+                    .body(
+                        r#"{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}"#,
+                    );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200);
+            })
+            .await;
+        server
+    }
+
+    /// The agent tag is published by a release workflow a deploy can race, so a missing one is
+    /// reported as temporary.
+    #[tokio::test]
+    async fn a_missing_agent_tag_is_temporary() {
+        let registry = registry_without_the_tag().await;
+
+        let error = layering_error(
+            &format!("{}/alien/agent:missing", registry.address()),
+            "registry.example.com/proj/sandbox:base",
+        )
+        .await;
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+    }
+
+    /// The base is the developer's image; a tag the registry does not have will not appear on a
+    /// retry.
+    #[tokio::test]
+    async fn a_missing_base_tag_is_a_build_failure() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:test");
+        push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
+        let base_registry = registry_without_the_tag().await;
+
+        let error = layering_error(
+            &agent_image,
+            &format!("{}/proj/sandbox:missing", base_registry.address()),
+        )
+        .await;
         assert_eq!(error.code, "IMAGE_BUILD_FAILED", "{error}");
     }
 }
