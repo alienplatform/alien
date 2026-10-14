@@ -10,7 +10,7 @@ use crate::{
 use alien_core::{PermissionSet, PermissionSetReference, ServiceAccount, Stack, Worker};
 use alien_error::{Context, IntoAlienError};
 
-/// Physical name used by the AWS Storage, Queue and KV create controllers.
+/// Physical name used by AWS prefixed-resource create controllers.
 pub fn aws_prefixed_resource_name(prefix: &str, resource_id: &str) -> String {
     format!("{prefix}-{resource_id}")
 }

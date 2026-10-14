@@ -8,8 +8,8 @@ use crate::{
     CheckResult,
 };
 use alien_core::{
-    InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, ResourceLifecycle, ServiceAccount,
-    Stack, StackState, StorageOutputs,
+    BuildOutputs, InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, ResourceLifecycle,
+    ServiceAccount, Stack, StackState, StorageOutputs, WorkerOutputs,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_permissions::{
@@ -116,29 +116,52 @@ pub(crate) fn check(
             let mut resource_context = context.clone().with_resource_id(id.to_string());
             // Existing/imported resources keep their recorded physical names. Never
             // infer a new name for a resource whose controller has already run.
-            let name = match state.and_then(|state| state.resources.get(id)) {
-                Some(saved) => {
-                    saved
-                        .outputs
-                        .as_ref()
-                        .and_then(|outputs| match resource_type.as_str() {
-                            "storage" => outputs
-                                .downcast_ref::<StorageOutputs>()
-                                .map(|o| o.bucket_name.clone()),
-                            "queue" => outputs
-                                .downcast_ref::<QueueOutputs>()
-                                .map(|o| o.queue_name.clone()),
-                            "kv" => outputs
-                                .downcast_ref::<KvOutputs>()
-                                .map(|o| o.store_name.clone()),
-                            _ => None,
-                        })
+            let name = if matches!(
+                resource_type.as_str(),
+                "artifact-registry" | "service-account" | "ai" | "sandbox"
+            ) {
+                // These writers deliberately pass the logical ID, including on
+                // updates. Their outputs identify other objects, not this context.
+                Some(id.to_string())
+            } else {
+                match state.and_then(|state| state.resources.get(id)) {
+                    Some(saved) => {
+                        saved
+                            .outputs
+                            .as_ref()
+                            .and_then(|outputs| match resource_type.as_str() {
+                                "storage" => outputs
+                                    .downcast_ref::<StorageOutputs>()
+                                    .map(|o| o.bucket_name.clone()),
+                                "queue" => outputs
+                                    .downcast_ref::<QueueOutputs>()
+                                    .map(|o| o.queue_name.clone()),
+                                "kv" => outputs
+                                    .downcast_ref::<KvOutputs>()
+                                    .map(|o| o.store_name.clone()),
+                                "worker" => outputs
+                                    .downcast_ref::<WorkerOutputs>()
+                                    .map(|o| o.worker_name.clone()),
+                                "build" => outputs
+                                    .downcast_ref::<BuildOutputs>()
+                                    .and_then(|o| o.identifier.split_once(":project/"))
+                                    .filter(|(_, name)| !name.is_empty())
+                                    .map(|(_, name)| name.to_string()),
+                                _ => None,
+                            })
+                    }
+                    None if matches!(
+                        resource_type.as_str(),
+                        "storage" | "queue" | "kv" | "worker" | "build" | "vault"
+                    ) =>
+                    {
+                        context
+                            .stack_prefix
+                            .as_deref()
+                            .map(|prefix| aws_prefixed_resource_name(prefix, id))
+                    }
+                    None => None,
                 }
-                None if matches!(resource_type.as_str(), "storage" | "queue" | "kv") => context
-                    .stack_prefix
-                    .as_deref()
-                    .map(|prefix| aws_prefixed_resource_name(prefix, id)),
-                None => None,
             };
             resource_context.resource_name = name;
             let selection = AwsResourcePolicyContext {
@@ -261,7 +284,7 @@ mod tests {
     async fn physical_names_count_fresh_and_imported_documents_without_guessing() {
         let generator = AwsRuntimePermissionsGenerator::new();
         let context = PermissionContext::new().with_stack_prefix("q5-names");
-        for resource_type in ["storage", "queue", "kv"] {
+        for resource_type in ["storage", "queue", "kv", "worker", "build"] {
             let mut stack = prepared(100, vec![grant("read", 100, true)]).await;
             // Both documents must use physical names and logical resource IDs.
             stack
@@ -275,6 +298,19 @@ mod tests {
                 let config = match resource_type {
                     "queue" => alien_core::Resource::new(alien_core::Queue::new(id.into()).build()),
                     "kv" => alien_core::Resource::new(alien_core::Kv::new(id.into()).build()),
+                    "worker" => alien_core::Resource::new(
+                        alien_core::Worker::new(id.into())
+                            .permissions("reader".into())
+                            .code(alien_core::WorkerCode::Image {
+                                image: "q5-image:latest".into(),
+                            })
+                            .build(),
+                    ),
+                    "build" => alien_core::Resource::new(
+                        alien_core::Build::new(id.into())
+                            .permissions("reader".into())
+                            .build(),
+                    ),
                     _ => alien_core::Resource::new(Storage::new(id.into()).build()),
                 };
                 stack.resources.get_mut(id).unwrap().config = config;
@@ -336,6 +372,17 @@ mod tests {
                         identifier: None,
                         endpoint: None,
                     }),
+                    "worker" => alien_core::ResourceOutputs::new(WorkerOutputs {
+                        worker_name: name,
+                        public_endpoints: Default::default(),
+                        identifier: None,
+                        commands_push_target: None,
+                    }),
+                    "build" => alien_core::ResourceOutputs::new(BuildOutputs {
+                        identifier: format!(
+                            "arn:aws:codebuild:us-east-1:123456789012:project/{name}"
+                        ),
+                    }),
                     _ => alien_core::ResourceOutputs::new(StorageOutputs { bucket_name: name }),
                 });
                 state.resources.insert(id.into(), saved);
@@ -368,6 +415,135 @@ mod tests {
             .unwrap();
             assert!(unknown.success);
             assert_eq!(unknown.warnings.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_vault_prefix_counts_but_existing_output_does_not_invent_a_prefix() {
+        let mut stack = prepared(100, vec![grant("read", 200, true)]).await;
+        let id = "objects-b";
+        stack.resources.get_mut(id).unwrap().config =
+            alien_core::Resource::new(alien_core::Vault::new(id.into()).build());
+        let context = PermissionContext::new().with_stack_prefix("q5-vault");
+        let fresh = super::check(
+            &stack,
+            Platform::Aws,
+            Some(InitialSetupAuthority::DirectSetup),
+            &context,
+            None,
+        )
+        .unwrap();
+        assert_eq!(fresh.errors.len(), 1);
+        let mut state = StackState::new(Platform::Aws);
+        let mut saved = alien_core::StackResourceState::new_pending(
+            "vault".into(),
+            stack.resources[id].config.clone(),
+            None,
+            vec![],
+        );
+        saved.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: "123456789012:us-east-1".into(),
+        }));
+        state.resources.insert(id.into(), saved);
+        let existing = super::check(
+            &stack,
+            Platform::Aws,
+            Some(InitialSetupAuthority::DirectSetup),
+            &context,
+            Some(&state),
+        )
+        .unwrap();
+        assert!(existing.success);
+        assert_eq!(existing.warnings.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn logical_writer_contexts_count_even_without_saved_outputs() {
+        for resource_type in ["artifact-registry", "service-account", "ai", "sandbox"] {
+            let mut stack = prepared(100, vec![grant("read", 200, true)]).await;
+            for id in ["objects-a", "objects-b"] {
+                stack.resources.get_mut(id).unwrap().config = match resource_type {
+                    "artifact-registry" => alien_core::Resource::new(
+                        alien_core::ArtifactRegistry::new(id.into()).build(),
+                    ),
+                    "service-account" => {
+                        alien_core::Resource::new(ServiceAccount::new(id.into()).build())
+                    }
+                    "sandbox" => alien_core::Resource::new(
+                        alien_core::Sandbox::new(id.into())
+                            .code(alien_core::SandboxCode::Image {
+                                image: "q5-image:latest".into(),
+                            })
+                            .egress(alien_core::SandboxEgress::Allow)
+                            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                                max_lifetime_seconds: None,
+                                idle_pause_seconds: None,
+                            })
+                            .build(),
+                    ),
+                    _ => alien_core::Resource::new(alien_core::Ai::new(id.into()).build()),
+                };
+            }
+            let generator = AwsRuntimePermissionsGenerator::new();
+            let size: usize = ["objects-a", "objects-b"]
+                .into_iter()
+                .map(|id| {
+                    let set = stack.permissions.profiles["reader"].0[id][0]
+                        .resolve(|_| None)
+                        .unwrap();
+                    render_aws_resource_policy(
+                        id,
+                        &set,
+                        &generator,
+                        &PermissionContext::new()
+                            .with_resource_id(id)
+                            .with_resource_name(id),
+                    )
+                    .unwrap()
+                    .document
+                    .chars()
+                    .filter(|c| !c.is_ascii_whitespace())
+                    .count()
+                })
+                .sum();
+            assert!(size > 10240);
+            let mut state =
+                StackState::with_resource_prefix(Platform::Aws, "q5-unrelated-prefix".into());
+            for id in ["objects-a", "objects-b"] {
+                state.resources.insert(
+                    id.into(),
+                    alien_core::StackResourceState::new_pending(
+                        resource_type.into(),
+                        stack.resources[id].config.clone(),
+                        None,
+                        vec![],
+                    ),
+                );
+            }
+            for saved in [None, Some(&state)] {
+                let result = super::check(
+                    &stack,
+                    Platform::Aws,
+                    Some(InitialSetupAuthority::DirectSetup),
+                    &PermissionContext::new().with_stack_prefix("q5-different"),
+                    saved,
+                )
+                .unwrap();
+                assert_eq!(result.errors.len(), 1);
+                assert!(result.errors[0].contains(&size.to_string()));
+            }
+            stack.resources.shift_remove("objects-b");
+            assert!(
+                super::check(
+                    &stack,
+                    Platform::Aws,
+                    Some(InitialSetupAuthority::DirectSetup),
+                    &PermissionContext::new(),
+                    Some(&state)
+                )
+                .unwrap()
+                .success
+            );
         }
     }
 
