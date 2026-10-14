@@ -1,4 +1,4 @@
-//! Definite setup-owned workload role overflow after identity mutation.
+//! Definite setup-owned inline role overflow after identity mutation.
 //!
 //! Unavailable controller names remain unresolved. No hypothetical physical names
 //! or live IAM reads are used to claim complete role headroom.
@@ -8,13 +8,13 @@ use crate::{
     CheckResult,
 };
 use alien_core::{
-    BuildOutputs, InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, ResourceLifecycle,
-    ServiceAccount, Stack, StackState, StorageOutputs, WorkerOutputs,
+    BuildOutputs, InitialSetupAuthority, KvOutputs, Platform, QueueOutputs, RemoteStackManagement,
+    ResourceLifecycle, ServiceAccount, Stack, StackState, StorageOutputs, WorkerOutputs,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_permissions::{
     aws_resource_policies::{
-        aws_prefixed_resource_name, aws_resource_policy_name,
+        aws_management_resource_policy_name, aws_prefixed_resource_name, aws_resource_policy_name,
         aws_service_account_injected_statements, render_aws_resource_policy,
         AwsResourcePolicyContext,
     },
@@ -23,7 +23,7 @@ use alien_permissions::{
 };
 use indexmap::IndexMap;
 
-/// Check only the inline documents DirectSetup will write to frozen workload roles.
+/// Check the resolved inline documents DirectSetup writes to frozen roles.
 pub(crate) fn check(
     stack: &Stack,
     platform: Platform,
@@ -33,18 +33,21 @@ pub(crate) fn check(
 ) -> Result<CheckResult> {
     let mut result = CheckResult::success().with_check_metadata(
         Some("IAM_WORKLOAD_INLINE_AGGREGATE"),
-        "Setup workload inline policies fit the aggregate per-role limit",
+        "Setup inline policies fit the aggregate per-role limit",
     );
     if platform != Platform::Aws || authority != Some(InitialSetupAuthority::DirectSetup) {
         return Ok(result);
     }
     let generator = AwsRuntimePermissionsGenerator::new();
-    for (_, account_entry) in stack.resources() {
-        let Some(account) = account_entry.config.downcast_ref::<ServiceAccount>() else {
+    let mut roles = Vec::new();
+    for (_, entry) in stack.resources() {
+        let Some(account) = entry.config.downcast_ref::<ServiceAccount>() else {
             continue;
         };
-        // Only a matching profile receives workload resource policies. Direct
-        // identities still write their own deployment-permissions document.
+        if entry.lifecycle != ResourceLifecycle::Frozen || entry.enabled_when.is_some() {
+            continue;
+        }
+        // Only a matching profile receives workload resource policies.
         let profile = account.id.strip_suffix("-sa").and_then(|name| {
             stack
                 .permission_profiles()
@@ -52,29 +55,44 @@ pub(crate) fn check(
                 .filter(|_| name != "management")
                 .map(|profile| (name, profile))
         });
+        roles.push((Some(account), profile));
+    }
+    if stack.resources().any(|(_, entry)| {
+        entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+            && entry.lifecycle == ResourceLifecycle::Frozen
+            && entry.enabled_when.is_none()
+    }) {
+        if let Some(profile) = stack.management().profile() {
+            roles.push((None, Some(("management", profile))));
+        }
+    }
+    for (account, profile) in roles {
+        let management = account.is_none();
         let role = match profile {
             Some((name, _)) => format!("permission profile '{name}'"),
-            None => format!("service account '{}'", account.id),
+            None => format!("service account '{}'", account.unwrap().id),
         };
-        if account_entry.lifecycle != ResourceLifecycle::Frozen
-            || account_entry.enabled_when.is_some()
-        {
-            continue;
-        }
+        // Management globals are managed policy chunks, never inline documents.
+        let stack_sets = account
+            .map(|account| account.stack_permission_sets.as_slice())
+            .unwrap_or_default();
         // None replaces an earlier resolved same-name document too: counting
         // the old document would overstate a definite lower bound.
         let mut documents: IndexMap<String, Option<String>> = IndexMap::new();
         let mut statements = Vec::new();
-        let mut incomplete = profile.is_none() && !account.resource_permission_sets.is_empty();
-        for set in &account.stack_permission_sets {
+        let mut incomplete = profile.is_none()
+            && account.is_some_and(|account| !account.resource_permission_sets.is_empty());
+        for set in stack_sets {
             match generator.generate_policy(set, BindingTarget::Stack, context) {
                 Ok(policy) => statements.extend(policy.statement),
                 Err(_) => incomplete = true,
             }
         }
-        statements.extend(aws_service_account_injected_statements(
-            account, stack, context,
-        ));
+        if let Some(account) = account {
+            statements.extend(aws_service_account_injected_statements(
+                account, stack, context,
+            ));
+        }
         if !statements.is_empty() {
             let document = serde_json::to_string(&AwsIamPolicy {
                 version: "2012-10-17".into(),
@@ -84,7 +102,7 @@ pub(crate) fn check(
             .context(ErrorData::CompileTimeCheckFailed {
                 check_name: "IAM workload aggregate".into(),
                 message: "Could not serialize the stack policy lower bound".into(),
-                resource_id: Some(account.id.clone()),
+                resource_id: account.map(|account| account.id.clone()),
             })?;
             documents.insert("deployment-permissions".into(), Some(document));
         }
@@ -121,7 +139,7 @@ pub(crate) fn check(
                     .get("*")
                     .into_iter()
                     .flatten()
-                    .filter(|reference| reference.id().starts_with(&prefix)),
+                    .filter(|reference| !management && reference.id().starts_with(&prefix)),
             );
             let mut resource_context = context.clone().with_resource_id(id.to_string());
             // Existing/imported resources keep their recorded physical names. Never
@@ -176,7 +194,7 @@ pub(crate) fn check(
             resource_context.resource_name = name;
             let selection = AwsResourcePolicyContext {
                 named_by_resource: explicit,
-                stack_sets: &account.stack_permission_sets,
+                stack_sets,
                 generator: &generator,
                 permission_context: &resource_context,
             };
@@ -187,8 +205,19 @@ pub(crate) fn check(
                     incomplete = true;
                     continue;
                 };
-                let name = aws_resource_policy_name(id, &set.id);
-                let document = match selection.is_redundant(reference) {
+                if management && set.id.ends_with("/provision") {
+                    continue;
+                }
+                let name = if management {
+                    aws_management_resource_policy_name(id, &set.id)
+                } else {
+                    aws_resource_policy_name(id, &set.id)
+                };
+                let document = match if management {
+                    Ok(false)
+                } else {
+                    selection.is_redundant(reference)
+                } {
                     Ok(true) => continue,
                     Ok(false) => {
                         render_aws_resource_policy(id, &set, &generator, &resource_context)
@@ -215,7 +244,7 @@ pub(crate) fn check(
             result.add_error(format!("IAM role for {role} needs at least {size} inline policy characters across setup resources; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html"));
         }
         if incomplete || !documents.is_empty() {
-            result.add_warning(format!("IAM inline policy coverage for {role} is incomplete: only resolved setup workload documents were counted. Controller names, injected grants, remote bindings and retained policies may consume additional quota; passing does not establish total role headroom."));
+            result.add_warning(format!("IAM inline policy coverage for {role} is incomplete: only resolved setup documents were counted. Controller names, injected grants, remote bindings and retained policies may consume additional quota; passing does not establish total role headroom."));
         }
     }
     Ok(result)
@@ -288,6 +317,66 @@ mod tests {
             .mutate(stack, &StackState::new(Platform::Aws), &config)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn management_counts_explicit_inline_grants_without_managed_globals() {
+        let mut stack = prepared(100, vec![grant("read", 100, false)]).await;
+        let mut profile = stack.permissions.profiles.shift_remove("reader").unwrap();
+        stack.resources.shift_remove("reader-sa");
+        stack.resources.insert(
+            "remote-management".into(),
+            alien_core::ResourceEntry {
+                config: alien_core::Resource::new(
+                    RemoteStackManagement::new("remote-management".into()).build(),
+                ),
+                lifecycle: ResourceLifecycle::Frozen,
+                enabled_when: None,
+                dependencies: vec![],
+                remote_access: false,
+            },
+        );
+        // Wildcards are managed chunks; explicit provision grants are not inline.
+        profile
+            .0
+            .insert("*".into(), vec![grant("storage/read", 400, false)]);
+        profile
+            .0
+            .get_mut("objects-a")
+            .unwrap()
+            .push(grant("storage/provision", 400, false));
+        stack.permissions.management = alien_core::ManagementPermissions::Override(profile);
+        let result = check(
+            &stack,
+            Platform::Aws,
+            Some(InitialSetupAuthority::DirectSetup),
+        )
+        .unwrap();
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("permission profile 'management'"));
+        assert!(result.errors[0].contains("10818"), "{:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1);
+        // One fitting resource document plus both excluded grants must pass.
+        stack.resources.shift_remove("objects-b");
+        assert!(
+            check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup)
+            )
+            .unwrap()
+            .success
+        );
+        // No management role writer means no inferred inline role.
+        stack.resources.shift_remove("remote-management");
+        let skipped = check(
+            &stack,
+            Platform::Aws,
+            Some(InitialSetupAuthority::DirectSetup),
+        )
+        .unwrap();
+        assert!(skipped.success);
+        assert!(skipped.warnings.is_empty());
     }
 
     #[tokio::test]

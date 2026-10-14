@@ -193,6 +193,15 @@ pub fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> S
     )
 }
 
+/// Inline policy a resource attaches to the management role.
+pub fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
+    format!(
+        "alien-mgmt-{}-{}",
+        resource_id,
+        permission_set_id.replace('/', "-")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

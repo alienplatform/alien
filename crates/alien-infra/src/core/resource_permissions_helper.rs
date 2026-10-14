@@ -23,7 +23,8 @@ use alien_gcp_clients::iam::{
 };
 use alien_permissions::{
     aws_resource_policies::{
-        aws_resource_policy_name, render_aws_resource_policy, AwsResourcePolicyContext,
+        aws_management_resource_policy_name, aws_resource_policy_name, render_aws_resource_policy,
+        AwsResourcePolicyContext,
     },
     generators::*,
     BindingTarget, PermissionContext,
@@ -2238,15 +2239,6 @@ impl ResourcePermissionsHelper {
             }),
         }
     }
-}
-
-/// Inline policy a resource attaches to the management role.
-fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
-    format!(
-        "alien-mgmt-{}-{}",
-        resource_id,
-        permission_set_id.replace('/', "-")
-    )
 }
 
 pub(crate) fn aws_remote_access_policy_name(resource_id: &str) -> String {
