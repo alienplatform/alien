@@ -33,7 +33,7 @@ use axum::{
     Router,
 };
 use sha2::{Digest, Sha256};
-use tracing::info;
+use tracing::warn;
 
 use alien_core::{
     container_resources::keep_volume_sizes_over_setup_source,
@@ -312,12 +312,14 @@ pub async fn stack_import(
                         .as_ref()
                         .and_then(|settings| settings.compute.as_ref()),
                 ) {
-                    info!(
+                    // WARN, not INFO: the stored size silently differs from what the setup
+                    // source says until its parameter or config is updated.
+                    warn!(
                         deployment_id = %existing.id,
                         container_id = %kept.container_id,
                         requested_gib = kept.requested_gib,
                         kept_gib = kept.kept_gib,
-                        "Setup registration asked for a smaller volume than the deployment has; keeping the larger size"
+                        "Setup registration asked for a smaller volume than the deployment has; keeping the larger size. Update the setup source to the kept size"
                     );
                 }
             }
