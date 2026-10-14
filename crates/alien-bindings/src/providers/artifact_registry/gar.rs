@@ -251,6 +251,77 @@ impl GarArtifactRegistry {
         }))
     }
 
+    /// The proxy accounts may have access only to previously provisioned repositories.
+    async fn ensure_proxy_access(&self, repository: &str) -> Result<()> {
+        if self.pull_service_account_email.is_none() && self.push_service_account_email.is_none() {
+            return Ok(());
+        }
+        let mut policy = self
+            .client
+            .get_repository_iam_policy(
+                self.project_id.clone(),
+                self.location.clone(),
+                repository.to_string(),
+            )
+            .await
+            .map_err(|error| {
+                map_cloud_client_error(
+                    error,
+                    "Failed to read image repository proxy access".to_string(),
+                    Some(repository.to_string()),
+                )
+            })?;
+        let mut changed = false;
+        for (role, account) in [
+            (
+                "roles/artifactregistry.reader",
+                &self.pull_service_account_email,
+            ),
+            (
+                "roles/artifactregistry.writer",
+                &self.push_service_account_email,
+            ),
+        ] {
+            let Some(account) = account else { continue };
+            let member = format!("serviceAccount:{account}");
+            if let Some(binding) = policy
+                .bindings
+                .iter_mut()
+                .find(|binding| binding.role == role && binding.condition.is_none())
+            {
+                if !binding.members.contains(&member) {
+                    binding.members.push(member);
+                    changed = true;
+                }
+            } else {
+                policy.bindings.push(alien_gcp_clients::iam::Binding {
+                    role: role.to_string(),
+                    members: vec![member],
+                    condition: None,
+                });
+                changed = true;
+            }
+        }
+        if changed {
+            self.client
+                .set_repository_iam_policy(
+                    self.project_id.clone(),
+                    self.location.clone(),
+                    repository.to_string(),
+                    policy,
+                )
+                .await
+                .map_err(|error| {
+                    map_cloud_client_error(
+                        error,
+                        "Failed to grant image repository proxy access".to_string(),
+                        Some(repository.to_string()),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
     /// Internal helper to add or remove members from IAM policy bindings
     async fn update_policy_members(
         &self,
@@ -420,6 +491,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
                 ))
             }
         }
+        self.ensure_proxy_access(&repository).await?;
         Ok(RepositoryResponse {
             name: format!("{}/{repository}/{project_id}", self.project_id),
             uri: None,
@@ -972,6 +1044,7 @@ mod tests {
             writes: Vec<String>,
             pending_deletion: Option<String>,
             deletion_fails: bool,
+            policy_write_fails: bool,
         }
         async fn api(
             State(state): State<Arc<Mutex<ApiState>>>,
@@ -1021,6 +1094,12 @@ mod tests {
                 return (StatusCode::OK, Json(state.policies.get(name).cloned().unwrap_or(json!({"etag":"original", "bindings":[{"role":"roles/viewer", "members":["user:keep@example.com"]}]}))));
             }
             if let Some(name) = repository.strip_suffix(":setIamPolicy") {
+                if state.policy_write_fails {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error":{"code":403,"message":"IAM write denied"}})),
+                    );
+                }
                 let input: Value = serde_json::from_str(&body).unwrap();
                 let mut policy = input["policy"].clone();
                 let expected = state
@@ -1229,6 +1308,76 @@ mod tests {
                 "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com"
             ])
         );
+        let registry = GarArtifactRegistry {
+            pull_service_account_email: Some("pull@vendor.iam.gserviceaccount.com".to_string()),
+            push_service_account_email: Some("push@vendor.iam.gserviceaccount.com".to_string()),
+            ..registry
+        };
+        // Provisioning repairs existing repositories as well as granting new ones.
+        for project in ["prj_a", "prj_c"] {
+            let repository = format!("artifacts-{}", project.replace('_', "-"));
+            let previous = state.lock().unwrap().policies.get(&repository).cloned();
+            registry.create_repository(project).await.unwrap();
+            let policy = state.lock().unwrap().policies[&repository].clone();
+            for (role, member) in [
+                (
+                    "roles/artifactregistry.reader",
+                    "serviceAccount:pull@vendor.iam.gserviceaccount.com",
+                ),
+                (
+                    "roles/artifactregistry.writer",
+                    "serviceAccount:push@vendor.iam.gserviceaccount.com",
+                ),
+            ] {
+                let bindings = policy["bindings"].as_array().unwrap();
+                assert!(bindings.iter().any(|binding| binding["role"] == role
+                    && binding.get("condition").is_none()
+                    && binding["members"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!(member))));
+            }
+            if let Some(previous) = previous {
+                for binding in previous["bindings"].as_array().unwrap() {
+                    let retained = policy["bindings"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|candidate| {
+                            candidate["role"] == binding["role"]
+                                && candidate.get("condition") == binding.get("condition")
+                        })
+                        .unwrap();
+                    for member in binding["members"].as_array().unwrap() {
+                        assert!(retained["members"].as_array().unwrap().contains(member));
+                    }
+                }
+            }
+            let writes = state.lock().unwrap().writes.len();
+            registry.create_repository(project).await.unwrap();
+            assert_eq!(
+                state.lock().unwrap().writes.len(),
+                writes,
+                "unchanged policy is not rewritten"
+            );
+        }
+        // A failed IAM write must not return a usable-looking repository path.
+        state.lock().unwrap().policy_write_fails = true;
+        assert_eq!(
+            registry
+                .create_repository("prj_d")
+                .await
+                .unwrap_err()
+                .http_status_code,
+            Some(403)
+        );
+        state.lock().unwrap().policy_write_fails = false;
+        registry.create_repository("prj_d").await.unwrap();
+        assert!(state
+            .lock()
+            .unwrap()
+            .policies
+            .contains_key("artifacts-prj-d"));
         server.abort();
     }
 }
