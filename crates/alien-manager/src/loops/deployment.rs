@@ -48,6 +48,11 @@ const MAX_STEPS_PER_HEARTBEAT: usize = 1;
 pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Maximum acquire/process batches before yielding back to the interval sleep.
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
+/// How long the loop leaves alone a deployment whose phase its credentials
+/// cannot provision, unless the deployment's status changes first. Only a
+/// setup-capable driver (the CLI) can move such a deployment, and it acquires
+/// it directly, so re-acquiring it every tick only rewrites its row.
+const UNPROVISIONABLE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
 /// Google documents IAM policy changes as typically propagating within two
 /// minutes, but potentially taking seven minutes or longer. Keep the first
 /// target-side token exchange retryable for a bounded window after setup hands
@@ -216,6 +221,19 @@ pub struct DeploymentLoop {
     /// so hold the last one instead of refetching and re-deserializing it.
     /// One entry per deployment, replaced when it moves to another release.
     settled_stack_cache: Mutex<HashMap<String, (String, Option<Stack>)>>,
+    /// Deployments this loop skipped because its credentials cannot provision
+    /// their phase, keyed by ID. The loop does not acquire them again until
+    /// their status changes or the recheck time passes.
+    unprovisionable: Mutex<HashMap<String, UnprovisionableDeployment>>,
+}
+
+/// A deployment the loop skipped for lack of provisioning credentials.
+#[derive(Debug, Clone)]
+struct UnprovisionableDeployment {
+    /// The status it was skipped in.
+    status: String,
+    /// When the loop may acquire it again in that status.
+    recheck_after: chrono::DateTime<chrono::Utc>,
 }
 
 impl DeploymentLoop {
@@ -272,7 +290,56 @@ impl DeploymentLoop {
             dev_status_tx,
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
+            unprovisionable: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Restrict `filter` to current candidates, minus deployments this loop
+    /// skipped for lack of provisioning credentials and that are still in the
+    /// status they were skipped in. Forgets entries that are due for a recheck,
+    /// changed status, or are no longer candidates. Returns `false` when no
+    /// candidate is left.
+    async fn exclude_unprovisionable(
+        &self,
+        caller: &Subject,
+        filter: &mut DeploymentFilter,
+    ) -> Result<bool, AlienError> {
+        let now = chrono::Utc::now();
+        let mut parked = self
+            .unprovisionable
+            .lock()
+            .expect("unprovisionable poisoned")
+            .clone();
+        parked.retain(|_, entry| entry.recheck_after > now);
+        if parked.is_empty() {
+            self.unprovisionable
+                .lock()
+                .expect("unprovisionable poisoned")
+                .clear();
+            return Ok(true);
+        }
+
+        let candidates = self
+            .deployment_store
+            .list_deployments(caller, filter)
+            .await?;
+        let mut still_parked = HashMap::new();
+        let mut ids = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            match parked.remove(&candidate.id) {
+                Some(entry) if entry.status == candidate.status => {
+                    still_parked.insert(candidate.id, entry);
+                }
+                _ => ids.push(candidate.id),
+            }
+        }
+        *self
+            .unprovisionable
+            .lock()
+            .expect("unprovisionable poisoned") = still_parked;
+        let has_candidates = !ids.is_empty();
+        filter.deployment_ids = Some(ids);
+        Ok(has_candidates)
     }
 
     /// Run the deployment loop forever.
@@ -345,6 +412,15 @@ impl DeploymentLoop {
         // no caller passthrough is available.
         let caller = Subject::system();
 
+        match self.exclude_unprovisionable(&caller, &mut filter).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                error!(%error, "Failed to list deployment candidates");
+                return;
+            }
+        }
+
         let skipped_ids = Mutex::new(Vec::new());
         for batch_index in 0..MAX_ACQUIRE_BATCHES_PER_TICK {
             let session = uuid::Uuid::new_v4().to_string();
@@ -373,6 +449,7 @@ impl DeploymentLoop {
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
                             let deployment_id = item.deployment.id.clone();
+                            let status = item.deployment.status.clone();
                             let skipped = self
                                 .process_deployment(
                                     item.deployment,
@@ -382,6 +459,17 @@ impl DeploymentLoop {
                                 )
                                 .await;
                             if skipped {
+                                self.unprovisionable
+                                    .lock()
+                                    .expect("unprovisionable poisoned")
+                                    .insert(
+                                        deployment_id.clone(),
+                                        UnprovisionableDeployment {
+                                            status,
+                                            recheck_after: chrono::Utc::now()
+                                                + UNPROVISIONABLE_RECHECK_INTERVAL,
+                                        },
+                                    );
                                 skipped_ids
                                     .lock()
                                     .expect("skipped IDs poisoned")
@@ -391,7 +479,7 @@ impl DeploymentLoop {
                         .await;
                     let skipped = skipped_ids.lock().expect("skipped IDs poisoned").clone();
                     if !skipped.is_empty() {
-                        // Snapshot remaining candidates only after the first skipped retry.
+                        // Snapshot remaining candidates only after the first skip.
                         // ID filtering prevents re-acquisition without holding a CLI's lease
                         // across unrelated work. New arrivals can wait for the next tick.
                         if filter.deployment_ids.is_none() {
@@ -449,6 +537,9 @@ impl DeploymentLoop {
     }
 
     /// Process a single deployment: step until stable, reconcile, release.
+    ///
+    /// Returns `true` when it was skipped because the resolved credentials
+    /// cannot provision its phase.
     async fn process_deployment(
         &self,
         deployment: DeploymentRecord,
@@ -669,7 +760,7 @@ impl DeploymentLoop {
                 )
                 .await?;
             }
-            return Ok(deployment.retry_requested);
+            return Ok(true);
         }
         let client_config = resolved_credentials.client_config;
 
@@ -1710,6 +1801,253 @@ mod tests {
             "all skipped leases must be returned before tick exits"
         );
         assert!(cli.iter().all(|item| item.deployment.retry_requested));
+    }
+
+    /// A manager whose credentials cannot provision a deployment's phase must
+    /// not re-acquire it on every tick: each acquisition rewrites the row
+    /// (lease, retry checkpoint, release) and nothing can change until a
+    /// setup-capable driver acts. Covers an abandoned retry on a failed
+    /// preflight and a pending deployment whose CLI never acquired it.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn unprovisionable_deployment_is_not_reacquired_every_tick() {
+        for (status, retry) in [("preflights-failed", true), ("pending", false)] {
+            let temp = tempfile::tempdir().unwrap();
+            let db = Arc::new(
+                SqliteDatabase::new(temp.path().join("manager.db").to_str().unwrap())
+                    .await
+                    .unwrap(),
+            );
+            let store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+            let releases = Arc::new(SqliteReleaseStore::new(db.clone()));
+            let caller = Subject::system();
+            let release = releases
+                .create_release(
+                    &caller,
+                    crate::traits::release_store::CreateReleaseParams {
+                        project_id: "default".to_string(),
+                        stacks: HashMap::from([(
+                            Platform::Aws,
+                            serde_json::from_value(
+                                serde_json::json!({"id":"retry", "resources":{}}),
+                            )
+                            .unwrap(),
+                        )]),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let deployment = store
+                .create_deployment(
+                    &caller,
+                    CreateDeploymentParams {
+                        name: "abandoned".to_string(),
+                        deployment_group_id: "dg_test".to_string(),
+                        platform: Platform::Aws,
+                        deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings {
+                            deployment_model: alien_core::DeploymentModel::Push,
+                            ..Default::default()
+                        },
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            db.execute(&format!(
+                "UPDATE deployments SET status = '{status}', desired_release_id = '{}' WHERE id = '{}'",
+                release.id, deployment.id
+            ))
+            .await
+            .unwrap();
+            // The retry a CLI requested before it died, or one requested with
+            // no CLI around.
+            if retry {
+                store
+                    .set_retry_requested(&caller, &deployment.id)
+                    .await
+                    .unwrap();
+            }
+            db.execute("CREATE TABLE row_writes (n INTEGER)")
+                .await
+                .unwrap();
+            db.execute(
+                "CREATE TRIGGER count_row_writes AFTER UPDATE ON deployments BEGIN INSERT INTO row_writes VALUES (1); END",
+            )
+            .await
+            .unwrap();
+            let row_writes = || async {
+                let conn = db.conn().lock().await;
+                let mut rows = conn
+                    .query("SELECT count(*) FROM row_writes", ())
+                    .await
+                    .unwrap();
+                let row = rows.next().await.unwrap().unwrap();
+                row.get::<i64>(0).unwrap()
+            };
+            let bindings = Arc::new(ServerBindings {
+                kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
+                command_storage: Arc::new(
+                    LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                        .unwrap(),
+                ),
+                command_dispatcher: Arc::new(NullCommandDispatcher),
+                command_registry: Arc::new(InMemoryCommandRegistry::default()),
+                artifact_registry: None,
+                bindings_provider: None,
+                target_bindings_providers: Default::default(),
+                registry_routing_table: Arc::new(
+                    crate::routes::registry_proxy::RegistryRoutingTable::new(vec![]).unwrap(),
+                ),
+            });
+            let credentials = Arc::new(RuntimeOnlyCredentials::default());
+            let runner = DeploymentLoop::new(
+                Arc::new(crate::config::ManagerConfig::default()),
+                store.clone(),
+                releases,
+                credentials.clone(),
+                bindings,
+                None,
+            );
+            let visits = || credentials.visits.lock().unwrap().len();
+
+            runner.tick().await;
+            assert_eq!(visits(), 1, "{status}: the first tick visits it once");
+            let writes_after_first_tick = row_writes().await;
+            assert!(
+                writes_after_first_tick > 0,
+                "{status}: the first tick leases it"
+            );
+            for _ in 0..20 {
+                runner.tick().await;
+            }
+            assert_eq!(
+                visits(),
+                1,
+                "{status}: later ticks must not acquire it again"
+            );
+            assert_eq!(
+                row_writes().await,
+                writes_after_first_tick,
+                "{status}: later ticks must not write its row"
+            );
+
+            let stored = store
+                .get_deployment(&caller, &deployment.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.status, status);
+            assert_eq!(stored.retry_requested, retry, "{status}: the retry is kept");
+            assert!(stored.locked_by.is_none());
+
+            // A setup-capable CLI still acquires it right away.
+            let cli_filter = DeploymentFilter {
+                deployment_ids: Some(vec![deployment.id.clone()]),
+                statuses: Some(vec![status.to_string()]),
+                deployment_model: Some(alien_core::DeploymentModel::Push),
+                ..Default::default()
+            };
+            let cli = store
+                .acquire(&caller, "cli-session", &cli_filter, 1)
+                .await
+                .unwrap();
+            assert_eq!(cli.len(), 1, "{status}: the CLI must acquire it");
+            assert_eq!(cli[0].deployment.retry_requested, retry);
+            store
+                .release_unused_acquisition(&caller, &cli[0], "cli-session")
+                .await
+                .unwrap();
+
+            // Leaving it alone does not hold back other work: a deployment that
+            // arrives later is acquired on the next tick.
+            let newcomer = store
+                .create_deployment(
+                    &caller,
+                    CreateDeploymentParams {
+                        name: "newcomer".to_string(),
+                        deployment_group_id: "dg_test".to_string(),
+                        platform: Platform::Aws,
+                        deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings {
+                            deployment_model: alien_core::DeploymentModel::Push,
+                            ..Default::default()
+                        },
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            db.execute(&format!(
+                "UPDATE deployments SET desired_release_id = '{}' WHERE id = '{}'",
+                release.id, newcomer.id
+            ))
+            .await
+            .unwrap();
+            let parked_writes = row_writes().await;
+            runner.tick().await;
+            assert_eq!(
+                credentials.visits.lock().unwrap()[1..],
+                [newcomer.id.clone()],
+                "{status}: the newcomer is acquired and the waiting deployment is not"
+            );
+            let parked_row = store
+                .get_deployment(&caller, &deployment.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(parked_row.status, status);
+            assert!(
+                row_writes().await > parked_writes,
+                "{status}: the newcomer was leased"
+            );
+
+            // The wait ends when its status changes (to another status these
+            // credentials cannot provision either)...
+            let other_status = if status == "pending" {
+                "preflights-failed"
+            } else {
+                "pending"
+            };
+            db.execute(&format!(
+                "UPDATE deployments SET status = '{other_status}', retry_requested = 1 WHERE id = '{}'",
+                deployment.id
+            ))
+            .await
+            .unwrap();
+            runner.tick().await;
+            assert_eq!(visits(), 3, "{status}: a status change ends the wait");
+            assert_eq!(credentials.visits.lock().unwrap()[2], deployment.id);
+            runner.tick().await;
+            assert_eq!(visits(), 3, "{status}: the new status waits again");
+
+            // ...or when the recheck time passes.
+            for entry in runner
+                .unprovisionable
+                .lock()
+                .expect("unprovisionable poisoned")
+                .values_mut()
+            {
+                entry.recheck_after = chrono::Utc::now() - chrono::Duration::seconds(1);
+            }
+            runner.tick().await;
+            assert_eq!(visits(), 5, "{status}: expired waits are rechecked");
+        }
     }
 
     /// A deployment that turned telemetry off gets no log endpoint from this manager, as the

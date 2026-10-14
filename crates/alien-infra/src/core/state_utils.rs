@@ -463,6 +463,27 @@ fn prepare_for_destroy_matching(
                                 );
                             }
                             Err(e) => {
+                                // Only a controller without a delete flow refuses this
+                                // transition. Types that enter a deployment only through
+                                // stack import (keys) have none. If creating failed before
+                                // anything was recorded, there is nothing to tear down.
+                                let never_provisioned = resource_state.status
+                                    == ResourceStatus::ProvisionFailed
+                                    && resource_state.outputs.is_none()
+                                    && resource_state.previous_config.is_none();
+                                if never_provisioned {
+                                    tracing::info!(
+                                        resource_id = %resource_id,
+                                        "Marking never-provisioned resource without a delete flow as deleted"
+                                    );
+                                    resource_state.set_internal_controller(None)?;
+                                    resource_state.status = ResourceStatus::Deleted;
+                                    resource_state.retry_attempt = 0;
+                                    resource_state.error = None;
+                                    resource_state.last_failed_state = None;
+                                    prepared_resource_ids.push(resource_id.clone());
+                                    continue;
+                                }
                                 if mode == DestroyPreparationMode::Teardown {
                                     return Err(e);
                                 }

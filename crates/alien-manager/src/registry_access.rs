@@ -316,8 +316,18 @@ pub async fn reconcile_registry_access_with_proxy(
         }
     };
 
-    let (repo_ids, refused_any) =
+    let (repo_ids, refused) =
         repository_access_with_proxy(artifact_registry.as_ref(), state, project_id, proxy_url);
+    for image in &refused {
+        warn!(
+            deployment_id = %deployment_id,
+            resource_id = %image.resource_id,
+            repository = %image.repository,
+            project_id = %project_id,
+            "Refusing registry access for an image outside its project's repository"
+        );
+    }
+    let refused_any = !refused.is_empty();
     if repo_ids.is_empty() {
         if refused_any {
             state
@@ -722,12 +732,19 @@ fn repository_ids_for_access(
     repository_access(artifact_registry, state, project_id).0
 }
 
-/// The repositories to grant, and whether any image was refused as not this project's.
+/// An image whose repository a grant leaves out, because it is not the deployment's project's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RefusedImage {
+    resource_id: String,
+    repository: String,
+}
+
+/// The repositories to grant, and the images refused as not this project's.
 fn repository_access(
     artifact_registry: &dyn ArtifactRegistry,
     state: &DeploymentState,
     project_id: &str,
-) -> (Vec<String>, bool) {
+) -> (Vec<String>, Vec<RefusedImage>) {
     repository_access_with_proxy(artifact_registry, state, project_id, None)
 }
 
@@ -736,10 +753,10 @@ fn repository_access_with_proxy(
     state: &DeploymentState,
     project_id: &str,
     proxy_url: Option<&str>,
-) -> (Vec<String>, bool) {
+) -> (Vec<String>, Vec<RefusedImage>) {
     let prefix = artifact_registry.upstream_repository_prefix();
     if prefix.is_empty() {
-        return (Vec::new(), false);
+        return (Vec::new(), Vec::new());
     }
 
     let platform = state
@@ -768,13 +785,13 @@ fn repository_access_with_proxy(
     // publishes under the shared prefix, and GAR binds IAM at the repository, so every grant on
     // this platform opens the same shared repository. AWS narrows its own grant per project.
     if !has_image_in_repository_prefix(state, &prefix, sandbox_source) {
-        return (Vec::new(), false);
+        return (Vec::new(), Vec::new());
     }
 
     let repo_ids = HashSet::from([prefix]);
     let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
     repo_ids.sort();
-    (repo_ids, false)
+    (repo_ids, Vec::new())
 }
 
 fn has_image_in_repository_prefix(
@@ -942,8 +959,8 @@ fn collect_image_repositories(
     proxy_url: Option<&str>,
     sandbox_source: SandboxImageSource,
     repo_ids: &mut HashSet<String>,
-) -> bool {
-    let mut refused = false;
+) -> Vec<RefusedImage> {
+    let mut refused = Vec::new();
     // Every project shares the prefix, so matching the prefix alone would open a repository
     // outside the deployment's project. Workers and sandbox base images follow the same rule.
     let own_repository = format!("{prefix}-{project_id}");
@@ -970,14 +987,13 @@ fn collect_image_repositories(
             // repository to the canonical default project. Other projects always use a suffix.
             let own_repository = repo_id == own_repository
                 || (is_worker && project_id == "default" && repo_id == prefix);
+            // Returned, not logged: cleanup derives repositories here without the proxy URL,
+            // so only the grant path knows a refusal is real.
             if !own_repository || !own_registry {
-                warn!(
-                    resource_id = %id,
-                    repository = %repo_id,
-                    project_id = %project_id,
-                    "Refusing registry access for an image outside its project's repository"
-                );
-                refused = true;
+                refused.push(RefusedImage {
+                    resource_id: id.to_string(),
+                    repository: repo_id,
+                });
                 continue;
             }
             repo_ids.insert(repo_id);
@@ -1623,6 +1639,99 @@ mod tests {
         assert_eq!(
             *registry.removals.lock().expect("removals lock"),
             vec!["alien-artifacts-other"]
+        );
+    }
+
+    /// WARN lines logged on this thread while `run` runs.
+    async fn warnings_during<F: std::future::Future<Output = ()>>(run: F) -> String {
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        run.await;
+        drop(guard);
+        let logs = captured.0.lock().expect("log lock").clone();
+        String::from_utf8(logs).expect("utf-8 logs")
+    }
+
+    /// Cleanup derives repositories without the manager's proxy URL, so an image published
+    /// through the proxy looked like another project's. Every deletion of such a deployment
+    /// logged a refusal for its own repository. Refusals are logged where access is granted.
+    #[tokio::test]
+    async fn cleanup_of_a_proxy_published_worker_logs_no_refusal() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state("manager.example.com/alien-artifacts-prj_test:latest");
+        let granted = warnings_during(
+            reconcile_registry_access_with_proxy()
+                .bindings_provider(&recording_provider(registry.clone()))
+                .target_bindings_providers(&HashMap::new())
+                .deployment_id("deployment")
+                .project_id(PROJECT)
+                .state(&mut state)
+                .proxy_url("https://manager.example.com/")
+                .call(),
+        )
+        .await;
+        assert_eq!(
+            *registry.grants.lock().expect("grants lock"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        assert!(!granted.contains("Refusing"), "{granted}");
+
+        state.status = DeploymentStatus::Deleted;
+        let cleanup = warnings_during(async {
+            cleanup_deleted_registry_access(
+                &MockDeploymentStore::new(),
+                &recording_provider(registry.clone()),
+                &HashMap::new(),
+                "deployment",
+                PROJECT,
+                &state,
+            )
+            .await
+            .expect("the grant must revoke");
+        })
+        .await;
+        assert_eq!(
+            *registry.removals.lock().expect("removals lock"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        assert!(!cleanup.contains("Refusing"), "{cleanup}");
+
+        // Granting an image outside the project still logs its refusal, naming the deployment.
+        let mut refused = worker_grant_state("manager.example.com/alien-artifacts-other:latest");
+        let logged = warnings_during(
+            reconcile_registry_access_with_proxy()
+                .bindings_provider(&recording_provider(registry.clone()))
+                .target_bindings_providers(&HashMap::new())
+                .deployment_id("refused-deployment")
+                .project_id(PROJECT)
+                .state(&mut refused)
+                .proxy_url("https://manager.example.com/")
+                .call(),
+        )
+        .await;
+        assert!(
+            logged
+                .contains("Refusing registry access for an image outside its project's repository")
+                && logged.contains("deployment_id=refused-deployment")
+                && logged.contains("repository=alien-artifacts-other"),
+            "{logged}"
         );
     }
 
@@ -2509,7 +2618,7 @@ mod tests {
             repository_access(&registry, &aws_state_with_stack(stack), PROJECT);
         assert_eq!(repo_ids, vec!["alien-artifacts-prj_test".to_string()]);
         assert!(
-            refused,
+            !refused.is_empty(),
             "the worker's grant must not mark the deployment fully granted"
         );
     }
