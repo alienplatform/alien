@@ -1444,6 +1444,7 @@ async fn run_dev_session(
                 eprint!("Building... ");
             }
         }
+        commands::wait_for_resumed_dev_deployment(port, &deployment_name).await?;
         let release_id =
             build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
                 .await?;

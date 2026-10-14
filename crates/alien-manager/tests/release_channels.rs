@@ -274,3 +274,51 @@ async fn deployments_mid_rollout_are_left_alone() {
         Some(r1)
     );
 }
+
+#[tokio::test]
+async fn channel_release_reaches_failed_local_startup_without_restarting_cloud_setup() {
+    let f = Fixture::new().await;
+    let mut cases = Vec::new();
+    for (index, phase) in [
+        "preflights-failed",
+        "initial-setup-failed",
+        "provisioning-failed",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for platform in ["local", "kubernetes"] {
+            let id = f
+                .running_deployment(&format!("retry-{platform}-{index}"))
+                .await;
+            f.db.conn()
+                .lock()
+                .await
+                .execute(
+                    "UPDATE deployments SET platform = ?1, status = ?2 WHERE id = ?3",
+                    (platform, phase, id.as_str()),
+                )
+                .await
+                .unwrap();
+            cases.push((id, platform, phase));
+        }
+    }
+    let release = f.publish(DEFAULT_CHANNEL).await;
+    for (id, platform, phase) in cases {
+        let deployment = f
+            .deployments
+            .get_deployment(&admin(), &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deployment.status, phase);
+        assert!(
+            !deployment.retry_requested,
+            "a release selects code without requesting a retry"
+        );
+        assert_eq!(
+            deployment.desired_release_id.as_deref(),
+            (platform == "local").then_some(release.as_str())
+        );
+    }
+}
