@@ -13,6 +13,7 @@ pub use azure::authorization::{AuthorizationApi, AzureAuthorizationClient};
 pub use azure::blob_containers::{AzureBlobContainerClient, BlobContainerApi};
 pub use azure::cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi};
 pub use azure::compute::{AzureVmssClient, VirtualMachineScaleSetsApi};
+pub use azure::compute_usages::{AzureComputeUsagesClient, ComputeUsagesApi};
 pub use azure::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
 pub use azure::containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi};
 pub use azure::data_protection::{AzureDataProtectionClient, DataProtectionApi};
