@@ -67,7 +67,13 @@ impl ServiceUsageQuotasApi for ServiceUsageQuotasClient {
             urlencoding::encode(metric),
         );
         self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, metric)
+            .execute_request(
+                Method::GET,
+                &path,
+                Some(vec![("view", "FULL".into())]),
+                Option::<()>::None,
+                metric,
+            )
             .await
     }
 }

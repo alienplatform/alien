@@ -28,7 +28,8 @@ async fn reads_target_project_applied_value_and_preserves_access_errors() {
     let applied = server.mock_async(|when, then| {
         when.method(GET)
             .path("/projects/test-project/services/iam.googleapis.com/consumerQuotaMetrics/iam.googleapis.com%2Froles%2Fcustom_roles_count")
-            .header("authorization", "Bearer test-token");
+            .header("authorization", "Bearer test-token")
+            .query_param("view", "FULL");
         then.status(200).json_body_obj(&serde_json::json!({
             "name": "projects/test-project/services/iam.googleapis.com/consumerQuotaMetrics/iam.googleapis.com%2Froles%2Fcustom_roles_count",
             "metric": "iam.googleapis.com/roles/custom_roles_count",
@@ -53,7 +54,8 @@ async fn reads_target_project_applied_value_and_preserves_access_errors() {
     );
     applied.assert_async().await;
     let denied = server.mock_async(|when, then| {
-        when.method(GET).path("/projects/test-project/services/iam.googleapis.com/consumerQuotaMetrics/iam.googleapis.com%2Fquota%2Fservice-account-count");
+        when.method(GET).path("/projects/test-project/services/iam.googleapis.com/consumerQuotaMetrics/iam.googleapis.com%2Fquota%2Fservice-account-count")
+            .query_param("view", "FULL");
         then.status(403).json_body_obj(&serde_json::json!({"error": {
             "code": 403, "status": "PERMISSION_DENIED", "message": "Quota metadata read is denied"
         }}));
