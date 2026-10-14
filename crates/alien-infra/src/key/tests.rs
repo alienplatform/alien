@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use alien_aws_clients::{
-    kms::{DescribeKeyResponse, KeyMetadata, MockKmsApi},
+    kms::{DescribeKeyResponse, EncryptResponse, KeyMetadata, MockKmsApi},
     AwsClientConfig, AwsClientConfigExt,
 };
 use alien_azure_clients::{
@@ -50,16 +50,30 @@ const AWS_KEY_ARN: &str =
 const GCP_KEY: &str = "projects/p/locations/us-east4/keyRings/r/cryptoKeys/key";
 const AZURE_KEY: &str = "https://vault.vault.azure.net/keys/key";
 
+const AWS_KMS_URL: &str = "https://kms.us-east-1.amazonaws.com/";
+const GCP_TOKEN_URL: &str =
+    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken";
+const AZURE_TOKEN_URL: &str = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token";
+
+fn gcp_key_url() -> String {
+    format!("https://cloudkms.googleapis.com/v1/{GCP_KEY}")
+}
+
+fn azure_key_url() -> String {
+    format!("{AZURE_KEY}?api-version=7.4")
+}
+
 /// An HTTP error answer as the client returns it, optionally under the
 /// service-specific error the client maps it to.
 fn http_error(
+    url: &str,
     status: u16,
     body: Option<&str>,
     mapped: Option<ClientErrorData>,
 ) -> alien_client_core::Error {
     let error = AlienError::new(ClientErrorData::HttpResponseError {
         message: format!("HTTP {status}"),
-        url: "https://key.test".to_string(),
+        url: url.to_string(),
         http_status: status,
         http_request_text: None,
         http_response_text: body.map(str::to_string),
@@ -78,6 +92,7 @@ fn transport_error() -> alien_client_core::Error {
 
 fn aws_error(code: &str, status: u16) -> alien_client_core::Error {
     http_error(
+        AWS_KMS_URL,
         status,
         Some(&serde_json::json!({ "__type": code }).to_string()),
         Some(ClientErrorData::GenericError {
@@ -86,8 +101,9 @@ fn aws_error(code: &str, status: u16) -> alien_client_core::Error {
     )
 }
 
-fn denied(status: u16) -> alien_client_core::Error {
+fn denied(url: &str, status: u16) -> alien_client_core::Error {
     http_error(
+        url,
         status,
         None,
         Some(ClientErrorData::RemoteAccessDenied {
@@ -97,8 +113,9 @@ fn denied(status: u16) -> alien_client_core::Error {
     )
 }
 
-fn unavailable(status: u16) -> alien_client_core::Error {
+fn unavailable(url: &str, status: u16) -> alien_client_core::Error {
     http_error(
+        url,
         status,
         None,
         Some(ClientErrorData::RemoteServiceUnavailable {
@@ -107,8 +124,9 @@ fn unavailable(status: u16) -> alien_client_core::Error {
     )
 }
 
-fn throttled() -> alien_client_core::Error {
+fn throttled(url: &str) -> alien_client_core::Error {
     http_error(
+        url,
         429,
         None,
         Some(ClientErrorData::RateLimitExceeded {
@@ -117,23 +135,48 @@ fn throttled() -> alien_client_core::Error {
     )
 }
 
+/// A KMS mock whose failures come from DescribeKey, or for an external key
+/// store (`external`), from the Encrypt availability probe after DescribeKey
+/// reports the key Enabled.
 fn aws_provider(
     mode: Arc<AtomicU8>,
     transient: alien_client_core::Error,
     revoked: alien_client_core::Error,
+    external: bool,
 ) -> MockPlatformServiceProvider {
+    let failure = {
+        let mode = mode.clone();
+        move || match mode.load(Ordering::SeqCst) {
+            REVOKED => Some(revoked.clone()),
+            TRANSIENT => Some(transient.clone()),
+            TRANSPORT => Some(transport_error()),
+            _ => None,
+        }
+    };
+    let probe_failure = failure.clone();
     let mut kms = MockKmsApi::new();
     kms.expect_describe_key().returning(move |_| {
-        let (enabled, key_state) = match mode.load(Ordering::SeqCst) {
-            HEALTHY => (true, "Enabled"),
-            DISABLED => (false, "Disabled"),
-            REVOKED => return Err(revoked.clone()),
-            TRANSIENT => return Err(transient.clone()),
-            _ => return Err(transport_error()),
+        let disabled = mode.load(Ordering::SeqCst) == DISABLED;
+        if !external {
+            if let Some(error) = failure() {
+                return Err(error);
+            }
+        }
+        let (enabled, key_state) = if disabled {
+            (false, "Disabled")
+        } else {
+            (true, "Enabled")
         };
         Ok(DescribeKeyResponse {
             key_metadata: KeyMetadata {
-                origin: Some("AWS_KMS".to_string()),
+                origin: Some(
+                    if external {
+                        "EXTERNAL_KEY_STORE"
+                    } else {
+                        "AWS_KMS"
+                    }
+                    .to_string(),
+                ),
                 arn: AWS_KEY_ARN.to_string(),
                 key_id: "key-id".to_string(),
                 enabled,
@@ -144,6 +187,14 @@ fn aws_provider(
             },
         })
     });
+    kms.expect_encrypt()
+        .returning(move |_| match probe_failure() {
+            Some(error) => Err(error),
+            None => Ok(EncryptResponse {
+                ciphertext_blob: "probe".to_string(),
+                key_id: AWS_KEY_ARN.to_string(),
+            }),
+        });
     let kms = Arc::new(kms);
     let mut provider = MockPlatformServiceProvider::new();
     provider
@@ -386,30 +437,46 @@ async fn check(platform: Platform, mode: Arc<AtomicU8>, provider: MockPlatformSe
 
 #[tokio::test]
 async fn aws_key_pauses_dependents_only_on_a_confirmed_key_state() {
-    for (transient, revoked) in [
+    for (external, transient, revoked) in [
         (
+            false,
             aws_error("ThrottlingException", 400),
             aws_error("AccessDeniedException", 400),
         ),
         (
+            false,
             aws_error("KMSInternalException", 500),
             aws_error("NotFoundException", 400),
         ),
         (
             // An expired or rejected credential is ours, not the customer's key.
+            false,
             aws_error("UnrecognizedClientException", 400),
+            aws_error("AccessDeniedException", 400),
+        ),
+        (
+            // The external key store probe: a timeout is not an unavailable key,
+            // a key policy that stops allowing Encrypt is a revocation.
+            true,
+            aws_error("DependencyTimeoutException", 500),
             aws_error("AccessDeniedException", 400),
         ),
     ] {
         let mode = Arc::new(AtomicU8::new(HEALTHY));
-        let provider = aws_provider(mode.clone(), transient, revoked);
+        let provider = aws_provider(mode.clone(), transient, revoked, external);
         check(Platform::Aws, mode, provider).await;
     }
 }
 
 #[tokio::test]
 async fn gcp_key_pauses_dependents_only_on_a_confirmed_key_state() {
-    for (transient, revoked) in [(throttled(), denied(403)), (unavailable(503), denied(404))] {
+    let key = gcp_key_url();
+    for (transient, revoked) in [
+        (throttled(&key), denied(&key, 403)),
+        (unavailable(&key, 503), denied(&key, 404)),
+        // Impersonating our service account was denied: our credential, not the key.
+        (denied(GCP_TOKEN_URL, 403), denied(&key, 403)),
+    ] {
         let mode = Arc::new(AtomicU8::new(HEALTHY));
         let provider = gcp_provider(mode.clone(), transient, revoked);
         check(Platform::Gcp, mode, provider).await;
@@ -418,11 +485,14 @@ async fn gcp_key_pauses_dependents_only_on_a_confirmed_key_state() {
 
 #[tokio::test]
 async fn azure_key_pauses_dependents_only_on_a_confirmed_key_state() {
+    let key = azure_key_url();
     for (transient, revoked) in [
-        (throttled(), denied(403)),
-        (unavailable(503), denied(404)),
+        (throttled(&key), denied(&key, 403)),
+        (unavailable(&key, 503), denied(&key, 404)),
         // A 401 that survives the token refresh is our credential, not the key.
-        (denied(401), denied(403)),
+        (denied(&key, 401), denied(&key, 403)),
+        // Entra ID refused our token request.
+        (denied(AZURE_TOKEN_URL, 403), denied(&key, 403)),
     ] {
         let mode = Arc::new(AtomicU8::new(HEALTHY));
         let provider = azure_provider(mode.clone(), transient, revoked);

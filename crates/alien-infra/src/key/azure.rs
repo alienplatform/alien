@@ -67,7 +67,7 @@ impl AzureKeyController {
             .get_key(current_key_id)
             .await
             .inspect_err(|error| {
-                if super::key_revoked_by_status(error) {
+                if super::key_revoked_by_status(error, current_key_id) {
                     self.available = Some(false);
                 }
             })

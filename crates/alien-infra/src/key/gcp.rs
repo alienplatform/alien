@@ -56,7 +56,7 @@ impl GcpKeyController {
             .get_crypto_key(crypto_key_name)
             .await
             .inspect_err(|error| {
-                if super::key_revoked_by_status(error) {
+                if super::key_revoked_by_status(error, crypto_key_name) {
                     self.available = Some(false);
                 }
             })

@@ -30,10 +30,10 @@ fn merge_key_reimport(
     Ok(imported)
 }
 
-/// The HTTP status and provider error code of the response a failed key call got.
+/// The HTTP status, provider error code and URL of the response a failed key call got.
 ///
 /// `None` when no response came back (a transport failure or timeout).
-fn cloud_response(error: &alien_client_core::Error) -> Option<(u16, String)> {
+fn cloud_response(error: &alien_client_core::Error) -> Option<(u16, String, String)> {
     let contexts = std::iter::once(error.context.as_ref()).chain(
         std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
             .map(|source| source.context.as_ref()),
@@ -51,7 +51,12 @@ fn cloud_response(error: &alien_client_core::Error) -> Option<(u16, String)> {
                     .map(|code| code.rsplit('#').next().unwrap_or(code).to_string())
             })
             .unwrap_or_default();
-        Some((status, code))
+        let url = context
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Some((status, code, url))
     })
 }
 
@@ -60,20 +65,24 @@ fn cloud_response(error: &alien_client_core::Error) -> Option<(u16, String)> {
 /// A BYOK customer revokes access by removing our principal from the key policy
 /// (`AccessDeniedException`) or by deleting the key (`NotFoundException`).
 /// Throttling, `KMSInternalException`, `DependencyTimeoutException`, credential
-/// errors and transport failures say nothing about the key.
+/// errors (`UnrecognizedClientException`, or STS's XML `AccessDenied` when a
+/// role assumption fails) and transport failures say nothing about the key.
 fn aws_key_revoked(error: &alien_client_core::Error) -> bool {
-    cloud_response(error).is_some_and(|(_, code)| {
+    cloud_response(error).is_some_and(|(_, code, _)| {
         matches!(code.as_str(), "AccessDeniedException" | "NotFoundException")
     })
 }
 
-/// Whether Cloud KMS or Key Vault answered that the key is gone (404) or that
-/// access to it is denied (403: an IAM, RBAC, access policy or vault firewall
-/// decision made by the key's owner).
+/// Whether Cloud KMS or Key Vault answered the request for `key` that the key
+/// is gone (404) or that access to it is denied (403: an IAM, RBAC, access
+/// policy or vault firewall decision made by the key's owner).
 ///
+/// The response must come from the key's own URL: a 403 from fetching our
+/// token (service account impersonation, Entra ID) is about our credentials.
 /// 401, 429, 5xx, timeouts and transport failures say nothing about the key.
-fn key_revoked_by_status(error: &alien_client_core::Error) -> bool {
-    cloud_response(error).is_some_and(|(status, _)| matches!(status, 403 | 404))
+fn key_revoked_by_status(error: &alien_client_core::Error, key: &str) -> bool {
+    cloud_response(error)
+        .is_some_and(|(status, _, url)| matches!(status, 403 | 404) && url.contains(key))
 }
 
 #[cfg(all(test, feature = "test"))]
