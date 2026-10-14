@@ -459,7 +459,7 @@ fn service_type_name(service_type: &ComputeServiceType) -> String {
 }
 
 /// Revokes registry access once runtime teardown is complete.
-/// AWS also revokes at TeardownRequired, before setup deletion removes its identity and record.
+/// Deployment-owned identities are revoked at TeardownRequired, before setup deletion.
 ///
 /// Cloud Run's service agent is project-scoped, so multiple deployments in
 /// the same GCP project and Alien project share one GAR reader grant. The final active consumer
@@ -473,11 +473,14 @@ pub async fn cleanup_deleted_registry_access(
     project_id: &str,
     state: &DeploymentState,
 ) -> Result<()> {
-    // AWS setup deletion removes the target role and then the deployment record. Revoke
-    // while runtime teardown is complete and that setup handoff is still recorded.
+    // Setup deletion removes identity outputs. Revoke deployment-owned access while
+    // runtime teardown is complete and those outputs are still recorded.
     match (state.status, state.environment_info.as_ref()) {
         (DeploymentStatus::Deleted, _)
-        | (DeploymentStatus::TeardownRequired, Some(EnvironmentInfo::Aws(_))) => {}
+        | (
+            DeploymentStatus::TeardownRequired,
+            Some(EnvironmentInfo::Aws(_) | EnvironmentInfo::Gcp(_)),
+        ) => {}
         _ => return Ok(()),
     }
     let Some(environment_info) = state.environment_info.as_ref() else {
@@ -617,6 +620,25 @@ pub async fn cleanup_deleted_registry_access(
         return Ok(());
     }
     for repo_id in repo_ids {
+        if state.status == DeploymentStatus::TeardownRequired && platform == Platform::Gcp {
+            if let Some(email) = extract_rsm_access_configuration(state.stack_state.as_ref()) {
+                remove_registry_access(
+                    artifact_registry.as_ref(),
+                    &repo_id,
+                    environment_info,
+                    CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+                        project_numbers: Vec::new(),
+                        allowed_service_types: Vec::new(),
+                        service_account_emails: vec![email],
+                    }),
+                    "deployment-owned registry access",
+                    deployment_id,
+                )
+                .await?;
+            }
+            // The project service agents remain until the deletion is persisted.
+            continue;
+        }
         revoke_registry_access(
             artifact_registry.as_ref(),
             &repo_id,
@@ -631,7 +653,7 @@ pub async fn cleanup_deleted_registry_access(
     Ok(())
 }
 
-/// Revokes a deleted AWS deployment's registry access before the state that ends its runtime
+/// Revokes deployment-owned registry access before the state that ends its runtime
 /// cleanup is persisted, and returns the state to persist instead.
 ///
 /// The revoke goes first because a persisted `TeardownRequired` hands the deployment to setup
@@ -640,7 +662,7 @@ pub async fn cleanup_deleted_registry_access(
 /// the manager lacks a permission, and a retry of the delete revokes once it is granted. Any other
 /// failure is returned with nothing persisted, for the caller to retry.
 ///
-/// Other platforms revoke in [`revoke_after_persisting`].
+/// GCP project service agents are revoked in [`revoke_after_persisting`].
 pub async fn revoke_before_persisting(
     deployment_store: &dyn DeploymentStore,
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -649,7 +671,10 @@ pub async fn revoke_before_persisting(
     project_id: &str,
     state: DeploymentState,
 ) -> Result<DeploymentState> {
-    if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
+    if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_)))
+        && !(matches!(state.environment_info, Some(EnvironmentInfo::Gcp(_)))
+            && state.status == DeploymentStatus::TeardownRequired)
+    {
         return Ok(state);
     }
     match cleanup_deleted_registry_access(
@@ -700,7 +725,9 @@ pub async fn revoke_after_persisting(
     project_id: &str,
     state: &DeploymentState,
 ) -> Result<()> {
-    if matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
+    if matches!(state.environment_info, Some(EnvironmentInfo::Aws(_)))
+        || state.status == DeploymentStatus::TeardownRequired
+    {
         return Ok(());
     }
     cleanup_deleted_registry_access(
@@ -2209,6 +2236,59 @@ mod tests {
 
         assert_eq!(error.code, "REGISTRY_ACCESS_CLEANUP_FAILED");
         assert!(registry.removals.lock().expect("removals lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn gcp_teardown_revokes_management_identity_before_its_outputs_are_removed() {
+        let registry = Arc::new(RecordingGcpRegistry::default());
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry: registry.clone(),
+        });
+        let providers = Some(provider);
+        let targets = HashMap::new();
+        let store = store_answering(Ok(false));
+        let email = "management@test-project.iam.gserviceaccount.com";
+        let mut state = gcp_state_with_stack(worker_stack(
+            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts-default/default:latest",
+        ));
+        state.status = DeploymentStatus::TeardownRequired;
+        state.stack_state = Some(registered_stack_state(email));
+        let mut state = revoke_before_persisting(
+            &store,
+            &providers,
+            &targets,
+            "dep_deleted",
+            "default",
+            state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+        assert_eq!(
+            *registry.removals.lock().unwrap(),
+            vec![(Vec::<String>::new(), vec![email.to_string()])]
+        );
+        // Setup teardown removes the account and its outputs after this handoff.
+        state.stack_state = None;
+        state.status = DeploymentStatus::Deleted;
+        revoke_after_persisting(
+            &store,
+            &providers,
+            &targets,
+            "dep_deleted",
+            "default",
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *registry.removals.lock().unwrap(),
+            vec![
+                (Vec::<String>::new(), vec![email.to_string()]),
+                (vec![PROJECT_NUMBER.to_string()], Vec::<String>::new()),
+            ]
+        );
     }
 
     #[tokio::test]

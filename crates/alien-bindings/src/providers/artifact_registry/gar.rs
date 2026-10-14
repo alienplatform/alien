@@ -303,7 +303,14 @@ impl GarArtifactRegistry {
             // members and their conditions. A conditional binding is not a new grant target.
             for binding in &mut current_policy.bindings {
                 if binding.role == reader_role {
-                    binding.members.retain(|member| !members.contains(member));
+                    binding.members.retain(|member| {
+                        // IAM rewrites an account deleted during setup teardown with its UID.
+                        let principal = member
+                            .strip_prefix("deleted:")
+                            .and_then(|deleted| deleted.split_once("?uid="))
+                            .map_or(member.as_str(), |(principal, _)| principal);
+                        !members.iter().any(|selected| selected == principal)
+                    });
                 }
             }
             current_policy
@@ -1180,7 +1187,7 @@ mod tests {
         {
             let mut state = state.lock().unwrap();
             state.policies.insert("artifacts-prj-a".to_string(), json!({"etag":"legacy", "bindings":[
-                {"role":"roles/artifactregistry.reader", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com", "user:keep@example.com"]},
+                {"role":"roles/artifactregistry.reader", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com", "user:keep@example.com", "deleted:serviceAccount:management@test-project.iam.gserviceaccount.com?uid=123", "deleted:serviceAccount:other@test-project.iam.gserviceaccount.com?uid=456"]},
                 {"role":"roles/artifactregistry.reader", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com", "user:conditional@example.com"], "condition":{"title":"limited", "expression":"true"}},
                 {"role":"roles/viewer", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com"]}
             ]}));
@@ -1188,7 +1195,9 @@ mod tests {
         let cleanup = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
             project_numbers: vec!["123456789012".to_string()],
             allowed_service_types: vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox],
-            service_account_emails: Vec::new(),
+            service_account_emails: vec![
+                "management@test-project.iam.gserviceaccount.com".to_string()
+            ],
         });
         registry
             .remove_cross_account_access("vendor/artifacts-prj-a", cleanup.clone())
@@ -1200,7 +1209,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             state.lock().unwrap().policies["artifacts-prj-a"]["bindings"][0]["members"],
-            json!(["user:keep@example.com"])
+            json!([
+                "user:keep@example.com",
+                "deleted:serviceAccount:other@test-project.iam.gserviceaccount.com?uid=456"
+            ])
         );
         let policy = state.lock().unwrap().policies["artifacts-prj-a"].clone();
         assert_eq!(
