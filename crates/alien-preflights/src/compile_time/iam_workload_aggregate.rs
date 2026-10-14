@@ -39,15 +39,22 @@ pub(crate) fn check(
         return Ok(result);
     }
     let generator = AwsRuntimePermissionsGenerator::new();
-    for (profile_name, profile) in stack.permission_profiles() {
-        if profile_name == "management" {
-            continue;
-        }
-        let Some(account_entry) = stack.resources.get(&format!("{profile_name}-sa")) else {
-            continue;
-        };
+    for (_, account_entry) in stack.resources() {
         let Some(account) = account_entry.config.downcast_ref::<ServiceAccount>() else {
             continue;
+        };
+        // Only a matching profile receives workload resource policies. Direct
+        // identities still write their own deployment-permissions document.
+        let profile = account.id.strip_suffix("-sa").and_then(|name| {
+            stack
+                .permission_profiles()
+                .get(name)
+                .filter(|_| name != "management")
+                .map(|profile| (name, profile))
+        });
+        let role = match profile {
+            Some((name, _)) => format!("permission profile '{name}'"),
+            None => format!("service account '{}'", account.id),
         };
         if account_entry.lifecycle != ResourceLifecycle::Frozen
             || account_entry.enabled_when.is_some()
@@ -58,7 +65,7 @@ pub(crate) fn check(
         // the old document would overstate a definite lower bound.
         let mut documents: IndexMap<String, Option<String>> = IndexMap::new();
         let mut statements = Vec::new();
-        let mut incomplete = false;
+        let mut incomplete = profile.is_none() && !account.resource_permission_sets.is_empty();
         for set in &account.stack_permission_sets {
             match generator.generate_policy(set, BindingTarget::Stack, context) {
                 Ok(policy) => statements.extend(policy.statement),
@@ -82,6 +89,9 @@ pub(crate) fn check(
             documents.insert("deployment-permissions".into(), Some(document));
         }
         for (id, entry) in stack.resources() {
+            let Some((_, profile)) = profile else {
+                break;
+            };
             if entry.lifecycle != ResourceLifecycle::Frozen || entry.enabled_when.is_some() {
                 continue;
             }
@@ -202,10 +212,10 @@ pub(crate) fn check(
             })
             .sum();
         if size > 10_240 {
-            result.add_error(format!("IAM role for permission profile '{profile_name}' needs at least {size} inline policy characters across setup resources; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html"));
+            result.add_error(format!("IAM role for {role} needs at least {size} inline policy characters across setup resources; the aggregate per-role limit is 10240. Reduce grants or use managed policies. https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html"));
         }
         if incomplete || !documents.is_empty() {
-            result.add_warning(format!("IAM inline policy coverage for permission profile '{profile_name}' is incomplete: only resolved setup workload documents were counted. Controller names, injected grants, remote bindings and retained policies may consume additional quota; passing does not establish total role headroom."));
+            result.add_warning(format!("IAM inline policy coverage for {role} is incomplete: only resolved setup workload documents were counted. Controller names, injected grants, remote bindings and retained policies may consume additional quota; passing does not establish total role headroom."));
         }
     }
     Ok(result)
@@ -623,8 +633,152 @@ mod tests {
             .unwrap()
             .success
         );
+        stack.permissions.profiles.clear();
+        stack.resources.insert(
+            "handler".into(),
+            alien_core::ResourceEntry {
+                config: alien_core::Resource::new(
+                    alien_core::Worker::new("handler".into())
+                        .permissions("reader".into())
+                        .code(alien_core::WorkerCode::Image {
+                            image: "q5-image:latest".into(),
+                        })
+                        .build(),
+                ),
+                lifecycle: ResourceLifecycle::Frozen,
+                enabled_when: None,
+                dependencies: vec![],
+                remote_access: false,
+            },
+        );
+        let direct = super::check(
+            &stack,
+            Platform::Aws,
+            Some(InitialSetupAuthority::DirectSetup),
+            &context,
+            None,
+        )
+        .unwrap();
+        assert_eq!(direct.errors.len(), 1);
+        assert!(direct.errors[0].contains("service account 'reader-sa'"));
+        assert!(direct.errors[0].contains(&size.to_string()));
+        stack.resources.shift_remove("handler");
+        assert!(
+            super::check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context,
+                None
+            )
+            .unwrap()
+            .success
+        );
         account.stack_permission_sets.clear();
         assert!(aws_service_account_injected_statements(&account, &stack, &context).is_empty());
+    }
+
+    #[tokio::test]
+    async fn direct_identity_without_profile_resolves_at_deployment_time() {
+        let runner = crate::runner::PreflightRunner::with_registry(crate::PreflightRegistry::new());
+        let state = StackState::with_resource_prefix(Platform::Aws, "q5-direct".into());
+        let client = alien_core::ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "us-east-1".into(),
+            credentials: alien_core::AwsCredentials::Imds { endpoint: None },
+            service_overrides: None,
+        }));
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_stack_prefix("q5-direct");
+        for count in [200, 10] {
+            let resources: Vec<_> = (0..count).map(|index| format!(
+                "arn:aws:lambda:${{awsRegion}}:${{awsAccountId}}:function:${{stackPrefix}}-object-{index:04}"
+            )).collect();
+            let set = serde_json::from_value(serde_json::json!({
+                "id": "q5-direct-read", "description": "Synthetic deployment-context grants",
+                "platforms": {"aws": [{"grant": {"actions": ["lambda:GetFunction"]},
+                    "binding": {"stack": {"resources": resources}}}]}
+            }))
+            .unwrap();
+            let mut account = ServiceAccount::new("direct-identity".into()).build();
+            account.stack_permission_sets.push(set);
+            let document = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    &account.stack_permission_sets[0],
+                    BindingTarget::Stack,
+                    &context,
+                )
+                .unwrap();
+            let size = serde_json::to_string(&document)
+                .unwrap()
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .count();
+            assert_eq!(size > 10240, count == 200);
+            let stack = Stack::new("q5-direct".into())
+                .add(account, ResourceLifecycle::Frozen)
+                .build();
+            assert!(stack.permission_profiles().is_empty());
+            // Build time lacks deployment variables: warning, never a false failure.
+            let unresolved = check(
+                &stack,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .unwrap();
+            assert!(unresolved.success);
+            assert_eq!(unresolved.warnings.len(), 1);
+            let outcome = runner
+                .run_deployment_time_preflights(
+                    stack.clone(),
+                    &state,
+                    &config(),
+                    &client,
+                    None,
+                    None,
+                    Some(InitialSetupAuthority::DirectSetup),
+                )
+                .await;
+            if count == 200 {
+                let error = outcome.unwrap_err();
+                assert_eq!(error.code, "VALIDATION_FAILED");
+                assert!(!error.retryable);
+                let Some(ErrorData::ValidationFailed { results, .. }) = error.error else {
+                    panic!("structured results expected");
+                };
+                let aggregate = results
+                    .iter()
+                    .find(|result| result.code.as_deref() == Some("IAM_WORKLOAD_INLINE_AGGREGATE"))
+                    .unwrap();
+                assert_eq!(aggregate.errors.len(), 1);
+                assert!(aggregate.errors[0].contains("service account 'direct-identity'"));
+                assert!(aggregate.errors[0].contains(&size.to_string()));
+                assert_eq!(aggregate.warnings.len(), 1);
+            } else {
+                assert!(outcome.unwrap().1.success);
+            }
+            for authority in [None, Some(InitialSetupAuthority::ImportedHandoff)] {
+                assert!(
+                    super::check(&stack, Platform::Aws, authority, &context, Some(&state))
+                        .unwrap()
+                        .success
+                );
+            }
+            let mut live = stack;
+            live.resources.get_mut("direct-identity").unwrap().lifecycle = ResourceLifecycle::Live;
+            let skipped = super::check(
+                &live,
+                Platform::Aws,
+                Some(InitialSetupAuthority::DirectSetup),
+                &context,
+                Some(&state),
+            )
+            .unwrap();
+            assert!(skipped.success);
+            assert!(skipped.warnings.is_empty());
+        }
     }
 
     #[tokio::test]
