@@ -1,9 +1,11 @@
 use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
 use crate::error::Result;
-use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXES;
+use crate::mutations::management_permission_profile::{
+    GATE_DERIVED_GLOBAL_SUFFIXES, KEY_AVAILABILITY_PERMISSION_SET_ID,
+};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
-use alien_core::Stack;
+use alien_core::{Key, Stack};
 use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
@@ -138,7 +140,7 @@ fn management_differs_outside_gates(
 ) -> bool {
     match (
         old_management,
-        &without_added_role_guards(old_management, new_management),
+        &without_added_migration_grants(old_stack, old_management, new_management),
     ) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
@@ -163,38 +165,61 @@ fn management_differs_outside_gates(
     }
 }
 
-/// The new management permissions without the role guards this update adds: each is a Deny that
-/// only narrows the identity, and every AWS deployment prepared before them gains them on its next
-/// update. Only the canonical references at stack scope; anything else still reads as drift, and a
-/// guard the old profile held may not leave.
-fn without_added_role_guards(
+/// The new management permissions without the grants preparation now adds to every existing
+/// deployment, so the first update after they were introduced runs without setup:
+///
+/// - the role guards: each is a Deny that only narrows the identity. Only the canonical
+///   references at stack scope.
+/// - `key/availability` on a Key the installed stack already has. The Key controller uses it only
+///   when setup reports that it installed it (`availabilityProbe` in the key's import data), so a
+///   setup that predates it keeps its metadata-only health check until setup is rerun. Only the
+///   canonical reference in that key's own scope.
+///
+/// Anything else still reads as drift, and a grant the old profile held may not leave.
+fn without_added_migration_grants(
+    old_stack: &Stack,
     old: &ManagementPermissions,
     new: &ManagementPermissions,
 ) -> ManagementPermissions {
-    let old_global = match old {
+    let old_profile = match old {
         ManagementPermissions::Auto => None,
         ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
-            profile.0.get("*")
+            Some(profile)
         }
     };
-    let added: Vec<PermissionSetReference> = [MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD]
-        .into_iter()
-        .map(PermissionSetReference::from_name)
-        .filter(|guard| !old_global.is_some_and(|grants| grants.contains(guard)))
+    let old_scope = |scope: &str| old_profile.and_then(|profile| profile.0.get(scope));
+    let added_guards: Vec<PermissionSetReference> =
+        [MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD]
+            .into_iter()
+            .map(PermissionSetReference::from_name)
+            .filter(|guard| !old_scope("*").is_some_and(|grants| grants.contains(guard)))
+            .collect();
+    let key_availability = PermissionSetReference::from_name(KEY_AVAILABILITY_PERMISSION_SET_ID);
+    let keys_gaining_availability: Vec<&str> = old_stack
+        .resources()
+        .filter(|(_, entry)| entry.config.resource_type() == Key::RESOURCE_TYPE)
+        .map(|(id, _)| id.as_str())
+        .filter(|id| !old_scope(id).is_some_and(|grants| grants.contains(&key_availability)))
         .collect();
+    let strip = |profile: &mut PermissionProfile, scope: &str, added: &[PermissionSetReference]| {
+        if let Some(grants) = profile.0.get_mut(scope) {
+            grants.retain(|grant| !added.contains(grant));
+            if grants.is_empty() && old_scope(scope).is_none() {
+                profile.0.shift_remove(scope);
+            }
+        }
+    };
     let without = |profile: &PermissionProfile| {
         let mut profile = profile.clone();
-        if let Some(grants) = profile.0.get_mut("*") {
-            grants.retain(|grant| !added.contains(grant));
-            if grants.is_empty() && old_global.is_none() {
-                profile.0.shift_remove("*");
-            }
+        strip(&mut profile, "*", &added_guards);
+        for key in &keys_gaining_availability {
+            strip(&mut profile, key, std::slice::from_ref(&key_availability));
         }
         profile
     };
     match new {
         ManagementPermissions::Auto => ManagementPermissions::Auto,
-        // A profile the mutation left `Auto` becomes `Extend` only to hold the guards.
+        // A profile the mutation left `Auto` becomes `Extend` only to hold these grants.
         ManagementPermissions::Extend(profile) => {
             let profile = without(profile);
             if profile.0.is_empty() && matches!(old, ManagementPermissions::Auto) {
@@ -562,6 +587,95 @@ mod tests {
 
     /// The deployer said no to a gated live resource: its scoped management
     /// grant leaves with it, and the update must not read that as drift.
+    fn key_stack(keys: &[&str], management: ManagementPermissions) -> Stack {
+        keys.iter()
+            .fold(
+                Stack::new("s".to_string()).management(management),
+                |stack, key| {
+                    stack.add(Key::new(key.to_string()).build(), ResourceLifecycle::Frozen)
+                },
+            )
+            .build()
+    }
+
+    async fn key_update_passes(
+        old_keys: &[&str],
+        old: PermissionProfile,
+        new_keys: &[&str],
+        new: PermissionProfile,
+    ) -> bool {
+        PermissionProfilesUnchangedCheck
+            .check(
+                &key_stack(old_keys, ManagementPermissions::Extend(old)),
+                &key_stack(new_keys, ManagementPermissions::Extend(new)),
+            )
+            .await
+            .expect("check should run")
+            .success
+    }
+
+    /// Setups from before the availability probe have only the key's metadata grant.
+    #[tokio::test]
+    async fn an_installed_key_may_gain_its_availability_probe() {
+        assert!(
+            key_update_passes(
+                &["customer-key"],
+                PermissionProfile::new().resource("customer-key", ["key/management"]),
+                &["customer-key"],
+                PermissionProfile::new()
+                    .resource("customer-key", ["key/availability", "key/management"]),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn the_availability_probe_is_exempt_only_on_an_installed_keys_scope() {
+        let installed = PermissionProfile::new().resource("customer-key", ["key/management"]);
+        for new in [
+            installed.clone().global(["key/availability"]),
+            installed
+                .clone()
+                .resource("other-key", ["key/availability"]),
+        ] {
+            assert!(
+                !key_update_passes(
+                    &["customer-key"],
+                    installed.clone(),
+                    &["customer-key"],
+                    new.clone()
+                )
+                .await,
+                "{new:?}"
+            );
+        }
+        // A Key the installed stack doesn't have is new setup-owned IAM.
+        assert!(
+            !key_update_passes(
+                &["customer-key"],
+                installed.clone(),
+                &["customer-key", "other-key"],
+                installed.resource("other-key", ["key/availability"]),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installed_availability_probe_may_not_be_swapped_for_another_grant() {
+        assert!(
+            !key_update_passes(
+                &["customer-key"],
+                PermissionProfile::new()
+                    .resource("customer-key", ["key/availability", "key/management"]),
+                &["customer-key"],
+                PermissionProfile::new()
+                    .resource("customer-key", ["key/management", "key/native-volume"]),
+            )
+            .await
+        );
+    }
+
     #[tokio::test]
     async fn a_gated_resources_management_grants_follow_its_gate() {
         let old_stack = Stack::new("s".to_string())

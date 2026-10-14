@@ -230,8 +230,12 @@ fn generate_auto_management_profile(
         }
 
         if resource_type == "key" && platform == Platform::Aws {
-            resource_permission_set_ids.entry(resource_id.clone()).or_default()
-                .insert("key/availability".to_string());
+            // Setups from before this grant keep updating without it; see
+            // PermissionProfilesUnchangedCheck.
+            resource_permission_set_ids
+                .entry(resource_id.clone())
+                .or_default()
+                .insert(KEY_AVAILABILITY_PERMISSION_SET_ID.to_string());
         }
 
         if platform == Platform::Aws {
@@ -470,6 +474,9 @@ fn add_cloud_heartbeat_permission(
         permission_set_ids.insert(permission_set_id);
     }
 }
+
+/// Lets the AWS Key controller probe a customer key's availability.
+pub(crate) const KEY_AVAILABILITY_PERMISSION_SET_ID: &str = "key/availability";
 
 /// The `'*'`-scope grant suffixes this derivation emits per resource type
 /// (the `format!("{}/…")` inserts above). A check exempting gate-derived
