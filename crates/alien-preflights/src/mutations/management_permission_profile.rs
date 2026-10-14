@@ -683,6 +683,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_keys_are_refused_before_provisioning() {
+        let stack = Stack::new("example".to_string())
+            .add(
+                alien_core::Key::new("customer-key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = StackState::new(platform);
+            let mut config = deployment_config_for_management_permission_test();
+            ManagementPermissionProfileMutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .expect("manual key setup remains supported");
+            config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+            let error = ManagementPermissionProfileMutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .expect_err("initial setup and later key additions must stop before cloud changes");
+            assert!(error.to_string().contains("manual setup"), "{error}");
+        }
+    }
+
+    #[tokio::test]
     async fn automatic_azure_sandbox_is_refused_before_provisioning() {
         let stack = Stack::new("example".to_string())
             .add(

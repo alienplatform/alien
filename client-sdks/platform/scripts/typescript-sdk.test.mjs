@@ -494,3 +494,18 @@ test("published deployment-info operational enums retain root and deep imports",
     }
   }
 });
+
+
+test("import serialization and deployment responses retain selected disk capacity", async () => {
+  const selection = { cpu: 1.5, memory: "2Gi", volumeSizeGib: 128 };
+  for (const [path, schema] of [
+    ["persistimporteddeploymentrequestpendingpreparedstacksettingscustom2", "PersistImportedDeploymentRequestContainers$outboundSchema"],
+    ["deploymentdetailresponsependingpreparedstackdefaultunion", "DeploymentDetailResponseContainers$inboundSchema"],
+    ["synclistresponsependingpreparedstackdefaultunion", "SyncListResponseContainers$inboundSchema"],
+    ["targetdeploymentvolumerestore", "TargetDeploymentContainers$inboundSchema"],
+  ]) {
+    const model = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(model[schema].parse(selection), selection);
+    assert.deepEqual(model[schema].parse({}), {});
+  }
+});

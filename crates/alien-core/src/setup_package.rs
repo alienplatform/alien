@@ -1,5 +1,5 @@
 use crate::{
-    ownership_policy_for_resource_type, ErrorData, Platform, ResourceEntry, Result, Sandbox,
+    ownership_policy_for_resource_type, ErrorData, Key, Platform, ResourceEntry, Result, Sandbox,
     SetupManagement, Stack,
 };
 use alien_error::AlienError;
@@ -11,6 +11,21 @@ pub fn validate_automatic_setup_resources(
     platform: Platform,
     management: SetupManagement,
 ) -> Result<()> {
+    if management == SetupManagement::Automatic
+        && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+    {
+        for (id, entry) in stack.resources() {
+            if entry.config.downcast_ref::<Key>().is_some() {
+                return Err(AlienError::new(
+                    ErrorData::AutomaticSetupResourceUnsupported {
+                        resource_type: "key".to_string(),
+                        resource_id: id.to_string(),
+                        platform,
+                    },
+                ));
+            }
+        }
+    }
     if management == SetupManagement::Automatic && platform == Platform::Azure {
         for (id, entry) in stack.resources() {
             if entry.config.downcast_ref::<Sandbox>().is_some() {

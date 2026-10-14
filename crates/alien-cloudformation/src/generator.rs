@@ -240,6 +240,11 @@ pub fn generate_cloudformation_template_with_profile(
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    alien_core::validate_automatic_setup_resources(
+        stack,
+        options.target.cloud_platform(),
+        options.stack_settings.setup_management,
+    )?;
     if options.target.is_kubernetes()
         && (matches!(
             options.stack_settings.network,

@@ -1,7 +1,7 @@
 //! AWS data-layer scenarios — storage / kv / queue / vault.
 
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
-use alien_cloudformation::RegistrationMode;
+use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
     Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
@@ -805,4 +805,27 @@ fn aws_remote_queue_setup_passes_cloudformation_validation() {
         RegistrationMode::OutputsFallback,
         "remote Queue setup",
     );
+}
+
+#[test]
+fn automatic_key_packages_are_refused() {
+    let stack = Stack::new("example".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let error = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings {
+            setup_management: alien_core::SetupManagement::Automatic,
+            ..StackSettings::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Aws,
+        "aws",
+        "automatic key setup",
+    )
+    .expect_err("automatic packages cannot hand off setup-owned keys");
+    assert!(error.to_string().contains("manual setup"), "{error}");
 }

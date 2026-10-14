@@ -185,6 +185,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         required_operation_ids == REQUIRED_OPERATION_IDS,
     )?;
     canonicalize_nullable_enums(&mut filtered);
+    normalize_optional_response_bodies(&mut filtered);
     allow_unknown_properties(&mut filtered);
 
     Ok(Value::Object(filtered))
@@ -485,8 +486,50 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
     normalize_binding_unions(&mut root)?;
     open_string_enums(&mut root)?;
     canonicalize_nullable_enums(&mut root);
+    normalize_optional_response_bodies(&mut root);
     allow_unknown_properties(&mut root);
     Ok(Value::Object(root))
+}
+
+// Progenitor requires one success type per operation. For an operation that can
+// return JSON or no body, expose the HTTP response so callers can inspect its
+// status before decoding. Keep every status and the original wire body intact.
+fn normalize_optional_response_bodies(document: &mut Map<String, Value>) {
+    let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for path in paths.values_mut().filter_map(Value::as_object_mut) {
+        for method in HTTP_METHODS {
+            let Some(responses) = path
+                .get_mut(*method)
+                .and_then(|operation| operation.get_mut("responses"))
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            let successes: Vec<_> = responses
+                .iter()
+                .filter(|(status, _)| status.starts_with('2'))
+                .map(|(_, response)| response)
+                .collect();
+            let has_json = successes
+                .iter()
+                .any(|response| response.pointer("/content/application~1json").is_some());
+            let has_empty = successes.iter().any(|response| {
+                response.get("$ref").is_none()
+                    && response
+                        .get("content")
+                        .is_none_or(|content| content.as_object().is_some_and(Map::is_empty))
+            });
+            if has_json && has_empty {
+                for (status, response) in responses {
+                    if status.starts_with('2') {
+                        response["content"] = serde_json::json!({"application/octet-stream": {}});
+                    }
+                }
+            }
+        }
+    }
 }
 
 // A native Vec avoids typify's intrinsic empty-array default for this optional
