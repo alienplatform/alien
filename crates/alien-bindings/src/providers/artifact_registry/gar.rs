@@ -178,18 +178,20 @@ impl GarArtifactRegistry {
             .strip_prefix(&format!("{}/", self.project_id))
             .unwrap_or(repo_id);
         let repository = path.split('/').next().unwrap_or_default();
-        let shared = format!("{}-shared", self.repository_name);
-        let project_repository = repository
+        let logical_id = repository
             .strip_prefix(&format!("{}-prj-", self.repository_name))
-            .and_then(|suffix| {
-                alien_core::gar_repository::project_repository(
-                    &self.repository_name,
-                    &format!("prj_{suffix}"),
-                )
-            })
-            .is_some_and(|expected| expected == repository);
-        if repository == self.repository_name || repository == shared || project_repository {
-            return Ok(repository.to_string());
+            .map(|suffix| format!("prj_{suffix}"))
+            .or_else(|| {
+                (repository == format!("{}-default", self.repository_name))
+                    .then(|| "default".to_string())
+            });
+        if let Some(logical_id) = logical_id {
+            let valid_path = path
+                .split_once('/')
+                .is_none_or(|(_, rest)| rest.split('/').next() == Some(logical_id.as_str()));
+            if valid_path && self.project_repository_name(&logical_id)? == repository {
+                return Ok(repository.to_string());
+            }
         }
         Err(AlienError::new(ErrorData::BindingConfigInvalid {
             env_var: binding_env_var(&self.binding_name),
@@ -345,14 +347,6 @@ impl ArtifactRegistry for GarArtifactRegistry {
     }
 
     async fn create_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
-        // Standalone managers use the repository provisioned with their infrastructure.
-        if project_id == "default" {
-            return Ok(RepositoryResponse {
-                name: format!("{}/{}/default", self.project_id, self.repository_name),
-                uri: None,
-                created_at: None,
-            });
-        }
         let repository = self.project_repository_name(project_id)?;
         let existing = self
             .client
@@ -455,7 +449,6 @@ impl ArtifactRegistry for GarArtifactRegistry {
         access: CrossAccountAccess,
     ) -> Result<()> {
         let repo_name = self.iam_repository_name(repo_id)?;
-        // The manager selects eligible resources; standalone projects use the base repository.
 
         let gcp_access = match access {
             CrossAccountAccess::Gcp(gcp_access) => gcp_access,
@@ -820,15 +813,6 @@ impl ArtifactRegistry for GarArtifactRegistry {
 
     async fn delete_repository(&self, repo_id: &str) -> Result<()> {
         let repository = self.iam_repository_name(repo_id)?;
-        if repository == self.repository_name
-            || repository == format!("{}-shared", self.repository_name)
-        {
-            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(&self.binding_name),
-                binding_name: self.binding_name.clone(),
-                reason: "Only project repositories can be deleted through this binding".to_string(),
-            }));
-        }
         match self
             .client
             .delete_repository(
@@ -1095,9 +1079,13 @@ mod tests {
         assert!(registry.create_repository("prj_A").await.is_err());
         assert_eq!(
             registry.create_repository("default").await.unwrap().name,
-            "vendor/artifacts/default"
+            "vendor/artifacts-default/default"
         );
-        assert!(state.lock().unwrap().repositories.is_empty());
+        assert!(state
+            .lock()
+            .unwrap()
+            .repositories
+            .contains_key("artifacts-default"));
         let own = registry.create_repository("prj_b").await.unwrap();
         let other = registry.create_repository("prj_a").await.unwrap();
         assert_ne!(own.name, other.name);
@@ -1148,17 +1136,18 @@ mod tests {
                 .policies
                 .contains_key(other.name.split('/').nth(1).unwrap()));
         }
-        registry
-            .add_cross_account_access("vendor/artifacts", access.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            state.lock().unwrap().policies["artifacts"]["bindings"][1]["members"]
-                .as_array()
-                .unwrap()
-                .len(),
-            3
-        );
+        for invalid in [
+            "vendor/artifacts",
+            "vendor/artifacts-shared",
+            "vendor/artifacts-prj-b/prj_a",
+        ] {
+            assert!(registry
+                .add_cross_account_access(invalid, access.clone())
+                .await
+                .is_err());
+            assert!(registry.get_repository(invalid).await.is_err());
+            assert!(registry.delete_repository(invalid).await.is_err());
+        }
         registry.delete_repository(&own.name).await.unwrap();
         assert!(!state
             .lock()
@@ -1190,7 +1179,7 @@ mod tests {
         assert!(registry.get_repository(&other.name).await.is_ok());
         {
             let mut state = state.lock().unwrap();
-            state.policies.insert("artifacts".to_string(), json!({"etag":"legacy", "bindings":[
+            state.policies.insert("artifacts-prj-a".to_string(), json!({"etag":"legacy", "bindings":[
                 {"role":"roles/artifactregistry.reader", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com", "user:keep@example.com"]},
                 {"role":"roles/artifactregistry.reader", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com", "user:conditional@example.com"], "condition":{"title":"limited", "expression":"true"}},
                 {"role":"roles/viewer", "members":["serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com"]}
@@ -1202,18 +1191,18 @@ mod tests {
             service_account_emails: Vec::new(),
         });
         registry
-            .remove_cross_account_access("vendor/artifacts", cleanup.clone())
+            .remove_cross_account_access("vendor/artifacts-prj-a", cleanup.clone())
             .await
             .unwrap();
         registry
-            .remove_cross_account_access("vendor/artifacts", cleanup)
+            .remove_cross_account_access("vendor/artifacts-prj-a", cleanup)
             .await
             .unwrap();
         assert_eq!(
-            state.lock().unwrap().policies["artifacts"]["bindings"][0]["members"],
+            state.lock().unwrap().policies["artifacts-prj-a"]["bindings"][0]["members"],
             json!(["user:keep@example.com"])
         );
-        let policy = state.lock().unwrap().policies["artifacts"].clone();
+        let policy = state.lock().unwrap().policies["artifacts-prj-a"].clone();
         assert_eq!(
             policy["bindings"][1]["members"],
             json!(["user:conditional@example.com"])

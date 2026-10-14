@@ -3,7 +3,9 @@
 /// Derive a GAR resource name from a lowercase project ID without changing its identity.
 /// The original project ID remains in the image path for OCI routing.
 pub fn project_repository(prefix: &str, project_id: &str) -> Option<String> {
-    let suffix = project_id.strip_prefix("prj_")?;
+    let suffix = project_id
+        .strip_prefix("prj_")
+        .or_else(|| (project_id == "default").then_some(project_id))?;
     if suffix.is_empty()
         || !suffix
             .bytes()
@@ -11,7 +13,12 @@ pub fn project_repository(prefix: &str, project_id: &str) -> Option<String> {
     {
         return None;
     }
-    let repository = format!("{prefix}-prj-{suffix}");
+    let name = if project_id == "default" {
+        "default".to_string()
+    } else {
+        format!("prj-{suffix}")
+    };
+    let repository = format!("{prefix}-{name}");
     (repository.len() <= 63
         && repository.starts_with(|c: char| c.is_ascii_lowercase())
         && repository
@@ -33,7 +40,12 @@ mod tests {
 
     #[test]
     fn project_paths_require_the_matching_project_id() {
-        for id in ["prj_a", "prj_b", "prj_0123456789abcdefghijklmnopqr"] {
+        for id in [
+            "default",
+            "prj_a",
+            "prj_b",
+            "prj_0123456789abcdefghijklmnopqr",
+        ] {
             let repository = project_repository("alien-artifacts", id).expect("valid name");
             assert!(repository.len() <= 63);
             let path = format!("{repository}/{id}/worker");
