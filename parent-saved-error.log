@@ -1,0 +1,7 @@
+Saved manager resource error from original parent run
+State: applyingStackPermissions; deployment: initial-setup
+Role already exists: q5-i54p-execution-sa
+Cloud platform operation failed: Failed to apply stack permissions to IAM role 'q5-i54p-execution-sa'
+Quota exceeded: Maximum policy size of 10240 bytes exceeded for role q5-i54p-execution-sa
+AWS PutRolePolicy HTTP409 / LimitExceeded
+retryable: true

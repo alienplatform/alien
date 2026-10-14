@@ -1,0 +1,4 @@
+$ alien deploy --name q5-iam54p --platform aws --token-file deployment-token
+Deploying q5-iam54p to aws
+
+[Observer: interrupted after saved native quota failure; exit -2]

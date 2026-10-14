@@ -1,0 +1,7 @@
+$ alien deploy --name q5-iam54s --platform aws --token-file deployment-token
+Deploying q5-iam54s to aws
+> Success! Deployment is running.
+Deployment q5-iam54s ([DEPLOYMENT])
+Next alien deployments get [DEPLOYMENT]
+
+Exit: 0

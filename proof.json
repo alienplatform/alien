@@ -1,0 +1,29 @@
+{
+  "featureRevision": "ac5084237",
+  "parentRevision": "aa42e2f38",
+  "negativeExit": 1,
+  "negativeStatus": "initial-setup-failed",
+  "neededCharacters": 21317,
+  "limitCharacters": 10240,
+  "negativeExactRoleIdentitySetsUnchanged": true,
+  "positiveExit": 0,
+  "positiveStatus": "running",
+  "positiveRoleAndInlinePolicyVerified": true,
+  "parentNativeError": "LimitExceeded",
+  "parentPartialRoles": 1,
+  "parentRetryable": true,
+  "parentCLIInterruptedAfterCapture": true,
+  "normalDestroyExitCodes": [
+    0,
+    0,
+    0
+  ],
+  "cleanupExactRoleIdentityBaselineRestored": true,
+  "activeOwnedRoles": 0,
+  "limitations": [
+    "Checks one resolved ServiceAccount stack document, not all role inline policies.",
+    "Negative fails at direct controller entry, not deployment-wide build preflight.",
+    "Small control required verified target credentials for standalone manager and resume after setup.",
+    "Parent uses original manager and CLI; an earlier feature-manager comparison was inconclusive and excluded."
+  ]
+}
