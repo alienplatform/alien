@@ -9,7 +9,7 @@ use alien_azure_clients::{
         models::container_apps::{IpSecurityRestrictionRule, IpSecurityRestrictionRuleAction},
     },
 };
-use httpmock::prelude::*;
+use httpmock::{Method::PATCH, prelude::*};
 use serde_json::json;
 
 const APP_PATH: &str = "/subscriptions/test-subscription/resourceGroups/test-rg/providers/Microsoft.App/containerApps/test-app";
@@ -105,6 +105,13 @@ async fn clears_restrictions_explicitly_and_retains_async_operation() {
 #[tokio::test]
 async fn missing_app_is_an_error_without_creation_fallback() {
     let server = MockServer::start_async().await;
+    let create = server
+        .mock_async(|when, then| {
+            when.method(PUT).path(APP_PATH);
+            then.status(200)
+                .json_body(json!({"name":"test-app", "location":"eastus"}));
+        })
+        .await;
     let request = server
         .mock_async(|when, then| {
             when.method(PATCH).path(APP_PATH);
@@ -117,6 +124,7 @@ async fn missing_app_is_an_error_without_creation_fallback() {
         .update_container_app_ip_security_restrictions("test-rg", "test-app", &[])
         .await
         .expect_err("missing app must fail");
-    request.assert_async().await;
+    assert!(request.hits_async().await > 0);
+    create.assert_hits_async(0).await;
     assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
 }
