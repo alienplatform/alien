@@ -44,6 +44,20 @@ pub fn aws_nat_gateway_quota_identity(region: &str, zone: Option<&str>) -> Quota
     quota
 }
 
+/// Project custom-role quota shared by preflight and deployment-time failures.
+pub fn gcp_custom_role_quota_identity(project: &str) -> QuotaIdentity {
+    QuotaIdentity {
+        platform: Platform::Gcp,
+        service: "iam.googleapis.com".into(),
+        provider_id: "iam.googleapis.com/roles/custom_roles_count".into(),
+        name: "Custom roles per project (including deleted roles)".into(),
+        scope: project.into(),
+        increase_url: format!(
+            "https://console.cloud.google.com/iam-admin/quotas?project={project}"
+        ),
+    }
+}
+
 /// Additional capacity required at the peak of this deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

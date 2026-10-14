@@ -23,7 +23,7 @@ pub enum ErrorData {
     },
 
     /// A checked cloud quota filled after the preflight read.
-    #[cfg(feature = "aws")]
+    #[cfg(any(feature = "aws", feature = "gcp"))]
     #[error(
         code = "CLOUD_QUOTA_EXCEEDED",
         message = "Cloud quota exceeded: {message}",

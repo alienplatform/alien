@@ -1,7 +1,8 @@
 //! IAM custom-role usage includes soft-deleted roles, not just live roles.
 
 use crate::quotas::{
-    evaluate, QuotaDemand, QuotaIdentity, QuotaObservation, QuotaOutcome, QuotaResult,
+    evaluate, gcp_custom_role_quota_identity, QuotaDemand, QuotaObservation, QuotaOutcome,
+    QuotaResult,
 };
 use crate::CheckResult;
 use alien_core::{
@@ -261,17 +262,7 @@ pub async fn check(
     super::cloud_quotas::record(
         result,
         QuotaResult {
-            quota: QuotaIdentity {
-                platform: Platform::Gcp,
-                service: "iam.googleapis.com".into(),
-                provider_id: ROLE_METRIC.into(),
-                name: "Custom roles per project (including deleted roles)".into(),
-                scope: config.project_id.clone(),
-                increase_url: format!(
-                    "https://console.cloud.google.com/iam-admin/quotas?project={}",
-                    config.project_id
-                ),
-            },
+            quota: gcp_custom_role_quota_identity(&config.project_id),
             outcome,
         },
     );

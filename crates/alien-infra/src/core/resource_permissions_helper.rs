@@ -97,6 +97,33 @@ async fn ensure_gcp_custom_role(
         {
             e
         }
+        // IAM returns HTTP 429 for both request throttling and the persistent
+        // project role-count limit. Only the latter needs quota guidance.
+        Err(e)
+            if matches!(
+                &e.error,
+                Some(CloudClientErrorData::RateLimitExceeded { message })
+                    if message.starts_with("Maximum number of roles reached.")
+            ) =>
+        {
+            let project = custom_role
+                .name
+                .strip_prefix("projects/")
+                .and_then(|name| name.split_once("/roles/"))
+                .map(|(project, _)| project);
+            if let Some(project) = project {
+                let quota = alien_preflights::quotas::gcp_custom_role_quota_identity(project);
+                let message = format!(
+                    "{} ({}, {}): project role capacity is exhausted, including soft-deleted roles. Request an increase: {}",
+                    quota.name, quota.provider_id, quota.scope, quota.increase_url
+                );
+                return Err(e.context(ErrorData::CloudQuotaExceeded { quota, message }));
+            }
+            return Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create custom role '{}'", custom_role.role_id),
+                resource_id: Some(permission_set_id.to_string()),
+            }));
+        }
         Err(e) => {
             return Err(e.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create custom role '{}'", custom_role.role_id),
@@ -2252,10 +2279,15 @@ pub(crate) fn aws_remote_access_policy(
     resource_id: &str,
 ) -> Result<AwsIamPolicy> {
     alien_permissions::aws_resource_policies::aws_remote_access_policy(
-        generator, definition, permission_context,
+        generator,
+        definition,
+        permission_context,
     )
     .context(ErrorData::CloudPlatformError {
-        message: format!("Failed to generate Remote Bindings policy '{}'", definition.permission_set),
+        message: format!(
+            "Failed to generate Remote Bindings policy '{}'",
+            definition.permission_set
+        ),
         resource_id: Some(resource_id.to_string()),
     })
 }
@@ -3106,6 +3138,50 @@ mod tests {
         ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
             .await
             .expect("a missing role should be created");
+    }
+
+    #[tokio::test]
+    async fn gcp_custom_role_capacity_is_not_retryable_but_request_throttling_is() {
+        for (message, capacity) in [
+            ("Maximum number of roles reached. Maximum is: 300", true),
+            ("Quota exceeded for quota metric 'Write requests'", false),
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role()
+                .times(1)
+                .returning(|_| Err(not_found()));
+            iam.expect_create_role().times(1).returning(move |_, _| {
+                Err(gcp_error(
+                    429,
+                    &serde_json::json!({"error": {
+                        "code": 429, "status": "RESOURCE_EXHAUSTED", "message": message
+                    }})
+                    .to_string(),
+                ))
+            });
+            iam.expect_patch_role().never();
+            iam.expect_undelete_role().never();
+            let error = ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+                .await
+                .expect_err("a rejected creation must remain a failure");
+            assert_eq!(error.retryable, !capacity);
+            if capacity {
+                let Some(ErrorData::CloudQuotaExceeded { quota, message }) = error.error else {
+                    panic!("role capacity must report a typed quota error");
+                };
+                assert_eq!(
+                    quota,
+                    alien_preflights::quotas::gcp_custom_role_quota_identity("p")
+                );
+                assert!(message.contains(&quota.provider_id));
+                assert!(message.contains(&quota.increase_url));
+            } else {
+                assert!(matches!(
+                    error.error,
+                    Some(ErrorData::CloudPlatformError { .. })
+                ));
+            }
+        }
     }
 
     #[tokio::test]
