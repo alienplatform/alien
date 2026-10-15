@@ -250,7 +250,8 @@
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/loadBalancers/backendAddressPools/read",
             "Microsoft.Network/loadBalancers/backendAddressPools/write",
-            "Microsoft.Network/loadBalancers/backendAddressPools/join/action"
+            "Microsoft.Network/loadBalancers/backendAddressPools/join/action",
+            "Microsoft.Network/virtualNetworks/joinLoadBalancer/action"
           ]
         },
         "binding": {
