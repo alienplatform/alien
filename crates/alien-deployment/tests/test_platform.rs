@@ -17,6 +17,8 @@ use std::{collections::HashMap, sync::OnceLock};
 use tempfile::TempDir;
 use tokio::sync::MutexGuard;
 
+mod interrupted_update_recovery;
+
 const MAX_STEPS: usize = 100;
 
 static TEST_VAULT_ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();

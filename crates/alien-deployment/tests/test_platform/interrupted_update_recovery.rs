@@ -1,0 +1,170 @@
+use super::*;
+use alien_core::{ResourceRef, ResourceStatus};
+use alien_infra::{
+    give_test_worker_setup_grant, test_worker_configs_deployed, test_worker_deletes_issued,
+    withhold_test_worker_setup_grant, TestSetupGrant,
+};
+
+#[derive(Clone, Copy)]
+enum RecoveryTarget {
+    NewRelease,
+    SameRelease,
+    Removed,
+    Denied,
+}
+
+#[tokio::test]
+async fn retry_new_release_resumes_interrupted_updates_before_dependency_settles() {
+    exercise_recovery(RecoveryTarget::NewRelease).await;
+}
+
+#[tokio::test]
+async fn retry_same_release_finishes_interrupted_updates_without_duplicate_writes() {
+    exercise_recovery(RecoveryTarget::SameRelease).await;
+}
+
+#[tokio::test]
+async fn retry_removes_interrupted_resource_without_finishing_its_old_update() {
+    exercise_recovery(RecoveryTarget::Removed).await;
+}
+
+#[tokio::test]
+async fn retry_preserves_a_real_failure_during_resumed_update() {
+    exercise_recovery(RecoveryTarget::Denied).await;
+}
+
+async fn exercise_recovery(case: RecoveryTarget) {
+    let _vault = test_vault_env().await;
+    let suffix = match case {
+        RecoveryTarget::NewRelease => "new-release",
+        RecoveryTarget::SameRelease => "same-release",
+        RecoveryTarget::Removed => "removed",
+        RecoveryTarget::Denied => "denied",
+    };
+    let api_id = format!("interrupted-api-{suffix}");
+    let dependency_id = format!("interrupted-dependency-{suffix}");
+    let api_identifier = format!("test:worker:{api_id}");
+    let dependency_identifier = format!("test:worker:{dependency_id}");
+    let config = create_test_config("interrupted-update", false);
+    let mut installed = create_test_stack("interrupted-update", &api_id);
+    add_live_worker(&mut installed, image_worker(&api_id, "test:v1", 1024));
+    add_live_worker(
+        &mut installed,
+        image_worker(&dependency_id, "test:v1", 1024),
+    );
+    let mut state =
+        run_to_completion(create_initial_state(installed.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let mut interrupted = installed;
+    add_live_worker(&mut interrupted, image_worker(&api_id, "test:v2", 1024));
+    add_live_worker(
+        &mut interrupted,
+        image_worker(&dependency_id, "test:v2", 1024),
+    );
+    // Fail a real handler while its sibling's update is polling. Deployment orchestration,
+    // rather than the fixture, records the sibling's interrupted checkpoint.
+    withhold_test_worker_setup_grant(&dependency_id, TestSetupGrant::Update);
+    start_update(&mut state, release_of("rel_v2", interrupted.clone()));
+    let mut state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert_eq!(
+        resources[&dependency_id].error.as_ref().unwrap().code,
+        "SETUP_RERUN_REQUIRED"
+    );
+    let api = &resources[&api_id];
+    assert_eq!(api.status, ResourceStatus::UpdateFailed);
+    assert_eq!(api.error.as_ref().unwrap().code, "DEPLOYMENT_INTERRUPTED");
+    assert_eq!(
+        api.last_failed_state.as_ref().unwrap()["state"],
+        "updateConfigPolling"
+    );
+    give_test_worker_setup_grant(&dependency_id);
+
+    // Reload exactly the saved state, including both the actual failure and the interruption.
+    state = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    let mut target = interrupted;
+    if matches!(case, RecoveryTarget::NewRelease | RecoveryTarget::Denied) {
+        add_live_worker(&mut target, image_worker(&api_id, "test:v3", 1024));
+        target
+            .resources
+            .get_mut(&api_id)
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new("worker".into(), &dependency_id));
+    }
+    if matches!(case, RecoveryTarget::Removed) {
+        target.resources.shift_remove(&api_id);
+    }
+    if matches!(case, RecoveryTarget::Denied) {
+        withhold_test_worker_setup_grant(&api_id, TestSetupGrant::Update);
+    }
+    state.target_release = Some(release_of("rel_target", target));
+    request_retry(&mut state);
+    // run_to_completion stops at a failed state; execute the accepted retry transition first.
+    state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("retry transition should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::UpdatePending);
+    let state = run_to_completion(state, config).await;
+
+    if matches!(case, RecoveryTarget::Denied) {
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(resources[&api_id].status, ResourceStatus::UpdateFailed);
+        assert_eq!(
+            resources[&api_id].error.as_ref().unwrap().code,
+            "SETUP_RERUN_REQUIRED"
+        );
+        assert!(resources[&api_id].last_failed_state.is_some());
+        give_test_worker_setup_grant(&api_id);
+        return;
+    }
+    assert_eq!(state.status, DeploymentStatus::Running, "{state:#?}");
+    assert!(state.error.is_none());
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_target")
+    );
+    assert!(state.target_release.is_none());
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    for id in [&api_id, &dependency_id] {
+        if id == &api_id && matches!(case, RecoveryTarget::Removed) {
+            assert_eq!(resources[id].status, ResourceStatus::Deleted);
+            assert_eq!(test_worker_deletes_issued(&api_identifier).len(), 1);
+            continue;
+        }
+        assert_eq!(resources[id].status, ResourceStatus::Running);
+        assert!(resources[id].error.is_none());
+        assert!(test_worker_deletes_issued(&format!("test:worker:{id}")).is_empty());
+    }
+    let expected_images = if matches!(case, RecoveryTarget::NewRelease) {
+        vec!["test:v1", "test:v2", "test:v3"]
+    } else {
+        vec!["test:v1", "test:v2"]
+    };
+    assert_eq!(
+        test_worker_configs_deployed(&api_identifier)
+            .into_iter()
+            .map(|worker| worker.code)
+            .collect::<Vec<_>>(),
+        expected_images
+            .into_iter()
+            .map(|image| WorkerCode::Image {
+                image: image.to_string()
+            })
+            .collect::<Vec<_>>(),
+        "the persisted update finishes once before the newer configuration is applied",
+    );
+    assert_eq!(
+        test_worker_configs_deployed(&dependency_identifier).len(),
+        2
+    );
+}
