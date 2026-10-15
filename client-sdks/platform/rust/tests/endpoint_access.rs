@@ -96,3 +96,54 @@ async fn preserves_endpoint_access_authorization_errors() {
     assert_eq!(error.http_status_code, Some(403));
     assert!(!error.retryable);
 }
+
+#[tokio::test]
+async fn connection_info_keeps_public_and_private_routes_separate() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = Client::new(&format!("http://{}", listener.local_addr().unwrap()));
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let mut chunk = [0; 4096];
+            let count = stream.read(&mut chunk).unwrap();
+            assert_ne!(count, 0);
+            request.extend_from_slice(&chunk[..count]);
+        }
+        assert!(std::str::from_utf8(&request).unwrap().starts_with(
+            "GET /v1/deployments/dep_0c29fq4a2yjb7kx3smwdgxlcmpqr/info?workspace=example HTTP/1.1\r\n"
+        ));
+        let body = json!({
+            "arc":{"url":"https://manager.example.com","deploymentId":"dep_0c29fq4a2yjb7kx3smwdgxlcmpqr"},
+            "status":"running", "platform":"aws",
+            "resources":{"service":{"type":"daemon",
+                "publicEndpoints":{"api":{"url":"tcp://public.example.com:7000","protocol":"tcp","host":"public.example.com","port":7000}},
+                "privateEndpoints":{"api":{"url":"tcp://private.example.com:7000","protocol":"tcp","host":"private.example.com","port":7000}}
+            }}
+        });
+        let encoded = body.to_string();
+        write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{encoded}", encoded.len()).unwrap();
+        body
+    });
+    let response = client
+        .get_deployment_connection_info()
+        .id("dep_0c29fq4a2yjb7kx3smwdgxlcmpqr")
+        .workspace("example")
+        .send()
+        .await
+        .unwrap()
+        .into_inner();
+    let expected = server.join().unwrap();
+    let actual = serde_json::to_value(response).unwrap();
+    assert_eq!(
+        actual["resources"]["service"]["publicEndpoints"],
+        expected["resources"]["service"]["publicEndpoints"]
+    );
+    assert_eq!(
+        actual["resources"]["service"]["privateEndpoints"],
+        expected["resources"]["service"]["privateEndpoints"]
+    );
+}
