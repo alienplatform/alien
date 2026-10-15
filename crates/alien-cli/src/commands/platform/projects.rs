@@ -478,9 +478,10 @@ async fn capabilities_task(
                         Some(SandboxImageSource::Image(image)) => (Some(image), None),
                         Some(SandboxImageSource::Source(source)) => {
                             let source = &source;
-                            let images = publish_source_images(move |platform| {
+                            let snapshot = SourceSnapshot::take(source).await?;
+                            let images = publish_source_images(snapshot, move |platform, hash| {
                                 build_and_push_sandbox_base_image(
-                                    ctx, http, workspace, project, source, platform, json,
+                                    ctx, http, workspace, project, source, platform, hash, json,
                                 )
                             })
                             .await?;
@@ -582,6 +583,29 @@ struct SourceInputHash(String);
 impl SourceInputHash {
     fn tag(&self) -> String {
         format!("remote-sandbox-src-{}", &self.0[..16])
+    }
+}
+
+/// The `--src` tree's input hash on each cloud, taken once before the first leg. Each leg checks
+/// the tree against it before it saves, so an edit after an earlier leg fails the command instead
+/// of publishing another tree on a later cloud.
+struct SourceSnapshot {
+    aws: SourceInputHash,
+    azure: SourceInputHash,
+    gcp: SourceInputHash,
+}
+
+impl SourceSnapshot {
+    async fn take(source: &SandboxSource) -> Result<Self> {
+        let hash = |platform| async move {
+            let (src, toolchain, settings) = source_build(source, platform)?;
+            source_input_hash(&src, &toolchain, &settings, platform).await
+        };
+        Ok(Self {
+            aws: hash(Platform::Aws).await?,
+            azure: hash(Platform::Azure).await?,
+            gcp: hash(Platform::Gcp).await?,
+        })
     }
 }
 
@@ -717,16 +741,20 @@ struct SourceImages {
     gcp: ImageLeg,
 }
 
-/// Publishes the `--src` image with `publish` on AWS, then on Azure and GCP. AWS runs first, so a
-/// missing project fails there, and a missing manager on a later cloud means only that cloud.
-async fn publish_source_images<F, Fut>(mut publish: F) -> Result<SourceImages>
+/// Publishes the `--src` image with `publish` on AWS, then on Azure and GCP, each under its hash
+/// in `snapshot`. AWS runs first, so a missing project fails there, and a missing manager on a
+/// later cloud means only that cloud.
+async fn publish_source_images<F, Fut>(
+    snapshot: SourceSnapshot,
+    mut publish: F,
+) -> Result<SourceImages>
 where
-    F: FnMut(Platform) -> Fut,
+    F: FnMut(Platform, SourceInputHash) -> Fut,
     Fut: std::future::Future<Output = Result<String>>,
 {
-    let aws = publish(Platform::Aws).await?;
-    let azure = image_leg("Azure", publish(Platform::Azure).await)?;
-    let gcp = image_leg("GCP", publish(Platform::Gcp).await)?;
+    let aws = publish(Platform::Aws, snapshot.aws).await?;
+    let azure = image_leg("Azure", publish(Platform::Azure, snapshot.azure).await)?;
+    let gcp = image_leg("GCP", publish(Platform::Gcp, snapshot.gcp).await)?;
     Ok(SourceImages { aws, azure, gcp })
 }
 
@@ -821,18 +849,16 @@ fn skipped_clouds(
     skipped
 }
 
-/// Resolves the sandbox base image for `source` on `platform` in the project's private repository
-/// and returns the digest reference to configure. An unchanged source reuses the image already
-/// tagged with its input hash, from any machine, without building.
-async fn build_and_push_sandbox_base_image(
-    ctx: &ExecutionMode,
-    http: &crate::auth::AuthHttp,
-    workspace: Option<&str>,
-    project: &str,
+/// The source directory, toolchain and build settings of a `--src` build on `platform`. The
+/// snapshot and the leg both take them from here, so both hash the same inputs.
+fn source_build(
     source: &SandboxSource,
     platform: Platform,
-    json: bool,
-) -> Result<String> {
+) -> Result<(
+    PathBuf,
+    ToolchainConfig,
+    alien_build::settings::BuildSettings,
+)> {
     // Kept apart from `alien release`'s output so neither overwrites the other's stack.json.
     let output_dir = get_current_dir()?.join(".alien").join("remote-sandbox");
     let src = source_directory(&source.src)?;
@@ -848,7 +874,24 @@ async fn build_and_push_sandbox_base_image(
     // registry miss would push the older image under the new tag.
     settings.rebuild = true;
     settings.pull_base_images = source.rebuild;
-    let input_hash = source_input_hash(&src, &toolchain, &settings, platform).await?;
+    Ok((src, toolchain, settings))
+}
+
+/// Resolves the sandbox base image for `source` on `platform` in the project's private repository
+/// and returns the digest reference to configure. An unchanged source reuses the image already
+/// tagged with `input_hash`, from any machine, without building.
+#[allow(clippy::too_many_arguments)]
+async fn build_and_push_sandbox_base_image(
+    ctx: &ExecutionMode,
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+    source: &SandboxSource,
+    platform: Platform,
+    input_hash: SourceInputHash,
+    json: bool,
+) -> Result<String> {
+    let (src, toolchain, settings) = source_build(source, platform)?;
 
     let (manager, destination) = if platform == Platform::Aws {
         let manager = ctx
@@ -2211,7 +2254,11 @@ mod tests {
             .expect("request should serialize")
         };
 
-        let every_cloud = publish_source_images(|platform| async move { published(platform) })
+        let every_cloud =
+            publish_source_images(
+                any_snapshot(),
+                |platform, _| async move { published(platform) },
+            )
             .await
             .expect("every cloud published");
         assert_eq!(
@@ -2224,7 +2271,7 @@ mod tests {
             }),
         );
 
-        let no_gcp = publish_source_images(|platform| async move {
+        let no_gcp = publish_source_images(any_snapshot(), |platform, _| async move {
             match platform {
                 Platform::Gcp => no_manager(platform),
                 platform => published(platform),
@@ -2245,7 +2292,7 @@ mod tests {
             Some("the project has no GCP manager")
         );
 
-        publish_source_images(|platform| async move {
+        publish_source_images(any_snapshot(), |platform, _| async move {
             match platform {
                 Platform::Aws => no_manager(platform),
                 platform => published(platform),
@@ -2255,7 +2302,7 @@ mod tests {
         .err()
         .expect("AWS is required");
         for failing in [Platform::Azure, Platform::Gcp] {
-            publish_source_images(|platform| async move {
+            publish_source_images(any_snapshot(), |platform, _| async move {
                 if platform == failing {
                     Err(AlienError::new(ErrorData::ApiRequestFailed {
                         message: format!("Manager for {platform} platform did not become ready"),
@@ -2269,6 +2316,53 @@ mod tests {
             .err()
             .unwrap_or_else(|| panic!("any other {failing} failure fails the run"));
         }
+    }
+
+    fn any_snapshot() -> SourceSnapshot {
+        let hash = |byte: &str| SourceInputHash(byte.repeat(64));
+        SourceSnapshot {
+            aws: hash("a"),
+            azure: hash("b"),
+            gcp: hash("c"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_edit_between_clouds_fails_the_command() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("Dockerfile"), "FROM scratch\n").expect("Dockerfile");
+        let source = SandboxSource {
+            src: dir.path().to_path_buf(),
+            dockerfile: None,
+            rebuild: false,
+        };
+        let snapshot = SourceSnapshot::take(&source).await.expect("snapshot");
+        let published = std::sync::Mutex::new(Vec::new());
+
+        // Each leg makes the check `build_and_push_sandbox_base_image` makes before it saves; the
+        // tree is edited once AWS has saved.
+        let error = publish_source_images(snapshot, |platform, hash| {
+            let source = &source;
+            let published = &published;
+            async move {
+                let (src, toolchain, settings) = source_build(source, platform)?;
+                ensure_source_unchanged(&src, &toolchain, &settings, platform, &hash).await?;
+                published.lock().unwrap().push(platform);
+                if platform == Platform::Aws {
+                    std::fs::write(src.join("Dockerfile"), "FROM alpine:3.20\n").unwrap();
+                }
+                Ok(format!("{platform}-image"))
+            }
+        })
+        .await
+        .err()
+        .expect("Azure was built from another tree than AWS");
+
+        assert!(
+            matches!(&error.error, Some(ErrorData::ValidationError { field, .. }) if field == "src"),
+            "{error}"
+        );
+        assert_eq!(*published.lock().unwrap(), vec![Platform::Aws]);
     }
 
     #[tokio::test]
