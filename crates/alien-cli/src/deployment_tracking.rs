@@ -113,6 +113,13 @@ impl DeploymentTracker {
         self.deployments.get(name)
     }
 
+    /// Get a tracked deployment by its deployment ID
+    pub fn get_deployment_by_id(&self, deployment_id: &str) -> Option<&TrackedDeployment> {
+        self.deployments
+            .values()
+            .find(|tracked| tracked.deployment_id == deployment_id)
+    }
+
     /// Return the tracked deployment only while the platform still accepts its stored key.
     ///
     /// An entry outlives platform-side deletion, so a dead one is dropped here and
