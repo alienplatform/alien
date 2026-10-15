@@ -199,11 +199,17 @@ pub async fn handle_provisioning(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to determine outstanding provisioning deletions".to_string(),
         })?;
+    let pending_recovery_updates = executor
+        .pending_recovery_updates(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding provisioning recovery updates".to_string(),
+        })?;
     let stack_status = crate::updating::compute_update_status(
         &step_result.next_state,
         &target_stack,
         &reconciled_ids,
         &pending_deletions,
+        &pending_recovery_updates,
     )?;
 
     // Check if all live resources are deployed
@@ -271,7 +277,7 @@ pub async fn handle_provisioning(
             .collect();
 
         // Interrupt all in-progress resources so every resource reflects its true status.
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None)?;
 
         // An installed deployment provisions only to continue an update that setup handed
         // back. Its installed release keeps serving, so the failure is an update failure.
