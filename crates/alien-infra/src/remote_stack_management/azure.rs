@@ -55,21 +55,21 @@ fn get_fic_name(prefix: &str) -> String {
     format!("{}-management-fic", prefix)
 }
 
-fn management_role_definition_scope(
-    assignable_scopes: &[String],
-    subscription_id: &str,
-    resource_group_name: &str,
-) -> Scope {
-    let subscription_scope = format!("/subscriptions/{subscription_id}");
-    if assignable_scopes
-        .iter()
-        .any(|scope| scope == &subscription_scope)
-    {
-        Scope::Subscription
-    } else {
-        Scope::ResourceGroup {
-            resource_group_name: resource_group_name.to_string(),
+/// Where to create a role assignable only at `assignable_scope`: that resource group when it is
+/// in this subscription, otherwise the subscription.
+fn role_definition_scope_for(assignable_scope: &str, subscription_id: &str) -> Scope {
+    let segments: Vec<&str> = assignable_scope.split('/').filter(|s| !s.is_empty()).collect();
+    match segments.as_slice() {
+        [subscriptions, subscription, groups, group]
+            if subscriptions.eq_ignore_ascii_case("subscriptions")
+                && subscription.eq_ignore_ascii_case(subscription_id)
+                && groups.eq_ignore_ascii_case("resourceGroups") =>
+        {
+            Scope::ResourceGroup {
+                resource_group_name: group.to_string(),
+            }
         }
+        _ => Scope::Subscription,
     }
 }
 
@@ -379,9 +379,10 @@ impl AzureRemoteStackManagementController {
         // A controller saved mid-setup by an earlier version may already hold the single combined
         // role, and assignments made with it. Remove both before creating the per-scope roles.
         if let Some(legacy_role_id) = self.role_definition_id.clone() {
-            for assignment_id in std::mem::take(&mut self.role_assignment_ids) {
-                delete_management_role_assignment(&client, &assignment_id, &config.id).await?;
+            for assignment_id in &self.role_assignment_ids {
+                delete_management_role_assignment(&client, assignment_id, &config.id).await?;
             }
+            self.role_assignment_ids.clear();
             delete_management_role_definition(
                 &client,
                 &legacy_role_id,
@@ -402,11 +403,7 @@ impl AzureRemoteStackManagementController {
                 properties: Some(role.properties),
                 ..Default::default()
             };
-            let scope = management_role_definition_scope(
-                std::slice::from_ref(&role.scope),
-                &azure_cfg.subscription_id,
-                &resource_group_name,
-            );
+            let scope = role_definition_scope_for(&role.scope, &azure_cfg.subscription_id);
             let created = client
                 .create_or_update_role_definition(&scope, role.uuid.clone(), &role_definition)
                 .await
@@ -848,7 +845,7 @@ impl AzureRemoteStackManagementController {
                     &client,
                     &role_def_id,
                     &resource_group_name,
-                    "",
+                    "on delete",
                     &config.id,
                 )
                 .await?;
@@ -1091,6 +1088,66 @@ mod tests {
         );
     }
 
+    /// A KubernetesCluster in another resource group binds its grants there, so the plan can have
+    /// two resource-group scopes. Each gets its own role, with a name Azure accepts as unique in
+    /// the tenant, created in the group it is assignable at.
+    #[test]
+    fn a_second_resource_group_gets_its_own_uniquely_named_role() {
+        use alien_permissions::generators::{AzureCustomRole, AzureRoleDefinition};
+        let role = |key: &str, scope: &str, action: &str| AzureCustomRole {
+            key: key.to_string(),
+            role_definition: AzureRoleDefinition {
+                name: key.to_string(),
+                id: None,
+                is_custom: true,
+                description: String::new(),
+                actions: vec![action.to_string()],
+                not_actions: vec![],
+                data_actions: vec![],
+                not_data_actions: vec![],
+                assignable_scopes: vec![scope.to_string()],
+            },
+        };
+        let plan = AzureGrantPlan {
+            custom_roles: vec![
+                role("own", "/subscriptions/sub-123/resourceGroups/rg-123", "a/write"),
+                role("cluster", "/subscriptions/sub-123/resourceGroups/aks-rg", "b/read"),
+                role("skus", "/subscriptions/sub-123", "c/read"),
+            ],
+            bindings: vec![],
+        };
+        let roles =
+            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123")
+                .unwrap();
+        let names: BTreeSet<String> = roles
+            .iter()
+            .map(|r| r.properties.role_name.clone().unwrap())
+            .collect();
+        assert_eq!(names.len(), 3, "role names must be unique: {names:?}");
+        let name_at = |scope: &str| {
+            roles
+                .iter()
+                .find(|r| r.scope == scope)
+                .and_then(|r| r.properties.role_name.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            name_at("/subscriptions/sub-123/resourceGroups/rg-123"),
+            "test-management-resource-group-role"
+        );
+        assert_eq!(name_at("/subscriptions/sub-123"), "test-management-subscription-role");
+        assert!(name_at("/subscriptions/sub-123/resourceGroups/aks-rg")
+            .starts_with("test-management-resource-group-role-"));
+        assert!(matches!(
+            role_definition_scope_for("/subscriptions/sub-123/resourceGroups/aks-rg", "sub-123"),
+            Scope::ResourceGroup { resource_group_name } if resource_group_name == "aks-rg"
+        ));
+        assert!(matches!(
+            role_definition_scope_for("/subscriptions/sub-123", "sub-123"),
+            Scope::Subscription
+        ));
+    }
+
     /// A setup saved by an earlier version between creating its combined role and assigning it
     /// resumes in `CreatingRoleAssignments` with only `role_definition_id`. It must not fail on
     /// the missing per-scope role: it goes back to role creation, which deletes the assignments
@@ -1185,7 +1242,14 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        let roles = management_role_definitions(&grant_plan, "test", "Management role.").unwrap();
+        let roles = management_role_definitions(
+            &grant_plan,
+            "test",
+            "Management role.",
+            "sub-123",
+            "rg-123",
+        )
+        .unwrap();
 
         let custom_scopes: BTreeSet<&str> = grant_plan
             .bindings
@@ -1456,7 +1520,7 @@ fn emit_azure_remote_stack_management_heartbeat(
                     uami_principal_id: controller.uami_principal_id.clone(),
                     tenant_id: controller.tenant_id.clone(),
                     fic_name: controller.fic_name.clone(),
-                    role_definition_id: controller.role_definition_id.clone(),
+                    role_definition_id: controller.reported_role_definition_id(),
                     role_assignment_ids: controller.role_assignment_ids.clone(),
                 },
             ),
@@ -1610,11 +1674,19 @@ struct ManagementRoleDefinition {
 
 /// Builds one custom role per scope the plan's custom grants bind at. Each role carries only the
 /// actions bound at its scope, so a resource-group grant never reaches the subscription.
+///
+/// The roles at the deployment's own subscription and resource group get fixed names. A grant
+/// bound elsewhere (a KubernetesCluster in another resource group) gets a name with a short hash
+/// of its scope, since Azure requires custom role names to be unique in the tenant.
 fn management_role_definitions(
     grant_plan: &AzureGrantPlan,
     resource_prefix: &str,
     description: &str,
+    subscription_id: &str,
+    resource_group_name: &str,
 ) -> Result<Vec<ManagementRoleDefinition>> {
+    let subscription_scope = format!("/subscriptions/{subscription_id}");
+    let resource_group_scope = format!("{subscription_scope}/resourceGroups/{resource_group_name}");
     let roles = custom_roles_by_scope(grant_plan).context(ErrorData::InfrastructureError {
         message: "Failed to group Azure management grants by scope".to_string(),
         operation: Some("generate_management_role_definitions".to_string()),
@@ -1624,18 +1696,23 @@ fn management_role_definitions(
         .into_iter()
         .map(|role| {
             let kind = role.scope_kind.as_str();
-            ManagementRoleDefinition {
-                uuid: Uuid::new_v5(
-                    &Uuid::NAMESPACE_OID,
-                    format!(
-                        "deployment:azure:mgmt-role-def:{resource_prefix}:{}",
-                        role.scope
-                    )
+            let uuid = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("deployment:azure:mgmt-role-def:{resource_prefix}:{}", role.scope)
                     .as_bytes(),
-                )
-                .to_string(),
+            )
+            .to_string();
+            let own_scope = role.scope.eq_ignore_ascii_case(&subscription_scope)
+                || role.scope.eq_ignore_ascii_case(&resource_group_scope);
+            let role_name = if own_scope {
+                format!("{resource_prefix}-management-{kind}-role")
+            } else {
+                format!("{resource_prefix}-management-{kind}-role-{}", &uuid[..8])
+            };
+            ManagementRoleDefinition {
+                uuid,
                 properties: RoleDefinitionProperties {
-                    role_name: Some(format!("{resource_prefix}-management-{kind}-role")),
+                    role_name: Some(role_name),
                     description: Some(format!("{description} Scope: {kind}.")),
                     type_: Some("CustomRole".to_string()),
                     permissions: vec![Permission {
@@ -1754,7 +1831,29 @@ impl AzureRemoteStackManagementController {
             ),
             None => format!("Management role. Resource prefix: {}.", ctx.resource_prefix),
         };
-        management_role_definitions(&grant_plan, ctx.resource_prefix, &description)
+        let azure_cfg = ctx.get_azure_config()?;
+        let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
+        management_role_definitions(
+            &grant_plan,
+            ctx.resource_prefix,
+            &description,
+            &azure_cfg.subscription_id,
+            &resource_group_name,
+        )
+    }
+
+    /// The role reported in the heartbeat: a combined role still left from an earlier version,
+    /// otherwise the role at the deployment resource group.
+    fn reported_role_definition_id(&self) -> Option<String> {
+        self.role_definition_id.clone().or_else(|| {
+            self.scoped_role_definition_ids
+                .iter()
+                .find(|(scope, _)| {
+                    AzureManagementScopeKind::of(scope)
+                        == Some(AzureManagementScopeKind::ResourceGroup)
+                })
+                .map(|(_, id)| id.clone())
+        })
     }
 
     /// Every custom management role this controller may own: the per-scope roles and the
