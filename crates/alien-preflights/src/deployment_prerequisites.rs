@@ -8,12 +8,12 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
-    EndpointAccess, EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile,
-    PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker,
+    ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig, EndpointAccess,
+    EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile, PermissionSet,
+    Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker, validate_binding_type,
 };
 use alien_permissions::{
-    generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+    BindingTarget, PermissionContext, generators::AwsRuntimePermissionsGenerator,
 };
 
 /// Private endpoints must never silently become internet-facing on unsupported targets.
@@ -26,7 +26,7 @@ impl DeploymentPrerequisiteCheck for PrivateEndpointAccessCheck {
     }
 
     fn description(&self) -> &'static str {
-        "Private endpoint access requires AWS managed containers"
+        "Private endpoint access requires a supported managed compute backend"
     }
 
     fn should_run(&self, _stack: &Stack, _state: &StackState, config: &DeploymentConfig) -> bool {
@@ -44,22 +44,18 @@ impl DeploymentPrerequisiteCheck for PrivateEndpointAccessCheck {
                 .config
                 .downcast_ref::<Worker>()
                 .is_some_and(|worker| !worker.public_endpoints.is_empty())
-                || entry
-                    .config
-                    .downcast_ref::<Daemon>()
-                    .is_some_and(|daemon| !daemon.public_endpoints.is_empty())
         }) {
             return Ok(CheckResult::failed(vec![
-                "Private endpoint access is supported only for Container endpoints. Worker and Daemon endpoints require internet access.".to_string(),
+                "Private worker endpoints are not supported yet. Worker endpoints require internet access.".to_string(),
             ]));
         }
-        if state.platform == Platform::Aws
+        if is_cloud_platform(state.platform)
             && matches!(config.compute_backend, Some(ComputeBackend::Horizon(_)))
         {
             Ok(CheckResult::success())
         } else {
             Ok(CheckResult::failed(vec![
-                "Private endpoint access is supported only for AWS managed containers. Choose internet access or deploy to AWS with a managed container backend.".to_string(),
+                "Private container and daemon endpoints require AWS, GCP, or Azure with a managed compute backend.".to_string(),
             ]))
         }
     }
@@ -724,13 +720,13 @@ mod tests {
     use crate::runner::PreflightRunner;
     use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::{
-        bindings::{KvBinding, StorageBinding},
-        permissions::PermissionsConfig,
         AwsCustomCertificateConfig, CertificateStatus, ContainerCode, CustomCertificateConfig,
         CustomDomainConfig, DnsRecordStatus, DomainMetadata, DomainSettings, EnvironmentVariable,
         EnvironmentVariableType, EnvironmentVariablesSnapshot, ExternalBinding, HealthCheck,
         PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle,
         ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
+        bindings::{KvBinding, StorageBinding},
+        permissions::PermissionsConfig,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -775,12 +771,7 @@ mod tests {
         config.stack_settings.endpoint_access = EndpointAccess::Private;
         config.compute_backend = Some(horizon_backend());
         let check = PrivateEndpointAccessCheck;
-        for platform in [
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Kubernetes,
-            Platform::Machines,
-        ] {
+        for platform in [Platform::Kubernetes, Platform::Machines] {
             let state = stack_state(platform);
             assert!(check.should_run(&stack, &state, &config));
             let result = check.check(&stack, &state, &config).await.unwrap();
@@ -788,7 +779,7 @@ mod tests {
                 !result.success,
                 "private access must be rejected on {platform}"
             );
-            assert!(result.errors[0].contains("only for AWS"));
+            assert!(result.errors[0].contains("managed compute backend"));
         }
         let state = stack_state(Platform::Aws);
         assert!(check.check(&stack, &state, &config).await.unwrap().success);
@@ -798,11 +789,56 @@ mod tests {
         )]));
         let result = check.check(&worker_stack, &state, &config).await.unwrap();
         assert!(!result.success);
-        assert!(result.errors[0].contains("Worker and Daemon"));
+        assert!(result.errors[0].contains("Worker endpoints require internet"));
         config.compute_backend = None;
         assert!(!check.check(&stack, &state, &config).await.unwrap().success);
         config.stack_settings.endpoint_access = EndpointAccess::Internet;
         assert!(!check.should_run(&stack, &state, &config));
+    }
+
+    #[tokio::test]
+    async fn private_and_dual_managed_compute_endpoints_pass_on_each_cloud() {
+        let check = PrivateEndpointAccessCheck;
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for access in [EndpointAccess::Private, EndpointAccess::Both] {
+                for protocol in [ExposeProtocol::Http, ExposeProtocol::Tcp] {
+                    let mut container = create_public_container_entry("api");
+                    let mut daemon = container.clone();
+                    let mut container_config = container
+                        .config
+                        .downcast_ref::<Container>()
+                        .unwrap()
+                        .clone();
+                    container_config.public_endpoints[0].protocol = protocol;
+                    container.config = Resource::new(container_config);
+                    daemon.config = Resource::new(
+                        Daemon::new("agent".to_string())
+                            .code(alien_core::DaemonCode::Image {
+                                image: "test:latest".to_string(),
+                            })
+                            .public_endpoint(PublicEndpoint {
+                                name: "api".to_string(),
+                                port: 8080,
+                                protocol,
+                                host_label: None,
+                                wildcard_subdomains: false,
+                            })
+                            .build(),
+                    );
+                    for entry in [container, daemon] {
+                        let stack = create_stack(IndexMap::from([("endpoint".to_string(), entry)]));
+                        let state = stack_state(platform);
+                        let mut config = deployment_config();
+                        config.stack_settings.endpoint_access = access;
+                        config.compute_backend = Some(horizon_backend());
+                        assert!(check.should_run(&stack, &state, &config));
+                        assert!(check.check(&stack, &state, &config).await.unwrap().success);
+                        config.compute_backend = None;
+                        assert!(!check.check(&stack, &state, &config).await.unwrap().success);
+                    }
+                }
+            }
+        }
     }
 
     fn targeted_env(name: &str, target_resources: Option<Vec<&str>>) -> EnvironmentVariable {
@@ -1353,12 +1389,14 @@ mod tests {
             "uploads",
             ExternalBinding::Storage(StorageBinding::s3("bucket")),
         );
-        assert!(check
-            .check(&stack, &state, &bound)
-            .await
-            .unwrap()
-            .errors
-            .is_empty());
+        assert!(
+            check
+                .check(&stack, &state, &bound)
+                .await
+                .unwrap()
+                .errors
+                .is_empty()
+        );
 
         let result = check
             .check(&stack, &state, &deployment_config())
