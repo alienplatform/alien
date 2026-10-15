@@ -137,7 +137,10 @@ pub fn client_with_header(auth_value: &str) -> Result<Client> {
                 reason: "Invalid authorization header value".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
     Ok(crate::http_client::builder()
         .default_headers(headers)
         .build()
@@ -171,7 +174,10 @@ pub fn client_with_auth_and_workspace(auth_value: &str, workspace: &str) -> Resu
                         .to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
     Ok(crate::http_client::builder()
         .default_headers(headers)
         .build()

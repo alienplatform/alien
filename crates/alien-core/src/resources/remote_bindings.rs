@@ -36,7 +36,7 @@ impl RemoteBindings {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteBindingsOutputs {
     /// Role ARN, service-account email, or managed-identity resource ID.
     pub resource_id: String,
