@@ -1,6 +1,6 @@
 use alien_core::{
-    ownership_policy_for_resource_type, ResourceLifecycle, ResourceStatus, StackResourceState,
-    StackState,
+    ResourceLifecycle, ResourceStatus, StackResourceState, StackState,
+    ownership_policy_for_resource_type,
 };
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -673,7 +673,9 @@ mod tests {
         resource
             .set_internal_controller(Some(Box::new(TestWorkerController::default())))
             .unwrap();
-        for version in [1, crate::core::CURRENT_CONTROLLER_STATE_VERSION] {
+        for version in crate::core::MIN_SUPPORTED_CONTROLLER_STATE_VERSION
+            ..=crate::core::CURRENT_CONTROLLER_STATE_VERSION
+        {
             resource.internal_state.as_mut().unwrap()["_controllerStateVersion"] = version.into();
             resource
                 .get_internal_controller_typed::<TestWorkerController>()
